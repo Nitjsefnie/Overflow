@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Sql, TransactionSql } from "postgres";
+import postgres, { type Sql, type TransactionSql } from "postgres";
 import { GenericContainer, Wait } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
@@ -10,6 +10,7 @@ import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reco
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
+import { processWebhook } from "@/lib/webhooks/processor";
 
 let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
 let sql: Sql;
@@ -1138,6 +1139,165 @@ describe("initial PostgreSQL materialization", () => {
       .resolves.toBe("lock-released");
   });
 
+  it("keeps the shared pool available while a full cohort of repository reconciliations waits", async () => {
+    const sharedPoolCapacity = sql.options.max;
+    expect(sharedPoolCapacity).toBe(10);
+    const tokenEncryptionKey = Buffer.alloc(32, 15).toString("base64url");
+    const sponsorLogin = `pool-sponsor-${nextExternalId()}`;
+    const contributorLogin = `pool-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    await sql`
+      update users
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("pool-token", tokenEncryptionKey), "utf8")}
+      where id = ${sponsorId}
+    `;
+    const githubRepositoryId = nextExternalId();
+    const repositoryId = await insertRepository(sql, sponsorId, githubRepositoryId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const runOrder: string[] = [];
+    const pointsByRun = new Map<string, number>();
+    let activeSnapshotFetches = 0;
+    let maximumActiveSnapshotFetches = 0;
+    let releaseOwnerFetch!: () => void;
+    let markOwnerFetchStarted!: () => void;
+    const ownerFetchStarted = new Promise<void>((resolve) => { markOwnerFetchStarted = resolve; });
+    const holdOwnerFetch = new Promise<void>((resolve) => { releaseOwnerFetch = resolve; });
+
+    const trackedGateway = (
+      runName: string,
+      points: number,
+      hold: Promise<void> | undefined,
+    ): ReconciliationGateway => {
+      pointsByRun.set(runName, points);
+      const snapshot = materializationSnapshot({
+        repositoryId,
+        ownerName: repository.owner_name,
+        sponsorId,
+        contributorId,
+        sponsorLogin,
+        contributorLogin,
+        issueLabels: ["M"],
+        actualLabel: `delivered/${points}`,
+        githubIssueId,
+        githubPullRequestId,
+      });
+      const gateway = gatewayForSnapshot(snapshot);
+      return {
+        ...gateway,
+        async listIssues(reference) {
+          runOrder.push(runName);
+          activeSnapshotFetches += 1;
+          maximumActiveSnapshotFetches = Math.max(maximumActiveSnapshotFetches, activeSnapshotFetches);
+          try {
+            if (hold !== undefined) {
+              markOwnerFetchStarted();
+              await hold;
+            }
+            return await gateway.listIssues(reference);
+          } finally {
+            activeSnapshotFetches -= 1;
+          }
+        },
+      };
+    };
+
+    const ownerStore = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const ownerGateway = trackedGateway("owner", 1, holdOwnerFetch);
+    const delivery = {
+      deliveryId: `delivery-pool-contention-${nextExternalId()}`,
+      event: "pull_request" as const,
+      action: "closed",
+      repositoryGitHubId: githubRepositoryId,
+      repositoryFullName: repository.owner_name,
+    };
+    const ownerRun = processWebhook({
+      store: ownerStore,
+      reconcileRepository: (id) => reconcileRepository({ store: ownerStore, github: ownerGateway }, id),
+      leaseHeartbeatIntervalMs: 25,
+    }, delivery);
+    await ownerFetchStarted;
+
+    const observer = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const [initialLease] = await observer<{ lease_expires_at: string }[]>`
+      select lease_expires_at::text
+      from webhook_deliveries
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    const waiterRuns = Array.from({ length: sharedPoolCapacity }, (_, index) => {
+      const points = index + 1;
+      const waiterStore = new PostgresFoldStore(sql, tokenEncryptionKey);
+      return reconcileRepository({
+        store: waiterStore,
+        github: trackedGateway(`waiter-${points}`, points, undefined),
+      }, repositoryId);
+    });
+    const reconciliationCleanup = Promise.allSettled([ownerRun, ...waiterRuns]);
+    const ordinaryQuery = sql<{ value: number }[]>`select 1::integer as value`;
+
+    try {
+      // Synchronize deterministically with the former blocking implementation. The
+      // nonblocking coordinator never creates an ungranted advisory lock, so this
+      // bounded probe simply expires while its callers wait outside the pool.
+      const blockingWaitersDetected = await conditionWithin(async () => {
+        const [locks] = await observer<{ waiting: number }[]>`
+          select count(*)::integer as waiting
+          from pg_locks
+          where locktype = 'advisory' and granted = false
+        `;
+        return locks.waiting >= sharedPoolCapacity - 1;
+      }, 750);
+
+      expect(runOrder).toEqual(["owner"]);
+      await expect(resolveWithin(ordinaryQuery, 750)).resolves.toEqual([{ value: 1 }]);
+      expect(blockingWaitersDetected).toBe(false);
+      await expect(conditionWithin(async () => {
+        const [lease] = await observer<{ renewed: boolean }[]>`
+          select lease_expires_at > ${initialLease.lease_expires_at}::timestamptz as renewed
+          from webhook_deliveries
+          where github_delivery_id = ${delivery.deliveryId}
+        `;
+        return lease.renewed;
+      }, 750)).resolves.toBe(true);
+    } finally {
+      releaseOwnerFetch();
+      await observer`
+        select pg_cancel_backend(pid)
+        from pg_locks
+        where locktype = 'advisory'
+          and granted = false
+          and pid <> pg_backend_pid()
+      `;
+      await Promise.all([reconciliationCleanup, ordinaryQuery]);
+      await observer.end();
+    }
+
+    await expect(ownerRun).resolves.toEqual({ status: "PROCESSED" });
+    await expect(Promise.all(waiterRuns)).resolves.toHaveLength(sharedPoolCapacity);
+    expect(runOrder).toHaveLength(sharedPoolCapacity + 1);
+    expect(new Set(runOrder).size).toBe(sharedPoolCapacity + 1);
+    expect(maximumActiveSnapshotFetches).toBe(1);
+    const finalRun = runOrder.at(-1);
+    expect(finalRun).toBeDefined();
+    const [settlement] = await sql<{ settled_points: number }[]>`
+      select settlements.settled_points
+      from settlements
+      join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${repositoryId}
+    `;
+    expect(settlement.settled_points).toBe(pointsByRun.get(finalRun!));
+
+    await expect(ownerStore.withRepositoryReconciliation(repositoryId, async () => {
+      throw new Error("expected saturated-worker failure");
+    })).rejects.toThrow("expected saturated-worker failure");
+    await expect(ownerStore.withRepositoryReconciliation(repositoryId, async () => "released-after-error"))
+      .resolves.toBe("released-after-error");
+  });
+
   it("keeps a slow older reconciliation from overwriting the newer authoritative snapshot", async () => {
     const tokenEncryptionKey = Buffer.alloc(32, 10).toString("base64url");
     const sponsorLogin = `concurrency-sponsor-${nextExternalId()}`;
@@ -1603,6 +1763,39 @@ describe("initial PostgreSQL materialization", () => {
 function nextExternalId(): number {
   externalId += 1;
   return externalId;
+}
+
+async function resolveWithin<T>(promise: PromiseLike<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Operation exceeded ${timeoutMs}ms.`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function conditionWithin(
+  condition: () => Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (await condition()) {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    if (await condition()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function expectClaimedLease(

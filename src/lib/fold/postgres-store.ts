@@ -145,6 +145,24 @@ type ReconciledEntityKind =
 
 type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE" | "POLICY_VIOLATION";
 
+const repositoryLockWaitDeadlineMs = 60_000;
+const repositoryLockInitialRetryMs = 10;
+const repositoryLockMaximumRetryMs = 250;
+const repositoryLockNamespace = 684029183;
+const repositoryCoordinationFailure = "Unable to coordinate repository reconciliation.";
+
+function waitForRepositoryLockRetry(attempt: number, remainingMs: number): Promise<void> {
+  const retryCeilingMs = Math.min(
+    repositoryLockMaximumRetryMs,
+    repositoryLockInitialRetryMs * (2 ** Math.min(attempt, 10)),
+  );
+  const retryFloorMs = Math.ceil(retryCeilingMs / 2);
+  const jitteredRetryMs = retryFloorMs
+    + Math.floor(Math.random() * (retryCeilingMs - retryFloorMs + 1));
+  const retryMs = Math.max(1, Math.min(remainingMs, jitteredRetryMs));
+  return new Promise((resolve) => setTimeout(resolve, retryMs));
+}
+
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
@@ -155,24 +173,61 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     repositoryId: string,
     work: () => Promise<T>,
   ): Promise<T> {
-    const connection = await this.sql.reserve();
-    let locked = false;
-    try {
-      await connection`
-        select pg_advisory_lock(hashtextextended(${repositoryId}, 684029183))
-      `;
-      locked = true;
-      return await work();
-    } finally {
+    const deadline = Date.now() + repositoryLockWaitDeadlineMs;
+    let attempt = 0;
+
+    while (true) {
+      if (attempt > 0 && Date.now() >= deadline) {
+        throw new Error(repositoryCoordinationFailure);
+      }
+      let connection: Awaited<ReturnType<SqlClient["reserve"]>>;
       try {
+        connection = await this.sql.reserve();
+      } catch {
+        throw new Error(repositoryCoordinationFailure);
+      }
+
+      let locked = false;
+      try {
+        const [lock] = await connection<{ acquired: boolean }[]>`
+          select pg_try_advisory_lock(
+            hashtextextended(${repositoryId}, ${repositoryLockNamespace})
+          ) as acquired
+        `;
+        locked = lock?.acquired === true;
         if (locked) {
-          await connection`
-            select pg_advisory_unlock(hashtextextended(${repositoryId}, 684029183))
-          `;
+          try {
+            return await work();
+          } finally {
+            try {
+              const [unlock] = await connection<{ released: boolean }[]>`
+                select pg_advisory_unlock(
+                  hashtextextended(${repositoryId}, ${repositoryLockNamespace})
+                ) as released
+              `;
+              if (unlock?.released !== true) {
+                throw new Error(repositoryCoordinationFailure);
+              }
+            } catch {
+              throw new Error(repositoryCoordinationFailure);
+            }
+          }
         }
+      } catch (error) {
+        if (locked) {
+          throw error;
+        }
+        throw new Error(repositoryCoordinationFailure);
       } finally {
         connection.release();
       }
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(repositoryCoordinationFailure);
+      }
+      await waitForRepositoryLockRetry(attempt, remainingMs);
+      attempt += 1;
     }
   }
 
