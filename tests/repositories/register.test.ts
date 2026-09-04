@@ -106,6 +106,31 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
+  it("rejects a private repository before duplicate lookup, label creation, webhook creation, or persistence", async () => {
+    const harness = createHarness({ visibility: "PRIVATE" });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Only public GitHub repositories can be registered.",
+    });
+    expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
+    expect(harness.duplicateLookupIds).toEqual([]);
+    expect(harness.configuredLabels).toEqual([]);
+    expect(harness.createdRepositories).toEqual([]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+  });
+
+  it("rejects a private repository as private even when the actor lacks GitHub administrator permission", async () => {
+    const harness = createHarness({ visibility: "PRIVATE", canAdminister: false });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Only public GitHub repositories can be registered.",
+    });
+    expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
   it("rejects a repository that is already registered before creating a webhook", async () => {
     const existing = registeredRepository();
     const harness = createHarness({ existing });
@@ -174,6 +199,7 @@ type HarnessOptions = {
   actorRole?: "MEMBER" | "MODERATOR";
   actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
   canAdminister?: boolean;
+  visibility?: "PUBLIC" | "PRIVATE";
   existing?: RegisteredRepository | null;
   webhookFailure?: boolean;
   databaseFailure?: boolean;
@@ -183,6 +209,7 @@ function createHarness(options: HarnessOptions = {}) {
   const githubCalls: string[] = [];
   const configuredLabels: string[] = [];
   const deletedWebhookIds: number[] = [];
+  const duplicateLookupIds: number[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const actor = {
@@ -202,7 +229,7 @@ function createHarness(options: HarnessOptions = {}) {
           owner: "octo",
           name: "overflow",
           fullName: "octo/overflow",
-          visibility: "PUBLIC",
+          visibility: options.visibility ?? "PUBLIC",
           url: "https://github.com/octo/overflow",
           canAdminister: options.canAdminister ?? true,
         };
@@ -223,7 +250,8 @@ function createHarness(options: HarnessOptions = {}) {
       },
     },
     store: {
-      async findRepositoryByGitHubId() {
+      async findRepositoryByGitHubId(githubRepositoryId) {
+        duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
       },
       async createRepository(repository) {
@@ -240,7 +268,14 @@ function createHarness(options: HarnessOptions = {}) {
     },
   };
 
-  return { dependencies, githubCalls, configuredLabels, deletedWebhookIds, createdRepositories };
+  return {
+    dependencies,
+    githubCalls,
+    configuredLabels,
+    deletedWebhookIds,
+    duplicateLookupIds,
+    createdRepositories,
+  };
 }
 
 function createInput(
