@@ -103,6 +103,13 @@ export async function registerRepository(
   }
 
   const repository = await getSubmittedRepository(dependencies.github, submittedRepository);
+  if (repository.visibility !== "PUBLIC") {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only public GitHub repositories can be registered.",
+    );
+  }
+
   if (!repository.canAdminister) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
