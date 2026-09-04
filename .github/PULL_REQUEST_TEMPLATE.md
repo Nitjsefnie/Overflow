@@ -4,7 +4,7 @@
 
 ## Related Issues and Pull Requests
 
-<!-- Conditional: always check whether this pull request resolves or relates to existing work. Keep this section only when it applies; otherwise delete the heading and this comment. Put closing keywords only here, using lines such as "Fixes #123", "Relates to #456", or "Depends on #789". -->
+<!-- Conditional: always check whether this pull request resolves or relates to existing work. Keep this section only when it applies; otherwise delete the heading and this comment. Put closing keywords only here, using lines such as "Fixes #123", "Relates to #456", or "Depends on #789". Note: GitHub only auto-closes on merge into the DEFAULT branch. When the base is a dev/next/release branch, Fixes #N will not close the issue — close it by hand after the merge. -->
 
 ## Changes
 
