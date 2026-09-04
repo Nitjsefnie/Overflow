@@ -69,7 +69,12 @@ export class GitHubGateway {
     const nodes = await collectCursorPages((cursor) =>
       this.getIssuesPage(repository, cursor),
     );
-    return nodes.map(toGitHubIssue);
+    const issues: GitHubIssue[] = [];
+    for (const node of nodes) {
+      const labels = await this.getIssueLabels(repository, node.number, node.labels);
+      issues.push(toGitHubIssue(node, labels));
+    }
+    return issues;
   }
 
   public async getIssueClosingPullRequests(
@@ -79,7 +84,12 @@ export class GitHubGateway {
     const nodes = await collectCursorPages((cursor) =>
       this.getClosingPullRequestsPage(repository, issueNumber, cursor),
     );
-    return nodes.map(toGitHubPullRequest);
+    const pullRequests: GitHubPullRequest[] = [];
+    for (const node of nodes) {
+      const labels = await this.getPullRequestLabels(repository, node.number, node.labels);
+      pullRequests.push(toGitHubPullRequest(node, labels));
+    }
+    return pullRequests;
   }
 
   public async getPullRequestReviews(
@@ -195,6 +205,76 @@ export class GitHubGateway {
     return page;
   }
 
+  private async getIssueLabels(
+    repository: GitHubRepositoryReference,
+    issueNumber: number,
+    initialPage: GitHubGraphqlLabelConnection,
+  ): Promise<string[]> {
+    return this.collectLabels(initialPage, (cursor) =>
+      this.getIssueLabelsPage(repository, issueNumber, cursor),
+    );
+  }
+
+  private async getIssueLabelsPage(
+    repository: GitHubRepositoryReference,
+    issueNumber: number,
+    cursor: string,
+  ): Promise<GitHubGraphqlLabelConnection> {
+    const data = await this.graphql.query<{
+      repository: { issue: { labels: GitHubGraphqlLabelConnection } | null } | null;
+    }>(issueLabelsQuery, {
+      owner: repository.owner,
+      name: repository.name,
+      issueNumber,
+      cursor,
+    });
+    const page = data.repository?.issue?.labels;
+    if (page === undefined) {
+      throw new Error("GitHub GraphQL response was invalid.");
+    }
+    return page;
+  }
+
+  private async getPullRequestLabels(
+    repository: GitHubRepositoryReference,
+    pullRequestNumber: number,
+    initialPage: GitHubGraphqlLabelConnection,
+  ): Promise<string[]> {
+    return this.collectLabels(initialPage, (cursor) =>
+      this.getPullRequestLabelsPage(repository, pullRequestNumber, cursor),
+    );
+  }
+
+  private async getPullRequestLabelsPage(
+    repository: GitHubRepositoryReference,
+    pullRequestNumber: number,
+    cursor: string,
+  ): Promise<GitHubGraphqlLabelConnection> {
+    const data = await this.graphql.query<{
+      repository: { pullRequest: { labels: GitHubGraphqlLabelConnection } | null } | null;
+    }>(pullRequestLabelsQuery, {
+      owner: repository.owner,
+      name: repository.name,
+      pullRequestNumber,
+      cursor,
+    });
+    const page = data.repository?.pullRequest?.labels;
+    if (page === undefined) {
+      throw new Error("GitHub GraphQL response was invalid.");
+    }
+    return page;
+  }
+
+  private async collectLabels(
+    initialPage: GitHubGraphqlLabelConnection,
+    getNextPage: (cursor: string) => Promise<GitHubGraphqlLabelConnection>,
+  ): Promise<string[]> {
+    const labels = await collectCursorPages((cursor) =>
+      cursor === null ? Promise.resolve(initialPage) : getNextPage(cursor),
+    );
+    return labels.map((label) => label.name);
+  }
+
   private async getPullRequestReviewsPage(
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
@@ -283,6 +363,9 @@ export class GitHubGateway {
   }
 }
 
+type GitHubGraphqlLabel = { name: string };
+type GitHubGraphqlLabelConnection = GitHubGraphqlPage<GitHubGraphqlLabel>;
+
 type GitHubGraphqlIssueNode = {
   databaseId: number | null;
   number: number;
@@ -290,7 +373,7 @@ type GitHubGraphqlIssueNode = {
   body: string;
   url: string;
   state: "OPEN" | "CLOSED";
-  labels: { nodes: Array<{ name: string }> };
+  labels: GitHubGraphqlLabelConnection;
 };
 
 type GitHubGraphqlPullRequestNode = {
@@ -302,7 +385,7 @@ type GitHubGraphqlPullRequestNode = {
   state: "OPEN" | "CLOSED" | "MERGED";
   mergedAt: string | null;
   author: { login: string } | null;
-  labels: { nodes: Array<{ name: string }> };
+  labels: GitHubGraphqlLabelConnection;
 };
 
 type GitHubGraphqlPullRequestReviewNode = {
@@ -322,7 +405,10 @@ const issuesQuery = `
           body
           url
           state
-          labels(first: 100) { nodes { name } }
+          labels(first: 100) {
+            nodes { name }
+            pageInfo { hasNextPage endCursor }
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -344,8 +430,37 @@ const closingPullRequestsQuery = `
             state
             mergedAt
             author { login }
-            labels(first: 100) { nodes { name } }
+            labels(first: 100) {
+              nodes { name }
+              pageInfo { hasNextPage endCursor }
+            }
           }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+const issueLabelsQuery = `
+  query IssueLabels($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $issueNumber) {
+        labels(first: 100, after: $cursor) {
+          nodes { name }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+const pullRequestLabelsQuery = `
+  query PullRequestLabels($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pullRequestNumber) {
+        labels(first: 100, after: $cursor) {
+          nodes { name }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -366,7 +481,7 @@ const pullRequestReviewsQuery = `
   }
 `;
 
-function toGitHubIssue(node: GitHubGraphqlIssueNode): GitHubIssue {
+function toGitHubIssue(node: GitHubGraphqlIssueNode, labels: string[]): GitHubIssue {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
   }
@@ -378,11 +493,11 @@ function toGitHubIssue(node: GitHubGraphqlIssueNode): GitHubIssue {
     body: node.body,
     url: node.url,
     state: node.state,
-    labels: node.labels.nodes.map((label) => label.name),
+    labels,
   };
 }
 
-function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequest {
+function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode, labels: string[]): GitHubPullRequest {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
   }
@@ -396,7 +511,7 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     state: node.state,
     mergedAt: node.mergedAt,
     authorLogin: node.author?.login ?? null,
-    labels: node.labels.nodes.map((label) => label.name),
+    labels,
   };
 }
 

@@ -62,6 +62,63 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(cursors).toEqual([null, "cursor-2"]);
   });
 
+  it("collects labels after the first one hundred nodes for every returned issue", async () => {
+    const labelRequests: Array<{ issueNumber: number; cursor: string | null }> = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { cursor: string | null; issueNumber?: number };
+        };
+
+        if (request.query.includes("query RepositoryIssues")) {
+          return Response.json({
+            data: {
+              repository: {
+                issues: {
+                  nodes: [
+                    issueNode(101, 1, "First issue", firstLabelPage("issue-one")),
+                    issueNode(102, 2, "Second issue", firstLabelPage("issue-two")),
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          });
+        }
+
+        labelRequests.push({
+          issueNumber: request.variables.issueNumber ?? 0,
+          cursor: request.variables.cursor,
+        });
+        return Response.json({
+          data: {
+            repository: {
+              issue: {
+                labels: {
+                  nodes: [{ name: `required/${request.variables.issueNumber}` }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issues.map((issue) => issue.labels)).toEqual([
+      [...firstHundredLabels("issue-one"), "required/1"],
+      [...firstHundredLabels("issue-two"), "required/2"],
+    ]);
+    expect(labelRequests).toEqual([
+      { issueNumber: 1, cursor: "issue-one-label-cursor" },
+      { issueNumber: 2, cursor: "issue-two-label-cursor" },
+    ]);
+  });
+
   it("takes closing pull request links only from closedByPullRequestsReferences", async () => {
     let query = "";
     let askedForRestTimeline = false;
@@ -113,6 +170,68 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(askedForRestTimeline).toBe(false);
   });
 
+  it("collects labels after the first one hundred nodes for every closing pull request", async () => {
+    const labelRequests: Array<{ pullRequestNumber: number; cursor: string | null }> = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { cursor: string | null; pullRequestNumber?: number };
+        };
+
+        if (request.query.includes("query ClosingPullRequests")) {
+          return Response.json({
+            data: {
+              repository: {
+                issue: {
+                  closedByPullRequestsReferences: {
+                    nodes: [
+                      pullRequestNode(201, 4, firstLabelPage("pull-request-four")),
+                      pullRequestNode(202, 5, firstLabelPage("pull-request-five")),
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          });
+        }
+
+        labelRequests.push({
+          pullRequestNumber: request.variables.pullRequestNumber ?? 0,
+          cursor: request.variables.cursor,
+        });
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                labels: {
+                  nodes: [{ name: `required/${request.variables.pullRequestNumber}` }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const pullRequests = await gateway.getIssueClosingPullRequests(
+      { owner: "octo", name: "overflow" },
+      1,
+    );
+
+    expect(pullRequests.map((pullRequest) => pullRequest.labels)).toEqual([
+      [...firstHundredLabels("pull-request-four"), "required/4"],
+      [...firstHundredLabels("pull-request-five"), "required/5"],
+    ]);
+    expect(labelRequests).toEqual([
+      { pullRequestNumber: 4, cursor: "pull-request-four-label-cursor" },
+      { pullRequestNumber: 5, cursor: "pull-request-five-label-cursor" },
+    ]);
+  });
+
   it("collects pull request reviews through cursor-paginated GraphQL", async () => {
     const cursors: Array<string | null> = [];
     const gateway = new GitHubGateway({
@@ -153,7 +272,15 @@ describe("GitHubGateway GraphQL source adapter", () => {
   });
 });
 
-function issueNode(id: number, number: number, title: string) {
+function issueNode(
+  id: number,
+  number: number,
+  title: string,
+  labels: LabelConnectionFixture = {
+    nodes: [{ name: "size/M" }],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  },
+) {
   return {
     databaseId: id,
     number,
@@ -161,11 +288,18 @@ function issueNode(id: number, number: number, title: string) {
     body: "Issue body",
     url: `https://github.com/octo/overflow/issues/${number}`,
     state: "OPEN",
-    labels: { nodes: [{ name: "size/M" }] },
+    labels,
   };
 }
 
-function pullRequestNode(id: number, number: number) {
+function pullRequestNode(
+  id: number,
+  number: number,
+  labels: LabelConnectionFixture = {
+    nodes: [{ name: "delivered/6" }],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  },
+) {
   return {
     databaseId: id,
     number,
@@ -175,7 +309,7 @@ function pullRequestNode(id: number, number: number) {
     state: "MERGED",
     mergedAt: "2026-09-04T12:00:00.000Z",
     author: { login: "contributor" },
-    labels: { nodes: [{ name: "delivered/6" }] },
+    labels,
   };
 }
 
@@ -185,4 +319,20 @@ function reviewNode(id: number, state: string) {
     state,
     submittedAt: "2026-09-04T12:00:00.000Z",
   };
+}
+
+function firstLabelPage(prefix: string) {
+  return {
+    nodes: firstHundredLabels(prefix).map((name) => ({ name })),
+    pageInfo: { hasNextPage: true, endCursor: `${prefix}-label-cursor` },
+  };
+}
+
+type LabelConnectionFixture = {
+  nodes: Array<{ name: string }>;
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+function firstHundredLabels(prefix: string): string[] {
+  return Array.from({ length: 100 }, (_, index) => `${prefix}/${index + 1}`);
 }

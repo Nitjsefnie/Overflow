@@ -3,6 +3,7 @@ import type { Sql, TransactionSql } from "postgres";
 import { GenericContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
+import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 
 let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
 let sql: Sql;
@@ -90,6 +91,49 @@ describe("initial PostgreSQL materialization", () => {
     const githubRepositoryId = nextExternalId();
     await insertRepository(sql, sponsorId, githubRepositoryId);
     await expect(insertRepository(sql, sponsorId, githubRepositoryId)).rejects.toThrow();
+  });
+
+  it("requires every repository to persist a complete explicit difficulty scheme", async () => {
+    const sponsorId = await insertUser(sql);
+    const validScheme = validDifficultyScheme();
+
+    await expect(
+      insertRepositoryWithDifficultyScheme(sql, sponsorId, validScheme),
+    ).resolves.toEqual(expect.any(String));
+
+    const incompleteActualCatalog = validDifficultyScheme();
+    incompleteActualCatalog.actualLabels.pop();
+    const emptyOpeningCatalog = validDifficultyScheme();
+    emptyOpeningCatalog.openingLabels = [];
+    const duplicateAndMissingActualPoints = validDifficultyScheme();
+    duplicateAndMissingActualPoints.actualLabels[9] = { label: "delivered/10", points: 9 };
+    const outOfRangeOpeningPoints = validDifficultyScheme();
+    outOfRangeOpeningPoints.openingLabels[0] = {
+      ...outOfRangeOpeningPoints.openingLabels[0],
+      comparisonPoints: 11,
+    };
+    const wrongPointType = validDifficultyScheme() as unknown as {
+      actualLabels: Array<{ label: string; points: unknown }>;
+    };
+    wrongPointType.actualLabels[0] = { label: "delivered/1", points: "1" };
+    const overlappingCatalogs = validDifficultyScheme();
+    overlappingCatalogs.actualLabels[0] = { label: "S", points: 1 };
+    const blankDisplayName = validDifficultyScheme();
+    blankDisplayName.actualName = " ";
+
+    for (const scheme of [
+      null,
+      {},
+      emptyOpeningCatalog,
+      incompleteActualCatalog,
+      duplicateAndMissingActualPoints,
+      outOfRangeOpeningPoints,
+      wrongPointType,
+      overlappingCatalogs,
+      blankDisplayName,
+    ]) {
+      await expect(insertRepositoryWithDifficultyScheme(sql, sponsorId, scheme)).rejects.toThrow();
+    }
   });
 
   it("rejects updates to an issue's original opening rating", async () => {
@@ -339,24 +383,60 @@ async function insertRepository(
   sponsorId: string,
   githubRepositoryId = nextExternalId(),
 ): Promise<string> {
+  return insertRepositoryWithDifficultyScheme(
+    client,
+    sponsorId,
+    validDifficultyScheme(),
+    githubRepositoryId,
+  );
+}
+
+async function insertRepositoryWithDifficultyScheme(
+  client: QueryableSql,
+  sponsorId: string,
+  difficultyScheme: unknown,
+  githubRepositoryId = nextExternalId(),
+): Promise<string> {
+  const encodedDifficultyScheme =
+    difficultyScheme === null
+      ? null
+      : client.json(difficultyScheme as Parameters<typeof client.json>[0]);
   const [repository] = await client<{ id: string }[]>`
     insert into registered_repositories (
       github_repository_id,
       owner_name,
       sponsor_id,
       visibility,
-      github_webhook_id
+      github_webhook_id,
+      difficulty_scheme
     )
     values (
       ${githubRepositoryId},
       ${`owner-${githubRepositoryId}/repository-${githubRepositoryId}`},
       ${sponsorId},
       ${"PUBLIC"},
-      ${nextExternalId()}
+      ${nextExternalId()},
+      ${encodedDifficultyScheme}::jsonb
     )
     returning id
   `;
   return repository.id;
+}
+
+function validDifficultyScheme(): DifficultyScheme {
+  return {
+    openingName: "Scope",
+    actualName: "Delivered difficulty",
+    openingLabels: [
+      { label: "S", comparisonPoints: 2, reservePoints: 2 },
+      { label: "M", comparisonPoints: 5, reservePoints: 5 },
+      { label: "L", comparisonPoints: 8, reservePoints: 8 },
+    ],
+    actualLabels: Array.from({ length: 10 }, (_, index) => ({
+      label: `delivered/${index + 1}`,
+      points: index + 1,
+    })),
+  };
 }
 
 async function insertIssue(
