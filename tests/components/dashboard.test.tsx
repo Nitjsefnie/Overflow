@@ -19,6 +19,7 @@ describe("member dashboard", () => {
           reservedPoints: 4,
           availableHeadroom: 8,
           creditFloor: 5,
+          recentSettlements: [],
         }}
       />,
     );
@@ -31,6 +32,53 @@ describe("member dashboard", () => {
     expect(screen.getByText("Available headroom 8")).toBeVisible();
     expect(screen.getByText("Optional credit floor 5")).toBeVisible();
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
+  });
+
+  it("makes each recent settlement proof discoverable from the ledger", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 12,
+          earnedTotal: 19,
+          givenTotal: 7,
+          reservedPoints: 4,
+          availableHeadroom: 8,
+          recentSettlements: [
+            {
+              id: "settlement-9",
+              repositoryName: "co-op/harbour",
+              issueNumber: 9,
+              issueTitle: "Close the lock",
+              issueUrl: "https://github.com/co-op/harbour/issues/9",
+              pullRequestNumber: 12,
+              pullRequestTitle: "Seal the lock",
+              pullRequestUrl: "https://github.com/co-op/harbour/pull/12",
+              proofSha256: "a".repeat(64),
+              credits: 4,
+              reviewRounds: 3,
+              settledAt: "2026-09-03T00:00:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Recent settlement proofs" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Issue #9: Close the lock" })).toHaveAttribute(
+      "href",
+      "https://github.com/co-op/harbour/issues/9",
+    );
+    expect(screen.getByRole("link", { name: "Pull request #12: Seal the lock" })).toHaveAttribute(
+      "href",
+      "https://github.com/co-op/harbour/pull/12",
+    );
+    expect(screen.getByRole("link", { name: "View proof for issue #9" })).toHaveAttribute(
+      "href",
+      "/settlements/settlement-9",
+    );
+    expect(screen.getByText("4 credits · review deduction 3")).toBeVisible();
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {

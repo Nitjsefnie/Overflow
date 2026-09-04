@@ -1,7 +1,10 @@
 import type { DashboardProjection } from "@/lib/dashboard/queries";
 
 type BalanceCardProps = {
-  dashboard: DashboardProjection;
+  dashboard: Pick<
+    DashboardProjection,
+    "settledBalance" | "earnedTotal" | "givenTotal" | "reservedPoints" | "availableHeadroom" | "creditFloor"
+  >;
 };
 
 export function BalanceCard({ dashboard }: BalanceCardProps) {

@@ -48,6 +48,28 @@ describe("repository registration form", () => {
     expect(screen.getByLabelText("Actual label for 7 points")).toHaveValue("shelf");
   });
 
+  it("keeps an opening-label input focused throughout a multi-step edit", () => {
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    const openingLabel = screen.getByLabelText("Opening label 1");
+    openingLabel.focus();
+
+    fireEvent.change(openingLabel, { target: { value: "m" } });
+    expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
+    expect(openingLabel).toHaveFocus();
+    expect(openingLabel).toHaveValue("m");
+
+    fireEvent.change(openingLabel, { target: { value: "mo" } });
+    expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
+    expect(openingLabel).toHaveFocus();
+    expect(openingLabel).toHaveValue("mo");
+
+    fireEvent.change(openingLabel, { target: { value: "moon" } });
+    expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
+    expect(openingLabel).toHaveFocus();
+    expect(openingLabel).toHaveValue("moon");
+  });
+
   it("rejects more than one submitted repository before contacting the API", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

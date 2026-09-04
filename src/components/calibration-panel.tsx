@@ -8,7 +8,7 @@ export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
   const noSamples = comparison.selfWork.count === 0 && comparison.outsider.count === 0;
   return (
     <section className="calibration-panel surface shadow-offset" aria-labelledby="calibration-heading">
-      <p className="eyebrow">Evidence, not churn</p>
+      <p className="eyebrow">Paired calibration evidence</p>
       <h1 id="calibration-heading">Calibration comparison</h1>
       {noSamples ? (
         <p className="empty-copy">Complete paired work to establish calibration.</p>

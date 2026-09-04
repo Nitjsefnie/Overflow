@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
 
 export type RepositoryFormValues = {
@@ -12,6 +12,12 @@ export type RepositoryFormValues = {
 };
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
+
+type OpeningLabelRow = OpeningDifficultyLabel & { rowId: string };
+
+type RepositoryFormState = Omit<RepositoryFormValues, "openingLabels"> & {
+  openingLabels: OpeningLabelRow[];
+};
 
 type RepositoryFormProps = {
   initialValues?: RepositoryFormValues;
@@ -33,7 +39,8 @@ const defaultValues: RepositoryFormValues = {
 };
 
 export function RepositoryForm({ initialValues = defaultValues }: RepositoryFormProps) {
-  const [values, setValues] = useState<RepositoryFormValues>(() => cloneValues(initialValues));
+  const nextOpeningRowId = useRef(initialValues.openingLabels.length);
+  const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -55,7 +62,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify(values),
+        body: JSON.stringify(toRegistrationInput(values)),
       });
       const body = (await response.json().catch(() => null)) as RegistrationResponse | null;
       if (!response.ok) {
@@ -122,7 +129,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
         <p className="field-help">Set any labels and their comparison and reservation points.</p>
         <div className="catalog-rows">
           {values.openingLabels.map((openingLabel, index) => (
-            <div className="catalog-row" key={`${index}-${openingLabel.label}`}>
+            <div className="catalog-row" key={openingLabel.rowId}>
               <label className="field">
                 <span>Opening label {index + 1}</span>
                 <input
@@ -166,7 +173,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
             </div>
           ))}
         </div>
-        <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues)}>
+        <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues, nextOpeningRowId)}>
           Add opening label
         </button>
       </fieldset>
@@ -205,16 +212,30 @@ type RegistrationResponse = {
   error?: { message?: string };
 };
 
-function cloneValues(values: RepositoryFormValues): RepositoryFormValues {
+function createFormState(values: RepositoryFormValues): RepositoryFormState {
   return {
     ...values,
-    openingLabels: values.openingLabels.map((label) => ({ ...label })),
+    openingLabels: values.openingLabels.map((label, index) => ({ ...label, rowId: `opening-label-${index}` })),
+    actualLabels: values.actualLabels.map((label) => ({ ...label })),
+  };
+}
+
+function toRegistrationInput(values: RepositoryFormState): RepositoryFormValues {
+  return {
+    repositoryUrl: values.repositoryUrl,
+    openingName: values.openingName,
+    actualName: values.actualName,
+    openingLabels: values.openingLabels.map((label) => ({
+      label: label.label,
+      comparisonPoints: label.comparisonPoints,
+      reservePoints: label.reservePoints,
+    })),
     actualLabels: values.actualLabels.map((label) => ({ ...label })),
   };
 }
 
 function updateOpeningLabel(
-  setValues: Dispatch<SetStateAction<RepositoryFormValues>>,
+  setValues: Dispatch<SetStateAction<RepositoryFormState>>,
   index: number,
   field: "label" | "comparisonPoints" | "reservePoints",
   value: string | number,
@@ -237,7 +258,7 @@ function updateOpeningLabel(
 }
 
 function updateActualLabel(
-  setValues: Dispatch<SetStateAction<RepositoryFormValues>>,
+  setValues: Dispatch<SetStateAction<RepositoryFormState>>,
   points: number,
   label: string,
 ) {
@@ -249,18 +270,26 @@ function updateActualLabel(
   }));
 }
 
-function addOpeningLabel(setValues: Dispatch<SetStateAction<RepositoryFormValues>>) {
+function addOpeningLabel(
+  setValues: Dispatch<SetStateAction<RepositoryFormState>>,
+  nextOpeningRowId: { current: number },
+) {
   setValues((current) => ({
     ...current,
     openingLabels: [
       ...current.openingLabels,
-      { label: `Opening label ${current.openingLabels.length + 1}`, comparisonPoints: 1, reservePoints: 1 },
+      {
+        rowId: `opening-label-${nextOpeningRowId.current++}`,
+        label: `Opening label ${current.openingLabels.length + 1}`,
+        comparisonPoints: 1,
+        reservePoints: 1,
+      },
     ],
   }));
 }
 
 function removeOpeningLabel(
-  setValues: Dispatch<SetStateAction<RepositoryFormValues>>,
+  setValues: Dispatch<SetStateAction<RepositoryFormState>>,
   index: number,
 ) {
   setValues((current) => ({
@@ -302,7 +331,7 @@ function isGitHubRepositorySegment(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
 }
 
-function hasCompleteCatalog(values: RepositoryFormValues): boolean {
+function hasCompleteCatalog(values: RepositoryFormState): boolean {
   if (values.openingName.trim().length === 0 || values.actualName.trim().length === 0) {
     return false;
   }

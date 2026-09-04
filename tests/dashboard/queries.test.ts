@@ -29,6 +29,7 @@ describe("dashboard projections", () => {
   it("derives headroom from settled balance minus outsider reservations without a default floor", async () => {
     const { sql } = sqlHarness([
       [{ settled_balance: -2, earned_total: 3, given_total: 5, reserved_points: 7 }],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -39,12 +40,14 @@ describe("dashboard projections", () => {
       givenTotal: 5,
       reservedPoints: 7,
       availableHeadroom: -9,
+      recentSettlements: [],
     });
   });
 
   it("only displays an explicitly configured credit floor", async () => {
     const { sql } = sqlHarness([
       [{ settled_balance: 12, earned_total: 19, given_total: 7, reserved_points: 4 }],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql, creditFloor: 5 });
@@ -56,7 +59,53 @@ describe("dashboard projections", () => {
       reservedPoints: 4,
       availableHeadroom: 8,
       creditFloor: 5,
+      recentSettlements: [],
     });
+  });
+
+  it("projects recent settlement proof links without credentials, secrets, or churn fields", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: 12, earned_total: 19, given_total: 7, reserved_points: 4 }],
+      [
+        {
+          id: "settlement-9",
+          repository_name: "co-op/harbour",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          pull_request_number: 12,
+          pull_request_title: "Seal the lock",
+          pull_request_url: "https://github.com/co-op/harbour/pull/12",
+          proof_sha256: proof,
+          credits: 4,
+          review_rounds: 3,
+          settled_at: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.recentSettlements).toEqual([
+      {
+        id: "settlement-9",
+        repositoryName: "co-op/harbour",
+        issueNumber: 9,
+        issueTitle: "Close the lock",
+        issueUrl: "https://github.com/co-op/harbour/issues/9",
+        pullRequestNumber: 12,
+        pullRequestTitle: "Seal the lock",
+        pullRequestUrl: "https://github.com/co-op/harbour/pull/12",
+        proofSha256: proof,
+        credits: 4,
+        reviewRounds: 3,
+        settledAt: "2026-09-03T00:00:00.000Z",
+      },
+    ]);
+    const projectionSql = captures[1]?.text.toLowerCase() ?? "";
+    expect(projectionSql).toMatch(/from settlements/);
+    expect(projectionSql).toMatch(/order by settlements\.created_at desc/);
+    expect(projectionSql).not.toMatch(/encrypted_oauth_token|access_token|auth_secret|webhook_secret|credential|churn/);
   });
 
   it("uses repository reserve order first and oldest issues second for eligible work", async () => {

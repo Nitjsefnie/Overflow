@@ -9,6 +9,8 @@ export default async function ModerationPage() {
     redirect("/dashboard");
   }
 
+  const { ModerationControls } = await import("@/components/moderation-controls");
+
   let audits: OpenAuditProjection[] | null;
   try {
     const { listOpenAudits } = await import("@/lib/dashboard/queries");
@@ -40,8 +42,11 @@ export default async function ModerationPage() {
           <ol>
             {audits.map((audit) => (
               <li key={audit.id}>
-                <strong>{audit.targetLogin}</strong> · reported by {audit.reporterLogin} · {audit.settledSampleSize} settled pairs
-                {audit.repositoryName === null ? " · all repositories" : ` · ${audit.repositoryName}`}
+                <p>
+                  <strong>{audit.targetLogin}</strong> · reported by {audit.reporterLogin} · {audit.settledSampleSize} settled pairs
+                  {audit.repositoryName === null ? " · all repositories" : ` · ${audit.repositoryName}`}
+                </p>
+                <ModerationControls auditId={audit.id} targetLogin={audit.targetLogin} />
               </li>
             ))}
           </ol>

@@ -47,7 +47,8 @@ a:hover {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -333,6 +334,37 @@ dd {
   transform: rotate(2deg);
 }
 
+.recent-settlements {
+  margin-top: 2rem;
+  padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+.recent-settlement-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 1.4rem 0 0;
+  list-style: none;
+  border-top: 2px solid var(--line);
+}
+
+.recent-settlement {
+  padding: 1.1rem 0;
+  border-bottom: 1px solid #8a8479;
+}
+
+.recent-settlement-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.65rem;
+  font-weight: 800;
+}
+
+.recent-settlement-links a:hover {
+  background: var(--credit);
+}
+
 .text-link {
   display: inline-block;
   margin-top: 0.5rem;
@@ -423,7 +455,20 @@ dd {
   font-weight: 500;
 }
 
-.field input:focus {
+.field textarea {
+  width: 100%;
+  min-height: 6.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: #fffdf7;
+  color: var(--ink);
+  font-weight: 500;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
   border-color: var(--focus);
 }
 
@@ -532,6 +577,11 @@ button:disabled {
   color: var(--credit-ink);
 }
 
+.feedback.pending {
+  background: var(--paper-deep);
+  color: var(--ink);
+}
+
 .calibration-panel h1 {
   max-width: none;
   font-size: clamp(2.35rem, 6vw, 4.5rem);
@@ -587,6 +637,25 @@ button:disabled {
 .audit-queue li {
   padding: 0.5rem 0;
   border-bottom: 1px solid #8a8479;
+}
+
+.audit-queue li > p {
+  margin-bottom: 0;
+}
+
+.moderation-controls {
+  margin-top: 1rem;
+}
+
+.moderation-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+}
+
+.moderation-action-buttons .action-button {
+  margin-top: 0;
 }
 
 .landing-page {

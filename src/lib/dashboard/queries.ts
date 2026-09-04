@@ -15,7 +15,24 @@ export type DashboardProjection = {
   givenTotal: number;
   reservedPoints: number;
   availableHeadroom: number;
+  recentSettlements: RecentSettlementProjection[];
   creditFloor?: number;
+};
+
+/** A dashboard-safe settlement summary that links a member to the complete proof page. */
+export type RecentSettlementProjection = {
+  id: string;
+  repositoryName: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  pullRequestNumber: number;
+  pullRequestTitle: string;
+  pullRequestUrl: string;
+  proofSha256: string;
+  credits: number;
+  reviewRounds: number;
+  settledAt: string;
 };
 
 export type EligibleIssueProjection = {
@@ -70,6 +87,21 @@ type DashboardRow = {
   earned_total: number | string | null;
   given_total: number | string | null;
   reserved_points: number | string | null;
+};
+
+type RecentSettlementRow = {
+  id: string;
+  repository_name: string;
+  issue_number: number | string;
+  issue_title: string;
+  issue_url: string;
+  pull_request_number: number | string;
+  pull_request_title: string;
+  pull_request_url: string;
+  proof_sha256: string;
+  credits: number | string;
+  review_rounds: number | string;
+  settled_at: string | Date;
 };
 
 type EligibleIssueRow = {
@@ -163,6 +195,29 @@ export async function getDashboard(
           and lower(issues.claim_assignee_github_login) <> lower(sponsors.github_login)
       ), 0)::integer as reserved_points
   `;
+  const recentSettlementRows = await sql<RecentSettlementRow[]>`
+    select
+      settlements.id,
+      repositories.owner_name as repository_name,
+      issues.issue_number,
+      issues.title as issue_title,
+      issues.url as issue_url,
+      pull_requests.pull_request_number,
+      pull_requests.title as pull_request_title,
+      pull_requests.url as pull_request_url,
+      settlements.proof_sha256,
+      settlements.credits,
+      settlements.review_rounds,
+      settlements.created_at as settled_at
+    from settlements
+    join issues on issues.id = settlements.issue_id
+    join pull_requests on pull_requests.id = settlements.pull_request_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where (settlements.creditor_id = ${accountId} or settlements.debtor_id = ${accountId})
+      and settlements.status in ('SETTLED', 'UNCLAIMED')
+    order by settlements.created_at desc
+    limit 5
+  `;
 
   const settledBalance = readNumber(row?.settled_balance ?? 0, "Settled balance");
   const reservedPoints = readNumber(row?.reserved_points ?? 0, "Reserved points");
@@ -172,6 +227,7 @@ export async function getDashboard(
     givenTotal: readNumber(row?.given_total ?? 0, "Given total"),
     reservedPoints,
     availableHeadroom: settledBalance - reservedPoints,
+    recentSettlements: recentSettlementRows.map(toRecentSettlementProjection),
   };
   if (dependencies.creditFloor !== undefined) {
     projection.creditFloor = dependencies.creditFloor;
@@ -376,6 +432,23 @@ function toCalibrationPair(row: CalibrationRow): CalibrationPair {
     proofSha256: readText(row.proof_sha256, "GitHub proof fingerprint"),
     offeredDifficulty: readNumber(row.offered_difficulty, "Offered difficulty"),
     settledDifficulty: readNumber(row.settled_difficulty, "Settled difficulty"),
+  };
+}
+
+function toRecentSettlementProjection(row: RecentSettlementRow): RecentSettlementProjection {
+  return {
+    id: readText(row.id, "Settlement identifier"),
+    repositoryName: readText(row.repository_name, "Repository name"),
+    issueNumber: readNumber(row.issue_number, "Issue number"),
+    issueTitle: readText(row.issue_title, "Issue title"),
+    issueUrl: readText(row.issue_url, "Issue URL"),
+    pullRequestNumber: readNumber(row.pull_request_number, "Pull request number"),
+    pullRequestTitle: readText(row.pull_request_title, "Pull request title"),
+    pullRequestUrl: readText(row.pull_request_url, "Pull request URL"),
+    proofSha256: readText(row.proof_sha256, "Settlement proof"),
+    credits: readNumber(row.credits, "Credits"),
+    reviewRounds: readNumber(row.review_rounds, "Review rounds"),
+    settledAt: readTimestamp(row.settled_at, "Settlement time"),
   };
 }
 

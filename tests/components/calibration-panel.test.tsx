@@ -21,6 +21,7 @@ describe("calibration comparison", () => {
     expect(screen.getByText("Outsider settlement sample · 14 pairs")).toBeVisible();
     expect(screen.getByText("Mean delta −0.5")).toBeVisible();
     expect(screen.getByText("Difference between means −1.5")).toBeVisible();
+    expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
   it("names the next action when no paired samples exist", () => {
