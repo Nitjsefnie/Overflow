@@ -221,8 +221,8 @@ describe("initial PostgreSQL materialization", () => {
     const proofFingerprint = "a".repeat(64);
 
     await sql`
-      insert into pull_request_issues (pull_request_id, issue_id)
-      values (${pullRequest.id}, ${secondIssueId})
+      insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+      values (${pullRequest.id}, ${secondIssueId}, ${pullRequest.repositoryId})
     `;
     await sql`
       insert into settlements (
@@ -241,6 +241,19 @@ describe("initial PostgreSQL materialization", () => {
       { issue_id: pullRequest.issueId, proof_sha256: proofFingerprint },
       { issue_id: secondIssueId, proof_sha256: proofFingerprint },
     ].sort((left, right) => left.issue_id.localeCompare(right.issue_id)));
+  });
+
+  it("rejects a cross-repository PR/issue association before any settlement can reference it", async () => {
+    const pullRequest = await insertPullRequest(sql);
+    const foreignIssue = await insertIssue(sql);
+    const [pullRequestRow] = await sql<{ repository_id: string }[]>`
+      select repository_id from pull_requests where id = ${pullRequest.id}
+    `;
+
+    await expect(sql`
+      insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+      values (${pullRequest.id}, ${foreignIssue.id}, ${pullRequestRow.repository_id})
+    `).rejects.toThrow(/foreign key/);
   });
 
   it("claims an unclaimed GitHub identity without rewriting its proof or amount", async () => {
@@ -276,6 +289,47 @@ describe("initial PostgreSQL materialization", () => {
       proof_sha256: proofFingerprint,
       status: "SETTLED",
     });
+  });
+
+  it.each([
+    ["creditor", "BANNED"],
+    ["creditor", "RECALIBRATING"],
+    ["sponsor", "BANNED"],
+    ["sponsor", "RECALIBRATING"],
+  ])("leaves an unclaimed settlement unclaimed when its %s is %s", async (ineligibleActor, state) => {
+    const pullRequest = await insertPullRequest(sql);
+    const contributorId = await insertUserWithLogin(sql, `ineligible-${nextExternalId()}`);
+    const [contributor] = await sql<{ github_login: string }[]>`
+      select github_login from users where id = ${contributorId}
+    `;
+    const ineligibleUserId = ineligibleActor === "creditor" ? contributorId : pullRequest.sponsorId;
+    const proofFingerprint = `${state === "BANNED" ? "b" : "c"}`.repeat(64);
+
+    await sql`
+      update users set enforcement_state = ${state} where id = ${ineligibleUserId}
+    `;
+    await sql`
+      insert into settlements (
+        pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+        opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      )
+      values (
+        ${pullRequest.id}, ${pullRequest.issueId}, null, ${contributor.github_login}, ${pullRequest.sponsorId},
+        5, 6, 2, 4, ${proofFingerprint}, ${"UNCLAIMED"}
+      )
+    `;
+
+    await claimGitHubIdentity(sql, contributorId, contributor.github_login);
+
+    const [claimed] = await sql<{
+      creditor_id: string | null;
+      status: string;
+      credits: number;
+    }[]>`
+      select creditor_id, status, credits
+      from settlements where issue_id = ${pullRequest.issueId}
+    `;
+    expect(claimed).toEqual({ creditor_id: null, status: "UNCLAIMED", credits: 4 });
   });
 
   it("derives zero-sum ledger entries and account balances from settlements", async () => {
@@ -518,7 +572,218 @@ describe("initial PostgreSQL materialization", () => {
     expect(removalChange).toEqual({ change_kind: "REMOVE", pull_request_id: null });
   });
 
-  it("permits a failed GitHub delivery to be reclaimed for retry while keeping processed deliveries deduplicated", async () => {
+  it("records deterministic add, change, and removal provenance for self-work and hand closures", async () => {
+    const selfWorkSponsorLogin = `self-work-sponsor-${nextExternalId()}`;
+    const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
+    const selfWorkContributorId = await insertUserWithLogin(sql, `self-work-contributor-${nextExternalId()}`);
+    const selfWorkRepositoryId = await insertRepository(sql, selfWorkSponsorId);
+    const [selfWorkRepository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${selfWorkRepositoryId}
+    `;
+    const store = new PostgresFoldStore(sql);
+    const selfWorkSnapshot = materializationSnapshot({
+      repositoryId: selfWorkRepositoryId,
+      ownerName: selfWorkRepository.owner_name,
+      sponsorId: selfWorkSponsorId,
+      contributorId: selfWorkContributorId,
+      sponsorLogin: selfWorkSponsorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      existingIssues: [],
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorLogin = selfWorkSponsorLogin;
+
+    const selfWorkAddRun = await store.beginRun(selfWorkRepositoryId);
+    await expect(store.materialize({
+      repositoryId: selfWorkRepositoryId,
+      runId: selfWorkAddRun,
+      fold: foldRepository(selfWorkSnapshot),
+    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+
+    const selfWorkChangedSnapshot = structuredClone(selfWorkSnapshot);
+    selfWorkChangedSnapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/7"];
+    const selfWorkChangeRun = await store.beginRun(selfWorkRepositoryId);
+    await expect(store.materialize({
+      repositoryId: selfWorkRepositoryId,
+      runId: selfWorkChangeRun,
+      fold: foldRepository(selfWorkChangedSnapshot),
+    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+
+    const selfWorkRemoveRun = await store.beginRun(selfWorkRepositoryId);
+    await expect(store.materialize({
+      repositoryId: selfWorkRepositoryId,
+      runId: selfWorkRemoveRun,
+      fold: foldRepository({ ...selfWorkChangedSnapshot, issues: [] }),
+    })).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+
+    const selfWorkChanges = await sql<{
+      entity_kind: string;
+      change_kind: string;
+      before_state: { actualPoints?: number } | null;
+      after_state: { actualPoints?: number } | null;
+    }[]>`
+      select entity_kind, change_kind, before_state, after_state
+      from reconciliation_changes
+      where reconciliation_run_id in (${selfWorkAddRun}, ${selfWorkChangeRun}, ${selfWorkRemoveRun})
+      order by created_at, id
+    `;
+    expect(selfWorkChanges).toEqual([
+      {
+        entity_kind: "SELF_WORK_CALIBRATION",
+        change_kind: "ADD",
+        before_state: null,
+        after_state: expect.objectContaining({ actualPoints: 6 }),
+      },
+      {
+        entity_kind: "SELF_WORK_CALIBRATION",
+        change_kind: "CHANGE",
+        before_state: expect.objectContaining({ actualPoints: 6 }),
+        after_state: expect.objectContaining({ actualPoints: 7 }),
+      },
+      {
+        entity_kind: "SELF_WORK_CALIBRATION",
+        change_kind: "REMOVE",
+        before_state: expect.objectContaining({ actualPoints: 7 }),
+        after_state: null,
+      },
+    ]);
+
+    const closureSponsorId = await insertUserWithLogin(sql, `closure-sponsor-${nextExternalId()}`);
+    const closureContributorId = await insertUserWithLogin(sql, `closure-contributor-${nextExternalId()}`);
+    const closureRepositoryId = await insertRepository(sql, closureSponsorId);
+    const [closureRepository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${closureRepositoryId}
+    `;
+    const closureSnapshot = materializationSnapshot({
+      repositoryId: closureRepositoryId,
+      ownerName: closureRepository.owner_name,
+      sponsorId: closureSponsorId,
+      contributorId: closureContributorId,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      existingIssues: [],
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    closureSnapshot.issues[0]!.closingPullRequests = [];
+    const closureAddFold = foldRepository(closureSnapshot);
+    const closureAddRun = await store.beginRun(closureRepositoryId);
+    await expect(store.materialize({
+      repositoryId: closureRepositoryId,
+      runId: closureAddRun,
+      fold: closureAddFold,
+    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+
+    const closureChangeFold = structuredClone(closureAddFold);
+    closureChangeFold.unwritableClosures[0]!.reason = "No authoritative closing PR remains after refresh.";
+    const closureChangeRun = await store.beginRun(closureRepositoryId);
+    await expect(store.materialize({
+      repositoryId: closureRepositoryId,
+      runId: closureChangeRun,
+      fold: closureChangeFold,
+    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+
+    const closureRemoveFold = structuredClone(closureChangeFold);
+    closureRemoveFold.unwritableClosures = [];
+    const closureRemoveRun = await store.beginRun(closureRepositoryId);
+    await expect(store.materialize({
+      repositoryId: closureRepositoryId,
+      runId: closureRemoveRun,
+      fold: closureRemoveFold,
+    })).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+
+    const closureChanges = await sql<{
+      entity_kind: string;
+      change_kind: string;
+      before_state: { reason?: string } | null;
+      after_state: { reason?: string } | null;
+    }[]>`
+      select entity_kind, change_kind, before_state, after_state
+      from reconciliation_changes
+      where reconciliation_run_id in (${closureAddRun}, ${closureChangeRun}, ${closureRemoveRun})
+      order by created_at, id
+    `;
+    expect(closureChanges).toEqual([
+      {
+        entity_kind: "UNWRITABLE_CLOSURE",
+        change_kind: "ADD",
+        before_state: null,
+        after_state: expect.objectContaining({ reason: "No merged GitHub GraphQL closing pull request was found." }),
+      },
+      {
+        entity_kind: "UNWRITABLE_CLOSURE",
+        change_kind: "CHANGE",
+        before_state: expect.objectContaining({ reason: "No merged GitHub GraphQL closing pull request was found." }),
+        after_state: expect.objectContaining({ reason: "No authoritative closing PR remains after refresh." }),
+      },
+      {
+        entity_kind: "UNWRITABLE_CLOSURE",
+        change_kind: "REMOVE",
+        before_state: expect.objectContaining({ reason: "No authoritative closing PR remains after refresh." }),
+        after_state: null,
+      },
+    ]);
+  });
+
+  it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
+    const store = new PostgresFoldStore(sql);
+    const delivery = {
+      deliveryId: "delivery-stale-reclaim",
+      event: "pull_request" as const,
+      action: "closed",
+      repositoryGitHubId: nextExternalId(),
+      repositoryFullName: "octo/example",
+    };
+
+    const first = expectClaimedLease(await store.claimDelivery(delivery));
+    await expect(store.claimDelivery(delivery)).resolves.toEqual({ status: "DUPLICATE" });
+
+    await sql`
+      update webhook_deliveries
+      set lease_expires_at = now() - interval '1 second'
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    const reclaimed = expectClaimedLease(await store.claimDelivery(delivery));
+    expect(reclaimed.leaseToken).not.toBe(first.leaseToken);
+
+    const [record] = await sql<{ processing_state: string; attempt_count: number }[]>`
+      select processing_state, attempt_count from webhook_deliveries
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    expect(record).toEqual({ processing_state: "PENDING", attempt_count: 2 });
+  });
+
+  it("allows only the current delivery lease owner to complete a webhook", async () => {
+    const store = new PostgresFoldStore(sql);
+    const delivery = {
+      deliveryId: "delivery-owner-check",
+      event: "pull_request" as const,
+      action: "closed",
+      repositoryGitHubId: nextExternalId(),
+      repositoryFullName: "octo/example",
+    };
+
+    const first = expectClaimedLease(await store.claimDelivery(delivery));
+    await sql`
+      update webhook_deliveries
+      set lease_expires_at = now() - interval '1 second'
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    const replacement = expectClaimedLease(await store.claimDelivery(delivery));
+
+    await expect(store.markProcessed(delivery.deliveryId, first.leaseToken)).resolves.toBe(false);
+    await expect(store.markProcessed(delivery.deliveryId, replacement.leaseToken)).resolves.toBe(true);
+
+    const [record] = await sql<{ processing_state: string }[]>`
+      select processing_state from webhook_deliveries
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    expect(record).toEqual({ processing_state: "PROCESSED" });
+  });
+
+  it("reclaims a failed delivery only through a new lease and persists a sanitized failure", async () => {
     const store = new PostgresFoldStore(sql);
     const delivery = {
       deliveryId: "delivery-retryable",
@@ -528,11 +793,13 @@ describe("initial PostgreSQL materialization", () => {
       repositoryFullName: "octo/example",
     };
 
-    await expect(store.claimDelivery(delivery)).resolves.toBe("NEW");
-    await store.markFailed(delivery.deliveryId, "connection string must never be saved");
-    await expect(store.claimDelivery(delivery)).resolves.toBe("NEW");
-    await store.markProcessed(delivery.deliveryId);
-    await expect(store.claimDelivery(delivery)).resolves.toBe("DUPLICATE");
+    const first = expectClaimedLease(await store.claimDelivery(delivery));
+    await expect(
+      store.markFailed(delivery.deliveryId, first.leaseToken, "connection string must never be saved"),
+    ).resolves.toBe(true);
+    const retry = expectClaimedLease(await store.claimDelivery(delivery));
+    await expect(store.markProcessed(delivery.deliveryId, retry.leaseToken)).resolves.toBe(true);
+    await expect(store.claimDelivery(delivery)).resolves.toEqual({ status: "DUPLICATE" });
 
     const [record] = await sql<{ processing_state: string; error_message: string | null }[]>`
       select processing_state, error_message from webhook_deliveries
@@ -545,6 +812,16 @@ describe("initial PostgreSQL materialization", () => {
 function nextExternalId(): number {
   externalId += 1;
   return externalId;
+}
+
+function expectClaimedLease(
+  claim: Awaited<ReturnType<PostgresFoldStore["claimDelivery"]>>,
+): { status: "CLAIMED"; leaseToken: string } {
+  expect(claim).toEqual({ status: "CLAIMED", leaseToken: expect.any(String) });
+  if (claim.status !== "CLAIMED") {
+    throw new Error("Expected a claimed webhook delivery lease.");
+  }
+  return claim;
 }
 
 async function insertUser(client: QueryableSql, githubUserId = nextExternalId()): Promise<string> {
@@ -657,7 +934,7 @@ async function insertIssue(
 async function insertPullRequest(
   client: QueryableSql,
   options: { actualPoints?: number } = {},
-): Promise<{ id: string; issueId: string; sponsorId: string }> {
+): Promise<{ id: string; issueId: string; sponsorId: string; repositoryId: string }> {
   const issue = await insertIssue(client);
   const contributorId = await insertUser(client);
   const githubPullRequestId = nextExternalId();
@@ -693,10 +970,15 @@ async function insertPullRequest(
     returning id
   `;
   await client`
-    insert into pull_request_issues (pull_request_id, issue_id)
-    values (${pullRequest.id}, ${issue.id})
+    insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+    values (${pullRequest.id}, ${issue.id}, ${issue.repositoryId})
   `;
-  return { id: pullRequest.id, issueId: issue.id, sponsorId: issue.sponsorId };
+  return {
+    id: pullRequest.id,
+    issueId: issue.id,
+    sponsorId: issue.sponsorId,
+    repositoryId: issue.repositoryId,
+  };
 }
 
 async function insertSiblingIssue(client: QueryableSql, issueId: string): Promise<string> {
@@ -733,26 +1015,34 @@ function materializationSnapshot(input: {
   ownerName: string;
   sponsorId: string;
   contributorId: string;
+  sponsorLogin?: string;
+  contributorLogin?: string;
   issueLabels: string[];
   actualLabel: string;
   existingIssues: RepositoryFoldSnapshot["existingIssues"];
+  githubIssueId?: number;
+  githubPullRequestId?: number;
 }): RepositoryFoldSnapshot {
+  const sponsorLogin = input.sponsorLogin ?? "materialization-sponsor";
+  const contributorLogin = input.contributorLogin ?? "materialization-contributor";
+  const githubIssueId = input.githubIssueId ?? 9_000_000;
+  const githubPullRequestId = input.githubPullRequestId ?? 9_000_001;
   return {
     repository: {
       id: input.repositoryId,
       ownerName: input.ownerName,
       active: true,
-      sponsor: { id: input.sponsorId, githubLogin: "materialization-sponsor", enforcementState: "ACTIVE" },
+      sponsor: { id: input.sponsorId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
       difficultyScheme: validDifficultyScheme(),
     },
     users: [
-      { id: input.sponsorId, githubLogin: "materialization-sponsor", enforcementState: "ACTIVE" },
-      { id: input.contributorId, githubLogin: "materialization-contributor", enforcementState: "ACTIVE" },
+      { id: input.sponsorId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
+      { id: input.contributorId, githubLogin: contributorLogin, enforcementState: "ACTIVE" },
     ],
     existingIssues: input.existingIssues,
     issues: [
       {
-        id: 9_000_000,
+        id: githubIssueId,
         number: 1,
         title: "A materialized issue",
         body: "Issue body",
@@ -761,14 +1051,14 @@ function materializationSnapshot(input: {
         labels: input.issueLabels,
         closingPullRequests: [
           {
-            id: 9_000_001,
+            id: githubPullRequestId,
             number: 11,
             title: "A materialized pull request",
             body: "Pull request body",
             url: "https://github.com/example/materialized/pull/11",
             state: "MERGED",
             mergedAt: "2026-09-01T12:00:00.000Z",
-            authorLogin: "materialization-contributor",
+            authorLogin: contributorLogin,
             labels: [input.actualLabel],
             reviews: [],
             rawDiff: "materialized diff",

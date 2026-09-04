@@ -374,7 +374,10 @@ type GitHubGraphqlIssueNode = {
   url: string;
   state: "OPEN" | "CLOSED";
   labels: GitHubGraphqlLabelConnection;
+  assignees: { nodes: GitHubGraphqlAssignee[] };
 };
+
+type GitHubGraphqlAssignee = { login: string };
 
 type GitHubGraphqlPullRequestNode = {
   databaseId: number | null;
@@ -408,6 +411,9 @@ const issuesQuery = `
           labels(first: 100) {
             nodes { name }
             pageInfo { hasNextPage endCursor }
+          }
+          assignees(first: 2) {
+            nodes { login }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -494,7 +500,16 @@ function toGitHubIssue(node: GitHubGraphqlIssueNode, labels: string[]): GitHubIs
     url: node.url,
     state: node.state,
     labels,
+    claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),
   };
+}
+
+function claimAssigneeLogin(assignees: readonly GitHubGraphqlAssignee[]): string | null {
+  if (assignees.length !== 1) {
+    return null;
+  }
+  const login = assignees[0]?.login.trim();
+  return login === undefined || login.length === 0 ? null : login;
 }
 
 function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode, labels: string[]): GitHubPullRequest {

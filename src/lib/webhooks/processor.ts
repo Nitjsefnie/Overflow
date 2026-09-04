@@ -1,10 +1,10 @@
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 
 export type WebhookDeliveryStore = {
-  claimDelivery(delivery: GitHubWebhookDelivery): Promise<"NEW" | "DUPLICATE">;
+  claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
-  markProcessed(deliveryId: string): Promise<void>;
-  markFailed(deliveryId: string, errorMessage: string): Promise<void>;
+  markProcessed(deliveryId: string, leaseToken: string): Promise<boolean>;
+  markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
 };
 
 export type WebhookProcessorDependencies = {
@@ -14,12 +14,16 @@ export type WebhookProcessorDependencies = {
 
 export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" };
 
+export type WebhookDeliveryClaim =
+  | { status: "CLAIMED"; leaseToken: string }
+  | { status: "DUPLICATE" };
+
 export async function processWebhook(
   dependencies: WebhookProcessorDependencies,
   delivery: GitHubWebhookDelivery,
 ): Promise<WebhookProcessingResult> {
   const claim = await dependencies.store.claimDelivery(delivery);
-  if (claim === "DUPLICATE") {
+  if (claim.status === "DUPLICATE") {
     return { status: "DUPLICATE" };
   }
 
@@ -28,10 +32,14 @@ export async function processWebhook(
     if (repository !== null && repository.active) {
       await dependencies.reconcileRepository(repository.id);
     }
-    await dependencies.store.markProcessed(delivery.deliveryId);
-    return { status: "PROCESSED" };
+    const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
+    return { status: markedProcessed ? "PROCESSED" : "DUPLICATE" };
   } catch {
-    await dependencies.store.markFailed(delivery.deliveryId, "Webhook processing failed.");
+    try {
+      await dependencies.store.markFailed(delivery.deliveryId, claim.leaseToken, "Webhook processing failed.");
+    } catch {
+      // A stale pending lease remains reclaimable if recording its failure also fails.
+    }
     throw new Error("Webhook processing failed.");
   }
 }

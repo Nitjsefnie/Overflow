@@ -57,7 +57,7 @@ export async function reconcileRepository(
 
   const runId = await dependencies.store.beginRun(repositoryId);
   try {
-    if (!repository.active || repository.sponsor.enforcementState === "BANNED") {
+    if (!repository.active || repository.sponsor.enforcementState !== "ACTIVE") {
       await dependencies.store.completeRun(runId);
       return {
         repositoryId,
@@ -104,6 +104,7 @@ export async function reconcileRepository(
       existingIssues,
       issues: issuePullRequests.map(({ issue, closingPullRequests }) => ({
         ...issue,
+        claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
         closingPullRequests: closingPullRequests.map((pullRequest) => ({
           ...pullRequest,
           reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],

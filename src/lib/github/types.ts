@@ -21,6 +21,7 @@ export type GitHubIssue = {
   url: string;
   state: IssueState;
   labels: string[];
+  claimAssigneeGitHubLogin: string | null;
 };
 
 export type GitHubPullRequest = {

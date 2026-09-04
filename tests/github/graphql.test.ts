@@ -48,6 +48,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         url: "https://github.com/octo/overflow/issues/1",
         state: "OPEN",
         labels: ["size/M"],
+        claimAssigneeGitHubLogin: null,
       },
       {
         id: 102,
@@ -57,9 +58,46 @@ describe("GitHubGateway GraphQL source adapter", () => {
         url: "https://github.com/octo/overflow/issues/2",
         state: "OPEN",
         labels: ["size/M"],
+        claimAssigneeGitHubLogin: null,
       },
     ]);
     expect(cursors).toEqual([null, "cursor-2"]);
+  });
+
+  it("maps only one unambiguous GraphQL assignee as an issue claim lock", async () => {
+    let query = "";
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        query = (JSON.parse(String(init?.body)) as { query: string }).query;
+        return Response.json({
+          data: {
+            repository: {
+              issues: {
+                nodes: [
+                  issueNode(101, 1, "One assignee", undefined, [{ login: "claim-holder" }]),
+                  issueNode(102, 2, "No assignee", undefined, []),
+                  issueNode(103, 3, "Several assignees", undefined, [
+                    { login: "first" },
+                    { login: "second" },
+                  ]),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issues.map((issue) => issue.claimAssigneeGitHubLogin)).toEqual([
+      "claim-holder",
+      null,
+      null,
+    ]);
+    expect(query).toMatch(/assignees\(first:\s*2\)/);
   });
 
   it("collects labels after the first one hundred nodes for every returned issue", async () => {
@@ -280,6 +318,7 @@ function issueNode(
     nodes: [{ name: "size/M" }],
     pageInfo: { hasNextPage: false, endCursor: null },
   },
+  assignees: Array<{ login: string }> = [],
 ) {
   return {
     databaseId: id,
@@ -289,6 +328,7 @@ function issueNode(
     url: `https://github.com/octo/overflow/issues/${number}`,
     state: "OPEN",
     labels,
+    assignees: { nodes: assignees },
   };
 }
 

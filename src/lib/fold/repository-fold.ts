@@ -142,7 +142,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const selfWorkCalibrations: SelfWorkCalibration[] = [];
   const unwritableClosures: UnwritableClosure[] = [];
   const policyViolations: FoldPolicyViolation[] = [];
-  const canCreateSettlements = snapshot.repository.active && snapshot.repository.sponsor.enforcementState !== "BANNED";
+  const canCreateSettlements = snapshot.repository.active && isSettlementEligible(snapshot.repository.sponsor);
 
   for (const issue of snapshot.issues) {
     const opening = resolveOpening(issue, existingIssuesByGitHubId.get(issue.id), snapshot.repository.difficultyScheme);
@@ -201,6 +201,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     );
 
     if (!canCreateSettlements) {
+      continue;
+    }
+
+    if (author !== undefined && !isSettlementEligible(author)) {
       continue;
     }
 
@@ -450,6 +454,10 @@ function hashRawDiff(rawDiff: string): string {
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
+}
+
+function isSettlementEligible(user: FoldUser): boolean {
+  return user.enforcementState === "ACTIVE";
 }
 
 function validTimestamp(value: string | null): value is string {

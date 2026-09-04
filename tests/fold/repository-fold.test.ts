@@ -164,14 +164,22 @@ describe("foldRepository", () => {
 
   it.each([
     ["a banned sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "BANNED"; }],
+    ["a recalibrating sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "RECALIBRATING"; }],
+    ["a banned PR author", (snapshot: RepositoryFoldSnapshot) => {
+      snapshot.users.find((user) => user.id === "contributor")!.enforcementState = "BANNED";
+    }],
+    ["a recalibrating PR author", (snapshot: RepositoryFoldSnapshot) => {
+      snapshot.users.find((user) => user.id === "contributor")!.enforcementState = "RECALIBRATING";
+    }],
     ["an inactive repository", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.active = false; }],
-  ])("does not create new settlements for %s", (_name, change) => {
+  ])("does not create new settlements or ledger entries for %s", (_name, change) => {
     const snapshot = outsiderFixture();
     change(snapshot);
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements).toEqual([]);
+    expect(result.ledgerEntries).toEqual([]);
   });
 });
 

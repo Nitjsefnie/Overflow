@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { JSONValue } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
@@ -8,6 +9,7 @@ import type {
   FoldResult,
   FoldSettlement,
   FoldUser,
+  SelfWorkCalibration,
 } from "@/lib/fold/repository-fold";
 import type {
   ReconciliationDeltas,
@@ -15,7 +17,7 @@ import type {
   ReconciliationStore,
 } from "@/lib/fold/reconcile";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
-import type { WebhookDeliveryStore } from "@/lib/webhooks/processor";
+import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { decryptToken } from "@/lib/security/token-cipher";
 
 type RepositoryRow = {
@@ -63,6 +65,36 @@ type SettlementRow = {
   proof_sha256: string;
   status: FoldSettlement["status"];
 };
+
+type WebhookDeliveryLeaseRow = {
+  processing_lease_token: string;
+};
+
+type SelfWorkCalibrationRow = {
+  id: string;
+  pull_request_id: string;
+  issue_id: string;
+  github_pull_request_id: number | string;
+  github_issue_id: number | string;
+  user_id: string;
+  opening_comparison_points: number;
+  actual_points: number | null;
+};
+
+type UnwritableClosureRow = {
+  id: string;
+  issue_id: string;
+  github_issue_id: number | string;
+  reason: string;
+};
+
+type ReconciledEntityKind =
+  | "SETTLEMENT"
+  | "SELF_WORK_CALIBRATION"
+  | "UNWRITABLE_CLOSURE"
+  | "POLICY_VIOLATION";
+
+type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE" | "POLICY_VIOLATION";
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   public constructor(
@@ -182,10 +214,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return this.sql.begin(async (transaction) => {
       const issueIds = await upsertIssues(transaction, input.repositoryId, input.fold);
       const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, input.fold, issueIds);
-      await replacePullRequestIssueLinks(transaction, input.fold, issueIds, pullRequestIds);
-      const deltas = await materializeSettlements(transaction, input, issueIds, pullRequestIds);
-      await materializeSelfWorkCalibrations(transaction, input.fold, issueIds, pullRequestIds);
-      await materializeUnwritableClosures(transaction, input.fold, issueIds);
+      await replacePullRequestIssueLinks(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
+      const settlementDeltas = await materializeSettlements(transaction, input, issueIds, pullRequestIds);
+      const selfWorkDeltas = await materializeSelfWorkCalibrations(transaction, input, issueIds, pullRequestIds);
+      const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds);
       await materializeReviewRounds(transaction, input.fold, pullRequestIds);
       await deleteAbsentMaterialization(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
       await recordPolicyViolations(transaction, input.runId, input.fold);
@@ -194,20 +226,36 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         set status = ${"COMPLETED"}, completed_at = now(), error_message = null
         where id = ${input.runId}
       `;
-      return deltas;
+      return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas);
     }) as Promise<ReconciliationDeltas>;
   }
 
-  public async claimDelivery(delivery: GitHubWebhookDelivery): Promise<"NEW" | "DUPLICATE"> {
-    const rows = await this.sql<{ id: string }[]>`
-      insert into webhook_deliveries (github_delivery_id, event_name, processing_state)
-      values (${delivery.deliveryId}, ${delivery.event}, ${"PENDING"})
+  public async claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim> {
+    const leaseToken = randomUUID();
+    const rows = await this.sql<WebhookDeliveryLeaseRow[]>`
+      insert into webhook_deliveries (
+        github_delivery_id, event_name, processing_state, processing_lease_token, lease_expires_at, attempt_count
+      )
+      values (${delivery.deliveryId}, ${delivery.event}, ${"PENDING"}, ${leaseToken}, now() + interval '5 minutes', 1)
       on conflict (github_delivery_id) do update
-      set processing_state = ${"PENDING"}, error_message = null, processed_at = null
+      set event_name = excluded.event_name,
+          processing_state = ${"PENDING"},
+          processing_lease_token = excluded.processing_lease_token,
+          lease_expires_at = excluded.lease_expires_at,
+          attempt_count = webhook_deliveries.attempt_count + 1,
+          error_message = null,
+          processed_at = null
       where webhook_deliveries.processing_state = ${"FAILED"}
-      returning id
+        or (
+          webhook_deliveries.processing_state = ${"PENDING"}
+          and coalesce(webhook_deliveries.lease_expires_at, webhook_deliveries.received_at) <= now()
+        )
+      returning processing_lease_token::text
     `;
-    return rows.length === 0 ? "DUPLICATE" : "NEW";
+    const [row] = rows;
+    return row === undefined
+      ? { status: "DUPLICATE" }
+      : { status: "CLAIMED", leaseToken: row.processing_lease_token };
   }
 
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null> {
@@ -217,21 +265,37 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return row ?? null;
   }
 
-  public async markProcessed(deliveryId: string): Promise<void> {
-    await this.sql`
+  public async markProcessed(deliveryId: string, leaseToken: string): Promise<boolean> {
+    const rows = await this.sql<{ id: string }[]>`
       update webhook_deliveries
-      set processing_state = ${"PROCESSED"}, processed_at = now(), error_message = null
+      set processing_state = ${"PROCESSED"},
+          processed_at = now(),
+          error_message = null,
+          processing_lease_token = null,
+          lease_expires_at = null
       where github_delivery_id = ${deliveryId}
+        and processing_state = ${"PENDING"}
+        and processing_lease_token = ${leaseToken}
+      returning id
     `;
+    return rows.length === 1;
   }
 
-  public async markFailed(deliveryId: string, errorMessage: string): Promise<void> {
+  public async markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean> {
     void errorMessage;
-    await this.sql`
+    const rows = await this.sql<{ id: string }[]>`
       update webhook_deliveries
-      set processing_state = ${"FAILED"}, error_message = ${"Webhook processing failed."}, processed_at = now()
+      set processing_state = ${"FAILED"},
+          error_message = ${"Webhook processing failed."},
+          processed_at = now(),
+          processing_lease_token = null,
+          lease_expires_at = null
       where github_delivery_id = ${deliveryId}
+        and processing_state = ${"PENDING"}
+        and processing_lease_token = ${leaseToken}
+      returning id
     `;
+    return rows.length === 1;
   }
 }
 
@@ -289,9 +353,14 @@ export async function claimGitHubIdentity(
     await transaction`
       update settlements
       set creditor_id = ${userId}, status = ${"SETTLED"}
-      where status = ${"UNCLAIMED"}
-        and lower(creditor_github_login) = ${normalizeLogin(githubLogin)}
-        and debtor_id <> ${userId}
+      from users as creditor, users as debtor
+      where settlements.status = ${"UNCLAIMED"}
+        and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
+        and settlements.debtor_id <> ${userId}
+        and creditor.id = ${userId}
+        and creditor.enforcement_state = ${"ACTIVE"}
+        and debtor.id = settlements.debtor_id
+        and debtor.enforcement_state = ${"ACTIVE"}
     `;
   });
 }
@@ -407,7 +476,7 @@ async function materializeSettlements(
     const desired = settlementState(settlement);
     if (current === undefined) {
       await insertSettlement(sql, settlement, issueId, pullRequestId);
-      await recordChange(sql, input.runId, pullRequestId, "ADD", null, desired);
+      await recordChange(sql, input.runId, pullRequestId, "SETTLEMENT", "ADD", null, desired);
       adds += 1;
       continue;
     }
@@ -415,14 +484,22 @@ async function materializeSettlements(
     const before = settlementStateFromRow(current);
     if (JSON.stringify(before) !== JSON.stringify(desired)) {
       await updateSettlement(sql, settlement, issueId, pullRequestId);
-      await recordChange(sql, input.runId, pullRequestId, "CHANGE", before, desired);
+      await recordChange(sql, input.runId, pullRequestId, "SETTLEMENT", "CHANGE", before, desired);
       changes += 1;
     }
   }
 
   for (const row of existingByIssue.values()) {
     await sql`delete from settlements where id = ${row.id}`;
-    await recordChange(sql, input.runId, row.pull_request_id, "REMOVE", settlementStateFromRow(row), null);
+    await recordChange(
+      sql,
+      input.runId,
+      row.pull_request_id,
+      "SETTLEMENT",
+      "REMOVE",
+      settlementStateFromRow(row),
+      null,
+    );
     removals += 1;
   }
 
@@ -467,40 +544,163 @@ async function updateSettlement(
 
 async function materializeSelfWorkCalibrations(
   sql: TransactionClient,
-  fold: FoldResult,
+  input: { repositoryId: string; runId: string; fold: FoldResult },
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
-): Promise<void> {
-  for (const calibration of fold.selfWorkCalibrations) {
-    await sql`
-      insert into self_work_calibrations (
-        pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
-      )
-      values (
-        ${requiredId(pullRequestIds, calibration.githubPullRequestId, "Pull request")},
-        ${requiredId(issueIds, calibration.githubIssueId, "Issue")},
-        ${calibration.userId}, ${calibration.openingComparisonPoints}, ${calibration.actualPoints}
-      )
-      on conflict (pull_request_id, issue_id) do update
-      set user_id = excluded.user_id,
-          opening_comparison_points = excluded.opening_comparison_points,
-          actual_points = excluded.actual_points
-    `;
+): Promise<ReconciliationDeltas> {
+  const existingRows = await sql<SelfWorkCalibrationRow[]>`
+    select
+      self_work_calibrations.id,
+      self_work_calibrations.pull_request_id,
+      self_work_calibrations.issue_id,
+      pull_requests.github_pull_request_id,
+      issues.github_issue_id,
+      self_work_calibrations.user_id,
+      self_work_calibrations.opening_comparison_points,
+      self_work_calibrations.actual_points
+    from self_work_calibrations
+    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+    join issues on issues.id = self_work_calibrations.issue_id
+    where issues.repository_id = ${input.repositoryId}
+    order by issues.github_issue_id, pull_requests.github_pull_request_id
+  `;
+  const existingByKey = new Map(
+    existingRows.map((row) => [selfWorkCalibrationKeyFromRow(row), row]),
+  );
+  let adds = 0;
+  let changes = 0;
+  let removals = 0;
+
+  for (const calibration of input.fold.selfWorkCalibrations) {
+    const pullRequestId = requiredId(pullRequestIds, calibration.githubPullRequestId, "Pull request");
+    const issueId = requiredId(issueIds, calibration.githubIssueId, "Issue");
+    const key = selfWorkCalibrationKey(calibration.githubPullRequestId, calibration.githubIssueId);
+    const current = existingByKey.get(key);
+    const desired = selfWorkCalibrationState(calibration);
+    if (current === undefined) {
+      await sql`
+        insert into self_work_calibrations (
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+        )
+        values (
+          ${pullRequestId}, ${issueId}, ${calibration.userId},
+          ${calibration.openingComparisonPoints}, ${calibration.actualPoints}
+        )
+      `;
+      await recordChange(
+        sql,
+        input.runId,
+        pullRequestId,
+        "SELF_WORK_CALIBRATION",
+        "ADD",
+        null,
+        desired,
+      );
+      adds += 1;
+      continue;
+    }
+
+    existingByKey.delete(key);
+    const before = selfWorkCalibrationStateFromRow(current);
+    if (JSON.stringify(before) !== JSON.stringify(desired)) {
+      await sql`
+        update self_work_calibrations
+        set user_id = ${calibration.userId},
+            opening_comparison_points = ${calibration.openingComparisonPoints},
+            actual_points = ${calibration.actualPoints}
+        where id = ${current.id}
+      `;
+      await recordChange(
+        sql,
+        input.runId,
+        pullRequestId,
+        "SELF_WORK_CALIBRATION",
+        "CHANGE",
+        before,
+        desired,
+      );
+      changes += 1;
+    }
   }
+
+  for (const row of existingByKey.values()) {
+    await sql`delete from self_work_calibrations where id = ${row.id}`;
+    await recordChange(
+      sql,
+      input.runId,
+      row.pull_request_id,
+      "SELF_WORK_CALIBRATION",
+      "REMOVE",
+      selfWorkCalibrationStateFromRow(row),
+      null,
+    );
+    removals += 1;
+  }
+
+  return { adds, changes, removals };
 }
 
 async function materializeUnwritableClosures(
   sql: TransactionClient,
-  fold: FoldResult,
+  input: { repositoryId: string; runId: string; fold: FoldResult },
   issueIds: Map<number, string>,
-): Promise<void> {
-  for (const closure of fold.unwritableClosures) {
-    await sql`
-      insert into unwritable_closures (issue_id, reason)
-      values (${requiredId(issueIds, closure.githubIssueId, "Issue")}, ${closure.reason})
-      on conflict (issue_id) do update set reason = excluded.reason
-    `;
+): Promise<ReconciliationDeltas> {
+  const existingRows = await sql<UnwritableClosureRow[]>`
+    select unwritable_closures.id, unwritable_closures.issue_id, issues.github_issue_id, unwritable_closures.reason
+    from unwritable_closures
+    join issues on issues.id = unwritable_closures.issue_id
+    where issues.repository_id = ${input.repositoryId}
+    order by issues.github_issue_id
+  `;
+  const existingByIssue = new Map(
+    existingRows.map((row) => [toSafeInteger(row.github_issue_id), row]),
+  );
+  let adds = 0;
+  let changes = 0;
+  let removals = 0;
+
+  for (const closure of input.fold.unwritableClosures) {
+    const issueId = requiredId(issueIds, closure.githubIssueId, "Issue");
+    const current = existingByIssue.get(closure.githubIssueId);
+    const desired = unwritableClosureState(closure.githubIssueId, closure.reason);
+    if (current === undefined) {
+      await sql`
+        insert into unwritable_closures (issue_id, reason)
+        values (${issueId}, ${closure.reason})
+      `;
+      await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "ADD", null, desired);
+      adds += 1;
+      continue;
+    }
+
+    existingByIssue.delete(closure.githubIssueId);
+    const before = unwritableClosureStateFromRow(current);
+    if (JSON.stringify(before) !== JSON.stringify(desired)) {
+      await sql`
+        update unwritable_closures
+        set reason = ${closure.reason}
+        where id = ${current.id}
+      `;
+      await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "CHANGE", before, desired);
+      changes += 1;
+    }
   }
+
+  for (const row of existingByIssue.values()) {
+    await sql`delete from unwritable_closures where id = ${row.id}`;
+    await recordChange(
+      sql,
+      input.runId,
+      null,
+      "UNWRITABLE_CLOSURE",
+      "REMOVE",
+      unwritableClosureStateFromRow(row),
+      null,
+    );
+    removals += 1;
+  }
+
+  return { adds, changes, removals };
 }
 
 async function materializeReviewRounds(
@@ -522,6 +722,7 @@ async function materializeReviewRounds(
 
 async function replacePullRequestIssueLinks(
   sql: TransactionClient,
+  repositoryId: string,
   fold: FoldResult,
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
@@ -530,8 +731,8 @@ async function replacePullRequestIssueLinks(
     const pullRequestId = requiredId(pullRequestIds, pullRequest.githubPullRequestId, "Pull request");
     for (const githubIssueId of pullRequest.githubIssueIds) {
       await sql`
-        insert into pull_request_issues (pull_request_id, issue_id)
-        values (${pullRequestId}, ${requiredId(issueIds, githubIssueId, "Issue")})
+        insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+        values (${pullRequestId}, ${requiredId(issueIds, githubIssueId, "Issue")}, ${repositoryId})
         on conflict do nothing
       `;
     }
@@ -555,8 +756,6 @@ async function deleteAbsentMaterialization(
     from issues where repository_id = ${repositoryId}
   `;
 
-  await deleteAbsentSelfWorkCalibrations(sql, repositoryId, fold);
-  await deleteAbsentUnwritableClosures(sql, repositoryId, fold);
   await deleteAbsentPullRequestIssueLinks(sql, repositoryId, fold);
   for (const pullRequest of currentPullRequests) {
     if (!desiredPullRequestIds.has(pullRequest.id)) {
@@ -568,50 +767,6 @@ async function deleteAbsentMaterialization(
   for (const issue of currentIssues) {
     if (!desiredIssueIds.has(issue.id)) {
       await sql`delete from issues where id = ${issue.id}`;
-    }
-  }
-}
-
-async function deleteAbsentSelfWorkCalibrations(
-  sql: TransactionClient,
-  repositoryId: string,
-  fold: FoldResult,
-): Promise<void> {
-  const desired = new Set(
-    fold.selfWorkCalibrations.map(
-      (calibration) => `${calibration.githubPullRequestId}:${calibration.githubIssueId}`,
-    ),
-  );
-  const existing = await sql<{ id: string; github_pull_request_id: number | string; github_issue_id: number | string }[]>`
-    select self_work_calibrations.id, pull_requests.github_pull_request_id, issues.github_issue_id
-    from self_work_calibrations
-    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
-    join issues on issues.id = self_work_calibrations.issue_id
-    where issues.repository_id = ${repositoryId}
-  `;
-  for (const row of existing) {
-    const key = `${toSafeInteger(row.github_pull_request_id)}:${toSafeInteger(row.github_issue_id)}`;
-    if (!desired.has(key)) {
-      await sql`delete from self_work_calibrations where id = ${row.id}`;
-    }
-  }
-}
-
-async function deleteAbsentUnwritableClosures(
-  sql: TransactionClient,
-  repositoryId: string,
-  fold: FoldResult,
-): Promise<void> {
-  const desired = new Set(fold.unwritableClosures.map((closure) => closure.githubIssueId));
-  const existing = await sql<{ id: string; github_issue_id: number | string }[]>`
-    select unwritable_closures.id, issues.github_issue_id
-    from unwritable_closures
-    join issues on issues.id = unwritable_closures.issue_id
-    where issues.repository_id = ${repositoryId}
-  `;
-  for (const row of existing) {
-    if (!desired.has(toSafeInteger(row.github_issue_id))) {
-      await sql`delete from unwritable_closures where id = ${row.id}`;
     }
   }
 }
@@ -655,7 +810,7 @@ async function recordPolicyViolations(
   fold: FoldResult,
 ): Promise<void> {
   for (const violation of fold.policyViolations) {
-    await recordChange(sql, runId, null, "POLICY_VIOLATION", null, violation);
+    await recordChange(sql, runId, null, "POLICY_VIOLATION", "POLICY_VIOLATION", null, violation);
   }
 }
 
@@ -663,13 +818,19 @@ async function recordChange(
   sql: TransactionClient,
   runId: string,
   pullRequestId: string | null,
-  kind: string,
+  entityKind: ReconciledEntityKind,
+  changeKind: ReconciliationChangeKind,
   before: JSONValue | null,
   after: JSONValue | null,
 ): Promise<void> {
   await sql`
-    insert into reconciliation_changes (reconciliation_run_id, pull_request_id, change_kind, before_state, after_state)
-    values (${runId}, ${pullRequestId}, ${kind}, ${before === null ? null : sql.json(before)}, ${after === null ? null : sql.json(after)})
+    insert into reconciliation_changes (
+      reconciliation_run_id, pull_request_id, entity_kind, change_kind, before_state, after_state
+    )
+    values (
+      ${runId}, ${pullRequestId}, ${entityKind}, ${changeKind},
+      ${before === null ? null : sql.json(before)}, ${after === null ? null : sql.json(after)}
+    )
   `;
 }
 
@@ -703,6 +864,59 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     proofSha256: row.proof_sha256,
     status: row.status,
   };
+}
+
+function selfWorkCalibrationKey(githubPullRequestId: number, githubIssueId: number): string {
+  return `${githubPullRequestId}:${githubIssueId}`;
+}
+
+function selfWorkCalibrationKeyFromRow(row: SelfWorkCalibrationRow): string {
+  return selfWorkCalibrationKey(
+    toSafeInteger(row.github_pull_request_id),
+    toSafeInteger(row.github_issue_id),
+  );
+}
+
+function selfWorkCalibrationState(calibration: SelfWorkCalibration): JSONValue {
+  return {
+    githubIssueId: calibration.githubIssueId,
+    githubPullRequestId: calibration.githubPullRequestId,
+    userId: calibration.userId,
+    openingComparisonPoints: calibration.openingComparisonPoints,
+    actualPoints: calibration.actualPoints,
+  };
+}
+
+function selfWorkCalibrationStateFromRow(row: SelfWorkCalibrationRow): JSONValue {
+  return {
+    githubIssueId: toSafeInteger(row.github_issue_id),
+    githubPullRequestId: toSafeInteger(row.github_pull_request_id),
+    userId: row.user_id,
+    openingComparisonPoints: row.opening_comparison_points,
+    actualPoints: row.actual_points,
+  };
+}
+
+function unwritableClosureState(githubIssueId: number, reason: string): JSONValue {
+  return {
+    githubIssueId,
+    reason,
+  };
+}
+
+function unwritableClosureStateFromRow(row: UnwritableClosureRow): JSONValue {
+  return unwritableClosureState(toSafeInteger(row.github_issue_id), row.reason);
+}
+
+function combineDeltas(...deltas: readonly ReconciliationDeltas[]): ReconciliationDeltas {
+  return deltas.reduce(
+    (total, delta) => ({
+      adds: total.adds + delta.adds,
+      changes: total.changes + delta.changes,
+      removals: total.removals + delta.removals,
+    }),
+    { adds: 0, changes: 0, removals: 0 },
+  );
 }
 
 function toReconciliationRepository(row: RepositoryRow): ReconciliationRepository {
