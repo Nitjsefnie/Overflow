@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const { productionAuth } = vi.hoisted(() => ({ productionAuth: vi.fn() }));
+
+vi.mock("@/auth", () => ({ auth: productionAuth }));
+
 import {
   createModerationClosePatchHandler,
   createModerationPostHandler,
 } from "@/app/api/moderation/route";
-import { createModerationAuditPatchHandler } from "@/app/api/moderation/[id]/route";
+import {
+  PATCH as productionAuditPatch,
+  createModerationAuditPatchHandler,
+} from "@/app/api/moderation/[id]/route";
 import { ModerationServiceError, type AccountAudit, type RecalibrationClosure } from "@/lib/moderation/service";
 
 const moderatorSession = { user: { id: "00000000-0000-4000-8000-000000000001", role: "MODERATOR" as const } };
@@ -112,6 +120,28 @@ describe("account moderation API", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ audit: auditFixture({ state: "SUBSTANTIATED" }) });
+  });
+
+  it("uses the real production audit resolver for direct 401 and 403 responses", async () => {
+    productionAuth.mockResolvedValueOnce(null);
+    const unauthenticated = await productionAuditPatch(
+      jsonRequest({ action: "dismiss", reason: "No session may decide an audit." }, "PATCH"),
+      { params: Promise.resolve({ id: auditId }) },
+    );
+    expect(unauthenticated.status).toBe(401);
+    await expect(unauthenticated.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+
+    productionAuth.mockResolvedValueOnce(memberSession);
+    const memberResponse = await productionAuditPatch(
+      jsonRequest({ action: "dismiss", reason: "A member cannot decide an audit." }, "PATCH"),
+      { params: Promise.resolve({ id: auditId }) },
+    );
+    expect(memberResponse.status).toBe(403);
+    await expect(memberResponse.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
   });
 
   it("requires a plan and moderator session before closing recalibration", async () => {

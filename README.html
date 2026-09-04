@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overflow — cooperative ledger guide</title>
+  <style>
+    :root {
+      --paper: #f4eddd;
+      --surface: #fffaf0;
+      --ink: #181714;
+      --muted: #615b50;
+      --line: #25221d;
+      --lime: #b6ff20;
+      --coral: #ef725d;
+      --display: Georgia, "Times New Roman", serif;
+      --mono: "SFMono-Regular", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--paper); scroll-behavior: smooth; }
+    body {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 80px;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.6 Arial, Helvetica, sans-serif;
+    }
+    .layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 44px; }
+    nav { position: sticky; top: 24px; align-self: start; }
+    nav p, .eyebrow { margin: 0 0 10px; color: var(--muted); font: 700 11px/1.2 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    nav a { display: block; padding: 6px 0 6px 11px; border-left: 2px solid #9c9485; color: var(--ink); text-decoration: none; }
+    nav a:hover, nav a:focus { border-color: var(--ink); background: var(--lime); }
+    h1, h2 { font-family: var(--display); line-height: 1.05; letter-spacing: -.03em; }
+    h1 { max-width: 15ch; margin: 0 0 18px; font-size: clamp(44px, 7vw, 76px); }
+    h2 { margin: 44px 0 14px; font-size: 30px; scroll-margin-top: 24px; }
+    p, li { max-width: 720px; }
+    a { color: inherit; text-decoration-thickness: .12em; text-underline-offset: .16em; }
+    code, pre { font-family: var(--mono); }
+    pre { overflow-x: auto; padding: 16px; border: 2px solid var(--line); background: #1d1b18; color: #fffaf0; }
+    .mark { display: inline-block; width: 40px; height: 40px; margin-bottom: 20px; border: 2px solid var(--line); background: var(--lime) url("public/mark.svg") center / contain no-repeat; box-shadow: 5px 5px 0 var(--line); }
+    .summary, .callout, table { border: 2px solid var(--line); background: var(--surface); box-shadow: 5px 5px 0 var(--line); }
+    .summary { margin: 18px 0 28px; padding: 18px; }
+    .summary strong { background: var(--lime); padding: 2px 5px; }
+    .callout { margin: 20px 0; padding: 16px; border-left: 8px solid var(--coral); }
+    table { width: 100%; border-collapse: collapse; box-shadow: none; }
+    th, td { padding: 10px; border: 1px solid var(--line); vertical-align: top; text-align: left; }
+    th { background: var(--lime); font-family: var(--mono); font-size: 12px; }
+    .flow { display: inline-block; margin: 8px 0; padding: 10px 14px; border: 2px solid var(--line); background: var(--lime); font: 800 16px var(--mono); }
+    :focus-visible { outline: 3px solid #075f9f; outline-offset: 3px; }
+    @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } nav { position: static; display: flex; flex-wrap: wrap; gap: 2px 14px; } nav p { width: 100%; } nav a { border-left: 0; border-bottom: 2px solid #9c9485; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav aria-label="Guide contents">
+      <p>On this page</p>
+      <a href="#overview">Overview</a>
+      <a href="#github">GitHub and proof</a>
+      <a href="#scoring">Scoring and calibration</a>
+      <a href="#local">Local setup</a>
+      <a href="#reconciliation">Reconciliation</a>
+      <a href="#environment">Environment</a>
+    </nav>
+    <main>
+      <header id="overview">
+        <span class="mark" aria-hidden="true"></span>
+        <p class="eyebrow">Overflow cooperative ledger guide</p>
+        <h1>Credit with visible proof.</h1>
+        <div class="summary">
+          <strong>In brief</strong> — Overflow records explicit offers, linked GitHub completion evidence, and a credit transfer between a repository sponsor and an outside contributor.
+        </div>
+      </header>
+
+      <h2>Repository catalogs and headroom</h2>
+      <p>Repository registration is explicit and one at a time. The signed-in person submits one <code>owner/name</code> or canonical GitHub URL and must hold GitHub administrator permission for that repository.</p>
+      <p>Opening catalogs are entirely repository-chosen: S/M/L can work, as can <em>moonlit ridge</em>, <em>risk: high</em>, or another local vocabulary. Every opening label has comparison and reserve points from 1 through 10. Every actual catalog must contain exactly one editable label for each point from 1 through 10.</p>
+      <p>The dashboard reads materialized ledger entries. Available headroom is <code>settled balance − reserved points</code> for open issues assigned to outside contributors. If <code>CREDIT_FLOOR</code> is configured, it is shown as context only; it never clamps headroom.</p>
+
+      <h2 id="github">GitHub and proof</h2>
+      <p>Configure the GitHub OAuth callback as <code>https://&lt;public-host&gt;/api/auth/callback/github</code>. The application needs a public HTTPS GitHub webhook URL and a shared secret:</p>
+      <pre>APP_URL=https://&lt;public-host&gt;
+GITHUB_WEBHOOK_URL=https://&lt;public-host&gt;/api/webhooks/github
+GITHUB_WEBHOOK_SECRET=&lt;github-webhook-secret&gt;</pre>
+      <div class="callout">GitHub must be able to reach the webhook over public HTTPS. Keep the secret private and configure the same value in GitHub and the application.</div>
+      <p>GitHub GraphQL is the authority for closing links. A textual reference in an issue or pull request is not enough; settlement requires GraphQL-backed linked issue evidence. Overflow stores a proof fingerprint with the linked issue, pull request, and scoring inputs.</p>
+
+      <h2 id="scoring">Scoring, self-work, and moderation</h2>
+      <pre>credits = max(0, actual points − distinct review rounds)</pre>
+      <p>There is no churn metric. Calibration compares paired self-work samples with outsider settlements. Self-work becomes calibration evidence but creates no ledger entry. Work by an outside contributor who has not yet signed in remains an unclaimed settlement until their GitHub identity is claimed.</p>
+      <p class="flow">audit → warn → recalibrate → ban</p>
+      <p>Moderation is account-level and evidence-led: open an audit from paired samples, warn when the evidence warrants it, require recalibration before reactivation, and ban only after confirmed patterns persist.</p>
+
+      <h2 id="local">Local setup</h2>
+      <ol>
+        <li>Copy <code>.env.example</code> to <code>.env</code> and replace every placeholder. Generate <code>AUTH_SECRET</code> with <code>npx auth secret</code>; make <code>TOKEN_ENCRYPTION_KEY</code> from 32 random bytes encoded as unpadded base64url.</li>
+        <li>Use an already-installed PostgreSQL 17 instance, or start the supplied Compose service.</li>
+      </ol>
+      <pre>docker compose up -d postgres
+pnpm install --frozen-lockfile
+pnpm db:migrate
+pnpm dev</pre>
+      <p>Run the project gates with <code>pnpm test --run</code>, <code>pnpm lint</code>, <code>pnpm typecheck</code>, and <code>pnpm build</code>.</p>
+
+      <h2 id="reconciliation">One repository or all repositories</h2>
+      <p>Webhook processing updates materialized state incrementally. Use reconciliation after webhook downtime or a GitHub configuration change to recover linked issues, pull requests, settlement proof, self-work calibration, and unclaimed contributors.</p>
+      <pre># One explicit registered repository by owner/name
+pnpm reconcile -- --repository &lt;owner&gt;/&lt;name&gt;
+
+# Every active registered repository
+pnpm reconcile</pre>
+
+      <h2 id="environment">Environment reference</h2>
+      <table>
+        <thead><tr><th>Variable</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>DATABASE_URL</code></td><td>PostgreSQL connection string</td></tr>
+          <tr><td><code>AUTH_SECRET</code></td><td>Auth.js signing secret</td></tr>
+          <tr><td><code>AUTH_GITHUB_ID</code>, <code>AUTH_GITHUB_SECRET</code></td><td>GitHub OAuth credentials</td></tr>
+          <tr><td><code>TOKEN_ENCRYPTION_KEY</code></td><td>OAuth-token encryption key</td></tr>
+          <tr><td><code>APP_URL</code></td><td>Public application URL</td></tr>
+          <tr><td><code>GITHUB_WEBHOOK_URL</code>, <code>GITHUB_WEBHOOK_SECRET</code></td><td>Public webhook URL and shared secret</td></tr>
+          <tr><td><code>MODERATOR_GITHUB_LOGINS</code></td><td>Comma-separated moderator GitHub logins</td></tr>
+          <tr><td><code>CREDIT_FLOOR</code></td><td>Optional informational floor</td></tr>
+        </tbody>
+      </table>
+      <p>Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.</p>
+    </main>
+  </div>
+</body>
+</html>
