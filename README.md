@@ -8,7 +8,7 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 - Repository registration is explicit and one at a time. The signed-in person must have GitHub administrator permission for the submitted `owner/name` or canonical `https://github.com/owner/name` URL.
 - Each repository chooses its own opening catalog. S/M/L is allowed, but so are arbitrary labels such as `moonlit ridge`, `risk: high`, or anything else the repository understands. Each opening label carries comparison and reserve points from 1 through 10.
 - Every actual catalog has exactly one editable mapping for each point from 1 through 10. The labels are repository-defined; the point mapping is the common settlement scale.
-- The dashboard uses materialized ledger entries and balances. Available headroom is `settled balance − reserve points` for open issues assigned to outside contributors. `CREDIT_FLOOR`, when configured, is informational only and never clamps the result.
+- The dashboard uses materialized ledger entries and balances. Available headroom is `settled balance − reserve points` for open issues assigned to outside contributors, and negative headroom remains visible. This release enforces no credit floor and exposes no floor configuration; optional group floors await a later idempotent assignment-enforcement design.
 
 ## GitHub and proof
 
@@ -16,13 +16,13 @@ Create a GitHub OAuth application and a public HTTPS webhook endpoint. Set these
 
 ```dotenv
 APP_URL=https://<public-host>
-GITHUB_WEBHOOK_URL=https://<public-host>/api/webhooks/github
+GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
 GITHUB_WEBHOOK_SECRET=<the-webhook-secret-configured-in-github>
 ```
 
 GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`.
 
-Closing-link evidence comes from GitHub GraphQL. A pull request settles only when GraphQL authority establishes its linked issue; issue or pull-request text alone is not authoritative. Overflow stores the proof fingerprint with the settlement so the issue, pull request, and scoring inputs can be reviewed later.
+Closing-link evidence comes only from GitHub GraphQL `closedByPullRequestsReferences`. Opening difficulty is reconstructed from the earliest configured label that the issue owner applied before the first assignment. Settled difficulty requires an issue-owner label applied between the closing pull request’s final commit and merge, plus a nonblank owner comment in that window that names the label. Pull-request labels never price work. Overflow retains those event/comment identifiers and timestamps, the exact merge commit OID, and the diff fingerprint so every scoring input is reproducible.
 
 ## Scoring and calibration
 
@@ -86,7 +86,11 @@ pnpm reconcile -- --repository <owner>/<name>
 pnpm reconcile
 ```
 
-Reconciliation materializes issues, linked pull requests, settlement proof, self-work calibration, and unclaimed contributor records. It is the safe repair path after webhook downtime or a GitHub configuration change.
+Reconciliation materializes issues, linked pull requests, settlement proof, self-work calibration, and unclaimed contributor records. PostgreSQL serializes each repository from snapshot collection through materialization. Eligibility is reconstructed at merge time from immutable moderation history, so a later sanction cannot rewrite eligible historical facts.
+
+## Continuous integration
+
+GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.
 
 ## Environment reference
 
@@ -101,6 +105,5 @@ Reconciliation materializes issues, linked pull requests, settlement proof, self
 | `APP_URL` | Public application URL |
 | `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub webhook URL and shared secret |
 | `MODERATOR_GITHUB_LOGINS` | Comma-separated moderator GitHub logins |
-| `CREDIT_FLOOR` | Optional informational credit-floor display |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.

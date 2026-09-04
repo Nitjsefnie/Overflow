@@ -6,7 +6,9 @@ import {
   type ModerationRouteSession,
 } from "@/app/api/moderation/route";
 import { AccountModerationService } from "@/lib/moderation/service";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import type { UserRole } from "@/lib/db/types";
 
 const auditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dismiss"), reason: z.string() }).strict(),
@@ -51,6 +53,7 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
 
 export const PATCH = createModerationAuditPatchHandler({
   getSession: getProductionSession,
+  getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());
   },
@@ -59,28 +62,26 @@ export const PATCH = createModerationAuditPatchHandler({
 async function getProductionSession(): Promise<ModerationRouteSession | null> {
   const { auth } = await import("@/auth");
   const session = await auth();
-  const user = session?.user as { id?: unknown; role?: unknown } | undefined;
-  if (
-    typeof user?.id !== "string" ||
-    (user.role !== "MEMBER" && user.role !== "MODERATOR")
-  ) {
+  const user = session?.user as { id?: unknown } | undefined;
+  if (typeof user?.id !== "string") {
     return null;
   }
-  return { user: { id: user.id, role: user.role } };
+  return { user: { id: user.id } };
 }
 
 async function requiredModeratorSession(
   dependencies: ModerationRouteDependencies,
-): Promise<ModerationRouteSession | Response> {
+): Promise<{ user: { id: string; role: "MODERATOR" } } | Response> {
   try {
     const session = await dependencies.getSession();
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
-    if (session.user.role !== "MODERATOR") {
+    const currentRole: UserRole | null = await dependencies.getCurrentRole(session.user.id);
+    if (currentRole !== "MODERATOR") {
       return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
     }
-    return session;
+    return { user: { id: session.user.id, role: currentRole } };
   } catch {
     return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
   }

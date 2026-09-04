@@ -48,12 +48,12 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
               </dd>
             </div>
             <div>
-              <dt>Opening comparison</dt>
-              <dd>{settlement.openingComparisonPoints}</dd>
+              <dt>{settlement.openingName ?? "Opening comparison"}</dt>
+              <dd>{settlement.openingLabel ?? "Unknown label"} · {settlement.openingComparisonPoints}</dd>
             </div>
             <div>
-              <dt>Settled points</dt>
-              <dd>{settlement.settledPoints ?? "Awaiting settlement"}</dd>
+              <dt>{settlement.actualName ?? "Settled points"}</dt>
+              <dd>{settlement.settledLabel ?? "Awaiting settlement"} · {settlement.settledPoints ?? "Awaiting settlement"}</dd>
             </div>
             <div>
               <dt>Review deduction</dt>
@@ -63,7 +63,21 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
               <dt>Credits moved</dt>
               <dd>{settlement.credits}</dd>
             </div>
+            <div>
+              <dt>Your signed balance effect</dt>
+              <dd>{settlement.balanceEffect === undefined ? "Unavailable" : formatSigned(settlement.balanceEffect)}</dd>
+            </div>
+            <div>
+              <dt>Merge commit</dt>
+              <dd><code>{settlement.mergeCommitOid ?? "Unavailable"}</code></dd>
+            </div>
           </dl>
+          {settlement.settledLabelEventId !== undefined ? (
+            <p className="proof-fingerprint">
+              Issue-owned settlement evidence <code>{settlement.settledLabelEventId ?? "unsettled"}</code>
+              {settlement.settledRationaleCommentId === undefined ? null : <> · rationale <code>{settlement.settledRationaleCommentId ?? "unsettled"}</code></>}
+            </p>
+          ) : null}
           <p className="proof-fingerprint">
             GitHub closing-link proof <code>{settlement.proofSha256}</code>
           </p>
@@ -83,4 +97,8 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
       </AppShell>
     );
   }
+}
+
+function formatSigned(value: number): string {
+  return value < 0 ? `−${Math.abs(value)}` : value > 0 ? `+${value}` : "0";
 }

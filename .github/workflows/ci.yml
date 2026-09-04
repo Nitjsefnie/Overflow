@@ -1,0 +1,83 @@
+name: ci
+
+# The complete release gate. It exercises the real migration path against
+# PostgreSQL before running every behavioral, static, and production-build check.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: overflow
+          POSTGRES_PASSWORD: overflow
+          POSTGRES_DB: overflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U overflow -d overflow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Placeholders satisfy configuration validation without carrying production
+    # credentials or granting access to an external system.
+    env:
+      DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
+      AUTH_GITHUB_ID: ci-placeholder-github-client-id
+      AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      APP_URL: https://overflow.invalid
+      GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      GITHUB_WEBHOOK_SECRET: ci-placeholder-webhook-secret
+      MODERATOR_GITHUB_LOGINS: ci-moderator
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply PostgreSQL migrations
+        run: pnpm db:migrate
+
+      - name: Test suite
+        run: pnpm test --run
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Production build
+        run: pnpm build

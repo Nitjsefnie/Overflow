@@ -55,6 +55,29 @@ describe("processWebhook", () => {
 
     await expect(processWebhook(dependencies, delivery())).resolves.toEqual({ status: "DUPLICATE" });
   });
+
+  it("renews its delivery lease while repository reconciliation is still running", async () => {
+    vi.useFakeTimers();
+    let finishReconciliation!: () => void;
+    const dependencies = processorDependencies({
+      claimDelivery: claimedLease("lease-1"),
+      reconcileRepository: vi.fn(() => new Promise<void>((resolve) => {
+        finishReconciliation = resolve;
+      })),
+      leaseHeartbeatIntervalMs: 60_000,
+    });
+
+    try {
+      const processing = processWebhook(dependencies, delivery());
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      expect(dependencies.store.renewDeliveryLease).toHaveBeenCalledWith("delivery-1", "lease-1");
+      finishReconciliation();
+      await expect(processing).resolves.toEqual({ status: "PROCESSED" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function delivery() {
@@ -73,6 +96,7 @@ function processorDependencies(
     reconcileRepository: ReturnType<typeof vi.fn>;
     markProcessed: ReturnType<typeof vi.fn>;
     markFailed: ReturnType<typeof vi.fn>;
+    leaseHeartbeatIntervalMs: number;
   }> = {},
 ): WebhookProcessorDependencies & {
   reconcileRepository: ReturnType<typeof vi.fn>;
@@ -87,13 +111,19 @@ function processorDependencies(
     findRepositoryByGitHubId: vi.fn().mockResolvedValue({ id: "repository", active: true }),
     markProcessed: overrides.markProcessed ?? vi.fn().mockResolvedValue(true),
     markFailed: overrides.markFailed ?? vi.fn().mockResolvedValue(true),
+    renewDeliveryLease: vi.fn().mockResolvedValue(true),
   };
 
-  return { store, reconcileRepository } as WebhookProcessorDependencies & {
+  return {
+    store,
+    reconcileRepository,
+    leaseHeartbeatIntervalMs: overrides.leaseHeartbeatIntervalMs,
+  } as WebhookProcessorDependencies & {
     reconcileRepository: ReturnType<typeof vi.fn>;
     store: WebhookProcessorDependencies["store"] & {
       markProcessed: ReturnType<typeof vi.fn>;
       markFailed: ReturnType<typeof vi.fn>;
+      renewDeliveryLease: ReturnType<typeof vi.fn>;
     };
   };
 }

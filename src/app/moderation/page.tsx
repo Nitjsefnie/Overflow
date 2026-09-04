@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
-import type { OpenAuditProjection } from "@/lib/dashboard/queries";
+import type {
+  EnforcementHistoryProjection,
+  OpenAuditProjection,
+  RecalibratingAccountProjection,
+} from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 
 export default async function ModerationPage() {
@@ -9,12 +13,18 @@ export default async function ModerationPage() {
     redirect("/dashboard");
   }
 
-  const { ModerationControls } = await import("@/components/moderation-controls");
+  const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
 
   let audits: OpenAuditProjection[] | null;
+  let history: EnforcementHistoryProjection[] = [];
+  let recalibratingAccounts: RecalibratingAccountProjection[] = [];
   try {
-    const { listOpenAudits } = await import("@/lib/dashboard/queries");
-    audits = await listOpenAudits();
+    const { listEnforcementHistory, listOpenAudits, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
+    [audits, history, recalibratingAccounts] = await Promise.all([
+      listOpenAudits(),
+      listEnforcementHistory(),
+      listRecalibratingAccounts(),
+    ]);
   } catch {
     audits = null;
   }
@@ -46,12 +56,43 @@ export default async function ModerationPage() {
                   <strong>{audit.targetLogin}</strong> · reported by {audit.reporterLogin} · {audit.settledSampleSize} settled pairs
                   {audit.repositoryName === null ? " · all repositories" : ` · ${audit.repositoryName}`}
                 </p>
+                <p>Window: {audit.sampleStartedAt ?? "unknown"} to {audit.sampleEndedAt ?? "unknown"}</p>
+                <details>
+                  <summary>Reproducible cohort evidence and statistics</summary>
+                  <pre>{JSON.stringify({ definition: audit.cohortDefinition, statistics: audit.cohortStatistics }, null, 2)}</pre>
+                </details>
                 <ModerationControls auditId={audit.id} targetLogin={audit.targetLogin} />
               </li>
             ))}
           </ol>
         </section>
       )}
+      <section className="surface" aria-labelledby="recalibrating-heading">
+        <h2 id="recalibrating-heading">Recalibration plans and reactivation</h2>
+        {recalibratingAccounts.length === 0 ? <p>No accounts are recalibrating.</p> : (
+          <ol>
+            {recalibratingAccounts.map((account) => (
+              <li key={account.id}>
+                <p><strong>{account.githubLogin}</strong> · {account.confirmedPatternCount} confirmed patterns</p>
+                <RecalibrationPlanControl targetAccountId={account.id} targetLogin={account.githubLogin} />
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="enforcement-history-heading">
+        <h2 id="enforcement-history-heading">Enforcement history</h2>
+        {history.length === 0 ? <p>No enforcement events are recorded.</p> : (
+          <ol>
+            {history.map((event) => (
+              <li key={event.id}>
+                {event.createdAt} · {event.targetLogin}: {event.priorState} → {event.newState} · {event.reason}
+                {event.recalibrationPlan === null ? null : <pre>{JSON.stringify(event.recalibrationPlan, null, 2)}</pre>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
     </AppShell>
   );
 }

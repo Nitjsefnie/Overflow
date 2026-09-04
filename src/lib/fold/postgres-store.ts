@@ -2,14 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { JSONValue } from "postgres";
 import { getSql } from "@/lib/db/client";
 import {
-  participationEligibleEnforcementStates,
   type EnforcementState,
   type SqlClient,
   type TransactionClient,
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
-  ExistingFoldIssue,
+  FoldModerationEvent,
   FoldResult,
   FoldSettlement,
   FoldUser,
@@ -32,12 +31,14 @@ type RepositoryRow = {
   sponsor_id: string;
   sponsor_github_login: string;
   sponsor_enforcement_state: EnforcementState;
+  sponsor_moderation_events: unknown;
 };
 
 type UserRow = {
   id: string;
   github_login: string;
   enforcement_state: EnforcementState;
+  moderation_events: unknown;
 };
 
 type IssueRow = {
@@ -46,11 +47,25 @@ type IssueRow = {
   opening_label: string;
   opening_comparison_points: number;
   opening_reserve_points: number;
+  owner_github_login: string | null;
+  opening_source_event_id: string | null;
+  opening_source_actor_login: string | null;
+  opening_source_at: string | Date | null;
+  settled_label: string | null;
+  settled_points: number | null;
+  settled_label_event_id: string | null;
+  settled_label_actor_login: string | null;
+  settled_label_applied_at: string | Date | null;
+  settled_rationale_comment_id: string | null;
+  settled_rationale_actor_login: string | null;
+  settled_rationale_commented_at: string | Date | null;
 };
 
 type PullRequestRow = {
   id: string;
   github_pull_request_id: number | string;
+  merge_commit_oid?: string | null;
+  merged_at?: string | Date | null;
 };
 
 type SettlementRow = {
@@ -68,7 +83,28 @@ type SettlementRow = {
   credits: number;
   proof_sha256: string;
   status: FoldSettlement["status"];
+  settled_label: string | null;
+  settled_label_event_id: string | null;
+  settled_label_actor_login: string | null;
+  settled_label_applied_at: string | Date | null;
+  settled_rationale_comment_id: string | null;
+  settled_rationale_actor_login: string | null;
+  settled_rationale_commented_at: string | Date | null;
+  merge_commit_oid: string | null;
+  merged_at: string | Date | null;
 };
+
+type IdentityClaimSettlementRow = Pick<
+  SettlementRow,
+  | "id"
+  | "issue_id"
+  | "pull_request_id"
+  | "creditor_id"
+  | "creditor_github_login"
+  | "debtor_id"
+  | "opening_comparison_points"
+  | "settled_points"
+>;
 
 type WebhookDeliveryLeaseRow = {
   processing_lease_token: string;
@@ -83,6 +119,15 @@ type SelfWorkCalibrationRow = {
   user_id: string;
   opening_comparison_points: number;
   actual_points: number | null;
+  actual_label: string | null;
+  settled_label_event_id: string | null;
+  settled_label_actor_login: string | null;
+  settled_label_applied_at: string | Date | null;
+  settled_rationale_comment_id: string | null;
+  settled_rationale_actor_login: string | null;
+  settled_rationale_commented_at: string | Date | null;
+  merge_commit_oid: string | null;
+  merged_at: string | Date | null;
 };
 
 type UnwritableClosureRow = {
@@ -106,6 +151,31 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
   ) {}
 
+  public async withRepositoryReconciliation<T>(
+    repositoryId: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const connection = await this.sql.reserve();
+    let locked = false;
+    try {
+      await connection`
+        select pg_advisory_lock(hashtextextended(${repositoryId}, 684029183))
+      `;
+      locked = true;
+      return await work();
+    } finally {
+      try {
+        if (locked) {
+          await connection`
+            select pg_advisory_unlock(hashtextextended(${repositoryId}, 684029183))
+          `;
+        }
+      } finally {
+        connection.release();
+      }
+    }
+  }
+
   public async getRepository(repositoryId: string): Promise<ReconciliationRepository | null> {
     const [row] = await this.sql<RepositoryRow[]>`
       select
@@ -115,7 +185,17 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repositories.difficulty_scheme,
         sponsors.id as sponsor_id,
         sponsors.github_login as sponsor_github_login,
-        sponsors.enforcement_state as sponsor_enforcement_state
+        sponsors.enforcement_state as sponsor_enforcement_state,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', events.id,
+            'priorState', events.prior_state,
+            'newState', events.new_state,
+            'occurredAt', events.created_at
+          ) order by events.created_at, events.id)
+          from moderation_events as events
+          where events.target_user_id = sponsors.id
+        ), '[]'::jsonb) as sponsor_moderation_events
       from registered_repositories as repositories
       join users as sponsors on sponsors.id = repositories.sponsor_id
       where repositories.id = ${repositoryId}
@@ -154,29 +234,28 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), this.tokenEncryptionKey);
   }
 
-  public async listExistingIssues(repositoryId: string): Promise<ExistingFoldIssue[]> {
-    const rows = await this.sql<IssueRow[]>`
-      select github_issue_id, opening_label, opening_comparison_points, opening_reserve_points
-      from issues
-      where repository_id = ${repositoryId}
-    `;
-    return rows.map((row) => ({
-      githubIssueId: toSafeInteger(row.github_issue_id),
-      openingLabel: row.opening_label,
-      openingComparisonPoints: row.opening_comparison_points,
-      openingReservePoints: row.opening_reserve_points,
-    }));
-  }
-
   public async findUsersByGitHubLogins(logins: readonly string[]): Promise<FoldUser[]> {
     const normalized = [...new Set(logins.map(normalizeLogin).filter((login) => login.length > 0))];
     if (normalized.length === 0) {
       return [];
     }
     const rows = await this.sql<UserRow[]>`
-      select id, github_login, enforcement_state
+      select
+        users.id,
+        users.github_login,
+        users.enforcement_state,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', events.id,
+            'priorState', events.prior_state,
+            'newState', events.new_state,
+            'occurredAt', events.created_at
+          ) order by events.created_at, events.id)
+          from moderation_events as events
+          where events.target_user_id = users.id
+        ), '[]'::jsonb) as moderation_events
       from users
-      where lower(github_login) = any(${this.sql.array(normalized)})
+      where lower(users.github_login) = any(${this.sql.array(normalized)})
     `;
     return rows.map(toFoldUser);
   }
@@ -216,11 +295,27 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     fold: FoldResult;
   }): Promise<ReconciliationDeltas> {
     return this.sql.begin(async (transaction) => {
+      const [existingSettlements, existingSelfWorkCalibrations] = await Promise.all([
+        loadExistingSettlements(transaction, input.repositoryId),
+        loadExistingSelfWorkCalibrations(transaction, input.repositoryId),
+      ]);
       const issueIds = await upsertIssues(transaction, input.repositoryId, input.fold);
       const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, input.fold, issueIds);
       await replacePullRequestIssueLinks(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
-      const settlementDeltas = await materializeSettlements(transaction, input, issueIds, pullRequestIds);
-      const selfWorkDeltas = await materializeSelfWorkCalibrations(transaction, input, issueIds, pullRequestIds);
+      const settlementDeltas = await materializeSettlements(
+        transaction,
+        input,
+        issueIds,
+        pullRequestIds,
+        existingSettlements,
+      );
+      const selfWorkDeltas = await materializeSelfWorkCalibrations(
+        transaction,
+        input,
+        issueIds,
+        pullRequestIds,
+        existingSelfWorkCalibrations,
+      );
       const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds);
       await materializeReviewRounds(transaction, input.fold, pullRequestIds);
       await deleteAbsentMaterialization(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
@@ -285,6 +380,18 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.length === 1;
   }
 
+  public async renewDeliveryLease(deliveryId: string, leaseToken: string): Promise<boolean> {
+    const rows = await this.sql<{ id: string }[]>`
+      update webhook_deliveries
+      set lease_expires_at = now() + interval '5 minutes'
+      where github_delivery_id = ${deliveryId}
+        and processing_state = ${"PENDING"}
+        and processing_lease_token = ${leaseToken}
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
   public async markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean> {
     void errorMessage;
     const rows = await this.sql<{ id: string }[]>`
@@ -309,7 +416,7 @@ export async function claimGitHubIdentity(
   githubLogin: string,
 ): Promise<void> {
   await sql.begin(async (transaction) => {
-    const selfWorkSettlements = await transaction<SettlementRow[]>`
+    const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
       select
         settlements.id,
         settlements.issue_id,
@@ -331,6 +438,8 @@ export async function claimGitHubIdentity(
       where settlements.status = ${"UNCLAIMED"}
         and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
         and settlements.debtor_id = ${userId}
+        and pull_requests.merged_at is not null
+        and participation_eligible_at(${userId}, pull_requests.merged_at)
     `;
     for (const settlement of selfWorkSettlements) {
       await transaction`
@@ -357,14 +466,16 @@ export async function claimGitHubIdentity(
     await transaction`
       update settlements
       set creditor_id = ${userId}, status = ${"SETTLED"}
-      from users as creditor, users as debtor
+      from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
         and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
         and settlements.debtor_id <> ${userId}
         and creditor.id = ${userId}
-        and creditor.enforcement_state::text = any(${sql.array([...participationEligibleEnforcementStates])})
         and debtor.id = settlements.debtor_id
-        and debtor.enforcement_state::text = any(${sql.array([...participationEligibleEnforcementStates])})
+        and pull_requests.id = settlements.pull_request_id
+        and pull_requests.merged_at is not null
+        and participation_eligible_at(creditor.id, pull_requests.merged_at)
+        and participation_eligible_at(debtor.id, pull_requests.merged_at)
     `;
   });
 }
@@ -379,11 +490,19 @@ async function upsertIssues(
     const [row] = await sql<IssueRow[]>`
       insert into issues (
         github_issue_id, repository_id, issue_number, title, body, url, state,
-        opening_label, opening_comparison_points, opening_reserve_points, claim_assignee_github_login
+        owner_github_login, opening_label, opening_comparison_points, opening_reserve_points,
+        opening_source_event_id, opening_source_actor_login, opening_source_at,
+        settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
+        settled_label_applied_at, settled_rationale_comment_id, settled_rationale_actor_login,
+        settled_rationale_commented_at, claim_assignee_github_login
       )
       values (
         ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state},
-        ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints}, ${issue.claimAssigneeGitHubLogin}
+        ${issue.ownerGitHubLogin}, ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints},
+        ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt},
+        ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
+        ${issue.settledLabelAppliedAt}, ${issue.settledRationaleCommentId}, ${issue.settledRationaleActorLogin},
+        ${issue.settledRationaleCommentedAt}, ${issue.claimAssigneeGitHubLogin}
       )
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,
@@ -391,12 +510,52 @@ async function upsertIssues(
           body = excluded.body,
           url = excluded.url,
           state = excluded.state,
+          opening_label = case
+            when issues.opening_source_event_id is null then excluded.opening_label
+            else issues.opening_label
+          end,
+          opening_comparison_points = case
+            when issues.opening_source_event_id is null then excluded.opening_comparison_points
+            else issues.opening_comparison_points
+          end,
+          opening_reserve_points = case
+            when issues.opening_source_event_id is null then excluded.opening_reserve_points
+            else issues.opening_reserve_points
+          end,
+          owner_github_login = coalesce(issues.owner_github_login, excluded.owner_github_login),
+          opening_source_event_id = coalesce(issues.opening_source_event_id, excluded.opening_source_event_id),
+          opening_source_actor_login = coalesce(issues.opening_source_actor_login, excluded.opening_source_actor_login),
+          opening_source_at = coalesce(issues.opening_source_at, excluded.opening_source_at),
+          settled_label = excluded.settled_label,
+          settled_points = excluded.settled_points,
+          settled_label_event_id = excluded.settled_label_event_id,
+          settled_label_actor_login = excluded.settled_label_actor_login,
+          settled_label_applied_at = excluded.settled_label_applied_at,
+          settled_rationale_comment_id = excluded.settled_rationale_comment_id,
+          settled_rationale_actor_login = excluded.settled_rationale_actor_login,
+          settled_rationale_commented_at = excluded.settled_rationale_commented_at,
           claim_assignee_github_login = excluded.claim_assignee_github_login,
           updated_at = now()
-      returning id, github_issue_id, opening_label, opening_comparison_points, opening_reserve_points
+      returning
+        id, github_issue_id, opening_label, opening_comparison_points, opening_reserve_points,
+        owner_github_login, opening_source_event_id, opening_source_actor_login, opening_source_at,
+        settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
+        settled_label_applied_at, settled_rationale_comment_id, settled_rationale_actor_login,
+        settled_rationale_commented_at
     `;
     if (row === undefined) {
       throw new Error("Issue materialization returned no row.");
+    }
+    if (
+      row.opening_label !== issue.openingLabel ||
+      row.opening_comparison_points !== issue.openingComparisonPoints ||
+      row.opening_reserve_points !== issue.openingReservePoints ||
+      row.owner_github_login !== issue.ownerGitHubLogin ||
+      row.opening_source_event_id !== issue.openingSourceEventId ||
+      row.opening_source_actor_login !== issue.openingSourceActorLogin ||
+      timestampToIso(row.opening_source_at) !== issue.openingSourceAt
+    ) {
+      throw new Error("Issue opening evidence did not match immutable GitHub history.");
     }
     ids.set(issue.githubIssueId, row.id);
   }
@@ -418,13 +577,13 @@ async function upsertPullRequests(
     const [row] = await sql<PullRequestRow[]>`
       insert into pull_requests (
         github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
-        author_id, author_github_login, actual_label, actual_points, state, merged_at, proof_sha256
+        author_id, author_github_login, state, merged_at, merge_commit_oid, final_commit_at, proof_sha256
       )
       values (
         ${pullRequest.githubPullRequestId}, ${repositoryId}, ${firstIssueId}, ${pullRequest.number},
         ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.body}, ${pullRequest.authorId},
-        ${pullRequest.authorGitHubLogin}, ${pullRequest.actualLabel}, ${pullRequest.actualPoints},
-        ${pullRequest.state}, ${pullRequest.mergedAt}, ${pullRequest.proofSha256}
+        ${pullRequest.authorGitHubLogin}, ${pullRequest.state}, ${pullRequest.mergedAt},
+        ${pullRequest.mergeCommitOid}, ${pullRequest.finalCommitAt}, ${pullRequest.proofSha256}
       )
       on conflict (github_pull_request_id) do update
       set issue_id = excluded.issue_id,
@@ -434,10 +593,10 @@ async function upsertPullRequests(
           body = excluded.body,
           author_id = excluded.author_id,
           author_github_login = excluded.author_github_login,
-          actual_label = excluded.actual_label,
-          actual_points = excluded.actual_points,
           state = excluded.state,
           merged_at = excluded.merged_at,
+          merge_commit_oid = excluded.merge_commit_oid,
+          final_commit_at = excluded.final_commit_at,
           proof_sha256 = excluded.proof_sha256,
           updated_at = now()
       returning id, github_pull_request_id
@@ -455,19 +614,8 @@ async function materializeSettlements(
   input: { repositoryId: string; runId: string; fold: FoldResult },
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
+  existingRows: readonly SettlementRow[],
 ): Promise<ReconciliationDeltas> {
-  const existingRows = await sql<SettlementRow[]>`
-    select
-      settlements.id, settlements.issue_id, settlements.pull_request_id,
-      issues.github_issue_id, pull_requests.github_pull_request_id,
-      settlements.creditor_id, settlements.creditor_github_login, settlements.debtor_id,
-      settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
-      settlements.credits, settlements.proof_sha256, settlements.status
-    from settlements
-    join issues on issues.id = settlements.issue_id
-    join pull_requests on pull_requests.id = settlements.pull_request_id
-    where issues.repository_id = ${input.repositoryId}
-  `;
   const existingByIssue = new Map(existingRows.map((row) => [toSafeInteger(row.github_issue_id), row]));
   let adds = 0;
   let changes = 0;
@@ -508,6 +656,28 @@ async function materializeSettlements(
   }
 
   return { adds, changes, removals };
+}
+
+async function loadExistingSettlements(
+  sql: TransactionClient,
+  repositoryId: string,
+): Promise<SettlementRow[]> {
+  return sql<SettlementRow[]>`
+    select
+      settlements.id, settlements.issue_id, settlements.pull_request_id,
+      issues.github_issue_id, pull_requests.github_pull_request_id,
+      settlements.creditor_id, settlements.creditor_github_login, settlements.debtor_id,
+      settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
+      settlements.credits, settlements.proof_sha256, settlements.status,
+      issues.settled_label, issues.settled_label_event_id, issues.settled_label_actor_login,
+      issues.settled_label_applied_at, issues.settled_rationale_comment_id,
+      issues.settled_rationale_actor_login, issues.settled_rationale_commented_at,
+      pull_requests.merge_commit_oid, pull_requests.merged_at
+    from settlements
+    join issues on issues.id = settlements.issue_id
+    join pull_requests on pull_requests.id = settlements.pull_request_id
+    where issues.repository_id = ${repositoryId}
+  `;
 }
 
 async function insertSettlement(
@@ -551,23 +721,8 @@ async function materializeSelfWorkCalibrations(
   input: { repositoryId: string; runId: string; fold: FoldResult },
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
+  existingRows: readonly SelfWorkCalibrationRow[],
 ): Promise<ReconciliationDeltas> {
-  const existingRows = await sql<SelfWorkCalibrationRow[]>`
-    select
-      self_work_calibrations.id,
-      self_work_calibrations.pull_request_id,
-      self_work_calibrations.issue_id,
-      pull_requests.github_pull_request_id,
-      issues.github_issue_id,
-      self_work_calibrations.user_id,
-      self_work_calibrations.opening_comparison_points,
-      self_work_calibrations.actual_points
-    from self_work_calibrations
-    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
-    join issues on issues.id = self_work_calibrations.issue_id
-    where issues.repository_id = ${input.repositoryId}
-    order by issues.github_issue_id, pull_requests.github_pull_request_id
-  `;
   const existingByKey = new Map(
     existingRows.map((row) => [selfWorkCalibrationKeyFromRow(row), row]),
   );
@@ -642,6 +797,37 @@ async function materializeSelfWorkCalibrations(
   }
 
   return { adds, changes, removals };
+}
+
+async function loadExistingSelfWorkCalibrations(
+  sql: TransactionClient,
+  repositoryId: string,
+): Promise<SelfWorkCalibrationRow[]> {
+  return sql<SelfWorkCalibrationRow[]>`
+    select
+      self_work_calibrations.id,
+      self_work_calibrations.pull_request_id,
+      self_work_calibrations.issue_id,
+      pull_requests.github_pull_request_id,
+      issues.github_issue_id,
+      self_work_calibrations.user_id,
+      self_work_calibrations.opening_comparison_points,
+      self_work_calibrations.actual_points,
+      issues.settled_label as actual_label,
+      issues.settled_label_event_id,
+      issues.settled_label_actor_login,
+      issues.settled_label_applied_at,
+      issues.settled_rationale_comment_id,
+      issues.settled_rationale_actor_login,
+      issues.settled_rationale_commented_at,
+      pull_requests.merge_commit_oid,
+      pull_requests.merged_at
+    from self_work_calibrations
+    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+    join issues on issues.id = self_work_calibrations.issue_id
+    where issues.repository_id = ${repositoryId}
+    order by issues.github_issue_id, pull_requests.github_pull_request_id
+  `;
 }
 
 async function materializeUnwritableClosures(
@@ -846,7 +1032,16 @@ function settlementState(settlement: FoldSettlement): JSONValue {
     creditorGitHubLogin: settlement.creditorGitHubLogin,
     debtorId: settlement.debtorId,
     openingComparisonPoints: settlement.openingComparisonPoints,
+    settledLabel: settlement.settledLabel,
     settledPoints: settlement.settledPoints,
+    settledLabelEventId: settlement.settledLabelEventId,
+    settledLabelActorLogin: settlement.settledLabelActorLogin,
+    settledLabelAppliedAt: settlement.settledLabelAppliedAt,
+    settledRationaleCommentId: settlement.settledRationaleCommentId,
+    settledRationaleActorLogin: settlement.settledRationaleActorLogin,
+    settledRationaleCommentedAt: settlement.settledRationaleCommentedAt,
+    mergeCommitOid: settlement.mergeCommitOid,
+    mergedAt: settlement.mergedAt,
     reviewRounds: settlement.reviewRounds,
     credits: settlement.credits,
     proofSha256: settlement.proofSha256,
@@ -862,7 +1057,16 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     creditorGitHubLogin: row.creditor_github_login,
     debtorId: row.debtor_id,
     openingComparisonPoints: row.opening_comparison_points,
+    settledLabel: row.settled_label,
     settledPoints: row.settled_points,
+    settledLabelEventId: row.settled_label_event_id,
+    settledLabelActorLogin: row.settled_label_actor_login,
+    settledLabelAppliedAt: nullableTimestampToIso(row.settled_label_applied_at),
+    settledRationaleCommentId: row.settled_rationale_comment_id,
+    settledRationaleActorLogin: row.settled_rationale_actor_login,
+    settledRationaleCommentedAt: nullableTimestampToIso(row.settled_rationale_commented_at),
+    mergeCommitOid: row.merge_commit_oid,
+    mergedAt: nullableTimestampToIso(row.merged_at),
     reviewRounds: row.review_rounds,
     credits: row.credits,
     proofSha256: row.proof_sha256,
@@ -887,7 +1091,16 @@ function selfWorkCalibrationState(calibration: SelfWorkCalibration): JSONValue {
     githubPullRequestId: calibration.githubPullRequestId,
     userId: calibration.userId,
     openingComparisonPoints: calibration.openingComparisonPoints,
+    actualLabel: calibration.actualLabel,
     actualPoints: calibration.actualPoints,
+    actualLabelEventId: calibration.actualLabelEventId,
+    actualLabelActorLogin: calibration.actualLabelActorLogin,
+    actualLabelAppliedAt: calibration.actualLabelAppliedAt,
+    rationaleCommentId: calibration.rationaleCommentId,
+    rationaleActorLogin: calibration.rationaleActorLogin,
+    rationaleCommentedAt: calibration.rationaleCommentedAt,
+    mergeCommitOid: calibration.mergeCommitOid,
+    mergedAt: calibration.mergedAt,
   };
 }
 
@@ -897,7 +1110,16 @@ function selfWorkCalibrationStateFromRow(row: SelfWorkCalibrationRow): JSONValue
     githubPullRequestId: toSafeInteger(row.github_pull_request_id),
     userId: row.user_id,
     openingComparisonPoints: row.opening_comparison_points,
+    actualLabel: row.actual_label,
     actualPoints: row.actual_points,
+    actualLabelEventId: row.settled_label_event_id,
+    actualLabelActorLogin: row.settled_label_actor_login,
+    actualLabelAppliedAt: nullableTimestampToIso(row.settled_label_applied_at),
+    rationaleCommentId: row.settled_rationale_comment_id,
+    rationaleActorLogin: row.settled_rationale_actor_login,
+    rationaleCommentedAt: nullableTimestampToIso(row.settled_rationale_commented_at),
+    mergeCommitOid: row.merge_commit_oid,
+    mergedAt: nullableTimestampToIso(row.merged_at),
   };
 }
 
@@ -933,6 +1155,7 @@ function toReconciliationRepository(row: RepositoryRow): ReconciliationRepositor
       id: row.sponsor_id,
       githubLogin: row.sponsor_github_login,
       enforcementState: row.sponsor_enforcement_state,
+      moderationEvents: moderationEventsFromJson(row.sponsor_moderation_events),
     },
   };
 }
@@ -942,6 +1165,7 @@ function toFoldUser(row: UserRow): FoldUser {
     id: row.id,
     githubLogin: row.github_login,
     enforcementState: row.enforcement_state,
+    moderationEvents: moderationEventsFromJson(row.moderation_events),
   };
 }
 
@@ -963,4 +1187,61 @@ function toSafeInteger(value: number | string): number {
 
 function normalizeLogin(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function timestampToIso(value: string | Date | null): string {
+  const normalized = nullableTimestampToIso(value);
+  if (normalized === null) {
+    throw new Error("Database timestamp was missing.");
+  }
+  return normalized;
+}
+
+function nullableTimestampToIso(value: string | Date | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    throw new Error("Database timestamp was invalid.");
+  }
+  return date.toISOString();
+}
+
+function moderationEventsFromJson(value: unknown): FoldModerationEvent[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Moderation history was invalid.");
+  }
+  return value.map((candidate) => {
+    if (!isRecord(candidate)) {
+      throw new Error("Moderation history was invalid.");
+    }
+    const { id, priorState, newState, occurredAt } = candidate;
+    if (
+      typeof id !== "string" ||
+      !isEnforcementState(priorState) ||
+      !isEnforcementState(newState) ||
+      (typeof occurredAt !== "string" && !(occurredAt instanceof Date))
+    ) {
+      throw new Error("Moderation history was invalid.");
+    }
+    return {
+      id,
+      priorState,
+      newState,
+      occurredAt: timestampToIso(occurredAt),
+    };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isEnforcementState(value: unknown): value is EnforcementState {
+  return value === "ACTIVE" ||
+    value === "UNDER_AUDIT" ||
+    value === "WARNED" ||
+    value === "RECALIBRATING" ||
+    value === "BANNED";
 }

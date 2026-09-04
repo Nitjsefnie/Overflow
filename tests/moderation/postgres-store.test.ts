@@ -196,8 +196,10 @@ describe("PostgreSQL account moderation transitions", () => {
       new_state: string;
       reason: string;
       cohort_definition: {
-        selfWorkPairs?: Array<{ proofSha256?: unknown }>;
-        outsiderSettlementPairs?: Array<{ proofSha256?: unknown }>;
+        sampleStartedAt?: unknown;
+        sampleEndedAt?: unknown;
+        selfWorkPairs?: Array<{ proofSha256?: unknown; mergedAt?: unknown }>;
+        outsiderSettlementPairs?: Array<{ proofSha256?: unknown; mergedAt?: unknown }>;
       };
       cohort_statistics: { selfWork?: { count?: number }; outsider?: { count?: number } };
       recalibration_plan: string | null;
@@ -213,6 +215,10 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(events.every((event) => event.cohort_definition.outsiderSettlementPairs?.length === 10)).toBe(true);
     expect(events.every((event) => event.cohort_definition.selfWorkPairs?.every((pair) => typeof pair.proofSha256 === "string"))).toBe(true);
     expect(events.every((event) => event.cohort_definition.outsiderSettlementPairs?.every((pair) => typeof pair.proofSha256 === "string"))).toBe(true);
+    expect(events.every((event) => event.cohort_definition.sampleStartedAt === sampleStartedAt)).toBe(true);
+    expect(events.every((event) => event.cohort_definition.sampleEndedAt === sampleEndedAt)).toBe(true);
+    expect(events.every((event) => event.cohort_definition.selfWorkPairs?.every((pair) => typeof pair.mergedAt === "string"))).toBe(true);
+    expect(events.every((event) => event.cohort_definition.outsiderSettlementPairs?.every((pair) => typeof pair.mergedAt === "string"))).toBe(true);
     expect(events.every((event) => event.cohort_statistics.selfWork?.count === 10)).toBe(true);
     expect(events.every((event) => event.cohort_statistics.outsider?.count === 10)).toBe(true);
     expect(events).toContainEqual(
@@ -224,11 +230,12 @@ describe("PostgreSQL account moderation transitions", () => {
     );
   }, 60_000);
 
-  it("uses identical pair mapping for account-wide and repository-scoped calibration cohorts", async () => {
+  it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);
     const secondaryRepositoryId = await insertRepository(targetId);
     const primaryPairs = await insertCalibrationPairs({ targetId, repositoryId: primaryRepositoryId, count: 1 });
+    await rebuildCalibrationFacts(primaryRepositoryId, "2040-01-01T00:00:00.000Z");
     const store = new PostgresModerationStore(sql);
     const sampleStartedAt = "2020-01-01T00:00:00.000Z";
     const sampleEndedAt = "2030-01-01T00:00:00.000Z";
@@ -248,6 +255,20 @@ describe("PostgreSQL account moderation transitions", () => {
 
     expect(scopedBeforeSecondaryMaterialization).toEqual(primaryPairs);
     expect(accountWideBeforeSecondaryMaterialization).toEqual(primaryPairs);
+
+    await rebuildCalibrationFacts(primaryRepositoryId, "2010-01-01T00:00:00.000Z");
+    await expect(store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: primaryRepositoryId,
+      sampleStartedAt,
+      sampleEndedAt,
+    })).resolves.toEqual(primaryPairs);
+    await expect(store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: null,
+      sampleStartedAt,
+      sampleEndedAt,
+    })).resolves.toEqual(primaryPairs);
 
     const secondaryPairs = await insertCalibrationPairs({ targetId, repositoryId: secondaryRepositoryId, count: 1 });
     const accountWide = await store.loadCalibrationCohort({
@@ -383,18 +404,18 @@ async function insertPair(input: {
   `;
   const githubPullRequestId = nextExternalId();
   const authorId = input.selfWork ? input.targetId : await insertUser("MEMBER");
-  const [pullRequest] = await sql<{ id: string }[]>`
+  const [pullRequest] = await sql<{ id: string; merged_at: string | Date }[]>`
     insert into pull_requests (
       github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
-      author_id, actual_label, actual_points, state, merged_at, proof_sha256
+      author_id, state, merged_at, proof_sha256
     )
     values (
       ${githubPullRequestId}, ${input.repositoryId}, ${issue.id}, ${nextExternalId()},
       ${`https://github.com/example/overflow/pull/${githubPullRequestId}`}, ${"A merged contribution"},
-      ${"Pull request evidence"}, ${authorId}, ${"delivered/5"}, 5, ${"MERGED"}, now(),
+      ${"Pull request evidence"}, ${authorId}, ${"MERGED"}, now(),
       ${proofFor(githubPullRequestId)}
     )
-    returning id
+    returning id, merged_at
   `;
   await sql`
     insert into pull_request_issues (pull_request_id, issue_id, repository_id)
@@ -412,6 +433,7 @@ async function insertPair(input: {
       githubRepositoryId: await githubRepositoryIdFor(input.repositoryId),
       githubIssueId,
       githubPullRequestId,
+      mergedAt: toIso(pullRequest.merged_at),
       proofSha256: proofFor(githubPullRequestId),
       offeredDifficulty: 4,
       settledDifficulty: 5,
@@ -432,6 +454,7 @@ async function insertPair(input: {
     githubRepositoryId: await githubRepositoryIdFor(input.repositoryId),
     githubIssueId,
     githubPullRequestId,
+    mergedAt: toIso(pullRequest.merged_at),
     proofSha256: proofFor(githubIssueId),
     offeredDifficulty: 4,
     settledDifficulty: 5,
@@ -495,6 +518,71 @@ async function githubRepositoryIdFor(repositoryId: string): Promise<number> {
   return Number(repository.github_repository_id);
 }
 
+async function rebuildCalibrationFacts(repositoryId: string, createdAt: string): Promise<void> {
+  const selfWork = await sql<{
+    pull_request_id: string;
+    issue_id: string;
+    user_id: string;
+    opening_comparison_points: number;
+    actual_points: number | null;
+  }[]>`
+    select pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+    from self_work_calibrations
+    where issue_id in (select id from issues where repository_id = ${repositoryId})
+  `;
+  const outsiderSettlements = await sql<{
+    pull_request_id: string;
+    issue_id: string;
+    creditor_id: string | null;
+    creditor_github_login: string | null;
+    debtor_id: string;
+    opening_comparison_points: number;
+    settled_points: number | null;
+    review_rounds: number;
+    credits: number;
+    proof_sha256: string;
+    status: "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+  }[]>`
+    select pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+           opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+    from settlements
+    where issue_id in (select id from issues where repository_id = ${repositoryId})
+  `;
+
+  await sql.begin(async (transaction) => {
+    await transaction`
+      delete from self_work_calibrations
+      where issue_id in (select id from issues where repository_id = ${repositoryId})
+    `;
+    await transaction`
+      delete from settlements
+      where issue_id in (select id from issues where repository_id = ${repositoryId})
+    `;
+    for (const row of selfWork) {
+      await transaction`
+        insert into self_work_calibrations (
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, created_at
+        ) values (
+          ${row.pull_request_id}, ${row.issue_id}, ${row.user_id}, ${row.opening_comparison_points},
+          ${row.actual_points}, ${createdAt}
+        )
+      `;
+    }
+    for (const row of outsiderSettlements) {
+      await transaction`
+        insert into settlements (
+          pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+          opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, created_at
+        ) values (
+          ${row.pull_request_id}, ${row.issue_id}, ${row.creditor_id}, ${row.creditor_github_login}, ${row.debtor_id},
+          ${row.opening_comparison_points}, ${row.settled_points}, ${row.review_rounds}, ${row.credits},
+          ${row.proof_sha256}, ${row.status}, ${createdAt}
+        )
+      `;
+    }
+  });
+}
+
 async function settlementFacts() {
   return sql<{
     id: string;
@@ -527,6 +615,10 @@ function difficultyScheme() {
 
 function proofFor(identifier: number): string {
   return identifier.toString(16).padStart(64, "0");
+}
+
+function toIso(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
 function nextExternalId(): number {

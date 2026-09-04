@@ -13,6 +13,12 @@
 !vitest.config.ts
 !vitest.setup.ts
 
+!.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/*.yml
+
 !src/
 src/*
 !src/app/

@@ -20,8 +20,50 @@ export type GitHubIssue = {
   body: string;
   url: string;
   state: IssueState;
+  createdAt: string;
+  authorLogin: string | null;
   labels: string[];
   claimAssigneeGitHubLogin: string | null;
+  history: GitHubIssueHistoryEvent[];
+  comments: GitHubIssueComment[];
+};
+
+export type GitHubIssueHistoryEvent =
+  | {
+      kind: "LABELED";
+      id: string;
+      actorLogin: string | null;
+      label: string;
+      createdAt: string;
+    }
+  | {
+      kind: "UNLABELED";
+      id: string;
+      actorLogin: string | null;
+      label: string;
+      createdAt: string;
+    }
+  | {
+      kind: "ASSIGNED";
+      id: string;
+      actorLogin: string | null;
+      assigneeLogin: string | null;
+      createdAt: string;
+    }
+  | {
+      kind: "UNASSIGNED";
+      id: string;
+      actorLogin: string | null;
+      assigneeLogin: string | null;
+      createdAt: string;
+    };
+
+export type GitHubIssueComment = {
+  id: string;
+  databaseId: number | null;
+  authorLogin: string | null;
+  body: string;
+  createdAt: string;
 };
 
 export type GitHubPullRequest = {
@@ -32,8 +74,9 @@ export type GitHubPullRequest = {
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
+  mergeCommitOid: string | null;
+  finalCommitAt: string | null;
   authorLogin: string | null;
-  labels: string[];
 };
 
 export type GitHubWebhook = {

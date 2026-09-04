@@ -2,6 +2,7 @@ export type CalibrationPair = {
   githubRepositoryId: number;
   githubIssueId: number;
   githubPullRequestId: number;
+  mergedAt: string;
   proofSha256: string;
   offeredDifficulty: number;
   settledDifficulty: number;
@@ -85,5 +86,8 @@ function assertValidPair(pair: CalibrationPair): void {
 
   if (typeof pair.proofSha256 !== "string" || !/^[0-9a-f]{64}$/.test(pair.proofSha256)) {
     throw new CalibrationStatisticsError("GitHub proof fingerprint must be a lowercase SHA-256 digest.");
+  }
+  if (typeof pair.mergedAt !== "string" || Number.isNaN(Date.parse(pair.mergedAt))) {
+    throw new CalibrationStatisticsError("GitHub merge time must be a valid timestamp.");
   }
 }

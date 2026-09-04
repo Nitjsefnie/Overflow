@@ -30,14 +30,14 @@ One repository has one accountable sponsor in the MVP.
 - A repository is registered only after a signed-in member submits `owner/name` or its canonical GitHub URL.
 - Registration verifies repository administration permission, creates the webhook, and records only that repository. It never registers the rest of the member's accessible repositories.
 - Registration stores a repository-specific difficulty scheme made of two explicit label catalogs and human-readable display names. Nothing derives meaning from label text.
-- The opening catalog may use any vocabulary, such as `size/S`, `size/M`, and `size/L`. Each configured label maps to repository-chosen comparison points from 1 through 10, used only for calibration and optional exposure reservation.
+- The opening catalog may use any vocabulary, such as `size/S`, `size/M`, and `size/L`. Each configured label maps to repository-chosen comparison points from 1 through 10, used only for calibration and exposure reservation.
 - The closing/actual catalog may also use arbitrary label text, but its mappings must cover every integer from 1 through 10 exactly once because those mapped points award credit.
 - The historical `perceived difficulty: N` / `actual difficulty: N` families are one selectable preset, not hardcoded behavior. Registration verifies that every configured label exists, creating missing labels.
 
 ### Difficulty facts
 
-- **Offered difficulty** is the neutral domain value set by the issue owner at filing, before the work is known, and is immutable. It is the posted price and the amount reserved while an outsider holds the assignment. A repository may display this as “perceived,” “estimate,” or another configured term.
-- **Settled difficulty** is the neutral domain value set by that same owner after understanding the issue and landed diff, with a GitHub rationale comment, and is mandatory before outsider work merges. A repository may display this as “actual,” “final,” or another configured term.
+- **Offered difficulty** is the earliest configured opening-label event applied by the issue owner before the first assignment event. It is the posted price and the amount reserved while an outsider holds the assignment. Its event ID, actor, and timestamp are immutable proof; later configured opening-label mutations create policy violations without replacing the original. Bot-applied and post-assignment labels are not opening authority. A repository may display this as “perceived,” “estimate,” or another configured term.
+- **Settled difficulty** is a configured closing-label event applied to the issue by that same owner no earlier than the closing pull request’s final commit and no later than merge, accompanied by a nonblank owner comment no earlier than that event and no later than merge that names the configured label text. Pull-request labels and contributor-applied issue labels cannot settle. The label event and rationale comment IDs, actors, and timestamps are retained as proof. A repository may display this as “actual,” “final,” or another configured term.
 - Both labels live on the issue. The configured opening category maps to comparison points; the configured closing/actual category always maps to an integer from 1 through 10. The worker never prices their own work.
 - A missing or ambiguous label makes a row unsettled. Overflow never guesses.
 - Changing offered difficulty after the issue is filed creates a policy violation in the materialized audit trail; the original observed filing value remains the offered value used by the fold.
@@ -52,9 +52,9 @@ One repository has one accountable sponsor in the MVP.
 
 ### Events and reconciliation
 
-The webhook endpoint verifies `X-Hub-Signature-256` against the raw body before parsing JSON and deduplicates `X-GitHub-Delivery`. It processes issue/assignment/label state, submitted formal reviews, pull-request merge state, and installation/repository availability.
+The production webhook endpoint at `/api/github/webhooks` verifies `X-Hub-Signature-256` against the raw body before parsing JSON and deduplicates `X-GitHub-Delivery`. It processes issue/assignment/label state, submitted formal reviews, pull-request merge state, and installation/repository availability.
 
-`overflow reconcile` performs a full GraphQL fold for every active registered repository and upserts the PostgreSQL materialization. Reconciliation must be idempotent and must report additions, removals, and changes. Deleting or rewriting GitHub facts legitimately changes the rebuilt materialization; the reconciliation audit records both versions.
+`overflow reconcile` performs a fully paginated GraphQL fold for every active registered repository and upserts the PostgreSQL materialization. A PostgreSQL repository coordinator serializes each repository from before snapshot collection through materialization so an older worker cannot overwrite a newer result. Reconciliation must be idempotent and must report additions, removals, and changes. Deleting or rewriting GitHub facts legitimately changes the rebuilt materialization; the reconciliation audit records both versions.
 
 ## Rating and ledger rules
 
@@ -84,7 +84,7 @@ The historical records ratified the mechanism but not the numeric floor. Overflo
 available headroom = settled balance - sum(offered difficulty of open outsider-assigned issues)
 ```
 
-An optional group policy may set `credit_floor`. When configured, a new outsider assignment that would move the repository sponsor below the floor is compensatingly reversed and commented on; the claimant is not blocked from earning their way out of a deficit. Because no floor value has been ratified, the MVP default is disabled.
+No floor is enforced or configurable in this release, and negative headroom remains visible. Optional group floors are deferred until a later release can define and test a properly idempotent assignment-mutation protocol; the MVP does not expose a display-only switch or imply enforcement it does not perform.
 
 ## Statistical miscalibration ladder
 
@@ -97,6 +97,8 @@ For each sponsor, Overflow calculates:
 - sample sizes, means, medians, and the difference between those means; and
 - the underlying GitHub rows so a moderator can reproduce the figures.
 
+Calibration windows use each associated pull request’s immutable GitHub merge timestamp, never the database creation time of a rebuilt settlement or self-work row. The selected time boundary and every pair’s merge timestamp remain in the cohort proof.
+
 Automatic accusation is deliberately avoided. A moderator may open an account audit only when both the self-work and outsider samples contain at least 10 settled issues. That threshold is a provisional MVP ruling because the older decision record explicitly says five is too few but does not ratify a number.
 
 - **Audit:** snapshot the reproducible cohort and mark the account `UNDER_AUDIT`; no ledger row changes.
@@ -105,6 +107,8 @@ Automatic accusation is deliberately avoided. A moderator may open an account au
 - **Ban:** a substantiated third pattern changes the sponsor to `BANNED`, keeps their repositories inactive, and blocks new registration or settlement.
 
 Dismissal returns the prior enforcement state. Every transition records actor, timestamp, reason, sample definition, summary statistics, and prior/new state. No stage creates, reverses, or changes a settlement.
+
+Settlement eligibility is evaluated at the immutable GitHub merge timestamp from moderation-event history. A later warning, recalibration, or ban never deletes, rerates, or reclassifies an eligible historical settlement or self-work calibration; work merged while either participant was recalibrating or banned remains ineligible, including when an unclaimed identity is claimed later.
 
 ## Data model
 
@@ -139,7 +143,7 @@ The visual direction is a calm, dense exchange ledger: warm paper, ink typograph
 
 - OAuth access tokens are encrypted with AES-256-GCM using a base64-encoded 32-byte `TOKEN_ENCRYPTION_KEY`; plaintext is never persisted or logged.
 - Webhook verification uses constant-time comparison and rejects missing, malformed, or invalid signatures with `401`.
-- Mutations require a server-side session; moderation additionally requires `role = MODERATOR`.
+- Mutations require a server-side session; moderation reads, mutations, and UI re-resolve the current user role from PostgreSQL on every request or render and require `role = MODERATOR`. A cached JWT role is not authorization.
 - GitHub-generated strings render as text, never raw HTML. SQL is parameterized.
 - Registration rolls back local activation and attempts webhook cleanup if setup fails.
 - Webhook failures remain retryable and recorded. Reconciliation is the correctness backstop for missed or reordered events.
@@ -150,13 +154,14 @@ The visual direction is a calm, dense exchange ledger: warm paper, ink typograph
 - Service tests cover explicit registration, permission denial, GraphQL-only closing links, webhook idempotency, review deduplication, merge settlement, hand-close unwritable debt, unclaimed members, reconciliation drift, and account-level enforcement.
 - PostgreSQL behavior tests run the real migration in an ephemeral PostgreSQL 17 container and exercise constraints and views.
 - Component tests cover signed-out landing, dashboard summaries/headroom, issue cards, settlement proof, calibration comparison, registration errors, and moderator controls.
+- GitHub Actions gates pushes to `main`, pull requests targeting `main`, and manual dispatches with explicit read-only permissions, per-ref/PR concurrency, commit-pinned actions, PostgreSQL 17 migration, `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`; actionlint and zizmor separately gate workflow correctness and security.
 - `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` must pass from a clean checkout.
 
 ## Explicitly deferred
 
 - Measuring, pooling, or brokering members' LLM subscription capacity.
 - Automated LLM difficulty judgment; maintainers apply governed actual-difficulty labels from issue and diff evidence.
-- A mandatory default credit-floor number; the mechanism and headroom calculation ship, enforcement stays disabled until a group sets one.
+- Optional group credit floors and their idempotent assignment-enforcement protocol; only the headroom calculation ships in the MVP.
 - Automated statistical accusations or a group-vote ban mechanism.
 - Multiple sponsors per repository, groups/teams, cash settlement, transferable credits, and partial credit before merge.
 - Hosted deployment, billing, email/push notifications, and agent execution.

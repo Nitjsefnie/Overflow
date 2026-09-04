@@ -73,6 +73,7 @@ function calibrationPair(overrides: Partial<CalibrationPair> = {}): CalibrationP
     githubRepositoryId: 701,
     githubIssueId: 801,
     githubPullRequestId: 901,
+    mergedAt: "2026-01-01T00:00:00.000Z",
     proofSha256: "a".repeat(64),
     offeredDifficulty: 5,
     settledDifficulty: 5,

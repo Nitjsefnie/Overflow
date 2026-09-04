@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-const { productionAuth } = vi.hoisted(() => ({ productionAuth: vi.fn() }));
+const { productionAuth, productionRole } = vi.hoisted(() => ({
+  productionAuth: vi.fn(),
+  productionRole: vi.fn(),
+}));
 
 vi.mock("@/auth", () => ({ auth: productionAuth }));
+vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: productionRole }));
 
 import {
   createModerationClosePatchHandler,
@@ -20,9 +24,29 @@ const targetAccountId = "00000000-0000-4000-8000-000000000003";
 const auditId = "00000000-0000-4000-8000-000000000004";
 
 describe("account moderation API", () => {
+  it("revokes an already-issued moderator session immediately after the database role is demoted", async () => {
+    const getCurrentRole = vi.fn().mockResolvedValue("MEMBER");
+    const createService = vi.fn(async () => serviceHarness());
+    const handler = createModerationPostHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole,
+      createService,
+    } as Parameters<typeof createModerationPostHandler>[0]);
+
+    const response = await handler(jsonRequest(openPayload()));
+
+    expect(response.status).toBe(403);
+    expect(getCurrentRole).toHaveBeenCalledWith(moderatorSession.user.id);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
   it("returns a structured 401 before parsing an unauthenticated audit request", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => null,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
 
@@ -37,6 +61,7 @@ describe("account moderation API", () => {
   it("returns a structured 403 for a non-moderator", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => memberSession,
+      getCurrentRole: async () => "MEMBER",
       createService: async () => serviceHarness(),
     });
 
@@ -51,6 +76,7 @@ describe("account moderation API", () => {
   it("returns a structured 422 for an invalid payload instead of accepting settlement corrections", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
 
@@ -69,6 +95,7 @@ describe("account moderation API", () => {
   ] as const)("maps a %s service outcome to structured HTTP %s", async (code, status) => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
           open: async () => {
@@ -88,6 +115,7 @@ describe("account moderation API", () => {
   it("returns a sanitized 500 without database or upstream details", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
           open: async () => {
@@ -110,6 +138,7 @@ describe("account moderation API", () => {
   it("allows only dismissal or substantiation for a specific audit id", async () => {
     const handler = createModerationAuditPatchHandler({
       getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
 
@@ -134,6 +163,7 @@ describe("account moderation API", () => {
     });
 
     productionAuth.mockResolvedValueOnce(memberSession);
+    productionRole.mockResolvedValueOnce("MEMBER");
     const memberResponse = await productionAuditPatch(
       jsonRequest({ action: "dismiss", reason: "A member cannot decide an audit." }, "PATCH"),
       { params: Promise.resolve({ id: auditId }) },
@@ -147,6 +177,7 @@ describe("account moderation API", () => {
   it("requires a plan and moderator session before closing recalibration", async () => {
     const handler = createModerationClosePatchHandler({
       getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
 

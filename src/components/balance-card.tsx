@@ -3,7 +3,7 @@ import type { DashboardProjection } from "@/lib/dashboard/queries";
 type BalanceCardProps = {
   dashboard: Pick<
     DashboardProjection,
-    "settledBalance" | "earnedTotal" | "givenTotal" | "reservedPoints" | "availableHeadroom" | "creditFloor"
+    "settledBalance" | "earnedTotal" | "givenTotal" | "reservedPoints" | "availableHeadroom"
   >;
 };
 
@@ -34,9 +34,6 @@ export function BalanceCard({ dashboard }: BalanceCardProps) {
           <dd>Available headroom {formatUnsignedPositive(dashboard.availableHeadroom)}</dd>
         </div>
       </dl>
-      {dashboard.creditFloor !== undefined ? (
-        <p className="credit-floor">Optional credit floor {formatUnsignedPositive(dashboard.creditFloor)}</p>
-      ) : null}
     </section>
   );
 }

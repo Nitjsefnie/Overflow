@@ -1,25 +1,26 @@
 import { createHash } from "node:crypto";
 import { isParticipationEligible, type EnforcementState, type IssueState, type PullRequestState } from "@/lib/db/types";
-import {
-  parseActualDifficulty,
-  parseOpeningDifficulty,
-  type DifficultyScheme,
-} from "@/lib/domain/difficulty-scheme";
+import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
-import type { GitHubPullRequestReview } from "@/lib/github/types";
+import type {
+  GitHubIssueComment,
+  GitHubIssueHistoryEvent,
+  GitHubPullRequestReview,
+} from "@/lib/github/types";
+
+export type FoldModerationEvent = {
+  id: string;
+  priorState: EnforcementState;
+  newState: EnforcementState;
+  occurredAt: string;
+};
 
 export type FoldUser = {
   id: string;
   githubLogin: string;
   enforcementState: EnforcementState;
-};
-
-export type ExistingFoldIssue = {
-  githubIssueId: number;
-  openingLabel: string;
-  openingComparisonPoints: number;
-  openingReservePoints: number;
+  moderationEvents?: FoldModerationEvent[];
 };
 
 export type RepositoryFoldSnapshot = {
@@ -31,7 +32,6 @@ export type RepositoryFoldSnapshot = {
     difficultyScheme: DifficultyScheme;
   };
   users: FoldUser[];
-  existingIssues: ExistingFoldIssue[];
   issues: RepositoryFoldIssue[];
 };
 
@@ -42,8 +42,12 @@ export type RepositoryFoldIssue = {
   body: string;
   url: string;
   state: IssueState;
+  createdAt: string;
+  authorLogin: string | null;
   labels: string[];
   claimAssigneeGitHubLogin?: string | null;
+  history: GitHubIssueHistoryEvent[];
+  comments: GitHubIssueComment[];
   /** Deliberately ignored: only GraphQL closedByPullRequestsReferences is authoritative. */
   restTimeline?: unknown;
   closingPullRequests: RepositoryFoldPullRequest[];
@@ -57,19 +61,36 @@ export type RepositoryFoldPullRequest = {
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
+  mergeCommitOid: string | null;
+  finalCommitAt: string | null;
   authorLogin: string | null;
-  labels: string[];
   reviews: GitHubPullRequestReview[];
   rawDiff: string;
 };
 
-export type FoldIssue = ExistingFoldIssue & {
+export type FoldIssue = {
+  githubIssueId: number;
+  openingLabel: string;
+  openingComparisonPoints: number;
+  openingReservePoints: number;
   number: number;
   title: string;
   body: string;
   url: string;
   state: IssueState;
+  ownerGitHubLogin: string;
+  openingSourceEventId: string;
+  openingSourceActorLogin: string;
+  openingSourceAt: string;
   claimAssigneeGitHubLogin: string | null;
+  settledLabel: string | null;
+  settledPoints: number | null;
+  settledLabelEventId: string | null;
+  settledLabelActorLogin: string | null;
+  settledLabelAppliedAt: string | null;
+  settledRationaleCommentId: string | null;
+  settledRationaleActorLogin: string | null;
+  settledRationaleCommentedAt: string | null;
 };
 
 export type FoldPullRequest = {
@@ -80,10 +101,10 @@ export type FoldPullRequest = {
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
+  mergeCommitOid: string;
+  finalCommitAt: string;
   authorId: string | null;
   authorGitHubLogin: string | null;
-  actualLabel: string | null;
-  actualPoints: number | null;
   proofSha256: string;
   githubIssueIds: number[];
   reviewRounds: Array<{ githubReviewId: number; submittedAt: string }>;
@@ -96,7 +117,16 @@ export type FoldSettlement = {
   creditorGitHubLogin: string | null;
   debtorId: string;
   openingComparisonPoints: number;
+  settledLabel: string | null;
   settledPoints: number | null;
+  settledLabelEventId: string | null;
+  settledLabelActorLogin: string | null;
+  settledLabelAppliedAt: string | null;
+  settledRationaleCommentId: string | null;
+  settledRationaleActorLogin: string | null;
+  settledRationaleCommentedAt: string | null;
+  mergeCommitOid: string;
+  mergedAt: string;
   reviewRounds: number;
   credits: number;
   proofSha256: string;
@@ -108,7 +138,16 @@ export type SelfWorkCalibration = {
   githubPullRequestId: number;
   userId: string;
   openingComparisonPoints: number;
+  actualLabel: string | null;
   actualPoints: number | null;
+  actualLabelEventId: string | null;
+  actualLabelActorLogin: string | null;
+  actualLabelAppliedAt: string | null;
+  rationaleCommentId: string | null;
+  rationaleActorLogin: string | null;
+  rationaleCommentedAt: string | null;
+  mergeCommitOid: string;
+  mergedAt: string;
 };
 
 export type UnwritableClosure = {
@@ -131,33 +170,64 @@ export type FoldResult = {
   ledgerEntries: LedgerEntry[];
 };
 
+type OpeningResolution = {
+  githubIssueId: number;
+  openingLabel: string;
+  openingComparisonPoints: number;
+  openingReservePoints: number;
+  ownerGitHubLogin: string;
+  openingSourceEventId: string;
+  openingSourceActorLogin: string;
+  openingSourceAt: string;
+  mutated: boolean;
+};
+
+type SettledDifficultyEvidence = {
+  label: string;
+  points: number;
+  labelEventId: string;
+  labelActorLogin: string;
+  labelAppliedAt: string;
+  rationaleCommentId: string;
+  rationaleActorLogin: string;
+  rationaleCommentedAt: string;
+};
+
+type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
+  mergedAt: string;
+  mergeCommitOid: string;
+  finalCommitAt: string;
+};
+
 export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const usersByLogin = new Map(snapshot.users.map((user) => [normalizeLogin(user.githubLogin), user]));
-  const existingIssuesByGitHubId = new Map(
-    snapshot.existingIssues.map((issue) => [issue.githubIssueId, issue]),
-  );
   const issues: FoldIssue[] = [];
   const pullRequestsByGitHubId = new Map<number, FoldPullRequest>();
   const settlements: FoldSettlement[] = [];
   const selfWorkCalibrations: SelfWorkCalibration[] = [];
   const unwritableClosures: UnwritableClosure[] = [];
   const policyViolations: FoldPolicyViolation[] = [];
-  const canCreateSettlements = snapshot.repository.active && isParticipationEligible(snapshot.repository.sponsor.enforcementState);
 
   for (const issue of snapshot.issues) {
-    const opening = resolveOpening(issue, existingIssuesByGitHubId.get(issue.id), snapshot.repository.difficultyScheme);
+    const opening = resolveOpening(issue, snapshot.repository.difficultyScheme);
     if (opening === null) {
       policyViolations.push({
-        code: openingViolationCode(issue, snapshot.repository.difficultyScheme),
+        code: "OPENING_LABEL_MISSING",
         githubIssueId: issue.id,
       });
       continue;
     }
 
-    const existing = existingIssuesByGitHubId.get(issue.id);
-    if (existing !== undefined && openingHasChanged(issue, existing, snapshot.repository.difficultyScheme)) {
+    if (opening.mutated) {
       policyViolations.push({ code: "OPENING_LABEL_MUTATED", githubIssueId: issue.id });
     }
+
+    const pullRequest = issue.state === "CLOSED"
+      ? selectClosingPullRequest(issue.closingPullRequests)
+      : null;
+    const settledDifficulty = pullRequest === null
+      ? null
+      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme);
 
     issues.push({
       githubIssueId: issue.id,
@@ -166,17 +236,28 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       body: issue.body,
       url: issue.url,
       state: issue.state,
+      ownerGitHubLogin: opening.ownerGitHubLogin,
       openingLabel: opening.openingLabel,
       openingComparisonPoints: opening.openingComparisonPoints,
       openingReservePoints: opening.openingReservePoints,
+      openingSourceEventId: opening.openingSourceEventId,
+      openingSourceActorLogin: opening.openingSourceActorLogin,
+      openingSourceAt: opening.openingSourceAt,
       claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin ?? null,
+      settledLabel: settledDifficulty?.label ?? null,
+      settledPoints: settledDifficulty?.points ?? null,
+      settledLabelEventId: settledDifficulty?.labelEventId ?? null,
+      settledLabelActorLogin: settledDifficulty?.labelActorLogin ?? null,
+      settledLabelAppliedAt: settledDifficulty?.labelAppliedAt ?? null,
+      settledRationaleCommentId: settledDifficulty?.rationaleCommentId ?? null,
+      settledRationaleActorLogin: settledDifficulty?.rationaleActorLogin ?? null,
+      settledRationaleCommentedAt: settledDifficulty?.rationaleCommentedAt ?? null,
     });
 
     if (issue.state !== "CLOSED") {
       continue;
     }
 
-    const pullRequest = selectClosingPullRequest(issue.closingPullRequests);
     if (pullRequest === null) {
       unwritableClosures.push({
         githubIssueId: issue.id,
@@ -186,7 +267,6 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     }
 
     const author = pullRequest.authorLogin === null ? undefined : usersByLogin.get(normalizeLogin(pullRequest.authorLogin));
-    const actual = parseActualDifficulty(pullRequest.labels, snapshot.repository.difficultyScheme);
     const reviewRounds = countReviewRounds(pullRequest.reviews, pullRequest.mergedAt);
     const proofSha256 = hashRawDiff(pullRequest.rawDiff);
     const foldedPullRequest = rememberPullRequest(
@@ -194,17 +274,15 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       pullRequest,
       issue.id,
       author?.id ?? null,
-      actual.kind === "ok" ? actual.label : null,
-      actual.kind === "ok" ? actual.points : null,
       proofSha256,
       reviewRounds,
     );
 
-    if (!canCreateSettlements) {
+    if (!isParticipationEligibleAt(snapshot.repository.sponsor, pullRequest.mergedAt)) {
       continue;
     }
 
-    if (author !== undefined && !isParticipationEligible(author.enforcementState)) {
+    if (author !== undefined && !isParticipationEligibleAt(author, pullRequest.mergedAt)) {
       continue;
     }
 
@@ -214,7 +292,16 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         githubPullRequestId: foldedPullRequest.githubPullRequestId,
         userId: author.id,
         openingComparisonPoints: opening.openingComparisonPoints,
-        actualPoints: actual.kind === "ok" ? actual.points : null,
+        actualLabel: settledDifficulty?.label ?? null,
+        actualPoints: settledDifficulty?.points ?? null,
+        actualLabelEventId: settledDifficulty?.labelEventId ?? null,
+        actualLabelActorLogin: settledDifficulty?.labelActorLogin ?? null,
+        actualLabelAppliedAt: settledDifficulty?.labelAppliedAt ?? null,
+        rationaleCommentId: settledDifficulty?.rationaleCommentId ?? null,
+        rationaleActorLogin: settledDifficulty?.rationaleActorLogin ?? null,
+        rationaleCommentedAt: settledDifficulty?.rationaleCommentedAt ?? null,
+        mergeCommitOid: foldedPullRequest.mergeCommitOid,
+        mergedAt: foldedPullRequest.mergedAt!,
       });
       continue;
     }
@@ -227,6 +314,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         authorLogin: pullRequest.authorLogin,
         debtorId: snapshot.repository.sponsor.id,
         openingComparisonPoints: opening.openingComparisonPoints,
+        settledDifficulty,
       }),
     );
   }
@@ -250,55 +338,64 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
 
 function resolveOpening(
   issue: RepositoryFoldIssue,
-  existing: ExistingFoldIssue | undefined,
   scheme: DifficultyScheme,
-): ExistingFoldIssue | null {
-  if (existing !== undefined) {
-    return existing;
-  }
-
-  const parsed = parseOpeningDifficulty(issue.labels, scheme);
-  if (parsed.kind !== "ok") {
+): OpeningResolution | null {
+  const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
+  if (ownerLogin === null || !validTimestamp(issue.createdAt)) {
     return null;
   }
+  const openingByLabel = new Map(scheme.openingLabels.map((entry) => [entry.label, entry]));
+  const orderedHistory = issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems);
+  const firstAssignmentIndex = orderedHistory.findIndex((event) => event.kind === "ASSIGNED");
+  const openingSearchLimit = firstAssignmentIndex < 0 ? orderedHistory.length : firstAssignmentIndex;
+  const issueCreatedTime = Date.parse(issue.createdAt);
+  const sourceIndex = orderedHistory.findIndex(
+    (event, index) =>
+      index < openingSearchLimit &&
+      event.kind === "LABELED" &&
+      openingByLabel.has(event.label) &&
+      normalizedNonblankLogin(event.actorLogin) === ownerLogin &&
+      Date.parse(event.createdAt) >= issueCreatedTime,
+  );
+  if (sourceIndex < 0) {
+    return null;
+  }
+  const source = orderedHistory[sourceIndex] as Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>;
+  const configured = openingByLabel.get(source.label)!;
+  const mutated = orderedHistory.slice(sourceIndex + 1).some(
+    (event) =>
+      (event.kind === "LABELED" || event.kind === "UNLABELED") &&
+      openingByLabel.has(event.label),
+  );
 
   return {
     githubIssueId: issue.id,
-    openingLabel: parsed.label,
-    openingComparisonPoints: parsed.comparisonPoints,
-    openingReservePoints: parsed.reservePoints,
+    ownerGitHubLogin: issue.authorLogin!.trim(),
+    openingLabel: configured.label,
+    openingComparisonPoints: configured.comparisonPoints,
+    openingReservePoints: configured.reservePoints,
+    openingSourceEventId: source.id,
+    openingSourceActorLogin: source.actorLogin!.trim(),
+    openingSourceAt: new Date(source.createdAt).toISOString(),
+    mutated,
   };
-}
-
-function openingViolationCode(
-  issue: RepositoryFoldIssue,
-  scheme: DifficultyScheme,
-): FoldPolicyViolation["code"] {
-  return parseOpeningDifficulty(issue.labels, scheme).kind === "ambiguous"
-    ? "OPENING_LABEL_AMBIGUOUS"
-    : "OPENING_LABEL_MISSING";
-}
-
-function openingHasChanged(
-  issue: RepositoryFoldIssue,
-  existing: ExistingFoldIssue,
-  scheme: DifficultyScheme,
-): boolean {
-  const current = parseOpeningDifficulty(issue.labels, scheme);
-  return (
-    current.kind !== "ok" ||
-    current.label !== existing.openingLabel ||
-    current.comparisonPoints !== existing.openingComparisonPoints ||
-    current.reservePoints !== existing.openingReservePoints
-  );
 }
 
 function selectClosingPullRequest(
   pullRequests: readonly RepositoryFoldPullRequest[],
-): RepositoryFoldPullRequest | null {
+): AuthoritativeClosingPullRequest | null {
   const merged = pullRequests.filter(
-    (pullRequest) => pullRequest.state === "MERGED" && validTimestamp(pullRequest.mergedAt),
-  );
+    (pullRequest): pullRequest is AuthoritativeClosingPullRequest =>
+      pullRequest.state === "MERGED" &&
+      validTimestamp(pullRequest.mergedAt) &&
+      validTimestamp(pullRequest.finalCommitAt) &&
+      Date.parse(pullRequest.finalCommitAt) <= Date.parse(pullRequest.mergedAt) &&
+      typeof pullRequest.mergeCommitOid === "string" &&
+      /^[0-9a-f]{40}$/i.test(pullRequest.mergeCommitOid),
+  ).map((pullRequest) => ({
+    ...pullRequest,
+    mergeCommitOid: pullRequest.mergeCommitOid.toLowerCase(),
+  }));
   if (merged.length === 0) {
     return null;
   }
@@ -309,13 +406,79 @@ function selectClosingPullRequest(
   })[0] ?? null;
 }
 
+function resolveSettledDifficulty(
+  issue: RepositoryFoldIssue,
+  pullRequest: AuthoritativeClosingPullRequest,
+  scheme: DifficultyScheme,
+): SettledDifficultyEvidence | null {
+  const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
+  if (ownerLogin === null) {
+    return null;
+  }
+  const actualByLabel = new Map(scheme.actualLabels.map((entry) => [entry.label, entry]));
+  const mergeTime = Date.parse(pullRequest.mergedAt);
+  const finalCommitTime = Date.parse(pullRequest.finalCommitAt);
+  const activeLabels = new Map<string, Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>>();
+  for (const event of issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems)) {
+    if (
+      (event.kind !== "LABELED" && event.kind !== "UNLABELED") ||
+      !actualByLabel.has(event.label) ||
+      Date.parse(event.createdAt) > mergeTime
+    ) {
+      continue;
+    }
+    if (event.kind === "LABELED") {
+      activeLabels.set(event.label, event);
+    } else {
+      activeLabels.delete(event.label);
+    }
+  }
+  if (activeLabels.size !== 1) {
+    return null;
+  }
+  const [[label, source]] = [...activeLabels.entries()];
+  const sourceTime = Date.parse(source.createdAt);
+  if (
+    normalizedNonblankLogin(source.actorLogin) !== ownerLogin ||
+    sourceTime < finalCommitTime ||
+    sourceTime > mergeTime
+  ) {
+    return null;
+  }
+  const rationale = issue.comments
+    .filter(validIssueComment)
+    .sort(compareHistoryItems)
+    .find((comment) => {
+      const commentTime = Date.parse(comment.createdAt);
+      return (
+        normalizedNonblankLogin(comment.authorLogin) === ownerLogin &&
+        comment.body.trim().length > 0 &&
+        comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
+        commentTime >= sourceTime &&
+        commentTime <= mergeTime
+      );
+    });
+  if (rationale === undefined) {
+    return null;
+  }
+  const configured = actualByLabel.get(label)!;
+  return {
+    label: configured.label,
+    points: configured.points,
+    labelEventId: source.id,
+    labelActorLogin: source.actorLogin!.trim(),
+    labelAppliedAt: new Date(source.createdAt).toISOString(),
+    rationaleCommentId: rationale.id,
+    rationaleActorLogin: rationale.authorLogin!.trim(),
+    rationaleCommentedAt: new Date(rationale.createdAt).toISOString(),
+  };
+}
+
 function rememberPullRequest(
   pullRequestsByGitHubId: Map<number, FoldPullRequest>,
-  pullRequest: RepositoryFoldPullRequest,
+  pullRequest: AuthoritativeClosingPullRequest,
   issueId: number,
   authorId: string | null,
-  actualLabel: string | null,
-  actualPoints: number | null,
   proofSha256: string,
   reviewRounds: Array<{ githubReviewId: number; submittedAt: string }>,
 ): FoldPullRequest {
@@ -336,10 +499,10 @@ function rememberPullRequest(
     url: pullRequest.url,
     state: pullRequest.state,
     mergedAt: pullRequest.mergedAt,
+    mergeCommitOid: pullRequest.mergeCommitOid,
+    finalCommitAt: pullRequest.finalCommitAt,
     authorId,
     authorGitHubLogin: pullRequest.authorLogin,
-    actualLabel,
-    actualPoints,
     proofSha256,
     githubIssueIds: [issueId],
     reviewRounds,
@@ -382,8 +545,9 @@ function toSettlement(input: {
   authorLogin: string | null;
   debtorId: string;
   openingComparisonPoints: number;
+  settledDifficulty: SettledDifficultyEvidence | null;
 }): FoldSettlement {
-  const settledPoints = input.pullRequest.actualPoints;
+  const settledPoints = input.settledDifficulty?.points ?? null;
   const reviewRounds = input.pullRequest.reviewRounds.length;
   const base = {
     githubIssueId: input.issueId,
@@ -392,7 +556,16 @@ function toSettlement(input: {
     creditorGitHubLogin: input.authorLogin,
     debtorId: input.debtorId,
     openingComparisonPoints: input.openingComparisonPoints,
+    settledLabel: input.settledDifficulty?.label ?? null,
     settledPoints,
+    settledLabelEventId: input.settledDifficulty?.labelEventId ?? null,
+    settledLabelActorLogin: input.settledDifficulty?.labelActorLogin ?? null,
+    settledLabelAppliedAt: input.settledDifficulty?.labelAppliedAt ?? null,
+    settledRationaleCommentId: input.settledDifficulty?.rationaleCommentId ?? null,
+    settledRationaleActorLogin: input.settledDifficulty?.rationaleActorLogin ?? null,
+    settledRationaleCommentedAt: input.settledDifficulty?.rationaleCommentedAt ?? null,
+    mergeCommitOid: input.pullRequest.mergeCommitOid,
+    mergedAt: input.pullRequest.mergedAt!,
     reviewRounds,
     proofSha256: input.pullRequest.proofSha256,
   };
@@ -403,7 +576,7 @@ function toSettlement(input: {
 
   if (input.author === undefined) {
     if (input.authorLogin === null) {
-      return { ...base, credits: 0, status: "UNSETTLED" };
+      return { ...base, settledPoints: null, credits: 0, status: "UNSETTLED" };
     }
     return {
       ...base,
@@ -454,6 +627,44 @@ function hashRawDiff(rawDiff: string): string {
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
+}
+
+function normalizedNonblankLogin(login: string | null): string | null {
+  if (login === null || login.trim().length === 0) {
+    return null;
+  }
+  return normalizeLogin(login);
+}
+
+function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
+  return typeof event.id === "string" && event.id.length > 0 && validTimestamp(event.createdAt);
+}
+
+function validIssueComment(comment: GitHubIssueComment): boolean {
+  return typeof comment.id === "string" && comment.id.length > 0 && validTimestamp(comment.createdAt);
+}
+
+function compareHistoryItems(
+  left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
+  right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
+): number {
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+}
+
+function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
+  if (!validTimestamp(timestamp)) {
+    return false;
+  }
+  const targetTime = Date.parse(timestamp);
+  const events = [...(user.moderationEvents ?? [])]
+    .filter((event) => typeof event.id === "string" && event.id.length > 0 && validTimestamp(event.occurredAt))
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
+  const latestAtEvent = events.filter((event) => Date.parse(event.occurredAt) <= targetTime).at(-1);
+  if (latestAtEvent !== undefined) {
+    return isParticipationEligible(latestAtEvent.newState);
+  }
+  const firstLaterEvent = events.find((event) => Date.parse(event.occurredAt) > targetTime);
+  return isParticipationEligible(firstLaterEvent?.priorState ?? user.enforcementState);
 }
 
 function validTimestamp(value: string | null): value is string {

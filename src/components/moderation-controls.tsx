@@ -96,3 +96,61 @@ export function ModerationControls({ auditId, targetLogin }: ModerationControlsP
     </section>
   );
 }
+
+export function RecalibrationPlanControl({
+  targetAccountId,
+  targetLogin,
+}: {
+  targetAccountId: string;
+  targetLogin: string;
+}) {
+  const [plan, setPlan] = useState("");
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+
+  async function reactivate() {
+    const normalizedPlan = plan.trim();
+    setFeedback(null);
+    if (normalizedPlan.length === 0) {
+      setFeedback({ kind: "error", message: "Enter a nonblank recalibration plan before reactivation." });
+      return;
+    }
+    setPending(true);
+    try {
+      const response = await fetch("/api/moderation", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ targetAccountId, plan: normalizedPlan }),
+      });
+      const body = (await response.json().catch(() => null)) as ModerationResponse | null;
+      if (!response.ok) {
+        setFeedback({
+          kind: "error",
+          message: body?.error?.message ?? "The recalibration could not be closed. Check the account state and try again.",
+        });
+        return;
+      }
+      setFeedback({ kind: "success", message: `${targetLogin} was reactivated with the recorded plan.` });
+    } catch {
+      setFeedback({ kind: "error", message: "The recalibration control could not reach Overflow. Try again." });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section className="moderation-controls" aria-label={`Reactivation controls for ${targetLogin}`}>
+      <label className="field">
+        <span>Recalibration plan for {targetLogin}</span>
+        <textarea value={plan} onChange={(event) => setPlan(event.target.value)} rows={3} />
+      </label>
+      <button className="action-button" type="button" disabled={pending} onClick={() => void reactivate()}>
+        Reactivate account
+      </button>
+      {pending ? <p className="feedback pending" role="status">Recording recalibration plan…</p> : null}
+      {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
+      {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+    </section>
+  );
+}

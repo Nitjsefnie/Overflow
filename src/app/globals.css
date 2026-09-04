@@ -312,13 +312,6 @@ dd {
   font-weight: 800;
 }
 
-.credit-floor {
-  margin: 1.1rem 0 0;
-  color: var(--ink-muted);
-  font-family: var(--mono);
-  font-size: 0.75rem;
-}
-
 .ledger-note {
   position: relative;
 }

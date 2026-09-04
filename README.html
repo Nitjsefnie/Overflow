@@ -61,6 +61,7 @@
       <a href="#scoring">Scoring and calibration</a>
       <a href="#local">Local setup</a>
       <a href="#reconciliation">Reconciliation</a>
+      <a href="#ci">Continuous integration</a>
       <a href="#environment">Environment</a>
     </nav>
     <main>
@@ -76,15 +77,15 @@
       <h2>Repository catalogs and headroom</h2>
       <p>Repository registration is explicit and one at a time. The signed-in person submits one <code>owner/name</code> or canonical GitHub URL and must hold GitHub administrator permission for that repository.</p>
       <p>Opening catalogs are entirely repository-chosen: S/M/L can work, as can <em>moonlit ridge</em>, <em>risk: high</em>, or another local vocabulary. Every opening label has comparison and reserve points from 1 through 10. Every actual catalog must contain exactly one editable label for each point from 1 through 10.</p>
-      <p>The dashboard reads materialized ledger entries. Available headroom is <code>settled balance − reserved points</code> for open issues assigned to outside contributors. If <code>CREDIT_FLOOR</code> is configured, it is shown as context only; it never clamps headroom.</p>
+      <p>The dashboard reads materialized ledger entries. Available headroom is <code>settled balance − reserved points</code> for open issues assigned to outside contributors, and negative headroom remains visible. This release enforces no credit floor and exposes no floor configuration; optional group floors await a later idempotent assignment-enforcement design.</p>
 
       <h2 id="github">GitHub and proof</h2>
       <p>Configure the GitHub OAuth callback as <code>https://&lt;public-host&gt;/api/auth/callback/github</code>. The application needs a public HTTPS GitHub webhook URL and a shared secret:</p>
       <pre>APP_URL=https://&lt;public-host&gt;
-GITHUB_WEBHOOK_URL=https://&lt;public-host&gt;/api/webhooks/github
+GITHUB_WEBHOOK_URL=https://&lt;public-host&gt;/api/github/webhooks
 GITHUB_WEBHOOK_SECRET=&lt;github-webhook-secret&gt;</pre>
       <div class="callout">GitHub must be able to reach the webhook over public HTTPS. Keep the secret private and configure the same value in GitHub and the application.</div>
-      <p>GitHub GraphQL is the authority for closing links. A textual reference in an issue or pull request is not enough; settlement requires GraphQL-backed linked issue evidence. Overflow stores a proof fingerprint with the linked issue, pull request, and scoring inputs.</p>
+      <p>GitHub GraphQL <code>closedByPullRequestsReferences</code> is the only closing-link authority. Opening difficulty comes from the earliest configured label the issue owner applied before the first assignment. Settlement requires an owner-applied issue label between the closing pull request’s final commit and merge plus a nonblank owner comment in that window naming the label. Pull-request labels never price work. Event and comment IDs, actors and times, the exact merge commit OID, and the diff fingerprint remain available as proof.</p>
 
       <h2 id="scoring">Scoring, self-work, and moderation</h2>
       <pre>credits = max(0, actual points − distinct review rounds)</pre>
@@ -110,6 +111,10 @@ pnpm reconcile -- --repository &lt;owner&gt;/&lt;name&gt;
 
 # Every active registered repository
 pnpm reconcile</pre>
+      <p>PostgreSQL serializes each repository from snapshot collection through materialization. Eligibility is reconstructed at merge time from immutable moderation history, so later sanctions do not rewrite eligible historical settlements or calibration.</p>
+
+      <h2 id="ci">Continuous integration</h2>
+      <p>GitHub Actions runs the complete gate on pushes to <code>main</code>, pull requests targeting <code>main</code>, and manual dispatches. With pinned Node, pnpm, and action revisions, it applies migrations to PostgreSQL 17 and runs <code>pnpm test --run</code>, <code>pnpm lint</code>, <code>pnpm typecheck</code>, and <code>pnpm build</code>. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions. Checkout credentials are not persisted.</p>
 
       <h2 id="environment">Environment reference</h2>
       <table>
@@ -122,7 +127,6 @@ pnpm reconcile</pre>
           <tr><td><code>APP_URL</code></td><td>Public application URL</td></tr>
           <tr><td><code>GITHUB_WEBHOOK_URL</code>, <code>GITHUB_WEBHOOK_SECRET</code></td><td>Public webhook URL and shared secret</td></tr>
           <tr><td><code>MODERATOR_GITHUB_LOGINS</code></td><td>Comma-separated moderator GitHub logins</td></tr>
-          <tr><td><code>CREDIT_FLOOR</code></td><td>Optional informational floor</td></tr>
         </tbody>
       </table>
       <p>Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.</p>

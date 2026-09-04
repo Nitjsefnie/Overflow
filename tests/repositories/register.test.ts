@@ -235,7 +235,7 @@ function createHarness(options: HarnessOptions = {}) {
       },
     },
     webhook: {
-      callbackUrl: "https://overflow.example/api/webhooks/github",
+      callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
     },
   };

@@ -1,5 +1,4 @@
-import { foldRepository, type ExistingFoldIssue, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
-import { isParticipationEligible } from "@/lib/db/types";
+import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
 
 export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
@@ -24,9 +23,9 @@ export type ReconciliationDeltas = {
 };
 
 export type ReconciliationStore = {
+  withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
-  listExistingIssues(repositoryId: string): Promise<ExistingFoldIssue[]>;
   findUsersByGitHubLogins(logins: readonly string[]): Promise<FoldUser[]>;
   beginRun(repositoryId: string): Promise<string>;
   completeRun(runId: string): Promise<void>;
@@ -51,6 +50,16 @@ export async function reconcileRepository(
   dependencies: ReconciliationDependencies,
   repositoryId: string,
 ): Promise<ReconciliationSummary> {
+  return dependencies.store.withRepositoryReconciliation(
+    repositoryId,
+    () => reconcileRepositoryWhileCoordinated(dependencies, repositoryId),
+  );
+}
+
+async function reconcileRepositoryWhileCoordinated(
+  dependencies: ReconciliationDependencies,
+  repositoryId: string,
+): Promise<ReconciliationSummary> {
   const repository = await dependencies.store.getRepository(repositoryId);
   if (repository === null) {
     throw new Error("Repository was not found.");
@@ -58,7 +67,7 @@ export async function reconcileRepository(
 
   const runId = await dependencies.store.beginRun(repositoryId);
   try {
-    if (!repository.active || !isParticipationEligible(repository.sponsor.enforcementState)) {
+    if (!repository.active) {
       await dependencies.store.completeRun(runId);
       return {
         repositoryId,
@@ -95,14 +104,10 @@ export async function reconcileRepository(
         .flatMap(({ closingPullRequests }) => closingPullRequests.map((pullRequest) => pullRequest.authorLogin))
         .filter((login): login is string => login !== null),
     )];
-    const [users, existingIssues] = await Promise.all([
-      dependencies.store.findUsersByGitHubLogins(logins),
-      dependencies.store.listExistingIssues(repositoryId),
-    ]);
+    const users = await dependencies.store.findUsersByGitHubLogins(logins);
     const snapshot: RepositoryFoldSnapshot = {
       repository,
       users,
-      existingIssues,
       issues: issuePullRequests.map(({ issue, closingPullRequests }) => ({
         ...issue,
         claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,

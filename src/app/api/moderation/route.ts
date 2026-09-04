@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import {
   AccountModerationService,
@@ -26,7 +27,11 @@ const closeRecalibrationSchema = z
   .strict();
 
 export type ModerationRouteSession = {
-  user: { id: string; role: UserRole };
+  user: { id: string; role?: UserRole };
+};
+
+type AuthorizedModerationRouteSession = {
+  user: { id: string; role: "MODERATOR" };
 };
 
 export type ModerationRouteService = Pick<
@@ -36,6 +41,7 @@ export type ModerationRouteService = Pick<
 
 export type ModerationRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
+  getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModerationRouteService>;
 };
 
@@ -87,6 +93,7 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
 
 export const POST = createModerationPostHandler({
   getSession: getProductionSession,
+  getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());
   },
@@ -94,6 +101,7 @@ export const POST = createModerationPostHandler({
 
 export const PATCH = createModerationClosePatchHandler({
   getSession: getProductionSession,
+  getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());
   },
@@ -102,19 +110,16 @@ export const PATCH = createModerationClosePatchHandler({
 async function getProductionSession(): Promise<ModerationRouteSession | null> {
   const { auth } = await import("@/auth");
   const session = await auth();
-  const user = session?.user as { id?: unknown; role?: unknown } | undefined;
-  if (
-    typeof user?.id !== "string" ||
-    (user.role !== "MEMBER" && user.role !== "MODERATOR")
-  ) {
+  const user = session?.user as { id?: unknown } | undefined;
+  if (typeof user?.id !== "string") {
     return null;
   }
-  return { user: { id: user.id, role: user.role } };
+  return { user: { id: user.id } };
 }
 
 async function requiredModeratorSession(
   dependencies: ModerationRouteDependencies,
-): Promise<ModerationRouteSession | Response> {
+): Promise<AuthorizedModerationRouteSession | Response> {
   let session: ModerationRouteSession | null;
   try {
     session = await dependencies.getSession();
@@ -124,10 +129,16 @@ async function requiredModeratorSession(
   if (session === null) {
     return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
   }
-  if (session.user.role !== "MODERATOR") {
+  let currentRole: UserRole | null;
+  try {
+    currentRole = await dependencies.getCurrentRole(session.user.id);
+  } catch {
+    return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
+  }
+  if (currentRole !== "MODERATOR") {
     return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
   }
-  return session;
+  return { user: { id: session.user.id, role: currentRole } };
 }
 
 async function parseOpenAccountAuditInput(request: Request): Promise<OpenAccountAuditInput | null> {

@@ -39,8 +39,8 @@ describe("foldRepository", () => {
 
   it("uses the configured S/M/L catalog rather than inferring a label's points", () => {
     const snapshot = outsiderFixture();
-    snapshot.issues[0]!.labels = ["S"];
-    snapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/7"];
+    setOpeningLabel(snapshot, "S");
+    setActualLabel(snapshot, "delivered/7");
 
     const result = foldRepository(snapshot);
 
@@ -51,17 +51,18 @@ describe("foldRepository", () => {
     });
   });
 
-  it("preserves an observed opening rating after labels change and reports a policy violation", () => {
+  it("preserves the owner-applied opening event after labels change and reports a policy violation", () => {
     const snapshot = outsiderFixture();
-    snapshot.existingIssues = [
+    snapshot.issues[0]!.labels = ["L", "delivered/6"];
+    snapshot.issues[0]!.history.push(
       {
-        githubIssueId: 101,
-        openingLabel: "M",
-        openingComparisonPoints: 5,
-        openingReservePoints: 5,
+        kind: "LABELED",
+        id: "opening-mutation",
+        actorLogin: "sponsor",
+        label: "L",
+        createdAt: "2026-08-31T10:00:00.000Z",
       },
-    ];
-    snapshot.issues[0]!.labels = ["L"];
+    );
 
     const result = foldRepository(snapshot);
 
@@ -75,13 +76,22 @@ describe("foldRepository", () => {
     ]);
   });
 
-  it("does not guess missing or ambiguous configured opening labels", () => {
+  it("does not infer opening labels applied by a bot or after the first assignment", () => {
     const missing = outsiderFixture();
-    missing.issues[0]!.labels = [];
-    const ambiguous = outsiderFixture();
-    ambiguous.issues[0]!.labels = ["M", "L"];
+    missing.issues[0]!.history[0] = {
+      ...missing.issues[0]!.history[0]!,
+      actorLogin: "automation-bot",
+    };
+    const postAssignment = outsiderFixture();
+    postAssignment.issues[0]!.history.unshift({
+      kind: "ASSIGNED",
+      id: "assignment-before-opening",
+      actorLogin: "sponsor",
+      assigneeLogin: "contributor",
+      createdAt: "2026-08-30T09:30:00.000Z",
+    });
 
-    for (const snapshot of [missing, ambiguous]) {
+    for (const snapshot of [missing, postAssignment]) {
       const result = foldRepository(snapshot);
       expect(result.issues).toHaveLength(0);
       expect(result.settlements).toHaveLength(0);
@@ -91,7 +101,7 @@ describe("foldRepository", () => {
 
   it("uses the PR author as contributor while keeping an issue assignee as only a claim lock", () => {
     const snapshot = outsiderFixture();
-    snapshot.users.push({ id: "assignee", githubLogin: "claim-holder", enforcementState: "ACTIVE" });
+    snapshot.users.push({ id: "assignee", githubLogin: "claim-holder", enforcementState: "ACTIVE", moderationEvents: [] });
     snapshot.issues[0]!.claimAssigneeGitHubLogin = "claim-holder";
 
     const result = foldRepository(snapshot);
@@ -104,7 +114,7 @@ describe("foldRepository", () => {
 
   it("retains a zero-credit outsider settlement and proof without emitting a ledger entry", () => {
     const snapshot = outsiderFixture();
-    snapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/1"];
+    setActualLabel(snapshot, "delivered/1");
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
     ];
@@ -197,7 +207,6 @@ describe("foldRepository", () => {
     ["a recalibrating PR author", (snapshot: RepositoryFoldSnapshot) => {
       snapshot.users.find((user) => user.id === "contributor")!.enforcementState = "RECALIBRATING";
     }],
-    ["an inactive repository", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.active = false; }],
   ])("does not create new settlements or ledger entries for %s", (_name, change) => {
     const snapshot = outsiderFixture();
     change(snapshot);
@@ -206,6 +215,17 @@ describe("foldRepository", () => {
 
     expect(result.settlements).toEqual([]);
     expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("rebuilds eligible historical facts even when the repository is inactive later", () => {
+    const snapshot = outsiderFixture();
+    snapshot.repository.active = false;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ status: "SETTLED", creditorId: "contributor", credits: 6 }),
+    ]);
   });
 });
 
@@ -242,14 +262,13 @@ function outsiderFixture(): RepositoryFoldSnapshot {
       id: "repository",
       ownerName: "octo/example",
       active: true,
-      sponsor: { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      sponsor: { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
       difficultyScheme: difficultyScheme(),
     },
     users: [
-      { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
-      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE" },
+      { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
     ],
-    existingIssues: [],
     issues: [
       {
         id: 101,
@@ -258,7 +277,34 @@ function outsiderFixture(): RepositoryFoldSnapshot {
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
-        labels: ["M"],
+        createdAt: "2026-08-30T09:00:00.000Z",
+        authorLogin: "sponsor",
+        labels: ["M", "delivered/6"],
+        history: [
+          {
+            kind: "LABELED",
+            id: "opening-1",
+            actorLogin: "sponsor",
+            label: "M",
+            createdAt: "2026-08-30T10:00:00.000Z",
+          },
+          {
+            kind: "LABELED",
+            id: "actual-1",
+            actorLogin: "sponsor",
+            label: "delivered/6",
+            createdAt: "2026-09-01T11:00:00.000Z",
+          },
+        ],
+        comments: [
+          {
+            id: "comment-1",
+            databaseId: 401,
+            authorLogin: "sponsor",
+            body: "Settled as delivered/6 after reviewing the final diff.",
+            createdAt: "2026-09-01T11:30:00.000Z",
+          },
+        ],
         closingPullRequests: [
           {
             id: 201,
@@ -268,8 +314,9 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             url: "https://github.com/octo/example/pull/11",
             state: "MERGED",
             mergedAt: "2026-09-01T12:00:00.000Z",
+            mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+            finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: "contributor",
-            labels: ["delivered/6"],
             reviews: [],
             rawDiff: "diff",
           },
@@ -277,6 +324,32 @@ function outsiderFixture(): RepositoryFoldSnapshot {
       },
     ],
   };
+}
+
+function setOpeningLabel(snapshot: RepositoryFoldSnapshot, label: string): void {
+  const issue = snapshot.issues[0]!;
+  const event = issue.history.find((candidate) => candidate.kind === "LABELED" && candidate.id === "opening-1");
+  if (event === undefined || event.kind !== "LABELED") {
+    throw new Error("Opening fixture event was missing.");
+  }
+  event.label = label;
+  issue.labels = issue.labels.filter((candidate) => !["S", "M", "L"].includes(candidate));
+  issue.labels.push(label);
+}
+
+function setActualLabel(snapshot: RepositoryFoldSnapshot, label: string): void {
+  const issue = snapshot.issues[0]!;
+  const event = issue.history.find((candidate) => candidate.kind === "LABELED" && candidate.id === "actual-1");
+  if (event === undefined || event.kind !== "LABELED") {
+    throw new Error("Actual fixture event was missing.");
+  }
+  event.label = label;
+  issue.comments[0] = {
+    ...issue.comments[0]!,
+    body: `Settled as ${label} after reviewing the final diff.`,
+  };
+  issue.labels = issue.labels.filter((candidate) => !candidate.startsWith("delivered/"));
+  issue.labels.push(label);
 }
 
 function difficultyScheme() {

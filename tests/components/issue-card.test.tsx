@@ -18,6 +18,10 @@ describe("eligible issue card", () => {
           openingLabel: "moonlit ridge",
           comparisonPoints: 5,
           reservePoints: 8,
+          sponsorLogin: "harbour-owner",
+          assigneeGitHubLogin: "mira",
+          claimState: "CLAIMED",
+          availableHeadroom: -3,
           createdAt: "2026-09-01T10:00:00.000Z",
         }}
       />,
@@ -27,6 +31,9 @@ describe("eligible issue card", () => {
     expect(screen.getByText("Promise band: moonlit ridge")).toBeVisible();
     expect(screen.getByText("Comparison 5")).toBeVisible();
     expect(screen.getByText("Reserve 8")).toBeVisible();
+    expect(screen.getByText("Sponsor: harbour-owner")).toBeVisible();
+    expect(screen.getByText("Claim: assigned to mira")).toBeVisible();
+    expect(screen.getByText("Headroom: −3")).toBeVisible();
   });
 
   it("treats GitHub strings as text rather than markup", () => {

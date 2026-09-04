@@ -3,11 +3,20 @@ import { AppShell } from "@/components/app-shell";
 import { IssueCard } from "@/components/issue-card";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 
-export default async function IssuesPage() {
+type IssuesPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function IssuesPage({ searchParams }: IssuesPageProps = {}) {
   const session = await requireMemberPageSession();
   try {
     const { listEligibleIssues } = await import("@/lib/dashboard/queries");
-    const issues = await listEligibleIssues(session.user.id);
+    const query = searchParams === undefined ? {} : await searchParams;
+    const repository = singleValue(query.repository);
+    const openingLabel = singleValue(query.openingLabel);
+    const requestedClaimState = singleValue(query.claimState);
+    const claimState = requestedClaimState === "CLAIMED" || requestedClaimState === "ALL" ? requestedClaimState : "OPEN";
+    const issues = await listEligibleIssues(session.user.id, { repository, openingLabel, claimState });
     return (
       <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
         <section className="page-heading" aria-labelledby="eligible-issues-title">
@@ -15,6 +24,25 @@ export default async function IssuesPage() {
           <h1 id="eligible-issues-title">Eligible issues</h1>
           <p>Higher configured reserves appear first; ties keep the oldest issue first.</p>
         </section>
+        <form className="surface" method="get" action="/issues" aria-label="Filter eligible issues">
+          <label className="field">
+            <span>Repository</span>
+            <input name="repository" defaultValue={repository} placeholder="owner/name" />
+          </label>
+          <label className="field">
+            <span>Offered rating label</span>
+            <input name="openingLabel" defaultValue={openingLabel} />
+          </label>
+          <label className="field">
+            <span>Claim state</span>
+            <select name="claimState" defaultValue={claimState}>
+              <option value="OPEN">Unclaimed</option>
+              <option value="CLAIMED">Claimed</option>
+              <option value="ALL">All</option>
+            </select>
+          </label>
+          <button className="action-button" type="submit">Apply filters</button>
+        </form>
         {issues.length > 0 ? (
           <div className="issue-list">
             {issues.map((issue) => (
@@ -45,4 +73,8 @@ export default async function IssuesPage() {
       </AppShell>
     );
   }
+}
+
+function singleValue(value: string | string[] | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }

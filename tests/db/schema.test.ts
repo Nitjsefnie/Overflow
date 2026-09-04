@@ -77,16 +77,38 @@ describe("initial PostgreSQL materialization", () => {
   });
 
   it("records each numbered migration only once", async () => {
-    const [result] = await sql<{ count: number }[]>`
-      select count(*)::integer as count from schema_migrations where name = ${"001_initial.sql"}
+    const rows = await sql<{ name: string; count: number }[]>`
+      select name, count(*)::integer as count
+      from schema_migrations
+      group by name
+      order by name
     `;
 
-    expect(result.count).toBe(1);
+    expect(rows).toEqual([
+      "001_initial.sql",
+      "002_repository_difficulty_scheme.sql",
+      "003_multi_issue_settlements_and_claims.sql",
+      "004_preserve_reconciliation_provenance.sql",
+      "005_harden_materialization_invariants.sql",
+      "006_account_moderation_snapshots.sql",
+      "007_authoritative_history_and_merge_proof.sql",
+    ].map((name) => ({ name, count: 1 })));
   });
 
-  it("rejects out-of-range opening and actual difficulty points", async () => {
+  it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
     await expect(insertIssue(sql, { comparisonPoints: 11 })).rejects.toThrow();
-    await expect(insertPullRequest(sql, { actualPoints: 0 })).rejects.toThrow();
+    const issue = await insertIssue(sql);
+    await expect(sql`
+      update issues
+      set settled_label = ${"delivered/0"}, settled_points = 0,
+          settled_label_event_id = ${"settled-event-0"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:00:00.000Z"},
+          settled_rationale_comment_id = ${"comment-0"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${issue.id}
+    `).rejects.toThrow();
   });
 
   it("rejects duplicate GitHub user and repository identifiers", async () => {
@@ -149,6 +171,98 @@ describe("initial PostgreSQL materialization", () => {
     await expect(updateOriginalOpeningDifficulty(sql, issue.id)).rejects.toThrow();
   });
 
+  it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
+    const pullRequest = await insertPullRequest(sql);
+    const mergeCommitOid = "0123456789abcdef0123456789abcdef01234567";
+    await sql`
+      update issues
+      set owner_github_login = ${"issue-owner"},
+          opening_source_event_id = ${"opening-event-1"},
+          opening_source_actor_login = ${"issue-owner"},
+          opening_source_at = ${"2026-09-01T09:00:00.000Z"},
+          settled_label = ${"delivered/6"},
+          settled_points = 6,
+          settled_label_event_id = ${"settled-event-1"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:00:00.000Z"},
+          settled_rationale_comment_id = ${"comment-1"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${pullRequest.issueId}
+    `;
+    await sql`
+      update pull_requests
+      set merge_commit_oid = ${mergeCommitOid}, final_commit_at = ${"2026-09-01T10:00:00.000Z"}
+      where id = ${pullRequest.id}
+    `;
+
+    const [proof] = await sql<{
+      opening_source_event_id: string;
+      settled_label_event_id: string;
+      settled_rationale_comment_id: string;
+      merge_commit_oid: string;
+    }[]>`
+      select
+        issues.opening_source_event_id,
+        issues.settled_label_event_id,
+        issues.settled_rationale_comment_id,
+        pull_requests.merge_commit_oid
+      from issues
+      join pull_request_issues on pull_request_issues.issue_id = issues.id
+      join pull_requests on pull_requests.id = pull_request_issues.pull_request_id
+      where issues.id = ${pullRequest.issueId}
+    `;
+    expect(proof).toEqual({
+      opening_source_event_id: "opening-event-1",
+      settled_label_event_id: "settled-event-1",
+      settled_rationale_comment_id: "comment-1",
+      merge_commit_oid: mergeCommitOid,
+    });
+    const pullRequestColumns = await sql<{ column_name: string }[]>`
+      select column_name
+      from information_schema.columns
+      where table_schema = 'public' and table_name = 'pull_requests'
+    `;
+    expect(pullRequestColumns.map((column) => column.column_name)).not.toEqual(
+      expect.arrayContaining(["actual_label", "actual_points"]),
+    );
+
+    await expect(sql`
+      update issues set opening_source_event_id = ${"rewritten-event"} where id = ${pullRequest.issueId}
+    `).rejects.toThrow(/immutable/i);
+    await expect(sql`
+      update pull_requests set merge_commit_oid = ${"not-forty-hex"} where id = ${pullRequest.id}
+    `).rejects.toThrow();
+  });
+
+  it("keeps moderation history immutable and resolves eligibility at the merge timestamp", async () => {
+    const targetId = await insertUser(sql);
+    const actorId = await insertUser(sql);
+    const [event] = await sql<{ id: string }[]>`
+      insert into moderation_events (
+        target_user_id, actor_id, prior_state, new_state, reason, created_at
+      )
+      values (
+        ${targetId}, ${actorId}, ${"ACTIVE"}, ${"BANNED"}, ${"Historical sanction"},
+        ${"2026-09-02T00:00:00.000Z"}
+      )
+      returning id
+    `;
+
+    const [before] = await sql<{ eligible: boolean }[]>`
+      select participation_eligible_at(${targetId}, ${"2026-09-01T12:00:00.000Z"}) as eligible
+    `;
+    const [after] = await sql<{ eligible: boolean }[]>`
+      select participation_eligible_at(${targetId}, ${"2026-09-03T12:00:00.000Z"}) as eligible
+    `;
+    expect(before.eligible).toBe(true);
+    expect(after.eligible).toBe(false);
+    await expect(sql`
+      update moderation_events set reason = ${"Rewritten"} where id = ${event.id}
+    `).rejects.toThrow(/immutable/i);
+    await expect(sql`delete from moderation_events where id = ${event.id}`).rejects.toThrow(/immutable/i);
+  });
+
   it("rejects a pull request whose issue belongs to another repository", async () => {
     const issue = await insertIssue(sql);
     const foreignRepository = await insertRepository(sql, await insertUser(sql));
@@ -163,8 +277,6 @@ describe("initial PostgreSQL materialization", () => {
         url,
         title,
         body,
-        actual_label,
-        actual_points,
         state,
         merged_at
       )
@@ -176,8 +288,6 @@ describe("initial PostgreSQL materialization", () => {
         ${`https://github.com/example/repository/pull/${githubPullRequestId}`},
         ${"A mismatched contribution"},
         ${"Pull request evidence"},
-        ${"delivered/6"},
-        6,
         ${"MERGED"},
         now()
       )
@@ -382,6 +492,38 @@ describe("initial PostgreSQL materialization", () => {
     expect(claimed).toEqual({ creditor_id: null, status: "UNCLAIMED", credits: 4 });
   });
 
+  it("claims historically eligible unclaimed work after the contributor is sanctioned later", async () => {
+    const pullRequest = await insertPullRequest(sql);
+    const contributorId = await insertUserWithLogin(sql, `later-sanctioned-${nextExternalId()}`);
+    const moderatorId = await insertUser(sql);
+    const [contributor] = await sql<{ github_login: string }[]>`
+      select github_login from users where id = ${contributorId}
+    `;
+    await sql`
+      insert into settlements (
+        pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+        opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      )
+      values (
+        ${pullRequest.id}, ${pullRequest.issueId}, null, ${contributor.github_login}, ${pullRequest.sponsorId},
+        5, 6, 0, 6, ${"9".repeat(64)}, ${"UNCLAIMED"}
+      )
+    `;
+    await sql`
+      insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+      select ${contributorId}, ${moderatorId}, ${"ACTIVE"}, ${"BANNED"}, ${"Sanction after eligible merge"},
+        pull_requests.merged_at + interval '1 minute'
+      from pull_requests where id = ${pullRequest.id}
+    `;
+    await sql`update users set enforcement_state = ${"BANNED"} where id = ${contributorId}`;
+
+    await claimGitHubIdentity(sql, contributorId, contributor.github_login);
+
+    await expect(sql<{ creditor_id: string | null; status: string }[]>`
+      select creditor_id, status from settlements where issue_id = ${pullRequest.issueId}
+    `).resolves.toEqual([{ creditor_id: contributorId, status: "SETTLED" }]);
+  });
+
   it("derives zero-sum ledger entries and account balances from settlements", async () => {
     const settlement = await insertSettledRecord("b".repeat(64));
 
@@ -528,6 +670,133 @@ describe("initial PostgreSQL materialization", () => {
     await expect(sql`insert into calibration_statistics default values`).rejects.toThrow();
   });
 
+  it("rebuilds the original opening proof and mutation violation into an empty materialization", async () => {
+    const sponsorLogin = `opening-owner-${nextExternalId()}`;
+    const contributorLogin = `opening-worker-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    const issue = snapshot.issues[0]!;
+    issue.labels = ["L", "delivered/6"];
+    issue.history.push(
+      {
+        kind: "UNLABELED",
+        id: "opening-M-removed-after-assignment",
+        actorLogin: sponsorLogin,
+        label: "M",
+        createdAt: "2026-09-01T09:30:00.000Z",
+      },
+      {
+        kind: "LABELED",
+        id: "opening-L-added-after-assignment",
+        actorLogin: sponsorLogin,
+        label: "L",
+        createdAt: "2026-09-01T09:31:00.000Z",
+      },
+    );
+    const fold = foldRepository(snapshot);
+    expect(fold.issues[0]).toMatchObject({
+      openingLabel: "M",
+      openingComparisonPoints: 5,
+      openingSourceEventId: `opening-${issue.id}`,
+      openingSourceActorLogin: sponsorLogin,
+    });
+    expect(fold.policyViolations).toContainEqual({
+      code: "OPENING_LABEL_MUTATED",
+      githubIssueId: issue.id,
+    });
+
+    const store = new PostgresFoldStore(sql);
+    const runId = await store.beginRun(repositoryId);
+    await store.materialize({ repositoryId, runId, fold });
+
+    await expect(sql`
+      select opening_label, opening_comparison_points, opening_source_event_id,
+             opening_source_actor_login
+      from issues where repository_id = ${repositoryId}
+    `).resolves.toEqual([{
+      opening_label: "M",
+      opening_comparison_points: 5,
+      opening_source_event_id: `opening-${issue.id}`,
+      opening_source_actor_login: sponsorLogin,
+    }]);
+    await expect(sql`
+      select after_state
+      from reconciliation_changes
+      where reconciliation_run_id = ${runId} and change_kind = ${"POLICY_VIOLATION"}
+    `).resolves.toEqual([{
+      after_state: { code: "OPENING_LABEL_MUTATED", githubIssueId: issue.id },
+    }]);
+  });
+
+  it("repairs a legacy opening once when immutable GitHub source proof is first attached", async () => {
+    const sponsorLogin = `legacy-opening-owner-${nextExternalId()}`;
+    const contributorLogin = `legacy-opening-worker-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId,
+      githubPullRequestId: nextExternalId(),
+    });
+    const authoritativeIssue = snapshot.issues[0]!;
+
+    await sql`
+      insert into issues (
+        github_issue_id, repository_id, issue_number, title, body, url, state,
+        opening_label, opening_comparison_points, opening_reserve_points
+      )
+      values (
+        ${githubIssueId}, ${repositoryId}, ${authoritativeIssue.number}, ${authoritativeIssue.title},
+        ${authoritativeIssue.body}, ${authoritativeIssue.url}, ${authoritativeIssue.state},
+        ${"L"}, 8, 8
+      )
+    `;
+
+    const store = new PostgresFoldStore(sql);
+    const runId = await store.beginRun(repositoryId);
+    await store.materialize({ repositoryId, runId, fold: foldRepository(snapshot) });
+
+    await expect(sql`
+      select opening_label, opening_comparison_points, opening_reserve_points,
+             opening_source_event_id, opening_source_actor_login
+      from issues where github_issue_id = ${githubIssueId}
+    `).resolves.toEqual([{
+      opening_label: "M",
+      opening_comparison_points: 5,
+      opening_reserve_points: 5,
+      opening_source_event_id: `opening-${githubIssueId}`,
+      opening_source_actor_login: sponsorLogin,
+    }]);
+  });
+
   it("replaces a repository materialization atomically while retaining the first observed opening rating", async () => {
     const sponsorId = await insertUserWithLogin(sql, "materialization-sponsor");
     const contributorId = await insertUserWithLogin(sql, "materialization-contributor");
@@ -543,7 +812,6 @@ describe("initial PostgreSQL materialization", () => {
       contributorId,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
-      existingIssues: [],
     }));
     const initialRun = await store.beginRun(repositoryId);
 
@@ -553,20 +821,36 @@ describe("initial PostgreSQL materialization", () => {
       removals: 0,
     });
 
-    const changed = foldRepository(materializationSnapshot({
+    const changedSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
-      issueLabels: ["L"],
+      issueLabels: ["M"],
       actualLabel: "delivered/7",
-      existingIssues: initial.issues.map((issue) => ({
-        githubIssueId: issue.githubIssueId,
-        openingLabel: issue.openingLabel,
-        openingComparisonPoints: issue.openingComparisonPoints,
-        openingReservePoints: issue.openingReservePoints,
-      })),
-    }));
+    });
+    changedSnapshot.issues[0]!.labels = ["L", "delivered/7"];
+    changedSnapshot.issues[0]!.history.push(
+      {
+        kind: "UNLABELED",
+        id: "opening-M-removed",
+        actorLogin: "materialization-sponsor",
+        label: "M",
+        createdAt: "2026-09-01T09:30:00.000Z",
+      },
+      {
+        kind: "LABELED",
+        id: "opening-L-added",
+        actorLogin: "materialization-sponsor",
+        label: "L",
+        createdAt: "2026-09-01T09:31:00.000Z",
+      },
+    );
+    const changed = foldRepository(changedSnapshot);
+    expect(changed.policyViolations).toContainEqual({
+      code: "OPENING_LABEL_MUTATED",
+      githubIssueId: initial.issues[0]!.githubIssueId,
+    });
     const changedRun = await store.beginRun(repositoryId);
 
     await expect(store.materialize({ repositoryId, runId: changedRun, fold: changed })).resolves.toEqual({
@@ -605,7 +889,6 @@ describe("initial PostgreSQL materialization", () => {
             contributorId,
             issueLabels: ["M"],
             actualLabel: "delivered/6",
-            existingIssues: [],
           }),
           issues: [],
         }),
@@ -620,6 +903,66 @@ describe("initial PostgreSQL materialization", () => {
       where reconciliation_run_id = ${removedRun} and change_kind = ${"REMOVE"}
     `;
     expect(removalChange).toEqual({ change_kind: "REMOVE", pull_request_id: null });
+  });
+
+  it("records proof-only issue-history and merge-OID changes with the true prior canonical state", async () => {
+    const sponsorLogin = `proof-sponsor-${nextExternalId()}`;
+    const contributorLogin = `proof-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    const store = new PostgresFoldStore(sql);
+    const initialRun = await store.beginRun(repositoryId);
+    await store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(snapshot) });
+
+    const changedSnapshot = structuredClone(snapshot);
+    const issue = changedSnapshot.issues[0]!;
+    const actualEvent = issue.history.find((event) => event.kind === "LABELED" && event.label === "delivered/6");
+    if (actualEvent === undefined) throw new Error("Expected actual label proof fixture.");
+    actualEvent.id = "replacement-actual-event";
+    issue.comments[0]!.id = "replacement-rationale-comment";
+    issue.closingPullRequests[0]!.mergeCommitOid = "f".repeat(40);
+
+    const changedRun = await store.beginRun(repositoryId);
+    await expect(store.materialize({
+      repositoryId,
+      runId: changedRun,
+      fold: foldRepository(changedSnapshot),
+    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+
+    const [change] = await sql<{
+      before_state: { settledLabelEventId: string; settledRationaleCommentId: string; mergeCommitOid: string };
+      after_state: { settledLabelEventId: string; settledRationaleCommentId: string; mergeCommitOid: string };
+    }[]>`
+      select before_state, after_state
+      from reconciliation_changes
+      where reconciliation_run_id = ${changedRun} and entity_kind = ${"SETTLEMENT"}
+    `;
+    expect(change.before_state).toMatchObject({
+      settledLabelEventId: `actual-${snapshot.issues[0]!.id}`,
+      settledRationaleCommentId: `rationale-${snapshot.issues[0]!.id}`,
+      mergeCommitOid: snapshot.issues[0]!.closingPullRequests[0]!.mergeCommitOid,
+    });
+    expect(change.after_state).toMatchObject({
+      settledLabelEventId: "replacement-actual-event",
+      settledRationaleCommentId: "replacement-rationale-comment",
+      mergeCommitOid: "f".repeat(40),
+    });
   });
 
   it("converges real PostgreSQL materialization across reordered GraphQL snapshots", async () => {
@@ -652,7 +995,6 @@ describe("initial PostgreSQL materialization", () => {
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/5",
-      existingIssues: [],
       githubIssueId: changedIssueId,
       githubPullRequestId: changedPullRequestId,
     });
@@ -665,7 +1007,6 @@ describe("initial PostgreSQL materialization", () => {
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/5",
-      existingIssues: [],
       githubIssueId: obsoleteIssueId,
       githubPullRequestId: obsoletePullRequestId,
     }).issues[0]!;
@@ -688,40 +1029,36 @@ describe("initial PostgreSQL materialization", () => {
     const snapshots: AuthoritativeReconciliationSnapshot[] = [
       {
         issues: [
-          authoritativeIssue({ id: changedIssueId, number: 1 }),
-          authoritativeIssue({ id: addedIssueId, number: 3 }),
+          authoritativeIssue({ id: changedIssueId, number: 1, ownerLogin: sponsorLogin }),
+          authoritativeIssue({ id: addedIssueId, number: 3, ownerLogin: sponsorLogin }),
         ],
         closingPullRequests: new Map([
           [1, [authoritativePullRequest({
             id: changedPullRequestId,
             number: 11,
-            actualLabel: "delivered/6",
             authorLogin: contributorLogin,
           })]],
           [3, [authoritativePullRequest({
             id: addedPullRequestId,
             number: 13,
-            actualLabel: "delivered/6",
             authorLogin: contributorLogin,
           })]],
         ]),
       },
       {
         issues: [
-          authoritativeIssue({ id: addedIssueId, number: 3 }),
-          authoritativeIssue({ id: changedIssueId, number: 1 }),
+          authoritativeIssue({ id: addedIssueId, number: 3, ownerLogin: sponsorLogin }),
+          authoritativeIssue({ id: changedIssueId, number: 1, ownerLogin: sponsorLogin }),
         ],
         closingPullRequests: new Map([
           [3, [authoritativePullRequest({
             id: addedPullRequestId,
             number: 13,
-            actualLabel: "delivered/6",
             authorLogin: contributorLogin,
           })]],
           [1, [authoritativePullRequest({
             id: changedPullRequestId,
             number: 11,
-            actualLabel: "delivered/6",
             authorLogin: contributorLogin,
           })]],
         ]),
@@ -761,6 +1098,242 @@ describe("initial PostgreSQL materialization", () => {
     await expect(reconciliationMaterializationState(repositoryId)).resolves.toEqual(canonicalStateAfterFirstRun);
   });
 
+  it("serializes a repository before snapshot work and releases the cross-process lock on success or error", async () => {
+    const repositoryId = await insertRepository(sql, await insertUser(sql));
+    const firstWorker = new PostgresFoldStore(sql);
+    const secondWorker = new PostgresFoldStore(sql);
+    let releaseOlder!: () => void;
+    let olderStarted!: () => void;
+    const started = new Promise<void>((resolve) => { olderStarted = resolve; });
+    const holdOlder = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    const order: string[] = [];
+
+    const older = firstWorker.withRepositoryReconciliation(repositoryId, async () => {
+      order.push("older-snapshot-started");
+      olderStarted();
+      await holdOlder;
+      order.push("older-materialized");
+    });
+    await started;
+    const newer = secondWorker.withRepositoryReconciliation(repositoryId, async () => {
+      order.push("newer-snapshot-started");
+      order.push("newer-materialized");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(order).toEqual(["older-snapshot-started"]);
+
+    releaseOlder();
+    await Promise.all([older, newer]);
+    expect(order).toEqual([
+      "older-snapshot-started",
+      "older-materialized",
+      "newer-snapshot-started",
+      "newer-materialized",
+    ]);
+
+    await expect(firstWorker.withRepositoryReconciliation(repositoryId, async () => {
+      throw new Error("expected worker failure");
+    })).rejects.toThrow("expected worker failure");
+    await expect(secondWorker.withRepositoryReconciliation(repositoryId, async () => "lock-released"))
+      .resolves.toBe("lock-released");
+  });
+
+  it("keeps a slow older reconciliation from overwriting the newer authoritative snapshot", async () => {
+    const tokenEncryptionKey = Buffer.alloc(32, 10).toString("base64url");
+    const sponsorLogin = `concurrency-sponsor-${nextExternalId()}`;
+    const contributorLogin = `concurrency-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    await sql`
+      update users
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("concurrency-token", tokenEncryptionKey), "utf8")}
+      where id = ${sponsorId}
+    `;
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const olderSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/5",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const newerSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/7",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const olderGatewayBase = gatewayForSnapshot(olderSnapshot);
+    const newerGatewayBase = gatewayForSnapshot(newerSnapshot);
+    let releaseOlderFetch!: () => void;
+    let markOlderFetchStarted!: () => void;
+    const olderFetchStarted = new Promise<void>((resolve) => { markOlderFetchStarted = resolve; });
+    const holdOlderFetch = new Promise<void>((resolve) => { releaseOlderFetch = resolve; });
+    const order: string[] = [];
+    const olderGateway: ReconciliationGateway = {
+      ...olderGatewayBase,
+      async listIssues(reference) {
+        order.push("older-fetch-started");
+        markOlderFetchStarted();
+        await holdOlderFetch;
+        order.push("older-fetch-completed");
+        return olderGatewayBase.listIssues(reference);
+      },
+    };
+    const newerGateway: ReconciliationGateway = {
+      ...newerGatewayBase,
+      async listIssues(reference) {
+        order.push("newer-fetch-started");
+        return newerGatewayBase.listIssues(reference);
+      },
+    };
+    const olderWorker = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const newerWorker = new PostgresFoldStore(sql, tokenEncryptionKey);
+
+    const olderRun = reconcileRepository({ store: olderWorker, github: olderGateway }, repositoryId);
+    await olderFetchStarted;
+    const newerRun = reconcileRepository({ store: newerWorker, github: newerGateway }, repositoryId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(order).toEqual(["older-fetch-started"]);
+
+    releaseOlderFetch();
+    const [olderResult, newerResult] = await Promise.all([olderRun, newerRun]);
+
+    expect(olderResult).toMatchObject({ adds: 1, changes: 0, removals: 0 });
+    expect(newerResult).toMatchObject({ adds: 0, changes: 1, removals: 0 });
+    expect(order).toEqual(["older-fetch-started", "older-fetch-completed", "newer-fetch-started"]);
+    await expect(sql`
+      select settlements.settled_points, settlements.credits, issues.settled_label
+      from settlements join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${repositoryId}
+    `).resolves.toEqual([{ settled_points: 7, credits: 7, settled_label: "delivered/7" }]);
+  });
+
+  it("preserves historically eligible settlement and self-work facts after later sanctions", async () => {
+    const tokenEncryptionKey = Buffer.alloc(32, 11).toString("base64url");
+    const sponsorLogin = `history-sponsor-${nextExternalId()}`;
+    const contributorLogin = `history-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const moderatorId = await insertUser(sql);
+    await sql`
+      update users
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("history-token", tokenEncryptionKey), "utf8")}
+      where id = ${sponsorId}
+    `;
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const outsiderSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    const selfWorkSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/7",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    selfWorkSnapshot.issues[0]!.number = 2;
+    selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.number = 12;
+    selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorLogin = sponsorLogin;
+    outsiderSnapshot.issues.push(selfWorkSnapshot.issues[0]!);
+
+    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const initialRun = await store.beginRun(repositoryId);
+    await store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(outsiderSnapshot) });
+    const factsBefore = await historicalRepositoryFacts(repositoryId, [sponsorId, contributorId]);
+
+    for (const [targetId, newState] of [[contributorId, "BANNED"], [sponsorId, "RECALIBRATING"]] as const) {
+      await sql`
+        insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+        values (${targetId}, ${moderatorId}, ${"ACTIVE"}, ${newState}, ${"Sanction after the recorded merge"},
+          ${"2026-09-02T00:00:00.000Z"})
+      `;
+      await sql`update users set enforcement_state = ${newState} where id = ${targetId}`;
+    }
+
+    await expect(reconcileRepository({ store, github: gatewayForSnapshot(outsiderSnapshot) }, repositoryId))
+      .resolves.toMatchObject({ adds: 0, changes: 0, removals: 0 });
+    await expect(historicalRepositoryFacts(repositoryId, [sponsorId, contributorId])).resolves.toEqual(factsBefore);
+  });
+
+  it.each(["RECALIBRATING", "BANNED"] as const)(
+    "keeps work merged while the sponsor is %s ineligible",
+    async (state) => {
+      const tokenEncryptionKey = Buffer.alloc(32, state === "BANNED" ? 13 : 12).toString("base64url");
+      const sponsorLogin = `ineligible-sponsor-${state.toLowerCase()}-${nextExternalId()}`;
+      const contributorLogin = `ineligible-contributor-${nextExternalId()}`;
+      const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+      const contributorId = await insertUserWithLogin(sql, contributorLogin);
+      const moderatorId = await insertUser(sql);
+      await sql`
+        update users
+        set encrypted_oauth_token = ${Buffer.from(encryptToken("ineligible-token", tokenEncryptionKey), "utf8")},
+            enforcement_state = ${state}
+        where id = ${sponsorId}
+      `;
+      await sql`
+        insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+        values (${sponsorId}, ${moderatorId}, ${"ACTIVE"}, ${state}, ${"Sanction before merge"},
+          ${"2026-08-31T00:00:00.000Z"})
+      `;
+      const repositoryId = await insertRepository(sql, sponsorId);
+      const [repository] = await sql<{ owner_name: string }[]>`
+        select owner_name from registered_repositories where id = ${repositoryId}
+      `;
+      const snapshot = materializationSnapshot({
+        repositoryId,
+        ownerName: repository.owner_name,
+        sponsorId,
+        contributorId,
+        sponsorLogin,
+        contributorLogin,
+        issueLabels: ["M"],
+        actualLabel: "delivered/6",
+        githubIssueId: nextExternalId(),
+        githubPullRequestId: nextExternalId(),
+      });
+      const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+
+      await expect(reconcileRepository({ store, github: gatewayForSnapshot(snapshot) }, repositoryId))
+        .resolves.toMatchObject({ adds: 0, changes: 0, removals: 0 });
+      await expect(sql`select id from settlements where debtor_id = ${sponsorId}`).resolves.toEqual([]);
+      await expect(sql`select id from self_work_calibrations where user_id = ${sponsorId}`).resolves.toEqual([]);
+    },
+  );
+
   it("records deterministic add, change, and removal provenance for self-work and hand closures", async () => {
     const selfWorkSponsorLogin = `self-work-sponsor-${nextExternalId()}`;
     const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
@@ -778,7 +1351,6 @@ describe("initial PostgreSQL materialization", () => {
       sponsorLogin: selfWorkSponsorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
-      existingIssues: [],
       githubIssueId: nextExternalId(),
       githubPullRequestId: nextExternalId(),
     });
@@ -792,7 +1364,14 @@ describe("initial PostgreSQL materialization", () => {
     })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
 
     const selfWorkChangedSnapshot = structuredClone(selfWorkSnapshot);
-    selfWorkChangedSnapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/7"];
+    const changedIssue = selfWorkChangedSnapshot.issues[0]!;
+    changedIssue.labels = changedIssue.labels.map((label) => label === "delivered/6" ? "delivered/7" : label);
+    const actualEvent = changedIssue.history.find((event) => event.kind === "LABELED" && event.label === "delivered/6");
+    if (actualEvent === undefined || actualEvent.kind !== "LABELED") {
+      throw new Error("Expected actual label history fixture.");
+    }
+    actualEvent.label = "delivered/7";
+    changedIssue.comments[0]!.body = "Settled as delivered/7.";
     const selfWorkChangeRun = await store.beginRun(selfWorkRepositoryId);
     await expect(store.materialize({
       repositoryId: selfWorkRepositoryId,
@@ -852,7 +1431,6 @@ describe("initial PostgreSQL materialization", () => {
       contributorId: closureContributorId,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
-      existingIssues: [],
       githubIssueId: nextExternalId(),
       githubPullRequestId: nextExternalId(),
     });
@@ -970,6 +1548,30 @@ describe("initial PostgreSQL materialization", () => {
       where github_delivery_id = ${delivery.deliveryId}
     `;
     expect(record).toEqual({ processing_state: "PROCESSED" });
+  });
+
+  it("renews only the current webhook lease far enough to cover continued reconciliation", async () => {
+    const store = new PostgresFoldStore(sql);
+    const delivery = {
+      deliveryId: "delivery-renewal",
+      event: "pull_request" as const,
+      action: "closed",
+      repositoryGitHubId: nextExternalId(),
+      repositoryFullName: "octo/example",
+    };
+    const claim = expectClaimedLease(await store.claimDelivery(delivery));
+
+    await expect(
+      store.renewDeliveryLease(delivery.deliveryId, "00000000-0000-4000-8000-000000000099"),
+    ).resolves.toBe(false);
+    await expect(store.renewDeliveryLease(delivery.deliveryId, claim.leaseToken)).resolves.toBe(true);
+
+    const [record] = await sql<{ renewed: boolean }[]>`
+      select lease_expires_at > now() + interval '4 minutes' as renewed
+      from webhook_deliveries
+      where github_delivery_id = ${delivery.deliveryId}
+    `;
+    expect(record).toEqual({ renewed: true });
   });
 
   it("reclaims a failed delivery only through a new lease and persists a sanitized failure", async () => {
@@ -1122,7 +1724,6 @@ async function insertIssue(
 
 async function insertPullRequest(
   client: QueryableSql,
-  options: { actualPoints?: number } = {},
 ): Promise<{ id: string; issueId: string; sponsorId: string; repositoryId: string }> {
   const issue = await insertIssue(client);
   const contributorId = await insertUser(client);
@@ -1137,8 +1738,6 @@ async function insertPullRequest(
       title,
       body,
       author_id,
-      actual_label,
-      actual_points,
       state,
       merged_at
     )
@@ -1151,8 +1750,6 @@ async function insertPullRequest(
       ${"A merged contribution"},
       ${"Pull request evidence"},
       ${contributorId},
-      ${"delivered/6"},
-      ${options.actualPoints ?? 6},
       ${"MERGED"},
       now()
     )
@@ -1208,7 +1805,6 @@ function materializationSnapshot(input: {
   contributorLogin?: string;
   issueLabels: string[];
   actualLabel: string;
-  existingIssues: RepositoryFoldSnapshot["existingIssues"];
   githubIssueId?: number;
   githubPullRequestId?: number;
 }): RepositoryFoldSnapshot {
@@ -1228,7 +1824,6 @@ function materializationSnapshot(input: {
       { id: input.sponsorId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
       { id: input.contributorId, githubLogin: contributorLogin, enforcementState: "ACTIVE" },
     ],
-    existingIssues: input.existingIssues,
     issues: [
       {
         id: githubIssueId,
@@ -1237,7 +1832,40 @@ function materializationSnapshot(input: {
         body: "Issue body",
         url: "https://github.com/example/materialized/issues/1",
         state: "CLOSED",
-        labels: input.issueLabels,
+        createdAt: "2026-09-01T08:00:00.000Z",
+        authorLogin: sponsorLogin,
+        labels: [...input.issueLabels, input.actualLabel],
+        claimAssigneeGitHubLogin: contributorLogin,
+        history: [
+          {
+            kind: "LABELED",
+            id: `opening-${githubIssueId}`,
+            actorLogin: sponsorLogin,
+            label: input.issueLabels[0] ?? "M",
+            createdAt: "2026-09-01T08:01:00.000Z",
+          },
+          {
+            kind: "ASSIGNED",
+            id: `assigned-${githubIssueId}`,
+            actorLogin: sponsorLogin,
+            assigneeLogin: contributorLogin,
+            createdAt: "2026-09-01T09:00:00.000Z",
+          },
+          {
+            kind: "LABELED",
+            id: `actual-${githubIssueId}`,
+            actorLogin: sponsorLogin,
+            label: input.actualLabel,
+            createdAt: "2026-09-01T11:00:00.000Z",
+          },
+        ],
+        comments: [{
+          id: `rationale-${githubIssueId}`,
+          databaseId: githubIssueId + 20_000_000,
+          authorLogin: sponsorLogin,
+          body: `Settled as ${input.actualLabel}.`,
+          createdAt: "2026-09-01T11:30:00.000Z",
+        }],
         closingPullRequests: [
           {
             id: githubPullRequestId,
@@ -1247,8 +1875,9 @@ function materializationSnapshot(input: {
             url: "https://github.com/example/materialized/pull/11",
             state: "MERGED",
             mergedAt: "2026-09-01T12:00:00.000Z",
+            mergeCommitOid: githubPullRequestId.toString(16).padStart(40, "0"),
+            finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: contributorLogin,
-            labels: [input.actualLabel],
             reviews: [],
             rawDiff: "materialized diff",
           },
@@ -1263,7 +1892,7 @@ type AuthoritativeReconciliationSnapshot = {
   closingPullRequests: Map<number, GitHubPullRequest[]>;
 };
 
-function authoritativeIssue(input: { id: number; number: number }): GitHubIssue {
+function authoritativeIssue(input: { id: number; number: number; ownerLogin: string }): GitHubIssue {
   return {
     id: input.id,
     number: input.number,
@@ -1271,15 +1900,27 @@ function authoritativeIssue(input: { id: number; number: number }): GitHubIssue 
     body: `Reconciled issue ${input.number} body`,
     url: `https://github.com/example/materialized/issues/${input.number}`,
     state: "CLOSED",
-    labels: ["M"],
+    createdAt: "2026-09-01T08:00:00.000Z",
+    authorLogin: input.ownerLogin,
+    labels: ["M", "delivered/6"],
     claimAssigneeGitHubLogin: null,
+    history: [
+      { kind: "LABELED", id: `opening-${input.id}`, actorLogin: input.ownerLogin, label: "M", createdAt: "2026-09-01T08:01:00.000Z" },
+      { kind: "LABELED", id: `actual-${input.id}`, actorLogin: input.ownerLogin, label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z" },
+    ],
+    comments: [{
+      id: `rationale-${input.id}`,
+      databaseId: input.id + 20_000_000,
+      authorLogin: input.ownerLogin,
+      body: "Settled as delivered/6.",
+      createdAt: "2026-09-01T11:30:00.000Z",
+    }],
   };
 }
 
 function authoritativePullRequest(input: {
   id: number;
   number: number;
-  actualLabel: string;
   authorLogin: string;
 }): GitHubPullRequest {
   return {
@@ -1290,8 +1931,9 @@ function authoritativePullRequest(input: {
     url: `https://github.com/example/materialized/pull/${input.number}`,
     state: "MERGED",
     mergedAt: "2026-09-01T12:00:00.000Z",
+    mergeCommitOid: input.id.toString(16).padStart(40, "0"),
+    finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
-    labels: [input.actualLabel],
   };
 }
 
@@ -1318,13 +1960,11 @@ async function reconciliationMaterializationState(repositoryId: string) {
       pull_request_number: number | string;
       title: string;
       state: string;
-      actual_label: string | null;
-      actual_points: number | string | null;
       proof_sha256: string | null;
     }[]>`
       select
         github_pull_request_id, pull_request_number, title, state,
-        actual_label, actual_points, proof_sha256
+        proof_sha256
       from pull_requests
       where repository_id = ${repositoryId}
       order by github_pull_request_id
@@ -1394,6 +2034,104 @@ async function reconciliationMaterializationState(repositoryId: string) {
     `,
   ]);
   return { issues, pullRequests, settlements, reviewRounds, issueLinks, unwritableClosures };
+}
+
+function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGateway {
+  const issues: GitHubIssue[] = snapshot.issues.map((issue) => ({
+    id: issue.id,
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    url: issue.url,
+    state: issue.state,
+    createdAt: issue.createdAt,
+    authorLogin: issue.authorLogin,
+    labels: issue.labels,
+    claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin ?? null,
+    history: issue.history,
+    comments: issue.comments,
+  }));
+  const pullRequestsByIssue = new Map(snapshot.issues.map((issue) => [
+    issue.number,
+    issue.closingPullRequests.map((pullRequest): GitHubPullRequest => ({
+      id: pullRequest.id,
+      number: pullRequest.number,
+      title: pullRequest.title,
+      body: pullRequest.body,
+      url: pullRequest.url,
+      state: pullRequest.state,
+      mergedAt: pullRequest.mergedAt,
+      mergeCommitOid: pullRequest.mergeCommitOid,
+      finalCommitAt: pullRequest.finalCommitAt,
+      authorLogin: pullRequest.authorLogin,
+    })),
+  ]));
+  const evidenceByPullRequest = new Map(snapshot.issues.flatMap((issue) => (
+    issue.closingPullRequests.map((pullRequest) => [pullRequest.number, pullRequest] as const)
+  )));
+  return {
+    listIssues: async () => issues,
+    getIssueClosingPullRequests: async (_repository, issueNumber) => pullRequestsByIssue.get(issueNumber) ?? [],
+    getPullRequestReviews: async (_repository, pullRequestNumber) => (
+      evidenceByPullRequest.get(pullRequestNumber)?.reviews ?? []
+    ),
+    getPullRequestDiff: async (_repository, pullRequestNumber) => (
+      evidenceByPullRequest.get(pullRequestNumber)?.rawDiff ?? ""
+    ),
+  };
+}
+
+async function historicalRepositoryFacts(repositoryId: string, accountIds: string[]) {
+  const [issues, settlements, calibrations, ledger, balances] = await Promise.all([
+    sql`
+      select
+        id, opening_label, opening_comparison_points, opening_reserve_points,
+        opening_source_event_id, opening_source_actor_login, opening_source_at,
+        settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
+        settled_label_applied_at, settled_rationale_comment_id,
+        settled_rationale_actor_login, settled_rationale_commented_at
+      from issues where repository_id = ${repositoryId} order by github_issue_id
+    `,
+    sql`
+      select
+        settlements.id, settlements.issue_id, settlements.pull_request_id,
+        settlements.creditor_id, settlements.debtor_id, settlements.opening_comparison_points,
+        settlements.settled_points, settlements.review_rounds, settlements.credits,
+        settlements.proof_sha256, settlements.status, pull_requests.merge_commit_oid,
+        pull_requests.merged_at
+      from settlements
+      join issues on issues.id = settlements.issue_id
+      join pull_requests on pull_requests.id = settlements.pull_request_id
+      where issues.repository_id = ${repositoryId}
+      order by settlements.id
+    `,
+    sql`
+      select
+        self_work_calibrations.id, self_work_calibrations.issue_id,
+        self_work_calibrations.pull_request_id, self_work_calibrations.user_id,
+        self_work_calibrations.opening_comparison_points, self_work_calibrations.actual_points,
+        pull_requests.proof_sha256, pull_requests.merge_commit_oid, pull_requests.merged_at
+      from self_work_calibrations
+      join issues on issues.id = self_work_calibrations.issue_id
+      join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+      where issues.repository_id = ${repositoryId}
+      order by self_work_calibrations.id
+    `,
+    sql`
+      select ledger_entries.settlement_id, ledger_entries.account_id, ledger_entries.amount
+      from ledger_entries
+      join settlements on settlements.id = ledger_entries.settlement_id
+      join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${repositoryId}
+      order by ledger_entries.settlement_id, ledger_entries.account_id
+    `,
+    sql`
+      select account_id, balance from balances
+      where account_id::text = any(${sql.array(accountIds)})
+      order by account_id
+    `,
+  ]);
+  return { issues, settlements, calibrations, ledger, balances };
 }
 
 async function insertSettledRecord(proofFingerprint: string): Promise<{

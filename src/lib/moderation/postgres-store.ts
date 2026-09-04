@@ -33,6 +33,7 @@ type CalibrationPairRow = {
   github_repository_id: number | string;
   github_issue_id: number | string;
   github_pull_request_id: number | string;
+  merged_at: string | Date;
   proof_sha256: string | null;
   offered_difficulty: number | string;
   settled_difficulty: number | string;
@@ -329,6 +330,7 @@ export class PostgresModerationStore implements ModerationStore {
         repositories.github_repository_id,
         issues.github_issue_id,
         pull_requests.github_pull_request_id,
+        pull_requests.merged_at,
         pull_requests.proof_sha256,
         self_work_calibrations.opening_comparison_points as offered_difficulty,
         self_work_calibrations.actual_points as settled_difficulty
@@ -340,8 +342,8 @@ export class PostgresModerationStore implements ModerationStore {
         ${repositoryPredicate}
         and self_work_calibrations.actual_points is not null
         and pull_requests.proof_sha256 is not null
-        and self_work_calibrations.created_at >= ${input.sampleStartedAt}
-        and self_work_calibrations.created_at < ${input.sampleEndedAt}
+        and pull_requests.merged_at >= ${input.sampleStartedAt}
+        and pull_requests.merged_at < ${input.sampleEndedAt}
       order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
     `;
   }
@@ -358,6 +360,7 @@ export class PostgresModerationStore implements ModerationStore {
         repositories.github_repository_id,
         issues.github_issue_id,
         pull_requests.github_pull_request_id,
+        pull_requests.merged_at,
         settlements.proof_sha256,
         settlements.opening_comparison_points as offered_difficulty,
         settlements.settled_points as settled_difficulty
@@ -371,8 +374,8 @@ export class PostgresModerationStore implements ModerationStore {
         and settlements.creditor_id <> ${input.targetAccountId}
         and settlements.status = ${"SETTLED"}
         and settlements.settled_points is not null
-        and settlements.created_at >= ${input.sampleStartedAt}
-        and settlements.created_at < ${input.sampleEndedAt}
+        and pull_requests.merged_at >= ${input.sampleStartedAt}
+        and pull_requests.merged_at < ${input.sampleEndedAt}
       order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
     `;
   }
@@ -492,10 +495,19 @@ function toCalibrationPair(row: CalibrationPairRow): CalibrationPair {
     githubRepositoryId: toSafeInteger(row.github_repository_id),
     githubIssueId: toSafeInteger(row.github_issue_id),
     githubPullRequestId: toSafeInteger(row.github_pull_request_id),
+    mergedAt: toTimestamp(row.merged_at),
     proofSha256: toProofSha256(row.proof_sha256),
     offeredDifficulty: toSafeInteger(row.offered_difficulty),
     settledDifficulty: toSafeInteger(row.settled_difficulty),
   };
+}
+
+function toTimestamp(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    throw new Error("Database merge time was invalid.");
+  }
+  return date.toISOString();
 }
 
 function toProofSha256(value: string | null): string {

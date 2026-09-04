@@ -56,6 +56,42 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
           </ol>
         )}
       </section>
+      <section className="surface" aria-labelledby="open-claims-heading">
+        <h2 id="open-claims-heading">Open claims</h2>
+        {dashboard.openClaims.length === 0 ? <p>No open claims are reserving your ledger.</p> : (
+          <ul>
+            {dashboard.openClaims.map((claim) => (
+              <li key={claim.id}>
+                <a href={claim.url}>{claim.repositoryName} #{claim.issueNumber}: {claim.title}</a>
+                {" · "}{claim.assigneeGitHubLogin}{" · "}{claim.openingName}: {claim.openingLabel}{" · reserve "}{claim.reservePoints}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="registered-repositories-heading">
+        <h2 id="registered-repositories-heading">Registered repositories</h2>
+        {dashboard.registeredRepositories.length === 0 ? <p>No repositories are registered to this account.</p> : (
+          <ul>
+            {dashboard.registeredRepositories.map((repository) => (
+              <li key={repository.id}>
+                {repository.ownerName} · {repository.visibility} · {repository.active ? "active" : "inactive"}
+                {" · "}{repository.openingName} / {repository.actualName}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="enforcement-notices-heading">
+        <h2 id="enforcement-notices-heading">Enforcement notices</h2>
+        {dashboard.enforcementNotices.length === 0 ? <p>No enforcement notices are recorded.</p> : (
+          <ol>
+            {dashboard.enforcementNotices.map((notice) => (
+              <li key={notice.id}>{notice.createdAt.slice(0, 10)} · {notice.priorState} → {notice.newState} · {notice.reason}</li>
+            ))}
+          </ol>
+        )}
+      </section>
     </AppShell>
   );
 }
@@ -63,8 +99,8 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
 export default async function DashboardPage() {
   const session = await requireMemberPageSession();
   try {
-    const { getDashboard, readConfiguredCreditFloor } = await import("@/lib/dashboard/queries");
-    const dashboard = await getDashboard(session.user.id, { creditFloor: readConfiguredCreditFloor() });
+    const { getDashboard } = await import("@/lib/dashboard/queries");
+    const dashboard = await getDashboard(session.user.id);
     return (
       <DashboardContent
         memberName={session.user.name}

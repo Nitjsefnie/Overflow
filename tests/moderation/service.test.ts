@@ -272,6 +272,7 @@ function calibrationPairs(count: number, offset: number): CalibrationPair[] {
     githubRepositoryId: 700 + index,
     githubIssueId: offset + index,
     githubPullRequestId: offset + 1_000 + index,
+    mergedAt: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
     proofSha256: (offset + index).toString(16).padStart(64, "0"),
     offeredDifficulty: 4,
     settledDifficulty: 5,

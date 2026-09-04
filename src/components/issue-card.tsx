@@ -31,7 +31,16 @@ export function IssueCard({ issue }: IssueCardProps) {
           <dd>Reserve {issue.reservePoints}</dd>
         </div>
       </dl>
+      {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
+      {issue.claimState !== undefined ? (
+        <p>Claim: {issue.claimState === "CLAIMED" ? `assigned to ${issue.assigneeGitHubLogin ?? "unknown"}` : "unclaimed"}</p>
+      ) : null}
+      {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
       <p className="mono-meta">Opened {issue.createdAt.slice(0, 10)}</p>
     </article>
   );
+}
+
+function formatSigned(value: number): string {
+  return value < 0 ? `−${Math.abs(value)}` : value > 0 ? `+${value}` : "0";
 }

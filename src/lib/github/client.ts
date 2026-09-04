@@ -1,6 +1,8 @@
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import type {
   GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueHistoryEvent,
   GitHubPullRequest,
   GitHubPullRequestReview,
   GitHubRepository,
@@ -71,8 +73,11 @@ export class GitHubGateway {
     );
     const issues: GitHubIssue[] = [];
     for (const node of nodes) {
-      const labels = await this.getIssueLabels(repository, node.number, node.labels);
-      issues.push(toGitHubIssue(node, labels));
+      const [labels, timeline] = await Promise.all([
+        this.getIssueLabels(repository, node.number, node.labels),
+        this.getIssueTimeline(repository, node.number, node.timelineItems),
+      ]);
+      issues.push(toGitHubIssue(node, labels, timeline));
     }
     return issues;
   }
@@ -84,12 +89,7 @@ export class GitHubGateway {
     const nodes = await collectCursorPages((cursor) =>
       this.getClosingPullRequestsPage(repository, issueNumber, cursor),
     );
-    const pullRequests: GitHubPullRequest[] = [];
-    for (const node of nodes) {
-      const labels = await this.getPullRequestLabels(repository, node.number, node.labels);
-      pullRequests.push(toGitHubPullRequest(node, labels));
-    }
-    return pullRequests;
+    return nodes.map(toGitHubPullRequest);
   }
 
   public async getPullRequestReviews(
@@ -235,30 +235,48 @@ export class GitHubGateway {
     return page;
   }
 
-  private async getPullRequestLabels(
+  private async getIssueTimeline(
     repository: GitHubRepositoryReference,
-    pullRequestNumber: number,
-    initialPage: GitHubGraphqlLabelConnection,
-  ): Promise<string[]> {
-    return this.collectLabels(initialPage, (cursor) =>
-      this.getPullRequestLabelsPage(repository, pullRequestNumber, cursor),
+    issueNumber: number,
+    initialPage: GitHubGraphqlIssueTimelineConnection,
+  ): Promise<{ history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] }> {
+    const nodes = await collectCursorPages((cursor) =>
+      cursor === null
+        ? Promise.resolve(initialPage)
+        : this.getIssueTimelinePage(repository, issueNumber, cursor),
     );
+    const history: GitHubIssueHistoryEvent[] = [];
+    const comments: GitHubIssueComment[] = [];
+    for (const node of nodes) {
+      const mapped = toGitHubIssueTimelineItem(node);
+      if (mapped === null) {
+        continue;
+      }
+      if (mapped.kind === "COMMENT") {
+        comments.push(mapped.comment);
+      } else {
+        history.push(mapped.event);
+      }
+    }
+    history.sort(compareIssueHistoryItems);
+    comments.sort(compareIssueHistoryItems);
+    return { history, comments };
   }
 
-  private async getPullRequestLabelsPage(
+  private async getIssueTimelinePage(
     repository: GitHubRepositoryReference,
-    pullRequestNumber: number,
+    issueNumber: number,
     cursor: string,
-  ): Promise<GitHubGraphqlLabelConnection> {
+  ): Promise<GitHubGraphqlIssueTimelineConnection> {
     const data = await this.graphql.query<{
-      repository: { pullRequest: { labels: GitHubGraphqlLabelConnection } | null } | null;
-    }>(pullRequestLabelsQuery, {
+      repository: { issue: { timelineItems: GitHubGraphqlIssueTimelineConnection } | null } | null;
+    }>(issueTimelineQuery, {
       owner: repository.owner,
       name: repository.name,
-      pullRequestNumber,
+      issueNumber,
       cursor,
     });
-    const page = data.repository?.pullRequest?.labels;
+    const page = data.repository?.issue?.timelineItems;
     if (page === undefined) {
       throw new Error("GitHub GraphQL response was invalid.");
     }
@@ -373,8 +391,11 @@ type GitHubGraphqlIssueNode = {
   body: string;
   url: string;
   state: "OPEN" | "CLOSED";
+  createdAt: string;
+  author: { login: string } | null;
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
+  timelineItems: GitHubGraphqlIssueTimelineConnection;
 };
 
 type GitHubGraphqlAssignee = { login: string };
@@ -387,9 +408,36 @@ type GitHubGraphqlPullRequestNode = {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   mergedAt: string | null;
+  mergeCommit: { oid: string } | null;
+  commits: { nodes: Array<{ commit: { committedDate: string } }> };
   author: { login: string } | null;
-  labels: GitHubGraphqlLabelConnection;
 };
+
+type GitHubGraphqlIssueTimelineNode =
+  | {
+      __typename: "LabeledEvent" | "UnlabeledEvent";
+      id: string;
+      createdAt: string;
+      actor: { login: string } | null;
+      label: { name: string };
+    }
+  | {
+      __typename: "AssignedEvent" | "UnassignedEvent";
+      id: string;
+      createdAt: string;
+      actor: { login: string } | null;
+      assignee: { login?: string } | null;
+    }
+  | {
+      __typename: "IssueComment";
+      id: string;
+      databaseId: number | null;
+      createdAt: string;
+      author: { login: string } | null;
+      body: string;
+    };
+
+type GitHubGraphqlIssueTimelineConnection = GitHubGraphqlPage<GitHubGraphqlIssueTimelineNode>;
 
 type GitHubGraphqlPullRequestReviewNode = {
   databaseId: number | null;
@@ -408,12 +456,28 @@ const issuesQuery = `
           body
           url
           state
+          createdAt
+          author { login }
           labels(first: 100) {
             nodes { name }
             pageInfo { hasNextPage endCursor }
           }
           assignees(first: 2) {
             nodes { login }
+          }
+          timelineItems(
+            first: 100
+            itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
+          ) {
+            nodes {
+              __typename
+              ... on LabeledEvent { id createdAt actor { login } label { name } }
+              ... on UnlabeledEvent { id createdAt actor { login } label { name } }
+              ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
+              ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
+              ... on IssueComment { id databaseId createdAt author { login } body }
+            }
+            pageInfo { hasNextPage endCursor }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -435,11 +499,11 @@ const closingPullRequestsQuery = `
             url
             state
             mergedAt
-            author { login }
-            labels(first: 100) {
-              nodes { name }
-              pageInfo { hasNextPage endCursor }
+            mergeCommit { oid }
+            commits(last: 1) {
+              nodes { commit { committedDate } }
             }
+            author { login }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -461,12 +525,23 @@ const issueLabelsQuery = `
   }
 `;
 
-const pullRequestLabelsQuery = `
-  query PullRequestLabels($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String!) {
+const issueTimelineQuery = `
+  query IssueTimeline($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String!) {
     repository(owner: $owner, name: $name) {
-      pullRequest(number: $pullRequestNumber) {
-        labels(first: 100, after: $cursor) {
-          nodes { name }
+      issue(number: $issueNumber) {
+        timelineItems(
+          first: 100
+          after: $cursor
+          itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
+        ) {
+          nodes {
+            __typename
+            ... on LabeledEvent { id createdAt actor { login } label { name } }
+            ... on UnlabeledEvent { id createdAt actor { login } label { name } }
+            ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
+            ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
+            ... on IssueComment { id databaseId createdAt author { login } body }
+          }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -487,7 +562,11 @@ const pullRequestReviewsQuery = `
   }
 `;
 
-function toGitHubIssue(node: GitHubGraphqlIssueNode, labels: string[]): GitHubIssue {
+function toGitHubIssue(
+  node: GitHubGraphqlIssueNode,
+  labels: string[],
+  timeline: { history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] },
+): GitHubIssue {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
   }
@@ -499,8 +578,12 @@ function toGitHubIssue(node: GitHubGraphqlIssueNode, labels: string[]): GitHubIs
     body: node.body,
     url: node.url,
     state: node.state,
+    createdAt: node.createdAt,
+    authorLogin: node.author?.login ?? null,
     labels,
     claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),
+    history: timeline.history,
+    comments: timeline.comments,
   };
 }
 
@@ -512,7 +595,7 @@ function claimAssigneeLogin(assignees: readonly GitHubGraphqlAssignee[]): string
   return login === undefined || login.length === 0 ? null : login;
 }
 
-function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode, labels: string[]): GitHubPullRequest {
+function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequest {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
   }
@@ -525,9 +608,64 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode, labels: string[
     url: node.url,
     state: node.state,
     mergedAt: node.mergedAt,
+    mergeCommitOid: node.mergeCommit?.oid ?? null,
+    finalCommitAt: node.commits.nodes.at(-1)?.commit.committedDate ?? null,
     authorLogin: node.author?.login ?? null,
-    labels,
   };
+}
+
+function toGitHubIssueTimelineItem(
+  node: GitHubGraphqlIssueTimelineNode,
+): { kind: "EVENT"; event: GitHubIssueHistoryEvent } | { kind: "COMMENT"; comment: GitHubIssueComment } | null {
+  if (typeof node.id !== "string" || node.id.length === 0) {
+    throw new Error("GitHub GraphQL response was invalid.");
+  }
+  switch (node.__typename) {
+    case "LabeledEvent":
+    case "UnlabeledEvent":
+      return {
+        kind: "EVENT",
+        event: {
+          kind: node.__typename === "LabeledEvent" ? "LABELED" : "UNLABELED",
+          id: node.id,
+          actorLogin: node.actor?.login ?? null,
+          label: node.label.name,
+          createdAt: node.createdAt,
+        },
+      };
+    case "AssignedEvent":
+    case "UnassignedEvent":
+      return {
+        kind: "EVENT",
+        event: {
+          kind: node.__typename === "AssignedEvent" ? "ASSIGNED" : "UNASSIGNED",
+          id: node.id,
+          actorLogin: node.actor?.login ?? null,
+          assigneeLogin: node.assignee?.login ?? null,
+          createdAt: node.createdAt,
+        },
+      };
+    case "IssueComment":
+      return {
+        kind: "COMMENT",
+        comment: {
+          id: node.id,
+          databaseId: node.databaseId,
+          authorLogin: node.author?.login ?? null,
+          body: node.body,
+          createdAt: node.createdAt,
+        },
+      };
+    default:
+      return null;
+  }
+}
+
+function compareIssueHistoryItems(
+  left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
+  right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
+): number {
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
 }
 
 function toGitHubPullRequestReview(

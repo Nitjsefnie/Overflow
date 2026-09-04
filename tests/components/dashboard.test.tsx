@@ -18,8 +18,10 @@ describe("member dashboard", () => {
           givenTotal: 7,
           reservedPoints: 4,
           availableHeadroom: 8,
-          creditFloor: 5,
           recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
         }}
       />,
     );
@@ -30,7 +32,6 @@ describe("member dashboard", () => {
     expect(screen.getByText("Given 7")).toBeVisible();
     expect(screen.getByText("Reserved 4")).toBeVisible();
     expect(screen.getByText("Available headroom 8")).toBeVisible();
-    expect(screen.getByText("Optional credit floor 5")).toBeVisible();
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
@@ -61,6 +62,9 @@ describe("member dashboard", () => {
               settledAt: "2026-09-03T00:00:00.000Z",
             },
           ],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
         }}
       />,
     );
@@ -79,6 +83,58 @@ describe("member dashboard", () => {
       "/settlements/settlement-9",
     );
     expect(screen.getByText("4 credits · review deduction 3")).toBeVisible();
+  });
+
+  it("shows the dashboard operational queues and renders external text as text", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: -2,
+          earnedTotal: 3,
+          givenTotal: 5,
+          reservedPoints: 7,
+          availableHeadroom: -9,
+          recentSettlements: [],
+          openClaims: [{
+            id: "claim-1",
+            repositoryName: "co-op/harbour",
+            issueNumber: 17,
+            title: "<script>untrusted claim</script>",
+            url: "https://github.com/co-op/harbour/issues/17",
+            assigneeGitHubLogin: "mira",
+            openingName: "Offer band",
+            openingLabel: "shoal",
+            reservePoints: 7,
+          }],
+          registeredRepositories: [{
+            id: "repo-1",
+            ownerName: "co-op/harbour",
+            visibility: "PUBLIC",
+            active: true,
+            openingName: "Offer band",
+            actualName: "Delivered band",
+          }],
+          enforcementNotices: [{
+            id: "notice-1",
+            priorState: "UNDER_AUDIT",
+            newState: "WARNED",
+            reason: "Cohort review completed.",
+            createdAt: "2026-09-03T00:00:00.000Z",
+          }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Open claims" })).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /<script>untrusted claim<\/script>/ }),
+    ).toBeVisible();
+    expect(document.querySelector("script")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Registered repositories" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Enforcement notices" })).toBeVisible();
+    expect(screen.getByText(/UNDER_AUDIT → WARNED/)).toBeVisible();
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {
@@ -108,7 +164,6 @@ describe("member dashboard", () => {
     );
     expect(screen.getByText("−2")).toBeVisible();
     expect(screen.getByText("Available headroom −6")).toBeVisible();
-    expect(screen.queryByText(/credit floor/i)).not.toBeInTheDocument();
 
     rerender(
       <BalanceCard

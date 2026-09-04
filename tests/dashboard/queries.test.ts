@@ -4,7 +4,9 @@ import {
   getDashboard,
   getSettlementProof,
   listEligibleIssues,
+  listEnforcementHistory,
   listOpenAudits,
+  listRecalibratingAccounts,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
 
@@ -26,9 +28,79 @@ function sqlHarness(responses: unknown[][]): { sql: DashboardSql; captures: Quer
 const proof = "a".repeat(64);
 
 describe("dashboard projections", () => {
+  it("projects open claims, registered repositories, and enforcement notices without credentials", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: -4, earned_total: 2, given_total: 6, reserved_points: 5, enforcement_state: "WARNED" }],
+      [],
+      [
+        {
+          id: "claim-1",
+          repository_name: "co-op/harbour",
+          issue_number: 17,
+          title: "Repair the tide gate",
+          url: "https://github.com/co-op/harbour/issues/17",
+          assignee_github_login: "member",
+          opening_name: "Offer band",
+          opening_label: "shoal",
+          reserve_points: 5,
+        },
+      ],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+        },
+      ],
+      [
+        {
+          id: "event-1",
+          prior_state: "UNDER_AUDIT",
+          new_state: "WARNED",
+          reason: "Persistent calibration pattern confirmed.",
+          created_at: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard).toMatchObject({
+      enforcementState: "WARNED",
+      openClaims: [
+        expect.objectContaining({
+          id: "claim-1",
+          assigneeGitHubLogin: "member",
+          openingName: "Offer band",
+          openingLabel: "shoal",
+        }),
+      ],
+      registeredRepositories: [
+        expect.objectContaining({
+          id: "repo-1",
+          ownerName: "co-op/harbour",
+          openingName: "Offer band",
+          actualName: "Delivered band",
+        }),
+      ],
+      enforcementNotices: [
+        expect.objectContaining({ id: "event-1", newState: "WARNED" }),
+      ],
+    });
+    expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
+      /encrypted_oauth_token|access_token|webhook_secret|credential/,
+    );
+  });
+
   it("derives headroom from settled balance minus outsider reservations without a default floor", async () => {
     const { sql } = sqlHarness([
       [{ settled_balance: -2, earned_total: 3, given_total: 5, reserved_points: 7 }],
+      [],
+      [],
+      [],
       [],
     ]);
 
@@ -41,25 +113,9 @@ describe("dashboard projections", () => {
       reservedPoints: 7,
       availableHeadroom: -9,
       recentSettlements: [],
-    });
-  });
-
-  it("only displays an explicitly configured credit floor", async () => {
-    const { sql } = sqlHarness([
-      [{ settled_balance: 12, earned_total: 19, given_total: 7, reserved_points: 4 }],
-      [],
-    ]);
-
-    const dashboard = await getDashboard("member-1", { sql, creditFloor: 5 });
-
-    expect(dashboard).toEqual({
-      settledBalance: 12,
-      earnedTotal: 19,
-      givenTotal: 7,
-      reservedPoints: 4,
-      availableHeadroom: 8,
-      creditFloor: 5,
-      recentSettlements: [],
+      openClaims: [],
+      registeredRepositories: [],
+      enforcementNotices: [],
     });
   });
 
@@ -82,6 +138,9 @@ describe("dashboard projections", () => {
           settled_at: "2026-09-03T00:00:00.000Z",
         },
       ],
+      [],
+      [],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -150,10 +209,52 @@ describe("dashboard projections", () => {
       ],
     ]);
 
-    const issues = await listEligibleIssues("member-1", { sql });
+    const issues = await listEligibleIssues("member-1", {}, { sql });
 
     expect(issues.map((issue) => issue.id)).toEqual(["issue-old-high", "issue-new-high", "issue-low"]);
     expect(captures[0]?.text).toMatch(/order by\s+issues\.opening_reserve_points desc,\s+issues\.created_at asc/i);
+  });
+
+  it("applies repository, offered-label, and claim-state filters server side and projects operational context", async () => {
+    const { sql, captures } = sqlHarness([
+      [
+        {
+          id: "issue-claimed",
+          repository_name: "co-op/harbour",
+          sponsor_login: "sponsor",
+          issue_number: 8,
+          title: "Chart the shoal",
+          url: "https://github.com/co-op/harbour/issues/8",
+          opening_name: "Offer band",
+          opening_label: "shoal",
+          opening_comparison_points: 4,
+          opening_reserve_points: 6,
+          claim_assignee_github_login: "contributor",
+          available_headroom: -3,
+          created_at: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const issues = await listEligibleIssues(
+      "member-1",
+      { repository: "co-op/harbour", openingLabel: "shoal", claimState: "CLAIMED" },
+      { sql },
+    );
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        sponsorLogin: "sponsor",
+        assigneeGitHubLogin: "contributor",
+        claimState: "CLAIMED",
+        availableHeadroom: -3,
+        openingName: "Offer band",
+        openingLabel: "shoal",
+      }),
+    ]);
+    expect(captures[0]?.values).toContain("co-op/harbour");
+    expect(captures[0]?.values).toContain("shoal");
+    expect(captures[0]?.values).toContain("CLAIMED");
   });
 
   it("returns issue and pull-request proof with the hand-calculated review deduction", async () => {
@@ -200,6 +301,57 @@ describe("dashboard projections", () => {
     });
   });
 
+  it("projects configured rating names, authoritative event evidence, merge SHA, and signed balance effect", async () => {
+    const { sql } = sqlHarness([
+      [
+        {
+          id: "settlement-1",
+          status: "SETTLED",
+          repository_name: "co-op/harbour",
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          opening_label: "shoal",
+          settled_label: "landed/7",
+          settled_label_event_id: "label-event-7",
+          settled_label_actor_login: "owner",
+          settled_label_applied_at: "2026-09-03T10:00:00.000Z",
+          settled_rationale_comment_id: "comment-7",
+          settled_rationale_actor_login: "owner",
+          settled_rationale_commented_at: "2026-09-03T10:30:00.000Z",
+          pull_request_number: 12,
+          pull_request_title: "Seal the lock",
+          pull_request_url: "https://github.com/co-op/harbour/pull/12",
+          merge_commit_oid: "0123456789abcdef0123456789abcdef01234567",
+          merged_at: "2026-09-03T11:00:00.000Z",
+          proof_sha256: proof,
+          opening_comparison_points: 9,
+          settled_points: 7,
+          review_rounds: 3,
+          credits: 4,
+          balance_effect: -4,
+          settled_at: "2026-09-03T11:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const settlement = await getSettlementProof("member-1", "settlement-1", { sql });
+
+    expect(settlement).toMatchObject({
+      openingName: "Offer band",
+      actualName: "Delivered band",
+      openingLabel: "shoal",
+      settledLabel: "landed/7",
+      settledLabelEventId: "label-event-7",
+      settledRationaleCommentId: "comment-7",
+      mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+      mergedAt: "2026-09-03T11:00:00.000Z",
+      balanceEffect: -4,
+    });
+  });
+
   it("compares independently returned self-work and outsider calibration samples", async () => {
     const { sql } = sqlHarness([
       [
@@ -207,6 +359,7 @@ describe("dashboard projections", () => {
           github_repository_id: 1,
           github_issue_id: 10,
           github_pull_request_id: 100,
+          merged_at: "2026-01-03T00:00:00.000Z",
           proof_sha256: proof,
           offered_difficulty: 5,
           settled_difficulty: 6,
@@ -215,6 +368,7 @@ describe("dashboard projections", () => {
           github_repository_id: 1,
           github_issue_id: 11,
           github_pull_request_id: 101,
+          merged_at: "2026-01-04T00:00:00.000Z",
           proof_sha256: proof,
           offered_difficulty: 7,
           settled_difficulty: 5,
@@ -225,6 +379,7 @@ describe("dashboard projections", () => {
           github_repository_id: 1,
           github_issue_id: 12,
           github_pull_request_id: 102,
+          merged_at: "2026-01-05T00:00:00.000Z",
           proof_sha256: proof,
           offered_difficulty: 4,
           settled_difficulty: 7,
@@ -233,6 +388,7 @@ describe("dashboard projections", () => {
           github_repository_id: 1,
           github_issue_id: 13,
           github_pull_request_id: 103,
+          merged_at: "2026-01-06T00:00:00.000Z",
           proof_sha256: proof,
           offered_difficulty: 8,
           settled_difficulty: 7,
@@ -277,9 +433,85 @@ describe("dashboard projections", () => {
         openedAt: "2026-09-04T00:00:00.000Z",
         settledSampleSize: 20,
         differenceBetweenMeans: -1.5,
+        cohortStatistics: { differenceBetweenMeans: -1.5 },
       },
     ]);
     const projectedSql = captures.map((capture) => capture.text).join("\n").toLowerCase();
     expect(projectedSql).not.toMatch(/encrypted_oauth_token|access_token|auth_secret|webhook_secret|credential/);
+  });
+
+  it("projects reproducible audit evidence, enforcement history, and recalibrating accounts", async () => {
+    const cohortDefinition = {
+      sampleStartedAt: "2026-01-01T00:00:00.000Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+      selfWorkPairs: [{ githubIssueId: 1, mergedAt: "2026-01-03T00:00:00.000Z" }],
+      outsiderSettlementPairs: [{ githubIssueId: 2, mergedAt: "2026-01-04T00:00:00.000Z" }],
+    };
+    const cohortStatistics = {
+      selfWork: { count: 1, meanDelta: 1, medianDelta: 1 },
+      outsider: { count: 1, meanDelta: -1, medianDelta: -1 },
+      differenceBetweenMeans: 2,
+    };
+    const { sql, captures } = sqlHarness([
+      [
+        {
+          id: "audit-1",
+          target_account_id: "account-1",
+          target_login: "mira",
+          reporter_login: "moderator",
+          repository_name: null,
+          state: "OPEN",
+          prior_enforcement_state: "ACTIVE",
+          opened_at: "2026-09-04T00:00:00.000Z",
+          sample_started_at: "2026-01-01T00:00:00.000Z",
+          sample_ended_at: "2026-02-01T00:00:00.000Z",
+          settled_sample_size: 1,
+          cohort_definition: cohortDefinition,
+          cohort_statistics: cohortStatistics,
+        },
+      ],
+      [
+        {
+          id: "event-1",
+          target_account_id: "account-1",
+          target_login: "mira",
+          actor_login: "moderator",
+          prior_state: "ACTIVE",
+          new_state: "UNDER_AUDIT",
+          reason: "Review opened.",
+          recalibration_plan: null,
+          created_at: "2026-09-04T00:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: "account-2",
+          github_login: "quinn",
+          confirmed_miscalibration_count: 2,
+        },
+      ],
+    ]);
+
+    const [audits, history, recalibrating] = await Promise.all([
+      listOpenAudits({ sql }),
+      listEnforcementHistory({ sql }),
+      listRecalibratingAccounts({ sql }),
+    ]);
+
+    expect(audits[0]).toMatchObject({
+      cohortDefinition,
+      cohortStatistics,
+      sampleStartedAt: "2026-01-01T00:00:00.000Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+    });
+    expect(history[0]).toMatchObject({ targetLogin: "mira", newState: "UNDER_AUDIT" });
+    expect(recalibrating[0]).toEqual({
+      id: "account-2",
+      githubLogin: "quinn",
+      confirmedPatternCount: 2,
+    });
+    expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
+      /encrypted_oauth_token|access_token|webhook_secret|credential/,
+    );
   });
 });

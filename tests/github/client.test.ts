@@ -117,7 +117,7 @@ describe("GitHubGateway REST transport", () => {
 
     await expect(
       gateway.createWebhook(repository, {
-        callbackUrl: "https://overflow.example/api/webhooks/github",
+        callbackUrl: "https://overflow.example/api/github/webhooks",
         secret: "webhook-secret-for-test",
       }),
     ).resolves.toEqual({ id: 81 });
@@ -128,7 +128,7 @@ describe("GitHubGateway REST transport", () => {
       config: {
         content_type: "json",
         secret: "webhook-secret-for-test",
-        url: "https://overflow.example/api/webhooks/github",
+        url: "https://overflow.example/api/github/webhooks",
       },
       events: ["issues", "pull_request", "pull_request_review"],
       name: "web",

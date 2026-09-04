@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModerationControls } from "@/components/moderation-controls";
+import { ModerationControls, RecalibrationPlanControl } from "@/components/moderation-controls";
 
 const auditId = "00000000-0000-4000-8000-000000000004";
 
@@ -73,6 +73,32 @@ describe("moderation audit controls", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(`/api/moderation/${auditId}`, expect.objectContaining({
       body: JSON.stringify({ action: "substantiate", reason: "The evidence is sufficient." }),
+    }));
+  });
+
+  it("requires and submits a moderator recalibration plan before reactivation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ recalibration: { targetState: "ACTIVE" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationPlanControl targetAccountId="account-7" targetLogin="mira" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate account" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a nonblank recalibration plan");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Recalibration plan for mira"), {
+      target: { value: "Review ten completed contributions before new sponsorship." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate account" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("mira was reactivated"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/moderation", expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({
+        targetAccountId: "account-7",
+        plan: "Review ten completed contributions before new sponsorship.",
+      }),
     }));
   });
 });

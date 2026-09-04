@@ -2,6 +2,112 @@ import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 
 describe("GitHubGateway GraphQL source adapter", () => {
+  it("collects paginated immutable issue label, assignment, and owner-comment history", async () => {
+    const historyCursors: Array<string | null> = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { cursor: string | null; issueNumber?: number };
+        };
+        if (request.query.includes("query RepositoryIssues")) {
+          return Response.json({
+            data: {
+              repository: {
+                issues: {
+                  nodes: [
+                    {
+                      ...issueNode(101, 1, "History issue"),
+                      createdAt: "2026-08-30T09:00:00.000Z",
+                      author: { login: "owner" },
+                      timelineItems: {
+                        nodes: [
+                          {
+                            __typename: "LabeledEvent",
+                            id: "label-event-1",
+                            createdAt: "2026-08-30T10:00:00.000Z",
+                            actor: { login: "owner" },
+                            label: { name: "size/M" },
+                          },
+                        ],
+                        pageInfo: { hasNextPage: true, endCursor: "history-cursor-2" },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          });
+        }
+
+        historyCursors.push(request.variables.cursor);
+        return Response.json({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [
+                    {
+                      __typename: "AssignedEvent",
+                      id: "assignment-event-1",
+                      createdAt: "2026-08-31T09:00:00.000Z",
+                      actor: { login: "owner" },
+                      assignee: { login: "contributor" },
+                    },
+                    {
+                      __typename: "IssueComment",
+                      id: "comment-node-1",
+                      databaseId: 501,
+                      createdAt: "2026-09-01T11:30:00.000Z",
+                      author: { login: "owner" },
+                      body: "Owner rationale for delivered/6.",
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issues[0]).toMatchObject({
+      authorLogin: "owner",
+      createdAt: "2026-08-30T09:00:00.000Z",
+      history: [
+        {
+          kind: "LABELED",
+          id: "label-event-1",
+          actorLogin: "owner",
+          label: "size/M",
+          createdAt: "2026-08-30T10:00:00.000Z",
+        },
+        {
+          kind: "ASSIGNED",
+          id: "assignment-event-1",
+          actorLogin: "owner",
+          assigneeLogin: "contributor",
+          createdAt: "2026-08-31T09:00:00.000Z",
+        },
+      ],
+      comments: [
+        {
+          id: "comment-node-1",
+          databaseId: 501,
+          authorLogin: "owner",
+          body: "Owner rationale for delivered/6.",
+          createdAt: "2026-09-01T11:30:00.000Z",
+        },
+      ],
+    });
+    expect(historyCursors).toEqual(["history-cursor-2"]);
+  });
+
   it("collects every cursor-paginated issue page from GitHub GraphQL", async () => {
     const cursors: Array<string | null> = [];
     const gateway = new GitHubGateway({
@@ -47,8 +153,12 @@ describe("GitHubGateway GraphQL source adapter", () => {
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/1",
         state: "OPEN",
+        createdAt: "2026-08-30T09:00:00.000Z",
+        authorLogin: "owner",
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
+        history: [],
+        comments: [],
       },
       {
         id: 102,
@@ -57,8 +167,12 @@ describe("GitHubGateway GraphQL source adapter", () => {
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/2",
         state: "OPEN",
+        createdAt: "2026-08-30T09:00:00.000Z",
+        authorLogin: "owner",
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
+        history: [],
+        comments: [],
       },
     ]);
     expect(cursors).toEqual([null, "cursor-2"]);
@@ -198,8 +312,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
         url: "https://github.com/octo/overflow/pull/4",
         state: "MERGED",
         mergedAt: "2026-09-04T12:00:00.000Z",
+        mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+        finalCommitAt: "2026-09-04T10:00:00.000Z",
         authorLogin: "contributor",
-        labels: ["delivered/6"],
       },
     ]);
     expect(query).toMatch(/closedByPullRequestsReferences\(first:\s*100/);
@@ -208,44 +323,53 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(askedForRestTimeline).toBe(false);
   });
 
-  it("collects labels after the first one hundred nodes for every closing pull request", async () => {
-    const labelRequests: Array<{ pullRequestNumber: number; cursor: string | null }> = [];
+  it("carries the exact merge commit OID and final PR commit time from GraphQL", async () => {
+    let query = "";
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as {
-          query: string;
-          variables: { cursor: string | null; pullRequestNumber?: number };
-        };
-
-        if (request.query.includes("query ClosingPullRequests")) {
-          return Response.json({
-            data: {
-              repository: {
-                issue: {
-                  closedByPullRequestsReferences: {
-                    nodes: [
-                      pullRequestNode(201, 4, firstLabelPage("pull-request-four")),
-                      pullRequestNode(202, 5, firstLabelPage("pull-request-five")),
-                    ],
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                  },
-                },
-              },
-            },
-          });
-        }
-
-        labelRequests.push({
-          pullRequestNumber: request.variables.pullRequestNumber ?? 0,
-          cursor: request.variables.cursor,
-        });
+        query = (JSON.parse(String(init?.body)) as { query: string }).query;
         return Response.json({
           data: {
             repository: {
-              pullRequest: {
-                labels: {
-                  nodes: [{ name: `required/${request.variables.pullRequestNumber}` }],
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [pullRequestNode(201, 4)],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const [pullRequest] = await gateway.getIssueClosingPullRequests(
+      { owner: "octo", name: "overflow" },
+      1,
+    );
+
+    expect(pullRequest).toMatchObject({
+      mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+      finalCommitAt: "2026-09-04T10:00:00.000Z",
+    });
+    expect(query).toMatch(/mergeCommit\s*\{\s*oid\s*\}/);
+    expect(query).toMatch(/commits\(last:\s*1\)/);
+  });
+
+  it("does not request mutable pull-request labels for settlement pricing", async () => {
+    const queries: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(request.query);
+        return Response.json({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [pullRequestNode(201, 4), pullRequestNode(202, 5)],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
               },
@@ -260,14 +384,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
       1,
     );
 
-    expect(pullRequests.map((pullRequest) => pullRequest.labels)).toEqual([
-      [...firstHundredLabels("pull-request-four"), "required/4"],
-      [...firstHundredLabels("pull-request-five"), "required/5"],
-    ]);
-    expect(labelRequests).toEqual([
-      { pullRequestNumber: 4, cursor: "pull-request-four-label-cursor" },
-      { pullRequestNumber: 5, cursor: "pull-request-five-label-cursor" },
-    ]);
+    expect(pullRequests).toHaveLength(2);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).not.toMatch(/pullRequest\(number:.*labels/s);
   });
 
   it("collects pull request reviews through cursor-paginated GraphQL", async () => {
@@ -327,18 +446,20 @@ function issueNode(
     body: "Issue body",
     url: `https://github.com/octo/overflow/issues/${number}`,
     state: "OPEN",
+    createdAt: "2026-08-30T09:00:00.000Z",
+    author: { login: "owner" },
     labels,
     assignees: { nodes: assignees },
+    timelineItems: {
+      nodes: [],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    },
   };
 }
 
 function pullRequestNode(
   id: number,
   number: number,
-  labels: LabelConnectionFixture = {
-    nodes: [{ name: "delivered/6" }],
-    pageInfo: { hasNextPage: false, endCursor: null },
-  },
 ) {
   return {
     databaseId: id,
@@ -348,8 +469,11 @@ function pullRequestNode(
     url: `https://github.com/octo/overflow/pull/${number}`,
     state: "MERGED",
     mergedAt: "2026-09-04T12:00:00.000Z",
+    mergeCommit: { oid: "0123456789abcdef0123456789abcdef01234567" },
+    commits: {
+      nodes: [{ commit: { committedDate: "2026-09-04T10:00:00.000Z" } }],
+    },
     author: { login: "contributor" },
-    labels,
   };
 }
 

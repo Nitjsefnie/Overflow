@@ -138,14 +138,10 @@ describe("reconcileRepository", () => {
     },
   );
 
-  it.each([
-    ["an inactive repository", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.active = false; }],
-    ["a banned sponsor", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.sponsor.enforcementState = "BANNED"; }],
-    ["a recalibrating sponsor", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.sponsor.enforcementState = "RECALIBRATING"; }],
-  ])("records a no-op run for %s without deleting historical settlements", async (_name, change) => {
+  it("records a no-op run for an inactive repository without deleting historical settlements", async () => {
     const dependencies = reconciliationDependencies();
     const repository = await dependencies.store.getRepository("repository");
-    change(repository!);
+    repository!.active = false;
     (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
 
     const summary = await reconcileRepository(dependencies, "repository");
@@ -155,6 +151,31 @@ describe("reconcileRepository", () => {
     expect(dependencies.store.materialize).not.toHaveBeenCalled();
     expect(dependencies.store.completeRun).toHaveBeenCalledWith("run-1");
   });
+
+  it.each(["BANNED", "RECALIBRATING"] as const)(
+    "rebuilds work that was eligible when merged after the sponsor becomes %s",
+    async (enforcementState) => {
+      const dependencies = reconciliationDependencies();
+      const repository = await dependencies.store.getRepository("repository");
+      repository!.sponsor.enforcementState = enforcementState;
+      repository!.sponsor.moderationEvents = [{
+        id: `event-${enforcementState}`,
+        priorState: "ACTIVE",
+        newState: enforcementState,
+        occurredAt: "2026-09-02T00:00:00.000Z",
+      }];
+      (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
+
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
+        adds: 1,
+        changes: 0,
+        removals: 0,
+      });
+      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
+        fold: expect.objectContaining({ settlements: [expect.objectContaining({ credits: 6 })] }),
+      }));
+    },
+  );
 
   it("reconciles exactly one owner/name repository or every active repository through the same path", async () => {
     const reconcile = vi.fn().mockResolvedValue({ repositoryId: "repository", adds: 0, changes: 0, removals: 0 });
@@ -214,7 +235,22 @@ function reconciliationDependencies(
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
-        labels: ["M"],
+        createdAt: "2026-09-01T08:00:00.000Z",
+        authorLogin: "sponsor",
+        labels: ["M", "delivered/6"],
+        claimAssigneeGitHubLogin: "contributor",
+        history: [
+          { kind: "LABELED", id: "opening-101", actorLogin: "sponsor", createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
+          { kind: "ASSIGNED", id: "assigned-101", actorLogin: "sponsor", createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
+          { kind: "LABELED", id: "actual-101", actorLogin: "sponsor", createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" },
+        ],
+        comments: [{
+          id: "comment-101",
+          databaseId: 301,
+          authorLogin: "sponsor",
+          body: "Settled as delivered/6.",
+          createdAt: "2026-09-01T11:30:00.000Z",
+        }],
       },
     ]),
     getIssueClosingPullRequests: vi.fn().mockResolvedValue([
@@ -226,8 +262,9 @@ function reconciliationDependencies(
         url: "https://github.com/octo/example/pull/11",
         state: "MERGED",
         mergedAt: "2026-09-01T12:00:00.000Z",
+        mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+        finalCommitAt: "2026-09-01T10:00:00.000Z",
         authorLogin: "contributor",
-        labels: ["delivered/6"],
       },
     ]),
     getPullRequestReviews: vi.fn().mockResolvedValue([]),
@@ -236,6 +273,7 @@ function reconciliationDependencies(
   };
   const failRun = vi.fn().mockResolvedValue(undefined);
   const store = {
+    withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),
     getRepository: vi.fn().mockResolvedValue({
       id: "repository",
       ownerName: "octo/example",
@@ -249,7 +287,6 @@ function reconciliationDependencies(
       },
     }),
     getGitHubAccessToken: vi.fn().mockResolvedValue("token"),
-    listExistingIssues: vi.fn().mockResolvedValue([]),
     findUsersByGitHubLogins: vi.fn().mockResolvedValue([
       { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
       { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE" },
@@ -310,8 +347,22 @@ function reconciliationIssue(input: { id: number; number: number }) {
     body: `Issue ${input.number} body`,
     url: `https://github.com/octo/example/issues/${input.number}`,
     state: "CLOSED" as const,
-    labels: ["M"],
-    claimAssigneeGitHubLogin: null,
+    createdAt: "2026-09-01T08:00:00.000Z",
+    authorLogin: "sponsor",
+    labels: ["M", "delivered/6"],
+    claimAssigneeGitHubLogin: "contributor",
+    history: [
+      { kind: "LABELED" as const, id: `opening-${input.id}`, actorLogin: "sponsor", createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
+      { kind: "ASSIGNED" as const, id: `assigned-${input.id}`, actorLogin: "sponsor", createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
+      { kind: "LABELED" as const, id: `actual-${input.id}`, actorLogin: "sponsor", createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" },
+    ],
+    comments: [{
+      id: `comment-${input.id}`,
+      databaseId: input.id + 10_000,
+      authorLogin: "sponsor",
+      body: "Settled as delivered/6.",
+      createdAt: "2026-09-01T11:30:00.000Z",
+    }],
   };
 }
 
@@ -324,7 +375,8 @@ function reconciliationPullRequest(input: { id: number; number: number }) {
     url: `https://github.com/octo/example/pull/${input.number}`,
     state: "MERGED" as const,
     mergedAt: "2026-09-01T12:00:00.000Z",
+    mergeCommitOid: `${input.id.toString(16).padStart(40, "0")}`,
+    finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: "contributor",
-    labels: ["delivered/6"],
   };
 }

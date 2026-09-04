@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import type { UserRole } from "@/lib/db/types";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 export type MemberPageSession = {
   user: {
@@ -12,18 +13,25 @@ export type MemberPageSession = {
 export async function requireMemberPageSession(): Promise<MemberPageSession> {
   const { auth } = await import("@/auth");
   const session = await auth();
-  const user = session?.user as { id?: unknown; role?: unknown; name?: unknown; email?: unknown } | undefined;
-  if (
-    typeof user?.id !== "string" ||
-    (user.role !== "MEMBER" && user.role !== "MODERATOR")
-  ) {
+  const user = session?.user as { id?: unknown; name?: unknown; email?: unknown } | undefined;
+  if (typeof user?.id !== "string") {
+    redirect("/");
+  }
+
+  let currentRole: UserRole | null;
+  try {
+    currentRole = await getCurrentUserRole(user.id);
+  } catch {
+    redirect("/");
+  }
+  if (currentRole === null) {
     redirect("/");
   }
 
   return {
     user: {
       id: user.id,
-      role: user.role,
+      role: currentRole,
       name: displayName(user.name, user.email),
     },
   };
