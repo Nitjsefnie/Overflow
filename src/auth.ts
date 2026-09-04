@@ -6,7 +6,7 @@ import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { encryptToken } from "@/lib/security/token-cipher";
 
-export const githubOAuthScope = "read:user public_repo";
+export const githubOAuthScope = "public_repo";
 
 type PersistedGitHubUser = {
   id: string;
