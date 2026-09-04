@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Overflow MVP design</title>
+  <style>
+    :root{--paper:#f3f0e7;--ink:#181914;--muted:#686b5e;--line:#c9c8bb;--lime:#b9f227;--coral:#ff765f;--white:#fffdf6;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--sans:Inter,ui-sans-serif,system-ui,sans-serif;--serif:Iowan Old Style,Georgia,serif}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.62 var(--sans)}
+    .shell{max-width:1180px;margin:auto;padding:44px 28px 100px}.top{display:grid;grid-template-columns:1fr 310px;gap:36px;align-items:end;border-bottom:2px solid var(--ink);padding-bottom:30px}
+    .eyebrow,.tag{font:700 11px/1.2 var(--mono);letter-spacing:.12em;text-transform:uppercase}.eyebrow{color:#5f6f19}.tag{display:inline-block;background:var(--ink);color:var(--paper);padding:7px 9px;border-radius:3px}
+    h1{font:500 clamp(44px,8vw,88px)/.93 var(--serif);letter-spacing:-.05em;margin:14px 0 20px;max-width:800px}h1 i{color:#6c7d20;font-weight:500}
+    .lede{font-size:19px;max-width:710px}.facts{display:grid;gap:10px}.fact{border:1px solid var(--ink);background:var(--white);padding:13px 15px}.fact b{display:block;font:700 11px var(--mono);text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+    nav{position:sticky;top:0;z-index:2;background:rgba(243,240,231,.94);backdrop-filter:blur(10px);display:flex;gap:8px;overflow:auto;padding:14px 0;border-bottom:1px solid var(--line)}nav a{color:var(--ink);text-decoration:none;font:700 12px var(--mono);white-space:nowrap;border:1px solid var(--line);padding:7px 10px;background:var(--white)}
+    section{scroll-margin-top:72px;padding:54px 0;border-bottom:1px solid var(--line)}.head{display:grid;grid-template-columns:80px 1fr;gap:24px;margin-bottom:24px}.num{font:700 12px var(--mono);color:#6c7d20}.head h2{font:500 34px/1.1 var(--serif);margin:0}.head p{grid-column:2;margin:8px 0 0;color:var(--muted);max-width:760px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:var(--white);border:1px solid var(--ink);padding:20px}.card h3{font:600 20px var(--serif);margin:0 0 9px}.card p,.card ul{margin:0}.card ul{padding-left:18px}.wide{grid-column:span 2}
+    table{width:100%;border-collapse:collapse;background:var(--white);font-size:13px}th,td{padding:12px 14px;text-align:left;border:1px solid var(--line);vertical-align:top}th{background:var(--ink);color:var(--paper);font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.05em}
+    code,pre{font-family:var(--mono)}code{background:#e2e0d5;padding:2px 5px;border-radius:3px}pre{background:var(--ink);color:#f4f1e7;padding:20px;overflow:auto;border-left:7px solid var(--lime);font-size:13px}
+    .rule{display:grid;grid-template-columns:170px 1fr;border:1px solid var(--ink);background:var(--white);margin:10px 0}.rule b{padding:14px;background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px}.rule span{padding:14px}.warn{border-left:8px solid var(--coral)}.ok{border-left:8px solid var(--lime)}
+    .review{display:flex;gap:8px;margin-top:24px}.review button{border:1px solid var(--ink);background:var(--white);padding:9px 12px;font:700 11px var(--mono);cursor:pointer}.review button[data-choice=approve]{background:var(--lime)}.review output{padding:8px;color:var(--muted);font:12px var(--mono)}
+    footer{padding-top:40px;color:var(--muted);font-size:13px}.pill{display:inline-block;padding:2px 7px;border-radius:20px;background:#e1e7ca;font:700 11px var(--mono)}
+    @media(max-width:820px){.top{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.wide{grid-column:auto}.head{grid-template-columns:42px 1fr}.rule{grid-template-columns:1fr}.top{align-items:start}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div><div class="eyebrow">Design spec · 04 September 2026</div><h1>Turn spare capacity into <i>mutual credit.</i></h1><p class="lede">Overflow coordinates GitHub work between peers. Merged pull requests create zero-sum credit; ratings follow difficulty, review friction lowers the award, self-work never enters the ledger, and miscalibration escalates through an auditable ladder.</p></div>
+    <div class="facts"><div class="fact"><b>Release</b>MVP / one web service</div><div class="fact"><b>System of record</b>GitHub events + PostgreSQL ledger</div><div class="fact"><b>Stack</b>Next.js 16 · TypeScript · PostgreSQL</div><div class="fact"><b>Deferred</b>Agent execution and token metering</div></div>
+  </header>
+  <nav aria-label="Contents"><a href="#contract">Contract</a><a href="#flow">Flow</a><a href="#rating">Rating</a><a href="#moderation">Moderation</a><a href="#data">Data</a><a href="#surface">Surface</a><a href="#security">Security</a><a href="#verify">Verify</a></nav>
+
+  <section id="contract"><div class="head"><span class="num">01</span><div><h2>Product contract</h2><p>A reciprocal work exchange, not a marketplace and not a token meter.</p></div></div>
+    <div class="grid"><article class="card wide"><h3>The invariant</h3><p>Every posted award is one balanced transaction: the contributor receives <code>+N</code>, the repository sponsor receives <code>−N</code>. The sum of all accounts remains zero.</p></article><article class="card ok"><h3>Self-work</h3><p>Recorded as evidence, worth zero, and emits no ledger entries—even if repository ownership changes later.</p></article><article class="card"><h3>Member</h3><p>Signs in with GitHub, browses eligible work, contributes, and can open an audit.</p></article><article class="card"><h3>Sponsor</h3><p>The one accountable member who explicitly registers a repository and receives its debits.</p></article><article class="card"><h3>Moderator</h3><p>Resolves calibration evidence and advances warnings, recalibration, or bans.</p></article></div>
+    <div class="review"><button data-choice="approve" data-section="contract">Approve section</button><button data-choice="annotate" data-section="contract">Copy review prompt</button><output></output></div>
+  </section>
+
+  <section id="flow"><div class="head"><span class="num">02</span><div><h2>GitHub flow</h2><p>Only specifically registered repositories participate.</p></div></div>
+    <div class="rule"><b>1 · SIGN IN</b><span>Auth.js GitHub OAuth persists the member identity and an AES-256-GCM encrypted access token.</span></div>
+    <div class="rule"><b>2 · REGISTER</b><span>The member submits <code>owner/name</code> or a GitHub URL. Overflow verifies admin permission, creates the webhook and ten <code>overflow:1..10</code> labels, then imports that repository's eligible issues—nothing else.</span></div>
+    <div class="rule"><b>3 · CONTRIBUTE</b><span>A registered member opens a PR that closes exactly one eligible issue. GitHub remains the collaboration interface.</span></div>
+    <div class="rule"><b>4 · MERGE</b><span>A signed webhook triggers idempotent evaluation. Unregistered authors become unclaimed records; banned accounts and inactive repositories cannot post credit.</span></div>
+  </section>
+
+  <section id="rating"><div class="head"><span class="num">03</span><div><h2>Difficulty, not churn</h2><p>The issue label is the proposal; a PR label can recalibrate it after the diff is understood.</p></div></div>
+    <pre>rated difficulty = PR overflow label, otherwise issue overflow label
+review rounds     = unique CHANGES_REQUESTED review IDs before merge
+awarded credits   = max(0, rated difficulty - review rounds)</pre>
+    <div class="grid"><article class="card"><h3>Included evidence</h3><ul><li>Issue intent and constraints</li><li>PR diff and resulting behavior</li><li>Difficulty labels</li><li>Changes-requested reviews</li></ul></article><article class="card warn"><h3>Never scored</h3><ul><li>Lines added or deleted</li><li>File or commit count</li><li>Elapsed time</li><li>Generated churn</li></ul></article><article class="card"><h3>Ambiguity</h3><p>Multiple difficulty labels or multiple eligible closing issues create <code>NEEDS_AUDIT</code>; the service never guesses.</p></article></div>
+  </section>
+
+  <section id="moderation"><div class="head"><span class="num">04</span><div><h2>Graduated miscalibration ladder</h2><p>All changes are compensating transactions and append-only moderation events.</p></div></div>
+    <table><thead><tr><th>Stage</th><th>Trigger</th><th>Ledger action</th><th>Participation action</th></tr></thead><tbody>
+      <tr><td><span class="pill">AUDIT</span></td><td>A member supplies a concrete calibration concern.</td><td>Reverse the disputed award while evidence is reviewed.</td><td>None.</td></tr>
+      <tr><td><span class="pill">WARN</span></td><td>First substantiated case.</td><td>Post the moderator-corrected award.</td><td>Warning and incident count.</td></tr>
+      <tr><td><span class="pill">RECALIBRATE</span></td><td>Second substantiated case.</td><td>Correct this award and expose recent awards for review.</td><td>Deactivate sponsored repositories until closed.</td></tr>
+      <tr><td><span class="pill">BAN</span></td><td>Third substantiated case.</td><td>No new awards.</td><td>Block registration and keep sponsored repositories inactive.</td></tr>
+    </tbody></table>
+  </section>
+
+  <section id="data"><div class="head"><span class="num">05</span><div><h2>Data and transaction boundaries</h2><p>External IDs are unique; ledger rows never mutate.</p></div></div>
+    <div class="grid"><article class="card"><h3>Identity</h3><p><code>users</code><br><code>registered_repositories</code></p></article><article class="card"><h3>GitHub evidence</h3><p><code>issues</code><br><code>review_rounds</code><br><code>webhook_deliveries</code></p></article><article class="card"><h3>Credit</h3><p><code>contributions</code><br><code>ledger_transactions</code><br><code>ledger_entries</code></p></article><article class="card"><h3>Governance</h3><p><code>calibration_audits</code><br><code>moderation_events</code></p></article><article class="card wide"><h3>Evidence retention</h3><p>Store GitHub URLs, text metadata, labels, merge SHA and a SHA-256 fingerprint of the fetched diff. Fetch source patches on demand; do not duplicate repository code in the database.</p></article></div>
+  </section>
+
+  <section id="surface"><div class="head"><span class="num">06</span><div><h2>Application surface</h2><p>A warm, dense exchange ledger: infrastructure for trusted peers, not gig-work chrome.</p></div></div>
+    <table><thead><tr><th>Route</th><th>Purpose</th></tr></thead><tbody><tr><td><code>/</code></td><td>Product story and GitHub sign-in.</td></tr><tr><td><code>/dashboard</code></td><td>Balance, earned/given, open work, repositories, activity and enforcement notices.</td></tr><tr><td><code>/issues</code></td><td>Filterable eligible work by sponsor and difficulty.</td></tr><tr><td><code>/repositories/new</code></td><td>Explicit one-repository registration.</td></tr><tr><td><code>/contributions/:id</code></td><td>Rating evidence, review deduction, entries and audit action.</td></tr><tr><td><code>/moderation</code></td><td>Moderator-only audit queue, recalibration tools and history.</td></tr></tbody></table>
+  </section>
+
+  <section id="security"><div class="head"><span class="num">07</span><div><h2>Security and failures</h2><p>Authenticate at the edge, authorize at each mutation, and preserve failed delivery evidence.</p></div></div>
+    <div class="grid"><article class="card"><h3>Webhook</h3><p>Verify raw-body HMAC with constant-time comparison before JSON parsing. Deduplicate on <code>X-GitHub-Delivery</code>.</p></article><article class="card"><h3>Tokens</h3><p>Encrypt with AES-256-GCM and a base64 32-byte environment key. Never log plaintext.</p></article><article class="card"><h3>Database</h3><p>Parameterized SQL plus transactions for state transitions, contributions and balanced entries.</p></article><article class="card wide"><h3>Registration rollback</h3><p>When GitHub setup fails, do not leave a local active repository. When a later local write fails after webhook creation, attempt external webhook cleanup and surface the recoverable error.</p></article></div>
+  </section>
+
+  <section id="verify"><div class="head"><span class="num">08</span><div><h2>Definition of done</h2><p>Behavior is test-first; integration is independently reviewed.</p></div></div>
+    <div class="rule"><b>UNIT</b><span>Difficulty, award, self-work, balance, encryption, signature, parsing and enforcement transitions.</span></div><div class="rule"><b>SERVICE</b><span>Registration, permissions, idempotency, issue sync, review dedupe, merge, correction, unclaimed work and every audit decision.</span></div><div class="rule"><b>UI</b><span>Landing, dashboard summaries, issue cards, registration errors and moderator controls.</span></div><div class="rule"><b>GATES</b><span><code>pnpm test</code>, <code>pnpm lint</code>, <code>pnpm typecheck</code> and <code>pnpm build</code> all pass from a clean checkout.</span></div>
+    <div class="review"><button data-choice="approve" data-section="full-spec">Approve full spec</button><button data-choice="annotate" data-section="full-spec">Copy review prompt</button><output></output></div>
+  </section>
+  <footer>Overflow MVP design · source companion: <code>2026-09-04-overflow-mvp-design.md</code> · generated 2026-09-04</footer>
+</main>
+<script>
+  document.querySelectorAll('.review button').forEach((button)=>button.addEventListener('click',async()=>{const section=button.dataset.section;const out=button.parentElement.querySelector('output');if(button.dataset.choice==='approve'){localStorage.setItem(`overflow-review-${section}`,'approved');out.textContent='Approved in this browser.';return}const prompt=`Review the Overflow MVP design section "${section}". List the exact change, why it is needed, and any acceptance criterion it changes.`;await navigator.clipboard.writeText(prompt);out.textContent='Review prompt copied.'}))
+</script>
+</body>
+</html>
