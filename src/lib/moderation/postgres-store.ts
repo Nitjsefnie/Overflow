@@ -323,28 +323,7 @@ export class PostgresModerationStore implements ModerationStore {
     sampleStartedAt: string;
     sampleEndedAt: string;
   }): Promise<CalibrationPairRow[]> {
-    if (input.repositoryId === null) {
-      return this.sql<CalibrationPairRow[]>`
-        select
-          repositories.github_repository_id,
-          issues.github_issue_id,
-          pull_requests.github_pull_request_id,
-          pull_requests.proof_sha256,
-          self_work_calibrations.opening_comparison_points as offered_difficulty,
-          self_work_calibrations.actual_points as settled_difficulty
-        from self_work_calibrations
-        join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
-        join issues on issues.id = self_work_calibrations.issue_id
-        join registered_repositories as repositories on repositories.id = issues.repository_id
-        where self_work_calibrations.user_id = ${input.targetAccountId}
-          and self_work_calibrations.actual_points is not null
-          and pull_requests.proof_sha256 is not null
-          and self_work_calibrations.created_at >= ${input.sampleStartedAt}
-          and self_work_calibrations.created_at < ${input.sampleEndedAt}
-        order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
-      `;
-    }
-
+    const repositoryPredicate = this.repositoryPredicate(input.repositoryId);
     return this.sql<CalibrationPairRow[]>`
       select
         repositories.github_repository_id,
@@ -358,7 +337,7 @@ export class PostgresModerationStore implements ModerationStore {
       join issues on issues.id = self_work_calibrations.issue_id
       join registered_repositories as repositories on repositories.id = issues.repository_id
       where self_work_calibrations.user_id = ${input.targetAccountId}
-        and repositories.id = ${input.repositoryId}
+        ${repositoryPredicate}
         and self_work_calibrations.actual_points is not null
         and pull_requests.proof_sha256 is not null
         and self_work_calibrations.created_at >= ${input.sampleStartedAt}
@@ -373,30 +352,7 @@ export class PostgresModerationStore implements ModerationStore {
     sampleStartedAt: string;
     sampleEndedAt: string;
   }): Promise<CalibrationPairRow[]> {
-    if (input.repositoryId === null) {
-      return this.sql<CalibrationPairRow[]>`
-        select
-          repositories.github_repository_id,
-          issues.github_issue_id,
-          pull_requests.github_pull_request_id,
-          settlements.proof_sha256,
-          settlements.opening_comparison_points as offered_difficulty,
-          settlements.settled_points as settled_difficulty
-        from settlements
-        join pull_requests on pull_requests.id = settlements.pull_request_id
-        join issues on issues.id = settlements.issue_id
-        join registered_repositories as repositories on repositories.id = issues.repository_id
-        where settlements.debtor_id = ${input.targetAccountId}
-          and settlements.creditor_id is not null
-          and settlements.creditor_id <> ${input.targetAccountId}
-          and settlements.status = ${"SETTLED"}
-          and settlements.settled_points is not null
-          and settlements.created_at >= ${input.sampleStartedAt}
-          and settlements.created_at < ${input.sampleEndedAt}
-        order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
-      `;
-    }
-
+    const repositoryPredicate = this.repositoryPredicate(input.repositoryId);
     return this.sql<CalibrationPairRow[]>`
       select
         repositories.github_repository_id,
@@ -410,7 +366,7 @@ export class PostgresModerationStore implements ModerationStore {
       join issues on issues.id = settlements.issue_id
       join registered_repositories as repositories on repositories.id = issues.repository_id
       where settlements.debtor_id = ${input.targetAccountId}
-        and repositories.id = ${input.repositoryId}
+        ${repositoryPredicate}
         and settlements.creditor_id is not null
         and settlements.creditor_id <> ${input.targetAccountId}
         and settlements.status = ${"SETTLED"}
@@ -419,6 +375,10 @@ export class PostgresModerationStore implements ModerationStore {
         and settlements.created_at < ${input.sampleEndedAt}
       order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
     `;
+  }
+
+  private repositoryPredicate(repositoryId: string | null) {
+    return repositoryId === null ? this.sql`` : this.sql`and repositories.id = ${repositoryId}`;
   }
 }
 

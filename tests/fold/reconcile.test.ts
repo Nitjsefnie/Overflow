@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   reconcileRepository,
+  type ReconciliationDeltas,
   type ReconciliationDependencies,
 } from "@/lib/fold/reconcile";
+import type { FoldResult } from "@/lib/fold/repository-fold";
+import type { GitHubRepositoryReference } from "@/lib/github/types";
 import { runReconciliationCli } from "../../scripts/reconcile";
 
 describe("reconcileRepository", () => {
@@ -41,15 +44,65 @@ describe("reconcileRepository", () => {
   });
 
   it("converges when a full reconciliation is repeated after missed or reordered webhook deliveries", async () => {
-    const materialize = vi.fn().mockResolvedValue({ adds: 0, changes: 0, removals: 0 });
-    const dependencies = reconciliationDependencies({ materialize });
+    const materializer = new StatefulSettlementMaterializer(new Map([
+      [101, "stale settlement for the first authoritative issue"],
+      [999, "obsolete settlement from a missed webhook delivery"],
+    ]));
+    const snapshots = [
+      {
+        issues: [
+          reconciliationIssue({ id: 101, number: 1 }),
+          reconciliationIssue({ id: 102, number: 2 }),
+        ],
+        closingPullRequests: new Map([
+          [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
+          [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
+        ]),
+      },
+      {
+        issues: [
+          reconciliationIssue({ id: 102, number: 2 }),
+          reconciliationIssue({ id: 101, number: 1 }),
+        ],
+        closingPullRequests: new Map([
+          [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
+          [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
+        ]),
+      },
+    ];
+    let snapshotIndex = 0;
+    let currentSnapshot = snapshots[0]!;
+    const materialize = vi.fn((input: { repositoryId: string; runId: string; fold: FoldResult }) => (
+      materializer.materialize(input)
+    ));
+    const dependencies = reconciliationDependencies({
+      materialize,
+      github: {
+        listIssues: vi.fn(async () => {
+          const snapshot = snapshots[snapshotIndex];
+          snapshotIndex += 1;
+          if (snapshot === undefined) {
+            throw new Error("No authoritative reconciliation snapshot remained.");
+          }
+          currentSnapshot = snapshot;
+          return snapshot.issues;
+        }),
+        getIssueClosingPullRequests: vi.fn(async (
+          _repository: GitHubRepositoryReference,
+          issueNumber: number,
+        ) => currentSnapshot.closingPullRequests.get(issueNumber) ?? []),
+      },
+    });
 
     const first = await reconcileRepository(dependencies, "repository");
+    const canonicalStateAfterFirstRun = materializer.snapshot();
     const second = await reconcileRepository(dependencies, "repository");
 
-    expect(first).toMatchObject({ adds: 0, changes: 0, removals: 0 });
+    expect(first).toMatchObject({ adds: 1, changes: 1, removals: 1 });
+    expect(canonicalStateAfterFirstRun.map(([githubIssueId]) => githubIssueId)).toEqual([101, 102]);
     expect(second).toMatchObject({ adds: 0, changes: 0, removals: 0 });
     expect(materialize.mock.calls[0]?.[0].fold).toEqual(materialize.mock.calls[1]?.[0].fold);
+    expect(materializer.snapshot()).toEqual(canonicalStateAfterFirstRun);
   });
 
   it("records a sanitized failed reconciliation run instead of an upstream error message", async () => {
@@ -213,5 +266,65 @@ function reconciliationDependencies(
       failRun: ReturnType<typeof vi.fn>;
       completeRun: ReturnType<typeof vi.fn>;
     };
+  };
+}
+
+class StatefulSettlementMaterializer {
+  public constructor(private state: Map<number, string>) {}
+
+  public async materialize(input: { fold: FoldResult }): Promise<ReconciliationDeltas> {
+    const desired = new Map(
+      input.fold.settlements.map((settlement) => [settlement.githubIssueId, JSON.stringify(settlement)]),
+    );
+    let adds = 0;
+    let changes = 0;
+    let removals = 0;
+
+    for (const [githubIssueId, desiredState] of desired) {
+      const existingState = this.state.get(githubIssueId);
+      if (existingState === undefined) {
+        adds += 1;
+      } else if (existingState !== desiredState) {
+        changes += 1;
+      }
+    }
+    for (const githubIssueId of this.state.keys()) {
+      if (!desired.has(githubIssueId)) {
+        removals += 1;
+      }
+    }
+    this.state = desired;
+    return { adds, changes, removals };
+  }
+
+  public snapshot(): Array<[number, string]> {
+    return [...this.state.entries()].sort(([left], [right]) => left - right);
+  }
+}
+
+function reconciliationIssue(input: { id: number; number: number }) {
+  return {
+    id: input.id,
+    number: input.number,
+    title: `Issue ${input.number}`,
+    body: `Issue ${input.number} body`,
+    url: `https://github.com/octo/example/issues/${input.number}`,
+    state: "CLOSED" as const,
+    labels: ["M"],
+    claimAssigneeGitHubLogin: null,
+  };
+}
+
+function reconciliationPullRequest(input: { id: number; number: number }) {
+  return {
+    id: input.id,
+    number: input.number,
+    title: `Pull request ${input.number}`,
+    body: `Pull request ${input.number} body`,
+    url: `https://github.com/octo/example/pull/${input.number}`,
+    state: "MERGED" as const,
+    mergedAt: "2026-09-01T12:00:00.000Z",
+    authorLogin: "contributor",
+    labels: ["delivered/6"],
   };
 }

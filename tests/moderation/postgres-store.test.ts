@@ -224,6 +224,55 @@ describe("PostgreSQL account moderation transitions", () => {
     );
   }, 60_000);
 
+  it("uses identical pair mapping for account-wide and repository-scoped calibration cohorts", async () => {
+    const targetId = await insertUser("MEMBER");
+    const primaryRepositoryId = await insertRepository(targetId);
+    const secondaryRepositoryId = await insertRepository(targetId);
+    const primaryPairs = await insertCalibrationPairs({ targetId, repositoryId: primaryRepositoryId, count: 1 });
+    const store = new PostgresModerationStore(sql);
+    const sampleStartedAt = "2020-01-01T00:00:00.000Z";
+    const sampleEndedAt = "2030-01-01T00:00:00.000Z";
+
+    const scopedBeforeSecondaryMaterialization = await store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: primaryRepositoryId,
+      sampleStartedAt,
+      sampleEndedAt,
+    });
+    const accountWideBeforeSecondaryMaterialization = await store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: null,
+      sampleStartedAt,
+      sampleEndedAt,
+    });
+
+    expect(scopedBeforeSecondaryMaterialization).toEqual(primaryPairs);
+    expect(accountWideBeforeSecondaryMaterialization).toEqual(primaryPairs);
+
+    const secondaryPairs = await insertCalibrationPairs({ targetId, repositoryId: secondaryRepositoryId, count: 1 });
+    const accountWide = await store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: null,
+      sampleStartedAt,
+      sampleEndedAt,
+    });
+    const scopedAfterSecondaryMaterialization = await store.loadCalibrationCohort({
+      targetAccountId: targetId,
+      repositoryId: primaryRepositoryId,
+      sampleStartedAt,
+      sampleEndedAt,
+    });
+
+    expect(accountWide).toEqual({
+      selfWorkPairs: sortCalibrationPairs([...primaryPairs.selfWorkPairs, ...secondaryPairs.selfWorkPairs]),
+      outsiderSettlementPairs: sortCalibrationPairs([
+        ...primaryPairs.outsiderSettlementPairs,
+        ...secondaryPairs.outsiderSettlementPairs,
+      ]),
+    });
+    expect(scopedAfterSecondaryMaterialization).toEqual(primaryPairs);
+  });
+
   it.each([
     ["WARNED", true],
     ["UNDER_AUDIT", true],
@@ -429,6 +478,14 @@ async function repositoryStates(targetId: string): Promise<Array<{ id: string; a
 
 function expectedRepositoryStates(states: Array<{ id: string; active: boolean }>) {
   return [...states].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function sortCalibrationPairs(pairs: readonly CalibrationPair[]): CalibrationPair[] {
+  return [...pairs].sort((left, right) => (
+    left.githubRepositoryId - right.githubRepositoryId
+    || left.githubIssueId - right.githubIssueId
+    || left.githubPullRequestId - right.githubPullRequestId
+  ));
 }
 
 async function githubRepositoryIdFor(repositoryId: string): Promise<number> {

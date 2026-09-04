@@ -6,7 +6,10 @@ import { closeSql, getSql, withTransaction } from "@/lib/db/client";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
+import { encryptToken } from "@/lib/security/token-cipher";
 
 let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
 let sql: Sql;
@@ -619,6 +622,145 @@ describe("initial PostgreSQL materialization", () => {
     expect(removalChange).toEqual({ change_kind: "REMOVE", pull_request_id: null });
   });
 
+  it("converges real PostgreSQL materialization across reordered GraphQL snapshots", async () => {
+    const tokenEncryptionKey = Buffer.alloc(32, 7).toString("base64url");
+    const sponsorLogin = `reconciliation-sponsor-${nextExternalId()}`;
+    const contributorLogin = `reconciliation-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    await sql`
+      update users
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("reconciliation-token", tokenEncryptionKey), "utf8")}
+      where id = ${sponsorId}
+    `;
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const changedIssueId = nextExternalId();
+    const changedPullRequestId = nextExternalId();
+    const obsoleteIssueId = nextExternalId();
+    const obsoletePullRequestId = nextExternalId();
+    const addedIssueId = nextExternalId();
+    const addedPullRequestId = nextExternalId();
+    const staleSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/5",
+      existingIssues: [],
+      githubIssueId: changedIssueId,
+      githubPullRequestId: changedPullRequestId,
+    });
+    const obsoleteIssue = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/5",
+      existingIssues: [],
+      githubIssueId: obsoleteIssueId,
+      githubPullRequestId: obsoletePullRequestId,
+    }).issues[0]!;
+    obsoleteIssue.number = 2;
+    obsoleteIssue.title = "An obsolete materialized issue";
+    obsoleteIssue.url = "https://github.com/example/materialized/issues/2";
+    obsoleteIssue.closingPullRequests[0]!.number = 12;
+    obsoleteIssue.closingPullRequests[0]!.title = "An obsolete materialized pull request";
+    obsoleteIssue.closingPullRequests[0]!.url = "https://github.com/example/materialized/pull/12";
+    staleSnapshot.issues.push(obsoleteIssue);
+
+    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const staleRunId = await store.beginRun(repositoryId);
+    await expect(store.materialize({
+      repositoryId,
+      runId: staleRunId,
+      fold: foldRepository(staleSnapshot),
+    })).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
+
+    const snapshots: AuthoritativeReconciliationSnapshot[] = [
+      {
+        issues: [
+          authoritativeIssue({ id: changedIssueId, number: 1 }),
+          authoritativeIssue({ id: addedIssueId, number: 3 }),
+        ],
+        closingPullRequests: new Map([
+          [1, [authoritativePullRequest({
+            id: changedPullRequestId,
+            number: 11,
+            actualLabel: "delivered/6",
+            authorLogin: contributorLogin,
+          })]],
+          [3, [authoritativePullRequest({
+            id: addedPullRequestId,
+            number: 13,
+            actualLabel: "delivered/6",
+            authorLogin: contributorLogin,
+          })]],
+        ]),
+      },
+      {
+        issues: [
+          authoritativeIssue({ id: addedIssueId, number: 3 }),
+          authoritativeIssue({ id: changedIssueId, number: 1 }),
+        ],
+        closingPullRequests: new Map([
+          [3, [authoritativePullRequest({
+            id: addedPullRequestId,
+            number: 13,
+            actualLabel: "delivered/6",
+            authorLogin: contributorLogin,
+          })]],
+          [1, [authoritativePullRequest({
+            id: changedPullRequestId,
+            number: 11,
+            actualLabel: "delivered/6",
+            authorLogin: contributorLogin,
+          })]],
+        ]),
+      },
+    ];
+    let snapshotIndex = 0;
+    let currentSnapshot = snapshots[0]!;
+    const github: ReconciliationGateway = {
+      listIssues: async () => {
+        const snapshot = snapshots[snapshotIndex];
+        snapshotIndex += 1;
+        if (snapshot === undefined) {
+          throw new Error("No authoritative reconciliation snapshot remained.");
+        }
+        currentSnapshot = snapshot;
+        return snapshot.issues;
+      },
+      getIssueClosingPullRequests: async (_repository, issueNumber) => (
+        currentSnapshot.closingPullRequests.get(issueNumber) ?? []
+      ),
+      getPullRequestReviews: async () => [],
+      getPullRequestDiff: async (_repository, pullRequestNumber) => (
+        pullRequestNumber === 11 ? "materialized diff" : "added materialized diff"
+      ),
+    };
+
+    const first = await reconcileRepository({ store, github }, repositoryId);
+    const canonicalStateAfterFirstRun = await reconciliationMaterializationState(repositoryId);
+    const second = await reconcileRepository({ store, github }, repositoryId);
+
+    expect(first).toMatchObject({ adds: 1, changes: 1, removals: 1 });
+    expect(canonicalStateAfterFirstRun.issues.map((issue) => Number(issue.github_issue_id))).toEqual([
+      changedIssueId,
+      addedIssueId,
+    ]);
+    expect(second).toMatchObject({ adds: 0, changes: 0, removals: 0 });
+    await expect(reconciliationMaterializationState(repositoryId)).resolves.toEqual(canonicalStateAfterFirstRun);
+  });
+
   it("records deterministic add, change, and removal provenance for self-work and hand closures", async () => {
     const selfWorkSponsorLogin = `self-work-sponsor-${nextExternalId()}`;
     const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
@@ -1114,6 +1256,144 @@ function materializationSnapshot(input: {
       },
     ],
   };
+}
+
+type AuthoritativeReconciliationSnapshot = {
+  issues: GitHubIssue[];
+  closingPullRequests: Map<number, GitHubPullRequest[]>;
+};
+
+function authoritativeIssue(input: { id: number; number: number }): GitHubIssue {
+  return {
+    id: input.id,
+    number: input.number,
+    title: `Reconciled issue ${input.number}`,
+    body: `Reconciled issue ${input.number} body`,
+    url: `https://github.com/example/materialized/issues/${input.number}`,
+    state: "CLOSED",
+    labels: ["M"],
+    claimAssigneeGitHubLogin: null,
+  };
+}
+
+function authoritativePullRequest(input: {
+  id: number;
+  number: number;
+  actualLabel: string;
+  authorLogin: string;
+}): GitHubPullRequest {
+  return {
+    id: input.id,
+    number: input.number,
+    title: `Reconciled pull request ${input.number}`,
+    body: `Reconciled pull request ${input.number} body`,
+    url: `https://github.com/example/materialized/pull/${input.number}`,
+    state: "MERGED",
+    mergedAt: "2026-09-01T12:00:00.000Z",
+    authorLogin: input.authorLogin,
+    labels: [input.actualLabel],
+  };
+}
+
+async function reconciliationMaterializationState(repositoryId: string) {
+  const [issues, pullRequests, settlements, reviewRounds, issueLinks, unwritableClosures] = await Promise.all([
+    sql<{
+      github_issue_id: number | string;
+      issue_number: number | string;
+      title: string;
+      state: string;
+      opening_label: string;
+      opening_comparison_points: number | string;
+      opening_reserve_points: number | string;
+    }[]>`
+      select
+        github_issue_id, issue_number, title, state, opening_label,
+        opening_comparison_points, opening_reserve_points
+      from issues
+      where repository_id = ${repositoryId}
+      order by github_issue_id
+    `,
+    sql<{
+      github_pull_request_id: number | string;
+      pull_request_number: number | string;
+      title: string;
+      state: string;
+      actual_label: string | null;
+      actual_points: number | string | null;
+      proof_sha256: string | null;
+    }[]>`
+      select
+        github_pull_request_id, pull_request_number, title, state,
+        actual_label, actual_points, proof_sha256
+      from pull_requests
+      where repository_id = ${repositoryId}
+      order by github_pull_request_id
+    `,
+    sql<{
+      github_issue_id: number | string;
+      github_pull_request_id: number | string;
+      creditor_id: string | null;
+      creditor_github_login: string | null;
+      debtor_id: string;
+      opening_comparison_points: number | string;
+      settled_points: number | string | null;
+      review_rounds: number | string;
+      credits: number | string;
+      proof_sha256: string;
+      status: string;
+    }[]>`
+      select
+        issues.github_issue_id,
+        pull_requests.github_pull_request_id,
+        settlements.creditor_id,
+        settlements.creditor_github_login,
+        settlements.debtor_id,
+        settlements.opening_comparison_points,
+        settlements.settled_points,
+        settlements.review_rounds,
+        settlements.credits,
+        settlements.proof_sha256,
+        settlements.status
+      from settlements
+      join issues on issues.id = settlements.issue_id
+      join pull_requests on pull_requests.id = settlements.pull_request_id
+      where issues.repository_id = ${repositoryId}
+      order by issues.github_issue_id, pull_requests.github_pull_request_id
+    `,
+    sql<{
+      github_pull_request_id: number | string;
+      github_review_id: number | string;
+      submitted_at: string;
+    }[]>`
+      select pull_requests.github_pull_request_id, review_rounds.github_review_id, review_rounds.submitted_at
+      from review_rounds
+      join pull_requests on pull_requests.id = review_rounds.pull_request_id
+      where pull_requests.repository_id = ${repositoryId}
+      order by pull_requests.github_pull_request_id, review_rounds.github_review_id
+    `,
+    sql<{
+      github_issue_id: number | string;
+      github_pull_request_id: number | string;
+    }[]>`
+      select issues.github_issue_id, pull_requests.github_pull_request_id
+      from pull_request_issues
+      join issues on issues.id = pull_request_issues.issue_id
+      join pull_requests on pull_requests.id = pull_request_issues.pull_request_id
+      where pull_request_issues.repository_id = ${repositoryId}
+      order by issues.github_issue_id, pull_requests.github_pull_request_id
+    `,
+    sql<{
+      github_issue_id: number | string;
+      reason: string;
+    }[]>`
+      select issues.github_issue_id, unwritable_closures.reason
+      from unwritable_closures
+      join issues on issues.id = unwritable_closures.issue_id
+      where issues.repository_id = ${repositoryId}
+      order by issues.github_issue_id
+    `,
+  ]);
+  return { issues, pullRequests, settlements, reviewRounds, issueLinks, unwritableClosures };
 }
 
 async function insertSettledRecord(proofFingerprint: string): Promise<{
