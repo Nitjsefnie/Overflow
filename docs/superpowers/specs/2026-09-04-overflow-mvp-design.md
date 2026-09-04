@@ -1,138 +1,162 @@
 # Overflow MVP design
 
+## Authority and supersession
+
+This specification incorporates `usage-settle/2026-08-28-decisions` and `usage-settle/2026-08-31-architecture-ratified`. The user's 2026-09-04 direction supersedes those records in two places: Overflow is now a web platform backed by PostgreSQL, and formal review rounds reduce awarded credit. The older decisions remain authoritative everywhere else.
+
+PostgreSQL is a rebuildable materialization of GitHub state, not an independent financial authority. Every settlement and balance must be reproducible by folding registered repositories through GitHub's GraphQL state. Webhooks make the materialization current; reconciliation proves or repairs it.
+
 ## Product intent
 
-Overflow turns otherwise-expiring weekly LLM subscription capacity into reciprocal open-source work. Members choose issues from repositories that other members have explicitly registered, submit pull requests through GitHub, and receive mutual credit only when those pull requests merge. The ledger is zero-sum: every positive contribution entry has an equal negative sponsor entry, so the group can see who has contributed more than they have received without settling each favour immediately.
+Overflow turns otherwise-expiring weekly LLM subscription capacity into reciprocal open-source work. Members claim issues from repositories that other members explicitly register, submit pull requests through GitHub, and receive mutual credit only when those pull requests merge. The zero-sum balance shows who has contributed more than they have received without settling each favour immediately.
 
-## MVP boundary
-
-The first release is one Next.js application backed by PostgreSQL. It authenticates members through GitHub, lets a member register one repository at a time, creates and consumes GitHub webhooks, syncs eligible issues, awards merged work, exposes balances and activity, and gives moderators an auditable enforcement workflow.
-
-The MVP does not meter LLM tokens, execute agents, dispatch work, transfer money, or automatically register repositories visible to a user's GitHub account.
+The capacity never moves and credentials are never shared. Each member runs their own agent on their own account; only the resulting GitHub work and mutual-credit fold are shared.
 
 ## Actors
 
-- A **member** signs in through GitHub, browses eligible issues, and can contribute to another member's registered repository.
-- A **repository sponsor** is the member who registered a repository. The sponsor receives the debit when another member earns credit there.
-- A **contributor** is a registered member whose GitHub identity authored a merged pull request.
-- A **moderator** resolves calibration audits and advances the graduated enforcement ladder.
+- A **member** signs in through GitHub, browses eligible issues, claims one through assignment, and can contribute to another member's registered repository.
+- A **repository sponsor** is the member who explicitly registered a repository and is its accountable debtor.
+- A **contributor** is the registered GitHub user who authored the pull request that actually closed the issue.
+- A **moderator** reviews persistent calibration patterns and applies the graduated enforcement ladder.
 
-One repository has one accountable sponsor in the MVP. Organizations and teams can nominate a shared sponsor in a later release.
+One repository has one accountable sponsor in the MVP.
 
-## GitHub contract
+## GitHub-native source contract
 
-### Authentication and repository registration
+### Authentication and explicit registration
 
 - Authentication uses GitHub OAuth through Auth.js.
-- OAuth requests `read:user`, `user:email`, `repo`, and `admin:repo_hook` because the MVP supports private repositories and creates a repository webhook during explicit registration.
-- A repository is registered only after a signed-in member submits `owner/name` or a canonical GitHub repository URL.
-- Registration fetches the repository from GitHub, requires the member to have repository administration permission, creates the platform webhook, and records only that repository.
-- Registration never imports or registers the rest of the member's accessible repositories.
-- Registration creates the ten shared labels `overflow:1` through `overflow:10` when missing and imports currently open labelled issues.
+- OAuth requests `read:user`, `user:email`, `repo`, and `admin:repo_hook` to support private repositories and create a webhook during registration.
+- A repository is registered only after a signed-in member submits `owner/name` or its canonical GitHub URL.
+- Registration verifies repository administration permission, creates the webhook, and records only that repository. It never registers the rest of the member's accessible repositories.
+- Registration stores a repository-specific difficulty scheme made of two explicit label catalogs and human-readable display names. Nothing derives meaning from label text.
+- The opening catalog may use any vocabulary, such as `size/S`, `size/M`, and `size/L`. Each configured label maps to repository-chosen comparison points from 1 through 10, used only for calibration and optional exposure reservation.
+- The closing/actual catalog may also use arbitrary label text, but its mappings must cover every integer from 1 through 10 exactly once because those mapped points award credit.
+- The historical `perceived difficulty: N` / `actual difficulty: N` families are one selectable preset, not hardcoded behavior. Registration verifies that every configured label exists, creating missing labels.
 
-### Events
+### Difficulty facts
 
-The webhook endpoint verifies the `X-Hub-Signature-256` HMAC against the raw request body before parsing JSON. `X-GitHub-Delivery` is stored with a unique constraint, making redelivery idempotent.
+- **Offered difficulty** is the neutral domain value set by the issue owner at filing, before the work is known, and is immutable. It is the posted price and the amount reserved while an outsider holds the assignment. A repository may display this as “perceived,” “estimate,” or another configured term.
+- **Settled difficulty** is the neutral domain value set by that same owner after understanding the issue and landed diff, with a GitHub rationale comment, and is mandatory before outsider work merges. A repository may display this as “actual,” “final,” or another configured term.
+- Both labels live on the issue. The configured opening category maps to comparison points; the configured closing/actual category always maps to an integer from 1 through 10. The worker never prices their own work.
+- A missing or ambiguous label makes a row unsettled. Overflow never guesses.
+- Changing offered difficulty after the issue is filed creates a policy violation in the materialized audit trail; the original observed filing value remains the offered value used by the fold.
 
-The MVP processes:
+### Claims and settlement proof
 
-- `issues` events to upsert or close eligible issue records as labels or state change;
-- `pull_request_review` with action `submitted` and state `changes_requested` to record one unique review round by GitHub review ID; and
-- `pull_request` with action `closed` and `merged = true` to evaluate a contribution.
+- The issue assignee is the claim lock. The PR author is the creditor. These identities are intentionally distinct.
+- A settlement exists only when one merged pull request closes the issue through GitHub's closing relationship.
+- The issue-to-PR relationship must be read through GraphQL `closedByPullRequestsReferences`. REST issue timelines and cross-reference events are forbidden because they can return plausible but incorrect PRs when a closing keyword was added after the PR opened.
+- A cross-person issue closed by hand or by commit message is `UNWRITABLE`: no ledger row is invented, and the repository is flagged because GitHub exposes no authoritative creditor relationship.
+- A PR that closes several eligible issues creates one settlement per linked issue. A linked issue can settle only once; GraphQL state decides the closing PR.
 
-### Eligible work
+### Events and reconciliation
 
-- An eligible issue is open in an active registered repository and has exactly one label matching `overflow:1` through `overflow:10`.
-- A pull request must close exactly one eligible issue. Closing references are resolved from GitHub's API rather than inferred from line counts.
-- The PR author must have signed in to Overflow. Otherwise the merge is recorded as `UNCLAIMED` and can be reconciled when that GitHub identity joins.
-- A banned contributor or inactive repository cannot create a posted award.
+The webhook endpoint verifies `X-Hub-Signature-256` against the raw body before parsing JSON and deduplicates `X-GitHub-Delivery`. It processes issue/assignment/label state, submitted formal reviews, pull-request merge state, and installation/repository availability.
 
-## Rating and award rules
+`overflow reconcile` performs a full GraphQL fold for every active registered repository and upserts the PostgreSQL materialization. Reconciliation must be idempotent and must report additions, removals, and changes. Deleting or rewriting GitHub facts legitimately changes the rebuilt materialization; the reconciliation audit records both versions.
 
-The issue's `overflow:N` label is the approximate difficulty declared when work is offered. A pull request may carry one `overflow:N` label to recalibrate the final difficulty after maintainers have reviewed the issue and the actual diff. If a valid PR difficulty label exists it wins; otherwise the issue difficulty is used. Multiple difficulty labels make the award `NEEDS_AUDIT` instead of guessing.
+## Rating and ledger rules
 
-No line additions, deletions, files-changed count, commit count, elapsed time, or other churn metric enters the rating or the award. GitHub issue and PR URLs, titles, bodies, labels, and a SHA-256 fingerprint of the fetched diff are kept as the evidence trail; source patches are fetched on demand and are not copied into the database.
-
-For an eligible non-self contribution:
+For an outsider settlement:
 
 ```text
-rated difficulty = PR overflow label, otherwise issue overflow label
-review rounds     = unique changes-requested GitHub review IDs submitted before merge
+rated difficulty = settled difficulty on the linked issue
+review rounds     = unique formal CHANGES_REQUESTED GitHub review IDs submitted before merge
 awarded credits   = max(0, rated difficulty - review rounds)
 ```
 
-Every award posts exactly two immutable ledger entries under one transaction: `+awarded credits` to the contributor and `-awarded credits` to the repository sponsor. A zero-credit contribution is still recorded but posts no ledger entries.
+Review comments without a formal `CHANGES_REQUESTED` review are not review rounds. Additions, deletions, changed-file count, commit count, elapsed time, token use, and every other churn metric never enter the rating or award.
 
-If contributor and sponsor are the same GitHub user, the contribution is recorded as `SELF_WORK`, its awarded credits are zero, and it creates no ledger transaction or entries. This invariant applies even if identities, repository ownership, or labels later change.
+Each settlement stores debtor, creditor, offered difficulty, settled difficulty, review rounds, awarded credits, issue number, PR number, merge SHA, merge time, and a SHA-256 diff fingerprint. It does not store the patch or churn metrics.
 
-Late or redelivered review events trigger an idempotent award recomputation. Corrections append reversing and replacement transactions; posted ledger rows are never edited or deleted.
+The ledger is a view over settlements: contributor `+credits`, sponsor `-credits`. The view is balanced by construction, and balances are sums of those signed rows. There are no hand-entered adjustments.
 
-## Moderation and miscalibration ladder
+If contributor and sponsor are the same GitHub user, the fold records `SELF_WORK` calibration evidence but creates no settlement and no ledger row. Self-work still retains the offered→settled pair because it is the sponsor's no-counterparty calibration baseline.
 
-Any member can open one audit per contribution with a concrete reason. Opening an audit appends a reversal transaction that temporarily removes the disputed award from both balances. A moderator compares the linked issue and PR diff, never churn statistics, and either dismisses or substantiates the audit.
+If the contributor has not joined Overflow, the row is `UNCLAIMED` until that GitHub identity signs in. The GitHub identity, proof, and amount remain derivable.
 
-- **Audit:** the case is open and the disputed transaction is held through compensating entries.
-- **Warn:** the first substantiated case corrects that award, appends a warning, and increments the sponsor's confirmed-miscalibration count.
-- **Recalibrate:** the second substantiated case corrects that award, changes the sponsor to `RECALIBRATING`, deactivates sponsored repositories, and exposes recent awards for moderator review. A moderator can append corrections and close recalibration before repositories reactivate.
-- **Ban:** the third substantiated case changes the sponsor to `BANNED`, keeps sponsored repositories inactive, and blocks new awards or registrations.
+## Credit-limit boundary
 
-Dismissal appends a reinstatement transaction. Substantiation appends a replacement transaction at the moderator's corrected 1–10 difficulty less the already-recorded review rounds. Every transition records actor, timestamp, reason, prior state, and new state.
+The historical records ratified the mechanism but not the numeric floor. Overflow therefore calculates and displays each sponsor's reserved headroom without enforcing a default floor:
+
+```text
+available headroom = settled balance - sum(offered difficulty of open outsider-assigned issues)
+```
+
+An optional group policy may set `credit_floor`. When configured, a new outsider assignment that would move the repository sponsor below the floor is compensatingly reversed and commented on; the claimant is not blocked from earning their way out of a deficit. Because no floor value has been ratified, the MVP default is disabled.
+
+## Statistical miscalibration ladder
+
+Miscalibration is a persistent account-level pattern, never a dispute over one transaction. Individual settlement errors are allowed to be wrong and are not retroactively edited or arbitrated.
+
+For each sponsor, Overflow calculates:
+
+- the sponsor's self-work baseline distribution of `settled - offered`;
+- the outsider settlement distribution of `settled - offered`;
+- sample sizes, means, medians, and the difference between those means; and
+- the underlying GitHub rows so a moderator can reproduce the figures.
+
+Automatic accusation is deliberately avoided. A moderator may open an account audit only when both the self-work and outsider samples contain at least 10 settled issues. That threshold is a provisional MVP ruling because the older decision record explicitly says five is too few but does not ratify a number.
+
+- **Audit:** snapshot the reproducible cohort and mark the account `UNDER_AUDIT`; no ledger row changes.
+- **Warn:** a substantiated first pattern records the evidence and warning; future settlements continue normally.
+- **Recalibrate:** a substantiated second pattern changes the sponsor to `RECALIBRATING`, deactivates their registered repositories, and requires a moderator-recorded recalibration plan before reactivation.
+- **Ban:** a substantiated third pattern changes the sponsor to `BANNED`, keeps their repositories inactive, and blocks new registration or settlement.
+
+Dismissal returns the prior enforcement state. Every transition records actor, timestamp, reason, sample definition, summary statistics, and prior/new state. No stage creates, reverses, or changes a settlement.
 
 ## Data model
 
-- `users`: GitHub identity, login, avatar, role, enforcement state, confirmed-miscalibration count, encrypted OAuth token.
-- `registered_repositories`: GitHub repository identity, owner/name, sponsor, visibility, webhook identity, active state.
-- `issues`: GitHub issue identity, repository, number, title/body URL, state, approximate difficulty.
-- `review_rounds`: repository/PR number plus unique GitHub review ID and timestamp.
-- `contributions`: repository, PR identity and evidence, contributor, sponsor, issue, rated difficulty, review rounds, award, merge time, status.
-- `ledger_transactions`: immutable reasoned transaction grouped by contribution or audit.
-- `ledger_entries`: immutable signed integer amount, account user, counterparty, transaction.
-- `webhook_deliveries`: delivery ID, event name, processing state, error and timestamps.
-- `calibration_audits`: contribution, reporter, moderator, state, rationale, decision, corrected difficulty and timestamps.
-- `moderation_events`: target user, actor, transition, reason and timestamp.
+- `users`: GitHub identity, login, avatar, role, enforcement state, confirmed-pattern count, encrypted OAuth token.
+- `registered_repositories`: GitHub repository identity, owner/name, sponsor, visibility, webhook identity, active state, opening/actual label catalogs and display names, and last reconciliation time.
+- `issues`: GitHub issue identity, repository, owner/assignee identities, original offered difficulty, current settled difficulty, label validity, state, and GitHub timestamps.
+- `pull_requests`: GitHub PR identity, repository, author identity, merge SHA/time, diff fingerprint, and GraphQL closing relation.
+- `review_rounds`: repository/PR plus unique formal changes-requested review ID and submitted time.
+- `settlements`: the derived outsider row, proof, difficulties, penalty, amount, and materialization version.
+- `self_work_calibrations`: derived offered→settled pair with issue/PR proof and no amount.
+- `unwritable_closures`: cross-person close with no authoritative merged-PR link.
+- `webhook_deliveries`: delivery ID, event, processing state, error, and timestamps.
+- `reconciliation_runs` and `reconciliation_changes`: source snapshot provenance and drift repair history.
+- `calibration_audits` and `moderation_events`: account-level cohort evidence and enforcement transitions.
 
-Database constraints enforce difficulty `1..10`, non-negative review counts and awards, unique external IDs, one repository sponsor, one contribution per GitHub PR, one audit per reporter/contribution, and balanced ledger transactions.
+SQL views `ledger_entries`, `balances`, and `calibration_statistics` derive the user-facing ledger and audit measures from these facts.
 
 ## Application surfaces
 
 - `/`: product explanation and GitHub sign-in.
-- `/dashboard`: balance, earned/given totals, open work, registered repositories, recent ledger activity, and moderation notices.
-- `/repositories/new`: explicit repository registration form and its GitHub permission/webhook result.
-- `/issues`: filterable eligible issue board with difficulty and repository sponsor.
-- `/contributions/:id`: rating evidence, review penalty, ledger result, and audit action.
-- `/moderation`: moderator-only queue, decisions, recalibration tools, and enforcement history.
-- `/api/auth/[...nextauth]`: Auth.js handlers.
-- `/api/github/webhooks`: raw-body verified GitHub webhook receiver.
-- `/api/repositories` and `/api/audits`: authenticated mutation endpoints.
+- `/dashboard`: balance, earned/given totals, reserved headroom, open claims, registered repositories, recent settlements, and enforcement notices.
+- `/repositories/new`: explicit repository registration form and GitHub setup result.
+- `/issues`: filterable eligible issue board with the repository-configured opening-rating name, sponsor, assignee state, and headroom status.
+- `/settlements/:id`: issue and PR proof, repository-configured opening/settlement rating names, review penalty, and balance effect.
+- `/calibration`: the signed-in sponsor's self-work versus outsider calibration history.
+- `/moderation`: moderator-only account-level audit queue, cohort evidence, recalibration, and enforcement history.
+- `/api/auth/[...nextauth]`, `/api/github/webhooks`, `/api/repositories`, and `/api/moderation` provide authenticated integration boundaries.
 
-The visual direction is a dense but calm exchange ledger: warm paper background, ink typography, acid-lime positive balances, coral debits, compact data tables, and clear provenance links back to GitHub. It should feel like infrastructure for trusted peers, not a gig marketplace.
+The visual direction is a calm, dense exchange ledger: warm paper, ink typography, acid-lime credits, coral debits, compact evidence tables, and direct GitHub provenance. It should feel like infrastructure for trusted peers, not a gig marketplace.
 
 ## Security and failure handling
 
-- OAuth access tokens are encrypted with AES-256-GCM using a base64-encoded 32-byte `TOKEN_ENCRYPTION_KEY`; plaintext tokens are never persisted or logged.
-- Webhook signatures use constant-time comparison and reject missing, malformed, or invalid signatures with `401`.
+- OAuth access tokens are encrypted with AES-256-GCM using a base64-encoded 32-byte `TOKEN_ENCRYPTION_KEY`; plaintext is never persisted or logged.
+- Webhook verification uses constant-time comparison and rejects missing, malformed, or invalid signatures with `401`.
 - Mutations require a server-side session; moderation additionally requires `role = MODERATOR`.
-- GitHub API failures during registration roll back local registration and attempt webhook cleanup. Webhook delivery failures are recorded and return a retryable non-2xx response.
-- All GitHub-generated strings are rendered as text, never raw HTML.
-- SQL is parameterized. State transitions and ledger posting run inside database transactions.
+- GitHub-generated strings render as text, never raw HTML. SQL is parameterized.
+- Registration rolls back local activation and attempts webhook cleanup if setup fails.
+- Webhook failures remain retryable and recorded. Reconciliation is the correctness backstop for missed or reordered events.
 
 ## Verification
 
-- Pure unit tests cover difficulty label parsing, score calculation, self-work suppression, ledger balancing, token encryption, URL parsing, signature verification, and enforcement transitions.
-- Service tests with fakes cover explicit repository registration, permission denial, webhook idempotency, issue synchronization, review-round deduplication, merge awarding, late-review correction, unclaimed contributions, audit hold/dismiss/substantiate, recalibration, and ban behavior.
-- Component tests cover signed-out landing, dashboard summaries, issue cards, registration errors, and moderator controls.
-- `pnpm test`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` must pass from a clean checkout.
-- `git check-ignore -v` must prove seeded junk remains ignored while representative source, test, migration, and documentation files are tracked.
-
-## Deployment and operations
-
-The repository ships `.env.example`, `docker-compose.yml` for local PostgreSQL, SQL migrations, a migration command, and setup/run documentation. Production requires a public HTTPS base URL so GitHub can reach the webhook endpoint. Deployment-provider automation, email, background queues, and scheduled reconciliation are deferred.
+- Pure tests cover arbitrary label catalogs including S/M/L, exact 1–10 coverage for actual mappings, duplicate/overlapping mappings, offered-rating immutability, score calculation, self-work suppression, balance folding, calibration statistics, token encryption, URL parsing, and signature verification.
+- Service tests cover explicit registration, permission denial, GraphQL-only closing links, webhook idempotency, review deduplication, merge settlement, hand-close unwritable debt, unclaimed members, reconciliation drift, and account-level enforcement.
+- PostgreSQL behavior tests run the real migration in an ephemeral PostgreSQL 17 container and exercise constraints and views.
+- Component tests cover signed-out landing, dashboard summaries/headroom, issue cards, settlement proof, calibration comparison, registration errors, and moderator controls.
+- `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` must pass from a clean checkout.
 
 ## Explicitly deferred
 
-- Measuring or brokering members' LLM subscription capacity.
-- Automated LLM difficulty judgment; the MVP uses human GitHub labels plus audit.
-- Multiple sponsors per repository, organizations, teams, invitations, and private groups.
-- Multi-issue PR awards, partial credit before merge, cash settlement, and transferable credits.
-- A GitHub App installation flow; the MVP uses an OAuth app and per-repository webhook registration.
-- Hosted deployment, billing, notifications, and a job queue.
+- Measuring, pooling, or brokering members' LLM subscription capacity.
+- Automated LLM difficulty judgment; maintainers apply governed actual-difficulty labels from issue and diff evidence.
+- A mandatory default credit-floor number; the mechanism and headroom calculation ship, enforcement stays disabled until a group sets one.
+- Automated statistical accusations or a group-vote ban mechanism.
+- Multiple sponsors per repository, groups/teams, cash settlement, transferable credits, and partial credit before merge.
+- Hosted deployment, billing, email/push notifications, and agent execution.
