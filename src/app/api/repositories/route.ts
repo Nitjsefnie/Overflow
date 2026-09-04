@@ -1,0 +1,147 @@
+import { z } from "zod";
+import type { UserRole } from "@/lib/db/types";
+import { GitHubGateway } from "@/lib/github/client";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import {
+  RepositoryRegistrationError,
+  registerRepository,
+  type RepositoryRegistrationDependencies,
+  type RepositoryRegistrationInput,
+} from "@/lib/repositories/register";
+
+const registrationSchema = z
+  .object({
+    repositoryUrl: z.string(),
+    openingName: z.string(),
+    actualName: z.string(),
+    openingLabels: z.array(
+      z
+        .object({
+          label: z.string(),
+          comparisonPoints: z.number(),
+          reservePoints: z.number(),
+        })
+        .strict(),
+    ),
+    actualLabels: z.array(
+      z
+        .object({
+          label: z.string(),
+          points: z.number(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type RepositoryRouteSession = {
+  user: { id: string; role: UserRole };
+};
+
+export type RepositoryRouteDependencies = {
+  getSession: () => Promise<RepositoryRouteSession | null>;
+  createRegistrationDependencies: (
+    session: RepositoryRouteSession,
+  ) => Promise<RepositoryRegistrationDependencies>;
+};
+
+export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
+  return async function postRepository(request: Request): Promise<Response> {
+    let session: RepositoryRouteSession | null;
+    try {
+      session = await dependencies.getSession();
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    }
+    if (session === null) {
+      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+    }
+
+    const input = await parseInput(request);
+    if (input === null) {
+      return errorResponse(400, "INVALID_REQUEST", "Invalid repository registration request.");
+    }
+
+    try {
+      const registrationDependencies = await dependencies.createRegistrationDependencies(session);
+      const repository = await registerRepository(registrationDependencies, input);
+      return Response.json({ repository }, { status: 201 });
+    } catch (error) {
+      if (error instanceof RepositoryRegistrationError) {
+        return registrationErrorResponse(error);
+      }
+
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    }
+  };
+}
+
+export const POST = createRepositoryPostHandler({
+  async getSession() {
+    const { auth } = await import("@/auth");
+    const session = await auth();
+    const user = session?.user as { id?: unknown; role?: unknown } | undefined;
+    if (
+      typeof user?.id !== "string" ||
+      (user.role !== "MEMBER" && user.role !== "MODERATOR")
+    ) {
+      return null;
+    }
+    return { user: { id: user.id, role: user.role } };
+  },
+  async createRegistrationDependencies(session) {
+    const store = new PostgresRepositoryStore();
+    const accessToken = await store.getGitHubAccessToken(session.user.id);
+    if (accessToken === null) {
+      throw new Error("GitHub access token was unavailable.");
+    }
+
+    return {
+      actor: session.user,
+      github: new GitHubGateway({ accessToken }),
+      store,
+      webhook: requiredWebhookConfiguration(),
+    };
+  },
+});
+
+async function parseInput(request: Request): Promise<RepositoryRegistrationInput | null> {
+  try {
+    const result = registrationSchema.safeParse(await request.json());
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function requiredWebhookConfiguration(): { callbackUrl: string; secret: string } {
+  const callbackUrl = process.env.GITHUB_WEBHOOK_URL;
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (
+    callbackUrl === undefined ||
+    callbackUrl.length === 0 ||
+    secret === undefined ||
+    secret.length === 0
+  ) {
+    throw new Error("GitHub webhook configuration must be set.");
+  }
+
+  return { callbackUrl, secret };
+}
+
+function registrationErrorResponse(error: RepositoryRegistrationError): Response {
+  switch (error.code) {
+    case "INVALID_INPUT":
+      return errorResponse(400, error.code, error.message);
+    case "FORBIDDEN":
+      return errorResponse(403, error.code, error.message);
+    case "CONFLICT":
+      return errorResponse(409, error.code, error.message);
+    case "UPSTREAM_FAILURE":
+      return errorResponse(502, error.code, error.message);
+  }
+}
+
+function errorResponse(status: number, code: string, message: string): Response {
+  return Response.json({ error: { code, message } }, { status });
+}
