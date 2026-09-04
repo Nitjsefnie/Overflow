@@ -66,9 +66,29 @@ describe("reconcileRepository", () => {
     expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
   });
 
+  it.each(["WARNED", "UNDER_AUDIT"] as const)(
+    "reconciles a repository sponsored by a %s account",
+    async (enforcementState) => {
+      const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
+      const dependencies = reconciliationDependencies({ materialize });
+      const repository = await dependencies.store.getRepository("repository");
+      repository!.sponsor.enforcementState = enforcementState;
+      (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
+
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
+        adds: 1,
+        changes: 0,
+        removals: 0,
+      });
+      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" });
+      expect(materialize).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     ["an inactive repository", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.active = false; }],
     ["a banned sponsor", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.sponsor.enforcementState = "BANNED"; }],
+    ["a recalibrating sponsor", (repository: { active: boolean; sponsor: { enforcementState: string } }) => { repository.sponsor.enforcementState = "RECALIBRATING"; }],
   ])("records a no-op run for %s without deleting historical settlements", async (_name, change) => {
     const dependencies = reconciliationDependencies();
     const repository = await dependencies.store.getRepository("repository");

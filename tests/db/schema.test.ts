@@ -292,6 +292,53 @@ describe("initial PostgreSQL materialization", () => {
   });
 
   it.each([
+    ["creditor", "WARNED"],
+    ["creditor", "UNDER_AUDIT"],
+    ["sponsor", "WARNED"],
+    ["sponsor", "UNDER_AUDIT"],
+  ] as const)("claims an unclaimed identity when the %s is %s", async (eligibleActor, state) => {
+    const pullRequest = await insertPullRequest(sql);
+    const contributorId = await insertUserWithLogin(sql, `eligible-${nextExternalId()}`);
+    const [contributor] = await sql<{ github_login: string }[]>`
+      select github_login from users where id = ${contributorId}
+    `;
+    const eligibleUserId = eligibleActor === "creditor" ? contributorId : pullRequest.sponsorId;
+    const proofFingerprint = `${state === "WARNED" ? "a" : "d"}`.repeat(64);
+
+    await sql`
+      update users set enforcement_state = ${state} where id = ${eligibleUserId}
+    `;
+    await sql`
+      insert into settlements (
+        pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+        opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      )
+      values (
+        ${pullRequest.id}, ${pullRequest.issueId}, null, ${contributor.github_login}, ${pullRequest.sponsorId},
+        5, 6, 2, 4, ${proofFingerprint}, ${"UNCLAIMED"}
+      )
+    `;
+
+    await claimGitHubIdentity(sql, contributorId, contributor.github_login);
+
+    const [claimed] = await sql<{
+      creditor_id: string | null;
+      status: string;
+      credits: number;
+      proof_sha256: string;
+    }[]>`
+      select creditor_id, status, credits, proof_sha256
+      from settlements where issue_id = ${pullRequest.issueId}
+    `;
+    expect(claimed).toEqual({
+      creditor_id: contributorId,
+      status: "SETTLED",
+      credits: 4,
+      proof_sha256: proofFingerprint,
+    });
+  });
+
+  it.each([
     ["creditor", "BANNED"],
     ["creditor", "RECALIBRATING"],
     ["sponsor", "BANNED"],

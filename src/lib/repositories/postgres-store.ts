@@ -1,4 +1,9 @@
-import type { EnforcementState, SqlClient } from "@/lib/db/types";
+import {
+  isParticipationEligible,
+  participationEligibleEnforcementStates,
+  type EnforcementState,
+  type SqlClient,
+} from "@/lib/db/types";
 import type {
   NewRegisteredRepository,
   RegisteredRepository,
@@ -53,7 +58,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         with eligible_sponsor as (
           select id
           from users
-          where id = ${repository.sponsorId} and enforcement_state = ${"ACTIVE"}
+          where id = ${repository.sponsorId}
+            and enforcement_state::text = any(${this.sql.array([...participationEligibleEnforcementStates])})
           for update
         )
         insert into registered_repositories (
@@ -83,7 +89,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       `;
       if (row === undefined) {
         const enforcementState = await this.getEnforcementState(repository.sponsorId);
-        if (enforcementState !== "ACTIVE") {
+        if (enforcementState === null || !isParticipationEligible(enforcementState)) {
           throw new RepositoryRegistrationEnforcementError();
         }
         return null;

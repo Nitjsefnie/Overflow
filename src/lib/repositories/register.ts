@@ -1,4 +1,4 @@
-import type { EnforcementState, UserRole } from "@/lib/db/types";
+import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -78,7 +78,7 @@ export async function registerRepository(
 ): Promise<RegisteredRepository> {
   if (
     dependencies.actor.enforcementState !== undefined &&
-    dependencies.actor.enforcementState !== "ACTIVE"
+    !isParticipationEligible(dependencies.actor.enforcementState)
   ) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",

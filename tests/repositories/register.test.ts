@@ -63,16 +63,37 @@ describe("explicit repository registration", () => {
     ]);
   });
 
-  it("blocks a banned account from registering a repository before contacting GitHub", async () => {
-    const harness = createHarness({ actorEnforcementState: "BANNED" });
+  it.each(["WARNED", "UNDER_AUDIT"] as const)(
+    "allows a %s account to register a repository",
+    async (enforcementState) => {
+      const harness = createHarness({ actorEnforcementState: enforcementState });
 
-    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      message: "The account is not eligible to register repositories.",
-    });
-    expect(harness.githubCalls).toEqual([]);
-    expect(harness.createdRepositories).toEqual([]);
-  });
+      await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+        githubRepositoryId: 42,
+        sponsorId: "moderator-id",
+      });
+      expect(harness.githubCalls).toEqual([
+        "getRepository:octo/overflow",
+        "ensureDifficultyLabels:octo/overflow",
+        "createWebhook:octo/overflow",
+      ]);
+      expect(harness.createdRepositories).toHaveLength(1);
+    },
+  );
+
+  it.each(["RECALIBRATING", "BANNED"] as const)(
+    "blocks a %s account from registering a repository before contacting GitHub",
+    async (enforcementState) => {
+      const harness = createHarness({ actorEnforcementState: enforcementState });
+
+      await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: "The account is not eligible to register repositories.",
+      });
+      expect(harness.githubCalls).toEqual([]);
+      expect(harness.createdRepositories).toEqual([]);
+    },
+  );
 
   it("denies a moderator who lacks GitHub administrator permission for the submitted repository", async () => {
     const harness = createHarness({ canAdminister: false });

@@ -163,6 +163,32 @@ describe("foldRepository", () => {
   });
 
   it.each([
+    ["a warned sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "WARNED"; }],
+    ["an under-audit sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "UNDER_AUDIT"; }],
+    ["a warned PR author", (snapshot: RepositoryFoldSnapshot) => {
+      snapshot.users.find((user) => user.id === "contributor")!.enforcementState = "WARNED";
+    }],
+    ["an under-audit PR author", (snapshot: RepositoryFoldSnapshot) => {
+      snapshot.users.find((user) => user.id === "contributor")!.enforcementState = "UNDER_AUDIT";
+    }],
+  ])("creates the outsider settlement for %s", (_name, change) => {
+    const snapshot = outsiderFixture();
+    change(snapshot);
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({
+        status: "SETTLED",
+        creditorId: "contributor",
+        debtorId: "sponsor",
+        credits: 6,
+      }),
+    ]);
+    expect(result.ledgerEntries).toHaveLength(2);
+  });
+
+  it.each([
     ["a banned sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "BANNED"; }],
     ["a recalibrating sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "RECALIBRATING"; }],
     ["a banned PR author", (snapshot: RepositoryFoldSnapshot) => {

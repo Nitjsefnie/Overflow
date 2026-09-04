@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { JSONValue } from "postgres";
-import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
-import type { EnforcementState } from "@/lib/db/types";
+import {
+  participationEligibleEnforcementStates,
+  type EnforcementState,
+  type SqlClient,
+  type TransactionClient,
+} from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
   ExistingFoldIssue,
@@ -358,9 +362,9 @@ export async function claimGitHubIdentity(
         and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
         and settlements.debtor_id <> ${userId}
         and creditor.id = ${userId}
-        and creditor.enforcement_state = ${"ACTIVE"}
+        and creditor.enforcement_state::text = any(${sql.array([...participationEligibleEnforcementStates])})
         and debtor.id = settlements.debtor_id
-        and debtor.enforcement_state = ${"ACTIVE"}
+        and debtor.enforcement_state::text = any(${sql.array([...participationEligibleEnforcementStates])})
     `;
   });
 }

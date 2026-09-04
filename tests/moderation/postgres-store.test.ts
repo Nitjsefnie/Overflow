@@ -223,6 +223,42 @@ describe("PostgreSQL account moderation transitions", () => {
       }),
     );
   }, 60_000);
+
+  it.each([
+    ["WARNED", true],
+    ["UNDER_AUDIT", true],
+    ["RECALIBRATING", false],
+    ["BANNED", false],
+  ] as const)("the atomic registration guard permits %s exactly when participation is allowed", async (state, allowed) => {
+    const sponsorId = await insertUser("MEMBER");
+    const githubRepositoryId = nextExternalId();
+    const registrationStore = new PostgresRepositoryStore(sql);
+
+    await sql`
+      update users set enforcement_state = ${state} where id = ${sponsorId}
+    `;
+
+    const registration = {
+      githubRepositoryId,
+      ownerName: `example/registration-${githubRepositoryId}`,
+      sponsorId,
+      visibility: "PUBLIC" as const,
+      githubWebhookId: nextExternalId(),
+      difficultyScheme: difficultyScheme(),
+    };
+
+    if (!allowed) {
+      await expect(registrationStore.createRepository(registration)).rejects.toBeInstanceOf(
+        RepositoryRegistrationEnforcementError,
+      );
+      return;
+    }
+
+    await expect(registrationStore.createRepository(registration)).resolves.toMatchObject({
+      githubRepositoryId,
+      sponsorId,
+    });
+  });
 });
 
 async function openAudit(store: PostgresModerationStore, input: OpenAccountAuditStoreInput) {

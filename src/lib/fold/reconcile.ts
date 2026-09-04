@@ -1,4 +1,5 @@
 import { foldRepository, type ExistingFoldIssue, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import { isParticipationEligible } from "@/lib/db/types";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
 
 export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
@@ -57,7 +58,7 @@ export async function reconcileRepository(
 
   const runId = await dependencies.store.beginRun(repositoryId);
   try {
-    if (!repository.active || repository.sponsor.enforcementState !== "ACTIVE") {
+    if (!repository.active || !isParticipationEligible(repository.sponsor.enforcementState)) {
       await dependencies.store.completeRun(runId);
       return {
         repositoryId,

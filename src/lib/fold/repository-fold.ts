@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { EnforcementState, IssueState, PullRequestState } from "@/lib/db/types";
+import { isParticipationEligible, type EnforcementState, type IssueState, type PullRequestState } from "@/lib/db/types";
 import {
   parseActualDifficulty,
   parseOpeningDifficulty,
@@ -142,7 +142,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const selfWorkCalibrations: SelfWorkCalibration[] = [];
   const unwritableClosures: UnwritableClosure[] = [];
   const policyViolations: FoldPolicyViolation[] = [];
-  const canCreateSettlements = snapshot.repository.active && isSettlementEligible(snapshot.repository.sponsor);
+  const canCreateSettlements = snapshot.repository.active && isParticipationEligible(snapshot.repository.sponsor.enforcementState);
 
   for (const issue of snapshot.issues) {
     const opening = resolveOpening(issue, existingIssuesByGitHubId.get(issue.id), snapshot.repository.difficultyScheme);
@@ -204,7 +204,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       continue;
     }
 
-    if (author !== undefined && !isSettlementEligible(author)) {
+    if (author !== undefined && !isParticipationEligible(author.enforcementState)) {
       continue;
     }
 
@@ -454,10 +454,6 @@ function hashRawDiff(rawDiff: string): string {
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
-}
-
-function isSettlementEligible(user: FoldUser): boolean {
-  return user.enforcementState === "ACTIVE";
 }
 
 function validTimestamp(value: string | null): value is string {
