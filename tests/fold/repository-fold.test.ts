@@ -1,0 +1,266 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  foldRepository,
+  type RepositoryFoldSnapshot,
+} from "@/lib/fold/repository-fold";
+
+describe("foldRepository", () => {
+  it("keeps self work as calibration evidence instead of a settlement", () => {
+    const result = foldRepository(selfWorkFixture());
+
+    expect(result.settlements).toHaveLength(0);
+    expect(result.selfWorkCalibrations).toHaveLength(1);
+    expect(result.selfWorkCalibrations[0]).toMatchObject({
+      githubIssueId: 101,
+      githubPullRequestId: 201,
+      userId: "sponsor",
+      actualPoints: 6,
+    });
+  });
+
+  it("never treats a plausible REST timeline cross-reference as an authoritative closing PR", () => {
+    const result = foldRepository(restTimelineTrapFixture());
+
+    expect(result.settlements).toHaveLength(0);
+    expect(result.unwritableClosures).toHaveLength(1);
+    expect(result.unwritableClosures[0]).toMatchObject({
+      githubIssueId: 101,
+      reason: "No merged GitHub GraphQL closing pull request was found.",
+    });
+  });
+
+  it("subtracts each unique formal changes-requested review submitted before merge", () => {
+    const result = foldRepository(twoReviewRoundsFixture());
+
+    expect(result.settlements[0]?.credits).toBe(4);
+    expect(result.settlements[0]?.reviewRounds).toBe(2);
+  });
+
+  it("uses the configured S/M/L catalog rather than inferring a label's points", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.labels = ["S"];
+    snapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/7"];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      openingComparisonPoints: 2,
+      settledPoints: 7,
+      credits: 7,
+    });
+  });
+
+  it("preserves an observed opening rating after labels change and reports a policy violation", () => {
+    const snapshot = outsiderFixture();
+    snapshot.existingIssues = [
+      {
+        githubIssueId: 101,
+        openingLabel: "M",
+        openingComparisonPoints: 5,
+        openingReservePoints: 5,
+      },
+    ];
+    snapshot.issues[0]!.labels = ["L"];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.issues[0]).toMatchObject({
+      openingLabel: "M",
+      openingComparisonPoints: 5,
+      openingReservePoints: 5,
+    });
+    expect(result.policyViolations).toEqual([
+      expect.objectContaining({ code: "OPENING_LABEL_MUTATED", githubIssueId: 101 }),
+    ]);
+  });
+
+  it("does not guess missing or ambiguous configured opening labels", () => {
+    const missing = outsiderFixture();
+    missing.issues[0]!.labels = [];
+    const ambiguous = outsiderFixture();
+    ambiguous.issues[0]!.labels = ["M", "L"];
+
+    for (const snapshot of [missing, ambiguous]) {
+      const result = foldRepository(snapshot);
+      expect(result.issues).toHaveLength(0);
+      expect(result.settlements).toHaveLength(0);
+      expect(result.policyViolations).toHaveLength(1);
+    }
+  });
+
+  it("uses the PR author as contributor while keeping an issue assignee as only a claim lock", () => {
+    const snapshot = outsiderFixture();
+    snapshot.users.push({ id: "assignee", githubLogin: "claim-holder", enforcementState: "ACTIVE" });
+    snapshot.issues[0]!.claimAssigneeGitHubLogin = "claim-holder";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      creditorId: "contributor",
+      debtorId: "sponsor",
+    });
+  });
+
+  it("retains a zero-credit outsider settlement and proof without emitting a ledger entry", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.labels = ["delivered/1"];
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ status: "SETTLED", credits: 0, proofSha256: sha256("diff") }),
+    ]);
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("keeps an unjoined PR author unclaimed with GitHub identity, proof, and amount", () => {
+    const snapshot = outsiderFixture();
+    snapshot.users = snapshot.users.filter((user) => user.id !== "contributor");
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNCLAIMED",
+      creditorId: null,
+      creditorGitHubLogin: "contributor",
+      credits: 6,
+      proofSha256: sha256("diff"),
+    });
+  });
+
+  it("materializes one deterministic settlement for every issue closed by one merged PR", () => {
+    const snapshot = outsiderFixture();
+    const secondIssue = structuredClone(snapshot.issues[0]!);
+    secondIssue.id = 102;
+    secondIssue.number = 2;
+    secondIssue.title = "Second issue";
+    secondIssue.url = "https://github.com/octo/example/issues/2";
+    snapshot.issues.push(secondIssue);
+
+    const result = foldRepository(snapshot);
+
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.settlements).toHaveLength(2);
+    expect(result.settlements.map((settlement) => settlement.githubIssueId).sort()).toEqual([101, 102]);
+  });
+
+  it("settles an issue once when several merged GraphQL links are present", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests = [
+      { ...snapshot.issues[0]!.closingPullRequests[0]!, id: 202, number: 12, mergedAt: "2026-09-02T12:00:00.000Z" },
+      { ...snapshot.issues[0]!.closingPullRequests[0]!, id: 201, number: 10, mergedAt: "2026-09-01T12:00:00.000Z" },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubPullRequestId: 201, githubIssueId: 101 }),
+    ]);
+  });
+
+  it.each([
+    ["a banned sponsor", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.sponsor.enforcementState = "BANNED"; }],
+    ["an inactive repository", (snapshot: RepositoryFoldSnapshot) => { snapshot.repository.active = false; }],
+  ])("does not create new settlements for %s", (_name, change) => {
+    const snapshot = outsiderFixture();
+    change(snapshot);
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([]);
+  });
+});
+
+function selfWorkFixture(): RepositoryFoldSnapshot {
+  const snapshot = outsiderFixture();
+  snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor";
+  return snapshot;
+}
+
+function restTimelineTrapFixture(): RepositoryFoldSnapshot {
+  const snapshot = outsiderFixture();
+  snapshot.issues[0]!.closingPullRequests = [];
+  snapshot.issues[0]!.restTimeline = [
+    { source: "REST", pullRequestNumber: 201, authorLogin: "contributor" },
+  ];
+  return snapshot;
+}
+
+function twoReviewRoundsFixture(): RepositoryFoldSnapshot {
+  const snapshot = outsiderFixture();
+  snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z" },
+    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:01:00.000Z" },
+    { id: 302, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
+    { id: 303, state: "COMMENTED", submittedAt: "2026-09-01T11:30:00.000Z" },
+    { id: 304, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T13:00:00.000Z" },
+  ];
+  return snapshot;
+}
+
+function outsiderFixture(): RepositoryFoldSnapshot {
+  return {
+    repository: {
+      id: "repository",
+      ownerName: "octo/example",
+      active: true,
+      sponsor: { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      difficultyScheme: difficultyScheme(),
+    },
+    users: [
+      { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE" },
+    ],
+    existingIssues: [],
+    issues: [
+      {
+        id: 101,
+        number: 1,
+        title: "Issue",
+        body: "Issue body",
+        url: "https://github.com/octo/example/issues/1",
+        state: "CLOSED",
+        labels: ["M"],
+        closingPullRequests: [
+          {
+            id: 201,
+            number: 11,
+            title: "Pull request",
+            body: "Pull request body",
+            url: "https://github.com/octo/example/pull/11",
+            state: "MERGED",
+            mergedAt: "2026-09-01T12:00:00.000Z",
+            authorLogin: "contributor",
+            labels: ["delivered/6"],
+            reviews: [],
+            rawDiff: "diff",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function difficultyScheme() {
+  return {
+    openingName: "Size",
+    actualName: "Delivered",
+    openingLabels: [
+      { label: "S", comparisonPoints: 2, reservePoints: 2 },
+      { label: "M", comparisonPoints: 5, reservePoints: 5 },
+      { label: "L", comparisonPoints: 8, reservePoints: 8 },
+    ],
+    actualLabels: Array.from({ length: 10 }, (_, index) => ({
+      label: `delivered/${index + 1}`,
+      points: index + 1,
+    })),
+  };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}

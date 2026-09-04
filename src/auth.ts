@@ -3,6 +3,7 @@ import GitHub from "next-auth/providers/github";
 import type { Profile } from "next-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
+import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 export const githubOAuthScope = "read:user user:email repo admin:repo_hook";
@@ -120,6 +121,8 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
   if (user === undefined) {
     throw new Error("GitHub identity upsert returned no user.");
   }
+
+  await claimGitHubIdentity(getSql(), user.id, identity.login);
 
   return user;
 }
