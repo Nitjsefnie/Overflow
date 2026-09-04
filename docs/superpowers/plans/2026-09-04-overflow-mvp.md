@@ -233,6 +233,7 @@ Stage only Task 2 files and commit with message `feat: add github login and expl
 ### Task 3: Signed webhook ingestion and merged-PR credit posting
 
 **Files:**
+- Modify: `src/auth.ts`
 - Create: `src/lib/github/webhook-signature.ts`
 - Create: `src/lib/github/webhook-schema.ts`
 - Create: `src/lib/webhooks/processor.ts`
@@ -389,6 +390,7 @@ Stage only Task 4 files and commit with message `feat: enforce graduated calibra
 - Test: `tests/components/issue-card.test.tsx`
 - Test: `tests/components/repository-form.test.tsx`
 - Test: `tests/components/audit-panel.test.tsx`
+- Test: `tests/dashboard/queries.test.ts`
 
 **Interfaces:**
 - Consumes: Auth.js session, repository/contribution/moderation services, and DB queries from prior tasks.
