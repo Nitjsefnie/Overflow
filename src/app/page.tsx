@@ -1,19 +1,26 @@
+import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
+
+async function signInWithGitHub() {
+  "use server";
+  await signIn("github");
+}
 
 export function LandingPage() {
   return (
     <main className="landing-page">
       <section className="landing-hero" aria-labelledby="landing-title">
-        <div className="mark landing-mark" aria-hidden="true" />
         <p className="eyebrow">A cooperative ledger for open-source work</p>
         <h1 id="landing-title">Cooperative credit for open-source work.</h1>
         <p className="landing-lede">
           Overflow records completed contributions, visible proof, and the credit that moves between maintainers
           and contributors.
         </p>
-        <a className="action-button" href="/api/auth/signin/github">
-          Sign in with GitHub
-        </a>
+        <form action={signInWithGitHub}>
+          <button className="action-button" type="submit">
+            Sign in with GitHub
+          </button>
+        </form>
       </section>
       <section className="landing-principles" aria-label="How Overflow works">
         <article>
