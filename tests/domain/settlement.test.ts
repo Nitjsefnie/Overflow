@@ -14,6 +14,18 @@ describe("calculateSettlement", () => {
     ).toEqual({ status: "SELF_WORK", credits: 0 });
   });
 
+  it("returns unsettled when blank creditor and debtor identifiers match", () => {
+    expect(
+      calculateSettlement({
+        creditorId: "",
+        debtorId: "",
+        opening: 8,
+        settled: 9,
+        reviewIds: ["r1"],
+      }),
+    ).toEqual({ status: "UNSETTLED", credits: 0 });
+  });
+
   it("uses the settled difficulty and subtracts unique review rounds", () => {
     expect(
       calculateSettlement({

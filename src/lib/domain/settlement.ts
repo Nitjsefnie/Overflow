@@ -25,17 +25,16 @@ const minimumPoints = 1;
 const maximumPoints = 10;
 
 export function calculateSettlement(input: SettlementInput): SettlementDecision {
-  if (input.creditorId !== null && input.creditorId === input.debtorId) {
+  if (!hasText(input.creditorId) || !hasText(input.debtorId)) {
+    return { status: "UNSETTLED", credits: 0 };
+  }
+
+  if (input.creditorId === input.debtorId) {
     return { status: "SELF_WORK", credits: 0 };
   }
 
   const settled = resolveActualPoints(input.settled);
-  if (
-    !hasText(input.creditorId) ||
-    !hasText(input.debtorId) ||
-    !isPointsValue(input.opening) ||
-    settled === null
-  ) {
+  if (!isPointsValue(input.opening) || settled === null) {
     return { status: "UNSETTLED", credits: 0 };
   }
 

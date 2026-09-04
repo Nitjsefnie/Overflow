@@ -49,14 +49,15 @@ create table issues (
   opening_reserve_points integer not null check (opening_reserve_points between 1 and 10),
   created_at timestamp with time zone not null default now(),
   updated_at timestamp with time zone not null default now(),
-  unique (repository_id, issue_number)
+  unique (repository_id, issue_number),
+  unique (id, repository_id)
 );
 
 create table pull_requests (
   id uuid primary key default gen_random_uuid(),
   github_pull_request_id bigint not null unique check (github_pull_request_id > 0),
   repository_id uuid not null references registered_repositories(id),
-  issue_id uuid not null references issues(id),
+  issue_id uuid not null,
   pull_request_number integer not null check (pull_request_number > 0),
   url text not null,
   title text not null,
@@ -76,7 +77,9 @@ create table pull_requests (
       and actual_points between 1 and 10
     )
   ),
-  unique (repository_id, pull_request_number)
+  unique (repository_id, pull_request_number),
+  unique (id, issue_id),
+  foreign key (issue_id, repository_id) references issues(id, repository_id)
 );
 
 create table review_rounds (
@@ -90,8 +93,8 @@ create table review_rounds (
 
 create table settlements (
   id uuid primary key default gen_random_uuid(),
-  pull_request_id uuid not null unique references pull_requests(id),
-  issue_id uuid not null references issues(id),
+  pull_request_id uuid not null unique,
+  issue_id uuid not null,
   creditor_id uuid not null references users(id),
   debtor_id uuid not null references users(id),
   opening_comparison_points integer not null check (opening_comparison_points between 1 and 10),
@@ -108,17 +111,20 @@ create table settlements (
   check (
     status <> 'SETTLED'
     or credits = greatest(0, settled_points - review_rounds)
-  )
+  ),
+  check (creditor_id <> debtor_id),
+  foreign key (pull_request_id, issue_id) references pull_requests(id, issue_id)
 );
 
 create table self_work_calibrations (
   id uuid primary key default gen_random_uuid(),
-  pull_request_id uuid not null unique references pull_requests(id),
-  issue_id uuid not null references issues(id),
+  pull_request_id uuid not null unique,
+  issue_id uuid not null,
   user_id uuid not null references users(id),
   opening_comparison_points integer not null check (opening_comparison_points between 1 and 10),
   actual_points integer check (actual_points between 1 and 10),
-  created_at timestamp with time zone not null default now()
+  created_at timestamp with time zone not null default now(),
+  foreign key (pull_request_id, issue_id) references pull_requests(id, issue_id)
 );
 
 create table unwritable_closures (
@@ -159,16 +165,20 @@ create table reconciliation_changes (
 
 create table calibration_audits (
   id uuid primary key default gen_random_uuid(),
-  settlement_id uuid not null references settlements(id),
+  account_id uuid not null references users(id),
+  repository_id uuid references registered_repositories(id),
   reporter_id uuid not null references users(id),
   moderator_id uuid references users(id),
   state calibration_audit_state not null default 'OPEN',
   rationale text not null check (length(trim(rationale)) > 0),
   decision text,
-  corrected_points integer check (corrected_points between 1 and 10),
+  sample_started_at timestamp with time zone not null,
+  sample_ended_at timestamp with time zone not null,
+  settled_sample_size integer not null check (settled_sample_size > 0),
   opened_at timestamp with time zone not null default now(),
   decided_at timestamp with time zone,
-  unique (settlement_id, reporter_id)
+  check (sample_ended_at > sample_started_at),
+  unique (account_id, repository_id, sample_started_at, sample_ended_at, reporter_id)
 );
 
 create table moderation_events (
@@ -209,7 +219,10 @@ select
   settlements.credits as amount,
   settlements.created_at
 from settlements
-where settlements.status = 'SETTLED' and settlements.credits > 0
+where
+  settlements.status = 'SETTLED'
+  and settlements.credits > 0
+  and settlements.creditor_id <> settlements.debtor_id
 union all
 select
   settlements.id as settlement_id,
@@ -218,7 +231,10 @@ select
   -settlements.credits as amount,
   settlements.created_at
 from settlements
-where settlements.status = 'SETTLED' and settlements.credits > 0;
+where
+  settlements.status = 'SETTLED'
+  and settlements.credits > 0
+  and settlements.creditor_id <> settlements.debtor_id;
 
 create view balances as
 select
@@ -229,9 +245,11 @@ group by account_id;
 
 create view calibration_statistics as
 select
+  settlements.debtor_id as account_id,
   issues.repository_id,
   count(settlements.id)::integer as settlement_count,
   coalesce(avg(settlements.settled_points - settlements.opening_comparison_points), 0) as average_points_delta
-from issues
-left join settlements on settlements.issue_id = issues.id
-group by issues.repository_id;
+from settlements
+join issues on issues.id = settlements.issue_id
+where settlements.status = 'SETTLED'
+group by settlements.debtor_id, issues.repository_id;

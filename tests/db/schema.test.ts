@@ -98,6 +98,74 @@ describe("initial PostgreSQL materialization", () => {
     await expect(updateOriginalOpeningDifficulty(sql, issue.id)).rejects.toThrow();
   });
 
+  it("rejects a pull request whose issue belongs to another repository", async () => {
+    const issue = await insertIssue(sql);
+    const foreignRepository = await insertRepository(sql, await insertUser(sql));
+    const githubPullRequestId = nextExternalId();
+
+    await expect(sql`
+      insert into pull_requests (
+        github_pull_request_id,
+        repository_id,
+        issue_id,
+        pull_request_number,
+        url,
+        title,
+        body,
+        actual_label,
+        actual_points,
+        state,
+        merged_at
+      )
+      values (
+        ${githubPullRequestId},
+        ${foreignRepository},
+        ${issue.id},
+        ${nextExternalId()},
+        ${`https://github.com/example/repository/pull/${githubPullRequestId}`},
+        ${"A mismatched contribution"},
+        ${"Pull request evidence"},
+        ${"delivered/6"},
+        6,
+        ${"MERGED"},
+        now()
+      )
+    `).rejects.toThrow();
+  });
+
+  it("rejects a settlement whose issue does not match its pull request", async () => {
+    const pullRequest = await insertPullRequest(sql);
+    const unrelatedIssue = await insertIssue(sql);
+    const creditorId = await insertUser(sql);
+
+    await expect(sql`
+      insert into settlements (
+        pull_request_id,
+        issue_id,
+        creditor_id,
+        debtor_id,
+        opening_comparison_points,
+        settled_points,
+        review_rounds,
+        credits,
+        proof_sha256,
+        status
+      )
+      values (
+        ${pullRequest.id},
+        ${unrelatedIssue.id},
+        ${creditorId},
+        ${pullRequest.sponsorId},
+        5,
+        6,
+        2,
+        4,
+        ${"c".repeat(64)},
+        ${"SETTLED"}
+      )
+    `).rejects.toThrow();
+  });
+
   it("rejects duplicate settlement proof fingerprints", async () => {
     const proofFingerprint = "a".repeat(64);
     await insertSettledRecord(proofFingerprint);
@@ -119,6 +187,130 @@ describe("initial PostgreSQL materialization", () => {
       { account_id: settlement.creditorId, balance: 4 },
       { account_id: settlement.debtorId, balance: -4 },
     ].sort((left, right) => left.account_id.localeCompare(right.account_id)));
+  });
+
+  it("retains self-work only in self-work calibrations", async () => {
+    const pullRequest = await insertPullRequest(sql);
+
+    await expect(sql`
+      insert into settlements (
+        pull_request_id,
+        issue_id,
+        creditor_id,
+        debtor_id,
+        opening_comparison_points,
+        settled_points,
+        review_rounds,
+        credits,
+        proof_sha256,
+        status
+      )
+      values (
+        ${pullRequest.id},
+        ${pullRequest.issueId},
+        ${pullRequest.sponsorId},
+        ${pullRequest.sponsorId},
+        5,
+        6,
+        2,
+        4,
+        ${"d".repeat(64)},
+        ${"SETTLED"}
+      )
+    `).rejects.toThrow();
+
+    const [calibration] = await sql<{ pull_request_id: string; user_id: string }[]>`
+      insert into self_work_calibrations (
+        pull_request_id,
+        issue_id,
+        user_id,
+        opening_comparison_points,
+        actual_points
+      )
+      values (
+        ${pullRequest.id},
+        ${pullRequest.issueId},
+        ${pullRequest.sponsorId},
+        5,
+        6
+      )
+      returning pull_request_id, user_id
+    `;
+
+    expect(calibration).toEqual({
+      pull_request_id: pullRequest.id,
+      user_id: pullRequest.sponsorId,
+    });
+  });
+
+  it("records calibration audits as account evaluation periods without settlement rerating fields", async () => {
+    const accountId = await insertUser(sql);
+    const reporterId = await insertUser(sql);
+    const [audit] = await sql<{ account_id: string; settled_sample_size: number }[]>`
+      insert into calibration_audits (
+        account_id,
+        reporter_id,
+        rationale,
+        sample_started_at,
+        sample_ended_at,
+        settled_sample_size
+      )
+      values (
+        ${accountId},
+        ${reporterId},
+        ${"The account's settled sample warrants evaluation."},
+        now() - interval '30 days',
+        now(),
+        3
+      )
+      returning account_id, settled_sample_size
+    `;
+
+    expect(audit).toEqual({ account_id: accountId, settled_sample_size: 3 });
+
+    const columns = await sql<{ column_name: string }[]>`
+      select column_name
+      from information_schema.columns
+      where table_schema = 'public' and table_name = 'calibration_audits'
+    `;
+    const columnNames = columns.map((column) => column.column_name);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "account_id",
+        "sample_started_at",
+        "sample_ended_at",
+        "settled_sample_size",
+      ]),
+    );
+    expect(columnNames).not.toContain("settlement_id");
+    expect(columnNames).not.toContain("corrected_points");
+  });
+
+  it("derives account calibration statistics from settled facts only", async () => {
+    const settled = await insertSettledRecord("e".repeat(64));
+    const unsettled = await insertUnsettledRecord("f".repeat(64));
+
+    const [settledStatistics] = await sql<{
+      account_id: string;
+      settlement_count: number;
+      average_points_delta: number | string;
+    }[]>`
+      select account_id, settlement_count, average_points_delta
+      from calibration_statistics
+      where account_id = ${settled.debtorId}
+    `;
+    expect(settledStatistics).toMatchObject({
+      account_id: settled.debtorId,
+      settlement_count: 1,
+    });
+    expect(Number(settledStatistics.average_points_delta)).toBe(1);
+
+    const unsettledStatistics = await sql<{ account_id: string }[]>`
+      select account_id
+      from calibration_statistics
+      where account_id = ${unsettled.debtorId}
+    `;
+    expect(unsettledStatistics).toEqual([]);
   });
 
   it("rejects direct writes to every derived view", async () => {
@@ -280,6 +472,41 @@ async function insertSettledRecord(proofFingerprint: string): Promise<{
       returning creditor_id, debtor_id
     `;
     return { creditorId: settlement.creditor_id, debtorId: settlement.debtor_id };
+  });
+}
+
+async function insertUnsettledRecord(proofFingerprint: string): Promise<{ debtorId: string }> {
+  return withTransaction(async (transactionSql) => {
+    const pullRequest = await insertPullRequest(transactionSql);
+    const creditorId = await insertUser(transactionSql);
+    const [settlement] = await transactionSql<{ debtor_id: string }[]>`
+      insert into settlements (
+        pull_request_id,
+        issue_id,
+        creditor_id,
+        debtor_id,
+        opening_comparison_points,
+        settled_points,
+        review_rounds,
+        credits,
+        proof_sha256,
+        status
+      )
+      values (
+        ${pullRequest.id},
+        ${pullRequest.issueId},
+        ${creditorId},
+        ${pullRequest.sponsorId},
+        5,
+        null,
+        0,
+        0,
+        ${proofFingerprint},
+        ${"UNSETTLED"}
+      )
+      returning debtor_id
+    `;
+    return { debtorId: settlement.debtor_id };
   });
 }
 
