@@ -19,7 +19,7 @@ type GitHubIdentity = {
   avatarUrl: string | null;
 };
 
-export const { handlers: { GET, POST }, auth } = NextAuth({
+export const { handlers: { GET, POST }, auth, signIn } = NextAuth({
   providers: [
     GitHub({
       authorization: { params: { scope: githubOAuthScope } },
