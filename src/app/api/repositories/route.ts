@@ -92,12 +92,16 @@ export const POST = createRepositoryPostHandler({
   async createRegistrationDependencies(session) {
     const store = new PostgresRepositoryStore();
     const accessToken = await store.getGitHubAccessToken(session.user.id);
+    const enforcementState = await store.getEnforcementState(session.user.id);
     if (accessToken === null) {
       throw new Error("GitHub access token was unavailable.");
     }
+    if (enforcementState === null) {
+      throw new Error("Account enforcement state was unavailable.");
+    }
 
     return {
-      actor: session.user,
+      actor: { ...session.user, enforcementState },
       github: new GitHubGateway({ accessToken }),
       store,
       webhook: requiredWebhookConfiguration(),

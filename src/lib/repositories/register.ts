@@ -1,4 +1,4 @@
-import type { UserRole } from "@/lib/db/types";
+import type { EnforcementState, UserRole } from "@/lib/db/types";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -49,7 +49,7 @@ export type RepositoryRegistrationStore = {
 };
 
 export type RepositoryRegistrationDependencies = {
-  actor: { id: string; role: UserRole };
+  actor: { id: string; role: UserRole; enforcementState?: EnforcementState };
   github: RepositoryRegistrationGateway;
   store: RepositoryRegistrationStore;
   webhook: GitHubWebhookConfiguration;
@@ -65,10 +65,27 @@ export class RepositoryRegistrationError extends Error {
   }
 }
 
+export class RepositoryRegistrationEnforcementError extends Error {
+  public constructor() {
+    super("The account is not eligible to register repositories.");
+    this.name = "RepositoryRegistrationEnforcementError";
+  }
+}
+
 export async function registerRepository(
   dependencies: RepositoryRegistrationDependencies,
   input: RepositoryRegistrationInput,
 ): Promise<RegisteredRepository> {
+  if (
+    dependencies.actor.enforcementState !== undefined &&
+    dependencies.actor.enforcementState !== "ACTIVE"
+  ) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "The account is not eligible to register repositories.",
+    );
+  }
+
   const difficultyScheme = toDifficultyScheme(input);
   const validation = validateDifficultyScheme(difficultyScheme);
   if (!validation.ok) {
@@ -125,6 +142,14 @@ export async function registerRepository(
   } catch (error) {
     if (error instanceof RepositoryRegistrationError) {
       throw error;
+    }
+
+    if (error instanceof RepositoryRegistrationEnforcementError) {
+      await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
+      throw new RepositoryRegistrationError(
+        "FORBIDDEN",
+        "The account is not eligible to register repositories.",
+      );
     }
 
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);

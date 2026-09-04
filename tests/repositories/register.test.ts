@@ -63,6 +63,17 @@ describe("explicit repository registration", () => {
     ]);
   });
 
+  it("blocks a banned account from registering a repository before contacting GitHub", async () => {
+    const harness = createHarness({ actorEnforcementState: "BANNED" });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "The account is not eligible to register repositories.",
+    });
+    expect(harness.githubCalls).toEqual([]);
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
   it("denies a moderator who lacks GitHub administrator permission for the submitted repository", async () => {
     const harness = createHarness({ canAdminister: false });
 
@@ -140,6 +151,7 @@ describe("explicit repository registration", () => {
 
 type HarnessOptions = {
   actorRole?: "MEMBER" | "MODERATOR";
+  actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
   canAdminister?: boolean;
   existing?: RegisteredRepository | null;
   webhookFailure?: boolean;
@@ -152,8 +164,15 @@ function createHarness(options: HarnessOptions = {}) {
   const deletedWebhookIds: number[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
+  const actor = {
+    id: "moderator-id",
+    role: options.actorRole ?? "MODERATOR",
+    ...(options.actorEnforcementState === undefined
+      ? {}
+      : { enforcementState: options.actorEnforcementState }),
+  };
   const dependencies: RepositoryRegistrationDependencies = {
-    actor: { id: "moderator-id", role: options.actorRole ?? "MODERATOR" },
+    actor,
     github: {
       async getRepository(repository) {
         githubCalls.push(`getRepository:${repository.owner}/${repository.name}`);

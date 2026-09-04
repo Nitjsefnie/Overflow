@@ -1,9 +1,10 @@
-import type { SqlClient } from "@/lib/db/types";
+import type { EnforcementState, SqlClient } from "@/lib/db/types";
 import type {
   NewRegisteredRepository,
   RegisteredRepository,
   RepositoryRegistrationStore,
 } from "@/lib/repositories/register";
+import { RepositoryRegistrationEnforcementError } from "@/lib/repositories/register";
 import { getSql } from "@/lib/db/client";
 import { decryptToken } from "@/lib/security/token-cipher";
 
@@ -18,6 +19,10 @@ type RepositoryRow = {
 
 type OAuthTokenRow = {
   encrypted_oauth_token: Buffer | null;
+};
+
+type EnforcementStateRow = {
+  enforcement_state: EnforcementState;
 };
 
 export class PostgresRepositoryStore implements RepositoryRegistrationStore {
@@ -45,6 +50,12 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null> {
     try {
       const [row] = await this.sql<RepositoryRow[]>`
+        with eligible_sponsor as (
+          select id
+          from users
+          where id = ${repository.sponsorId} and enforcement_state = ${"ACTIVE"}
+          for update
+        )
         insert into registered_repositories (
           github_repository_id,
           owner_name,
@@ -53,14 +64,15 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           github_webhook_id,
           difficulty_scheme
         )
-        values (
+        select
           ${repository.githubRepositoryId},
           ${repository.ownerName},
-          ${repository.sponsorId},
+          eligible_sponsor.id,
           ${repository.visibility},
           ${repository.githubWebhookId},
           ${this.sql.json(repository.difficultyScheme)}
-        )
+        from eligible_sponsor
+        on conflict (github_repository_id) do nothing
         returning
           id,
           github_repository_id,
@@ -70,7 +82,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           github_webhook_id
       `;
       if (row === undefined) {
-        throw new Error("Repository insert returned no row.");
+        const enforcementState = await this.getEnforcementState(repository.sponsorId);
+        if (enforcementState !== "ACTIVE") {
+          throw new RepositoryRegistrationEnforcementError();
+        }
+        return null;
       }
 
       return toRegisteredRepository(row);
@@ -80,6 +96,16 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       }
       throw error;
     }
+  }
+
+  public async getEnforcementState(userId: string): Promise<EnforcementState | null> {
+    const [row] = await this.sql<EnforcementStateRow[]>`
+      select enforcement_state
+      from users
+      where id = ${userId}
+      limit 1
+    `;
+    return row?.enforcement_state ?? null;
   }
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
