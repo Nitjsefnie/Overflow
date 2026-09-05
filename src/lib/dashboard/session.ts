@@ -18,14 +18,18 @@ export async function requireMemberPageSession(): Promise<MemberPageSession> {
     redirect("/");
   }
 
+  // Not the landing page: it sends any session carrying an id and a member role
+  // straight back to /dashboard, so bouncing there on a JWT the ledger cannot
+  // vouch for produces an endless /dashboard -> / -> /dashboard loop. /session
+  // is terminal and carries the sign-out that clears the JWT.
   let currentRole: UserRole | null;
   try {
     currentRole = await getCurrentUserRole(user.id);
   } catch {
-    redirect("/");
+    redirect("/session?reason=unavailable");
   }
   if (currentRole === null) {
-    redirect("/");
+    redirect("/session?reason=stale");
   }
 
   return {
