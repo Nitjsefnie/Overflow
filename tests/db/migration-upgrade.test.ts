@@ -126,7 +126,7 @@ describe("upgrading an already-deployed database", () => {
   );
 });
 
-describe("the settled status check an upgraded database enforces", () => {
+describe("the settled status check a fresh database enforces", () => {
   // The rendering assertions above pass whatever rule 015 installs. These drive it: every write
   // the check exists to refuse has to be refused, and the writes it exists to allow accepted.
   let sponsorId = "";
@@ -152,6 +152,31 @@ describe("the settled status check an upgraded database enforces", () => {
     { name: "settled credit with no creditor", row: { creditorId: null } },
     { name: "settled credit that is not points minus review rounds", row: { credits: 3 } },
     { name: "settled credit with no settled amount", row: { settledPoints: null, credits: 0 } },
+    {
+      name: "an unclaimed amount above the ten-point ceiling",
+      row: {
+        status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder",
+        settledPoints: 11, credits: 9,
+      },
+    },
+    {
+      name: "an unclaimed amount below the one-point floor",
+      row: {
+        status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder",
+        settledPoints: 0, credits: 0,
+      },
+    },
+    {
+      name: "unclaimed credit that is not points minus review rounds",
+      row: { status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder", credits: 3 },
+    },
+    {
+      name: "unclaimed credit with no settled amount",
+      row: {
+        status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "holder",
+        settledPoints: null, credits: 0,
+      },
+    },
     {
       name: "unclaimed credit held by an account instead of a login",
       row: { status: "UNCLAIMED", creditorGitHubLogin: "holder" },
