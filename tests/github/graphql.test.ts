@@ -1,5 +1,140 @@
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitHubGraphqlClient } from "@/lib/github/graphql";
+
+describe("GitHubGraphqlClient failures", () => {
+  it("surfaces GitHub RATE_LIMIT type and message through the gateway", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        errors: [{
+          type: "RATE_LIMIT",
+          code: "graphql_rate_limit",
+          message: "API rate limit already exceeded for user ID 75166987.",
+        }],
+      }),
+    });
+
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" })).rejects.toThrow(
+      /RATE_LIMIT.*API rate limit already exceeded for user ID 75166987\./,
+    );
+  });
+
+  it("includes multiple errors and their supplied paths even alongside partial data", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: { repository: null },
+        errors: [
+          { type: "FORBIDDEN", message: "Resource not accessible", path: ["repository", "issues", 0] },
+          { type: "undefinedField", message: "Field removed", path: ["query", "repository", "oldField"] },
+        ],
+      }),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(
+      /FORBIDDEN.*Resource not accessible.*\["repository","issues",0\].*undefinedField.*Field removed.*\["query","repository","oldField"\]/,
+    );
+  });
+
+  it.each([
+    {}, { errors: null }, { errors: "bad" }, { errors: {} }, { errors: 42 },
+    { errors: [] }, { errors: [null, false, 42, "bad", []] },
+    { errors: [{}] }, { errors: [{ type: {}, message: [], path: {} }] },
+    null,
+  ])("normalizes malformed or missing errors to a readable failure: %j", async (payload) => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json(payload),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\./);
+  });
+
+  it.each([
+    [{ type: "FORBIDDEN" }, "FORBIDDEN"],
+    [{ message: "Field removed" }, "Field removed"],
+    [{ type: "FORBIDDEN", message: "Denied", path: [null, {}] }, "Denied"],
+  ])("keeps available fields when other fields are missing or malformed: %j", async (entry, detail) => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({ errors: [null, entry] }),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(String(detail));
+  });
+
+  it("bounds the summary to five errors and 512 characters per field with truncation markers", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({ errors: [
+        ...Array.from({ length: 5 }, (_, index) => ({
+          type: `ERROR_${index}${"t".repeat(10_000)}`,
+          message: `message_${index}${"m".repeat(10_000)}`,
+          path: Array.from({ length: 100 }, () => "p".repeat(10_000)),
+        })),
+        { type: "OMITTED", message: "must not appear" },
+      ] }),
+    });
+
+    const error = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("ERROR_4");
+    expect(message).toContain("message_4");
+    expect(message).not.toContain("OMITTED");
+    expect(message).not.toContain("m".repeat(513));
+    expect(message).toContain("…");
+    expect(message).toContain("1 more error");
+    expect(message.length).toBeLessThanOrEqual(8_000);
+  });
+
+  it("aborts a stalled request with the exact existing timeout message", async () => {
+    let signal: AbortSignal | null | undefined;
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      timeoutMs: 1,
+      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        signal = init?.signal;
+        signal?.addEventListener("abort", () => reject(new Error("private details")), { once: true });
+      }),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub request timed out\.$/);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("preserves the exact non-2xx message without the response body", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private details", { status: 502 }),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub API request failed with status 502\.$/);
+  });
+
+  it.each([
+    new Error("private network details"), "private rejection", null,
+    new Error("GitHub request timed out."),
+    new Error("GitHub API request failed with status 401."),
+  ])("normalizes unrelated rejections structurally: %j", async (failure) => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => { throw failure; },
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
+  });
+
+  it("normalizes JSON parse failures", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private invalid JSON"),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
+  });
+});
 
 describe("GitHubGateway GraphQL source adapter", () => {
   it("collects paginated immutable issue label, assignment, and owner-comment history", async () => {
