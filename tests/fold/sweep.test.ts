@@ -7,6 +7,26 @@ import {
 } from "@/lib/fold/sweep";
 
 describe("scheduled reconciliation sweep", () => {
+  it("counts reconciled, failed, and cooling repositories in one summary", async () => {
+    const attempted: string[] = [];
+    const failures: string[] = [];
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    await expect(sweepReconciliations({
+      listActiveRepositoryIds: async () => ["ready", "cooling", "broken"],
+      getReconciliationCooldown: async (id) => id === "cooling" ? new Date("2030-01-02T04:04:05.678Z") : null,
+      now,
+      reconcile: async (id) => {
+        attempted.push(id);
+        if (id === "broken") {
+          throw new Error("Reconciliation failed");
+        }
+      },
+      onFailure: (id) => { failures.push(id); },
+    })).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 1 });
+    expect(attempted).toEqual(["ready", "broken"]);
+    expect(failures).toEqual(["broken"]);
+  });
+
   it("counts a cooldown discovered under the repository lock as skipped", async () => {
     await expect(sweepReconciliations({
       listActiveRepositoryIds: async () => ["repo-a"],
