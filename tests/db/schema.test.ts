@@ -197,6 +197,7 @@ describe("initial PostgreSQL materialization", () => {
       "013_immutable_github_identity.sql",
       "013_reconciliation_cooldown.sql",
       "014_opening_authority_precondition.sql",
+      "015_normalize_settlement_status_check.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
