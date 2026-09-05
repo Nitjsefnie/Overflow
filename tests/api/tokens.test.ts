@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { apiTokenPrefix, hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import {
   createApiTokenPostHandler,
@@ -8,18 +9,20 @@ import {
 
 describe("POST /api/tokens", () => {
   beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    spyOnConsoleOutput();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    try {
+      expectNoConsoleOutput();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
-  it("mints a token for a signed-in member, returning the plaintext while storing only its hash", async () => {
+  it.each(["another-member-id", "second-member-id"])("mints a token for signed-in member %s, returning the plaintext while storing only its hash", async (userId) => {
     const store = recordingStore();
-    const handler = createApiTokenPostHandler(signedInAs("another-member-id", store));
+    const handler = createApiTokenPostHandler(signedInAs(userId, store));
 
     const response = await handler(mintRequest());
     const body = (await response.json()) as { token: string; createdAt: string };
@@ -29,14 +32,13 @@ describe("POST /api/tokens", () => {
       token: expect.stringMatching(/^ovf_[A-Za-z0-9_-]{43}$/),
       createdAt: issuedAt.toISOString(),
     });
-    expect(store.calls).toEqual([{ userId: "another-member-id", tokenHash: expect.any(Buffer) }]);
+    expect(store.calls).toEqual([{ userId, tokenHash: expect.any(Buffer) }]);
 
     // The whole "shown once" design fails silently if these two are swapped, so
     // assert the relationship rather than either value on its own.
     const storedHash = store.calls[0].tokenHash;
     expect(storedHash.equals(hashApiToken(body.token) as Buffer)).toBe(true);
     expect(storedHash.equals(Buffer.from(body.token, "utf8"))).toBe(false);
-    expectNoConsoleCalls();
   });
 
   it("returns a structured 401 without a session and never reaches the store", async () => {
@@ -69,7 +71,6 @@ describe("POST /api/tokens", () => {
     const storedHash = store.calls[0].tokenHash;
     expect(text).not.toContain(storedHash.toString("hex"));
     expect(text).not.toContain(storedHash.toString("base64url"));
-    expectNoConsoleCalls();
   });
 
   it("returns a structured 502 without logging when token store creation fails after minting", async () => {
@@ -86,7 +87,6 @@ describe("POST /api/tokens", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UPSTREAM_FAILURE", message: "Unable to issue an API token." },
     });
-    expectNoConsoleCalls();
   });
 
   it("returns a structured 502 when the session lookup fails", async () => {
@@ -117,7 +117,6 @@ describe("POST /api/tokens", () => {
     expect(second.token).not.toEqual(first.token);
     expect(store.calls).toHaveLength(2);
     expect(store.calls[1].tokenHash.equals(store.calls[0].tokenHash)).toBe(false);
-    expectNoConsoleCalls();
   });
 
   it("refuses to mint for a request carrying only an API token credential", async () => {
@@ -137,12 +136,6 @@ describe("POST /api/tokens", () => {
     expect(store.accountLookups).toEqual([]);
   });
 });
-
-function expectNoConsoleCalls(): void {
-  expect(console.log).not.toHaveBeenCalled();
-  expect(console.error).not.toHaveBeenCalled();
-  expect(console.warn).not.toHaveBeenCalled();
-}
 
 const issuedAt = new Date("2026-09-05T10:00:00.000Z");
 
