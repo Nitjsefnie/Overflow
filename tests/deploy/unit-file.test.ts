@@ -177,6 +177,42 @@ const requiredEnvironment: Readonly<Record<string, string>> = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
 };
 
+/**
+ * The start command's tokens, with a `--name=value` argument written as the two
+ * tokens it stands for.
+ *
+ * That is the only equivalence the pin allows, and it is not a guess:
+ * checked against the commander build Next actually bundles in this tree,
+ * `next start --hostname=127.0.0.1 --port=3000` resolves to the same options as
+ * the space-separated spelling. Nothing else is normalised, so the short
+ * aliases stay visible as the extra tokens they are — `-H 0.0.0.0` and the
+ * attached `-H0.0.0.0`, both of which that same check showed do move the
+ * listener, do not match this vector and never will.
+ */
+function startCommandTokens(command: ReadonlyArray<string>): string[] {
+  return command.flatMap((token) => {
+    const joined = /^(--[^=]+)=(.*)$/.exec(token);
+
+    return joined ? [joined[1]!, joined[2]!] : [token];
+  });
+}
+
+describe("start command tokens", () => {
+  it.each([
+    [["--hostname=127.0.0.1"], ["--hostname", "127.0.0.1"]],
+    [["--hostname", "127.0.0.1"], ["--hostname", "127.0.0.1"]],
+    [["--port=3000", "--hostname=0.0.0.0"], ["--port", "3000", "--hostname", "0.0.0.0"]],
+    [["-H0.0.0.0"], ["-H0.0.0.0"]],
+    [["-H", "0.0.0.0"], ["-H", "0.0.0.0"]],
+    [
+      ["/srv/overflow/node_modules/next/dist/bin/next", "start"],
+      ["/srv/overflow/node_modules/next/dist/bin/next", "start"],
+    ],
+  ])("reads %j as %j", (command, expected) => {
+    expect(startCommandTokens(command)).toEqual(expected);
+  });
+});
+
 describe("Overflow production unit", () => {
   let source = "";
 
@@ -307,6 +343,8 @@ describe("Overflow production unit", () => {
   });
 
   it("runs exactly the reviewed start command, token by token", () => {
-    expect(only("Service", "ExecStart").words).toEqual([...requiredStartCommand]);
+    expect(startCommandTokens(only("Service", "ExecStart").words)).toEqual([
+      ...requiredStartCommand,
+    ]);
   });
 });
