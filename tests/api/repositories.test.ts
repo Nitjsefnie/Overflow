@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { trustedOrigin } from "../support/trusted-origin";
+import {
+  expectNoDependencyCall,
+  foreignOrigin,
+  guardedRequests,
+  trustedOrigin,
+  useTrustedOrigin,
+} from "../support/trusted-origin";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -17,6 +23,8 @@ import { POST, createRepositoryPostHandler } from "@/app/api/repositories/route"
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+
+useTrustedOrigin();
 
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue(null);
@@ -346,6 +354,38 @@ describe("POST /api/repositories", () => {
       existingWorkIngested: false,
     });
   });
+
+  // A cross-site form post carries the session cookie by itself, so a forged
+  // registration must cost the server nothing: no token lookup, no session
+  // read, no registration setup.
+  it("refuses a foreign-origin cookie request before the token lookup or the session read", async () => {
+    const dependencies = unusedRouteDependencies();
+    const handler = createRepositoryPostHandler(dependencies);
+
+    const response = await handler(foreignTextRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin cookie request that is not JSON", async () => {
+    const dependencies = unusedRouteDependencies();
+    const handler = createRepositoryPostHandler(dependencies);
+
+    const response = await handler(trustedTextRequest(validInput()));
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expectNoDependencyCall(dependencies);
+  });
 });
 
 const apiToken = `ovf_${"recognisable-api-credential".padEnd(43, "_")}`;
@@ -374,10 +414,34 @@ function tokenFixture(account: ApiTokenAccount | null = tokenAccount) {
   return { handler, getSession, findAccountByTokenHash, createRegistrationDependencies };
 }
 
-function authorizedRequest(body: unknown = validInput(), credential = apiToken): Request {
-  const request = jsonRequest(body);
-  request.headers.set("authorization", `Bearer ${credential}`);
-  return request;
+/** Every route dependency as a mock, for requests the guard must refuse outright. */
+function unusedRouteDependencies() {
+  return {
+    getSession: vi.fn(),
+    findAccountByTokenHash: vi.fn(),
+    createRegistrationDependencies: vi.fn(),
+  };
+}
+
+/**
+ * A programmatic client is not a browser: it sends no `Origin` header at all,
+ * so every token-path test here exercises the request shape a script actually
+ * produces.
+ */
+function authorizedRequest(
+  body: unknown = validInput(),
+  credential = apiToken,
+  headers: Record<string, string> = {},
+): Request {
+  return new Request(routeUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${credential}`,
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 describe("Overflow token registration", () => {
@@ -451,7 +515,9 @@ describe("Overflow token registration", () => {
 
   it("falls through to the cookie for a malformed Authorization header", async () => {
     const fixture = tokenFixture();
-    const request = authorizedRequest();
+    // Unrecognized credentials land on the cookie path, guard included, so this
+    // request is built as the browser one it is treated as.
+    const request = jsonRequest(validInput());
     request.headers.set("authorization", "Basic abc");
     const response = await fixture.handler(request);
     expect(response.status).toBe(201);
@@ -590,8 +656,6 @@ describe("Overflow token registration", () => {
       .mockResolvedValue("ACTIVE");
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
-    // Minting is a cookie-authenticated mutation, so it is same-origin only.
-    vi.stubEnv("APP_URL", trustedOrigin);
     const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchGitHub);
 
@@ -599,6 +663,7 @@ describe("Overflow token registration", () => {
     for (const [index, { account }] of identities.entries()) {
       readSession.mockResolvedValue({ user: account });
       const response = await mintToken(
+        // Minting is a cookie-authenticated mutation, so it is same-origin only.
         new Request("https://overflow.example/api/tokens", {
           method: "POST",
           headers: { origin: trustedOrigin },
@@ -636,15 +701,65 @@ describe("Overflow token registration", () => {
     expect(enforcement).toHaveBeenCalledTimes(identities.length);
     expect(fetchGitHub).toHaveBeenCalledTimes(identities.length);
   });
+
+  // A bearer credential is supplied deliberately by the client; a browser never
+  // attaches one to a cross-site request the way it attaches a session cookie.
+  // So the origin of a token-authenticated request is not consulted at all.
+  it.each<{ label: string; headers: Record<string, string> }>([
+    { label: "no Origin header", headers: {} },
+    { label: "a foreign Origin header", headers: { origin: foreignOrigin } },
+  ])("registers a bearer-token request that carries $label", async ({ headers }) => {
+    const fixture = tokenFixture();
+
+    const response = await fixture.handler(authorizedRequest(validInput(), apiToken, headers));
+
+    expect(response.status).toBe(201);
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
+      createHash("sha256").update(apiToken).digest(),
+    );
+  });
+
+  // The origin check is the only half a token request skips, and it is the only
+  // half that reads APP_URL: an unconfigured origin cannot strand a script.
+  it("registers a bearer-token request even when APP_URL is unset", async () => {
+    vi.stubEnv("APP_URL", "");
+    const fixture = tokenFixture();
+
+    const response = await fixture.handler(authorizedRequest());
+
+    expect(response.status).toBe(201);
+  });
+
+  it.each([
+    { label: "a recognized credential", credential: apiToken },
+    // A credential that fails the format check answers 401 at the hashing step,
+    // so a 415 for this one proves the content type is checked before the token
+    // is hashed or looked up.
+    { label: "a malformed credential", credential: "not-an-overflow-token" },
+  ])("refuses a text/plain bearer request carrying $label", async ({ credential }) => {
+    const fixture = tokenFixture();
+
+    const response = await fixture.handler(
+      authorizedRequest(validInput(), credential, { "content-type": "text/plain" }),
+    );
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expect(fixture.findAccountByTokenHash).not.toHaveBeenCalled();
+    expect(fixture.getSession).not.toHaveBeenCalled();
+    expect(fixture.createRegistrationDependencies).not.toHaveBeenCalled();
+  });
 });
 
-function jsonRequest(body: unknown): Request {
-  return new Request("https://overflow.example/api/repositories", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
+const routeUrl = "https://overflow.example/api/repositories";
+const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
+  guardedRequests(routeUrl);
 
 function validInput() {
   return {

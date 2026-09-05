@@ -51,6 +51,20 @@ export function rejectUntrustedRequest(
     return errorResponse(403, "FORBIDDEN", "The request origin is not allowed.");
   }
 
+  return rejectUnsupportedMediaType(request);
+}
+
+/**
+ * The content-type half of the guard on its own, for a route that authenticates
+ * a credential the client attaches deliberately rather than a cookie the browser
+ * attaches for it. Such a request has no origin to check — a programmatic client
+ * sends no `Origin` header — but it still may not smuggle a non-JSON body past a
+ * handler that only ever parses JSON.
+ *
+ * It reads nothing from the environment, so an unconfigured `APP_URL` cannot
+ * strand a client that never depended on it.
+ */
+export function rejectUnsupportedMediaType(request: Request): Response | null {
   // No content type at all is allowed: `POST /api/tokens` legitimately sends no
   // body, and a body-carrying request that omits the header still fails its own
   // schema parse.
