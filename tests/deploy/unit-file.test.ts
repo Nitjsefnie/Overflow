@@ -18,6 +18,17 @@ import {
  * fails the suite, so `ExecStartPre=`, `SupplementaryGroups=`,
  * `ReadWriteDirectories=` (systemd's still-live alias for `ReadWritePaths=`) or
  * `BindReadOnlyPaths=` cannot be added without a human putting them here first.
+ *
+ * Closed on names is only half of it, and the missing half was a hole: every key
+ * here also carries a pinned value, checked by `pins a value for every directive
+ * on the reviewed set`. `StandardOutput=` is why. It was admitted by name with
+ * its value left open, and systemd opens a `file:`, `append:` or `truncate:`
+ * target as PID 1 — as root, before the mount namespace and before the drop to
+ * `User=` — so `StandardOutput=truncate:/etc/cron.d/overflow` truncates a
+ * root-owned file outside the sandbox on every start, and `append:` writes
+ * process-controlled bytes into one. Measured on systemd 257.13: a transient
+ * unit with `User=overflow` and `ProtectSystem=strict` created a root-owned file
+ * in a directory that is read-only inside its own namespace.
  */
 const REVIEWED_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -82,7 +93,28 @@ const requiredServiceValues: ReadonlyArray<readonly [string, string]> = [
   ["SystemCallFilter", "@system-service"],
   ["SystemCallErrorNumber", "EPERM"],
   ["UMask", "0077"],
+  ["Type", "simple"],
+  ["Restart", "on-failure"],
+  ["RestartSec", "5s"],
+  ["StandardOutput", "journal"],
+  ["StandardError", "journal"],
+  ["SyslogIdentifier", "overflow"],
+  ["EnvironmentFile", "/etc/overflow/overflow.env"],
+  ["WorkingDirectory", "/srv/overflow"],
 ];
+
+/**
+ * The reviewed keys a test of their own pins rather than one of the tables
+ * above, because what they are pinned to is not a single literal value. Listing
+ * them here is what lets `pins a value for every directive on the reviewed set`
+ * insist that the reviewed set and the pinned set are the same set, so a key
+ * cannot be admitted with its value left open.
+ */
+const separatelyPinnedServiceKeys: ReadonlyMap<string, string> = new Map([
+  ["Environment", "pinned as the resolved environment map, last-wins and resets applied"],
+  ["ExecStart", "pinned as the whole command vector, token by token"],
+  ["MemoryDenyWriteExecute", "pinned absent, or present in a spelling systemd reads as false"],
+]);
 
 /** `[Service]` directives that must be on, in any spelling systemd reads as true. */
 const requiredServiceSwitches: ReadonlyArray<string> = [
@@ -185,6 +217,17 @@ describe("Overflow production unit", () => {
 
   it("parses under systemd's grammar with no shape the guard has to guess at", () => {
     expect(() => parseUnitFile(source)).not.toThrow();
+  });
+
+  it("pins a value for every directive on the reviewed set", () => {
+    const pinned = new Set([
+      ...requiredServiceValues.map(([key]) => key),
+      ...requiredServiceSwitches,
+      ...separatelyPinnedServiceKeys.keys(),
+    ]);
+
+    expect([...REVIEWED_SERVICE_KEYS].filter((key) => !pinned.has(key))).toEqual([]);
+    expect([...pinned].filter((key) => !REVIEWED_SERVICE_KEYS.has(key))).toEqual([]);
   });
 
   it("declares no [Service] directive outside the reviewed set", () => {
