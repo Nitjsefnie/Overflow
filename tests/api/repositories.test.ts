@@ -362,7 +362,7 @@ describe("POST /api/repositories", () => {
     const dependencies = unusedRouteDependencies();
     const handler = createRepositoryPostHandler(dependencies);
 
-    const response = await handler(foreignTextRequest(validInput()));
+    const response = await handler(foreignJsonRequest(validInput()));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
@@ -386,6 +386,32 @@ describe("POST /api/repositories", () => {
     });
     expectNoDependencyCall(dependencies);
   });
+
+  // Which guard applies is decided by whether a bearer credential parsed, never
+  // by whether an Authorization header is merely present. Behind a reverse proxy
+  // doing HTTP Basic, every browser request carries `Authorization: Basic ...`,
+  // so the cheaper predicate would exempt all of them from the origin check and
+  // then read the victim's session cookie anyway.
+  it.each<{ label: string; build: (body: unknown) => Request }>([
+    { label: "JSON", build: foreignJsonRequest },
+    { label: "text/plain", build: foreignTextRequest },
+  ])(
+    "refuses a foreign-origin $label request whose Authorization header is not a bearer credential",
+    async ({ build }) => {
+      const dependencies = unusedRouteDependencies();
+      const handler = createRepositoryPostHandler(dependencies);
+      const request = build(validInput());
+      request.headers.set("authorization", "Basic abc");
+
+      const response = await handler(request);
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+      });
+      expectNoDependencyCall(dependencies);
+    },
+  );
 });
 
 const apiToken = `ovf_${"recognisable-api-credential".padEnd(43, "_")}`;
@@ -758,8 +784,12 @@ describe("Overflow token registration", () => {
 });
 
 const routeUrl = "https://overflow.example/api/repositories";
-const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
-  guardedRequests(routeUrl);
+const {
+  json: jsonRequest,
+  foreignJson: foreignJsonRequest,
+  foreignText: foreignTextRequest,
+  trustedText: trustedTextRequest,
+} = guardedRequests(routeUrl);
 
 function validInput() {
   return {
