@@ -199,7 +199,7 @@ export class AccountModerationService {
     ) {
       throw new ModerationServiceError(
         "INSUFFICIENT_SAMPLES",
-        "At least ten self-work and ten outsider-settlement pairs are required.",
+        `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required.`,
       );
     }
 
