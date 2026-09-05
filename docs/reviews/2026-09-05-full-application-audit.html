@@ -593,6 +593,7 @@
       const cards = Array.from(document.querySelectorAll('.finding'));
       const labels = { fix: 'Fix', defer: 'Defer', accept: 'Accept risk' };
       const docUrl = 'https://docs.nitjsefni.eu/#/d/overflow/2026-09-05-full-application-audit';
+      const agentDocUrl = 'https://docs.nitjsefni.eu/d/overflow/2026-09-05-full-application-audit';
       const clean = (value) => value.replace(/\s+/g, ' ').trim();
       function paragraphText(element) {
         const paragraphs = Array.from(element.querySelectorAll('p'));
@@ -649,7 +650,7 @@
         const current = report();
         const chosen = current.findings.filter((finding) => finding.decision !== null || finding.notes);
         const lines = [
-          'Use this Overflow audit register: ' + docUrl,
+          'Use this Overflow audit register: ' + agentDocUrl,
           'Baseline full-suite evidence belongs to ' + current.baselineSha + '.',
           'OAuth scope correction: ' + current.deploymentAddendumSha + '. I1 is primary-fixed; its decisions cover remaining follow-ups only.',
           'Review decisions below are planning input. Apply recorded fix decisions within the authorized task; retain defer/accept decisions and their conditions. Unreviewed items are not approved changes.',
