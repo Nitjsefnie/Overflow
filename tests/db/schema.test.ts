@@ -245,9 +245,18 @@ describe("initial PostgreSQL materialization", () => {
         );
       }
       await expect(readIssue()).resolves.toEqual(before);
+      // Each migration commits on its own, so a raised precondition rolls back only the migration
+      // that raised it: 013 stays applied and a re-run resumes at 014 instead of replaying it.
       await expect(upgradeSql`
-        select name from schema_migrations where name = '014_opening_authority_precondition.sql'
-      `).resolves.toEqual(sponsorAuthored ? [{ name: "014_opening_authority_precondition.sql" }] : []);
+        select name from schema_migrations
+        where name in (${"013_immutable_github_identity.sql"}, ${"014_opening_authority_precondition.sql"})
+        order by name
+      `).resolves.toEqual(sponsorAuthored
+        ? [
+            { name: "013_immutable_github_identity.sql" },
+            { name: "014_opening_authority_precondition.sql" },
+          ]
+        : [{ name: "013_immutable_github_identity.sql" }]);
     } finally {
       await closeSql();
       process.env.DATABASE_URL = databaseUrl;
