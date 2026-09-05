@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
-import { GenericContainer, Wait } from "testcontainers";
+import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
 import type { CalibrationPair } from "@/lib/calibration/statistics";
 import { closeSql, getSql } from "@/lib/db/client";
 import type { OpenAccountAuditStoreInput } from "@/lib/moderation/service";
@@ -9,27 +10,20 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { RepositoryRegistrationEnforcementError } from "@/lib/repositories/register";
 
-let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
+let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 40_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 describe("PostgreSQL account moderation transitions", () => {
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:17-alpine")
-      .withEnvironment({
-        POSTGRES_DB: "overflow_moderation_test",
-        POSTGRES_PASSWORD: "overflow_moderation_test",
-        POSTGRES_USER: "overflow_moderation_test",
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(
-        Wait.forSuccessfulCommand(
-          "psql -U overflow_moderation_test -d overflow_moderation_test -c 'select 1' >/dev/null 2>&1",
-        ),
-      )
-      .start();
-    process.env.DATABASE_URL = `postgresql://overflow_moderation_test:overflow_moderation_test@${container.getHost()}:${container.getMappedPort(5432)}/overflow_moderation_test`;
+    const started = await startPostgresContainer({
+      database: "overflow_moderation_test",
+      user: "overflow_moderation_test",
+      password: "overflow_moderation_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
