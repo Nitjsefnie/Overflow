@@ -113,6 +113,31 @@ const requiredInstallValues: ReadonlyArray<readonly [string, string]> = [
   ["WantedBy", "multi-user.target"],
 ];
 
+/**
+ * The start command, token by token: the interpreter, the script and the whole
+ * argument vector. Pinning the spelling of one flag at a time does not hold —
+ * Next's bundled commander declares `-p, --port` and `-H, --hostname` as the
+ * same options and resolves the last occurrence of either, so `-H 0.0.0.0`
+ * appended to a pinned `--hostname 127.0.0.1` moves the listener off the
+ * loopback address nginx proxies to; and systemd expands `$VAR` in a command
+ * line and word-splits the result, so any argument at all can arrive from
+ * `EnvironmentFile=`. An exact vector is the only shape with no residue: the
+ * interpreter stays an absolute path outside `/root`, Next's own CLI is started
+ * rather than a package manager that would drag corepack and a writable cache
+ * in, the listener stays on `127.0.0.1:3000`, and `next dev` cannot stand in
+ * for `next start`. Changing the command the service runs is a deliberate edit
+ * here as well as in the unit.
+ */
+const requiredStartCommand: ReadonlyArray<string> = [
+  "/usr/local/bin/node",
+  "/srv/overflow/node_modules/next/dist/bin/next",
+  "start",
+  "--hostname",
+  "127.0.0.1",
+  "--port",
+  "3000",
+];
+
 /** The environment the unit hands the service, resolved: exactly this, nothing more. */
 const requiredEnvironment: Readonly<Record<string, string>> = {
   NODE_ENV: "production",
@@ -156,26 +181,6 @@ describe("Overflow production unit", () => {
     }
 
     return environment;
-  };
-
-  /** The start command with the `-`/`@` prefixes stripped from the binary only. */
-  const execStartCommand = (): string[] => {
-    const [binary, ...argv] = only("Service", "ExecStart").words;
-
-    return [(binary ?? "").replace(/^[-@]+/, ""), ...argv];
-  };
-
-  const optionValue = (command: string[], option: string): string | undefined => {
-    const positions = command.flatMap((token, index) =>
-      token === option || token.startsWith(`${option}=`) ? [index] : [],
-    );
-
-    expect(positions, `${option} is given ${positions.length} times`).toHaveLength(1);
-
-    const token = command[positions[0]!]!;
-    return token === option
-      ? command[positions[0]! + 1]
-      : token.slice(option.length + 1);
   };
 
   it("parses under systemd's grammar with no shape the guard has to guess at", () => {
@@ -258,19 +263,7 @@ describe("Overflow production unit", () => {
     ).toEqual([]);
   });
 
-  it("starts Next directly rather than through a package manager", () => {
-    const command = execStartCommand();
-
-    expect(command[0]).toMatch(/^\//);
-    expect(
-      command.filter((token) => /(^|\/)(pnpm|pnpx|npm|npx|yarn|corepack)$/.test(token)),
-    ).toEqual([]);
-  });
-
-  it("binds the loopback listener nginx proxies to", () => {
-    const command = execStartCommand();
-
-    expect(optionValue(command, "--hostname")).toBe("127.0.0.1");
-    expect(optionValue(command, "--port")).toBe("3000");
+  it("runs exactly the reviewed start command, token by token", () => {
+    expect(only("Service", "ExecStart").words).toEqual([...requiredStartCommand]);
   });
 });
