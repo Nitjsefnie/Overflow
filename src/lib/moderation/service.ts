@@ -1,6 +1,7 @@
 import {
   CalibrationStatisticsError,
   compareCalibration,
+  MINIMUM_CALIBRATION_SAMPLE_SIZE,
   type CalibrationComparison,
   type CalibrationPair,
 } from "@/lib/calibration/statistics";
@@ -192,7 +193,10 @@ export class AccountModerationService {
       }
       throw error;
     }
-    if (comparison.selfWork.count < 10 || comparison.outsider.count < 10) {
+    if (
+      comparison.selfWork.count < MINIMUM_CALIBRATION_SAMPLE_SIZE ||
+      comparison.outsider.count < MINIMUM_CALIBRATION_SAMPLE_SIZE
+    ) {
       throw new ModerationServiceError(
         "INSUFFICIENT_SAMPLES",
         "At least ten self-work and ten outsider-settlement pairs are required.",
