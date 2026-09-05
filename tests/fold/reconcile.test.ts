@@ -105,18 +105,31 @@ describe("reconcileRepository", () => {
     expect(materializer.snapshot()).toEqual(canonicalStateAfterFirstRun);
   });
 
-  it("records a sanitized failed reconciliation run instead of an upstream error message", async () => {
+  it("records a sanitized failed run while logging and propagating the cause", async () => {
+    const upstream = new Error("token=secret should not be persisted");
     const dependencies = reconciliationDependencies({
       github: {
-        listIssues: vi.fn().mockRejectedValue(new Error("token=secret should not be persisted")),
+        listIssues: vi.fn().mockRejectedValue(upstream),
       },
     });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(reconcileRepository(dependencies, "repository")).rejects.toThrow(
-      "Unable to reconcile repository.",
-    );
+    try {
+      const failure = await reconcileRepository(dependencies, "repository").then(
+        () => {
+          throw new Error("Reconciliation was expected to fail.");
+        },
+        (error: unknown) => error,
+      );
 
-    expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("Unable to reconcile repository.");
+      expect((failure as Error).cause).toBe(upstream);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it.each(["WARNED", "UNDER_AUDIT"] as const)(
