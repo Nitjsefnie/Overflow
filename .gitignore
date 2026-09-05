@@ -73,6 +73,9 @@ src/app/calibration/*
 !src/app/moderation/
 src/app/moderation/*
 !src/app/moderation/*.tsx
+!src/app/rules/
+src/app/rules/*
+!src/app/rules/*.tsx
 !src/components/
 src/components/*
 !src/components/*.tsx
