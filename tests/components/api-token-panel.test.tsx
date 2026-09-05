@@ -6,13 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiTokenPanel } from "@/components/api-token-panel";
 import NewRepositoryPage from "@/app/repositories/new/page";
 
-const { getTokenSummary } = vi.hoisted(() => ({ getTokenSummary: vi.fn() }));
+const { getTokenSummary, requireMemberPageSession } = vi.hoisted(() => ({
+  getTokenSummary: vi.fn(),
+  requireMemberPageSession: vi.fn(),
+}));
 
 vi.mock("@/lib/tokens/postgres-store", () => ({
   PostgresApiTokenStore: class { getTokenSummary = getTokenSummary; },
 }));
 vi.mock("@/lib/dashboard/session", () => ({
-  requireMemberPageSession: async () => ({ user: { id: "member-id", name: "Ada", role: "MEMBER" } }),
+  requireMemberPageSession,
   isModeratorSession: () => false,
 }));
 
@@ -48,7 +51,10 @@ describe("API token panel", () => {
     expect(screen.queryByRole("button", { name: "Generate token" })).not.toBeInTheDocument();
   });
 
-  it("posts with the member cookie and shows the selectable token with a shown-once warning", async () => {
+  it("posts with the member cookie and shows the selectable token with a shown-once warning without logging", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchMock = vi.fn().mockResolvedValue(mintedToken());
     vi.stubGlobal("fetch", fetchMock);
     render(<ApiTokenPanel summary={null} />);
@@ -63,6 +69,9 @@ describe("API token panel", () => {
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/tokens", {
       method: "POST", credentials: "same-origin",
     });
+    expect(consoleLog).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("keeps plaintext through a rerender but loses it on remount without writing browser storage", async () => {
@@ -212,14 +221,20 @@ describe("repository registration page token panel", () => {
     }
   });
 
-  it.each([null, { createdAt: new Date(createdAt) }])("passes the member summary %j to the panel below the form", async (summary) => {
+  it.each([
+    { memberId: "member-without-token", summary: null },
+    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt) } },
+  ])("passes the member summary for $memberId to the panel below the form", async ({ memberId, summary }) => {
+    requireMemberPageSession.mockReset().mockResolvedValue({
+      user: { id: memberId, name: "Ada", role: "MEMBER" },
+    });
     getTokenSummary.mockReset().mockResolvedValue(summary);
     render(await NewRepositoryPage());
 
     const panel = screen.getByRole("region", { name: "Overflow API token" });
     const form = screen.getByRole("form", { name: "Register one repository" });
     expect(form.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(getTokenSummary).toHaveBeenCalledExactlyOnceWith("member-id");
+    expect(getTokenSummary).toHaveBeenCalledExactlyOnceWith(memberId);
     expect(screen.getByRole("button", { name: summary ? "Regenerate token" : "Generate token" })).toBeEnabled();
     if (summary) {
       expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
