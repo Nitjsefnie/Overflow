@@ -36,6 +36,13 @@ export function UnwritableClosureQueue({ closures }: UnwritableClosureQueueProps
               <p>
                 <a href={`/settlements/${closure.settlementId}`}>Open the settlement to request a correction</a>
               </p>
+              {closure.settlementParties === null ? null : (
+                <p className="mono-meta">
+                  Only a party can request a correction: {closure.settlementParties.creditorLogin === null ? null : (
+                    <><code>{closure.settlementParties.creditorLogin}</code> or </>
+                  )}<code>{closure.settlementParties.debtorLogin}</code>.
+                </p>
+              )}
               {closure.latestCorrection === null ? null : (
                 <p className="mono-meta">
                   Correction {closure.latestCorrection.state.toLowerCase()} · reported {closure.latestCorrection.requestedAt}
