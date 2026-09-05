@@ -140,7 +140,6 @@ db/*
 !db/migrations/
 db/migrations/*
 !db/migrations/*.sql
-!db/migrations/013_reconciliation_cooldown.sql
 
 !public/
 public/*
