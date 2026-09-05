@@ -67,6 +67,7 @@ src/app/repositories/new/*
 !src/app/repositories/new/*.tsx
 !src/app/settlements/
 src/app/settlements/*
+!src/app/settlements/*.tsx
 !src/app/settlements/[[]id[]]/
 src/app/settlements/[[]id[]]/*
 !src/app/settlements/[[]id[]]/*.tsx

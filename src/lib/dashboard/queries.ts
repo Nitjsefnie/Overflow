@@ -67,6 +67,25 @@ export type RecentSettlementProjection = {
   settledAt: string;
 };
 
+export type SettlementStatus = "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+
+/** One row of the member's settlement history, including work that was found and scored zero. */
+export type SettlementHistoryProjection = {
+  id: string;
+  status: SettlementStatus;
+  repositoryName: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  credits: number;
+  reviewRounds: number;
+  balanceEffect: number;
+  settledAt: string;
+};
+
+/** The settlement history is unpaginated, so it is capped at a depth a member can still read. */
+export const SETTLEMENT_HISTORY_LIMIT = 200;
+
 export type EligibleIssueProjection = {
   id: string;
   repositoryName: string;
@@ -92,7 +111,7 @@ export type EligibleIssueFilters = {
 
 export type SettlementProofProjection = {
   id: string;
-  status: "SETTLED" | "UNSETTLED" | "UNCLAIMED";
+  status: SettlementStatus;
   repositoryName: string;
   issueNumber: number;
   issueTitle: string;
@@ -209,6 +228,19 @@ type RecentSettlementRow = {
   proof_sha256: string;
   credits: number | string;
   review_rounds: number | string;
+  settled_at: string | Date;
+};
+
+type SettlementHistoryRow = {
+  id: string;
+  status: string;
+  repository_name: string;
+  issue_number: number | string;
+  issue_title: string;
+  issue_url: string;
+  credits: number | string;
+  review_rounds: number | string;
+  balance_effect: number | string;
   settled_at: string | Date;
 };
 
@@ -523,6 +555,52 @@ export async function listEligibleIssues(
     }
     return projection;
   });
+}
+
+/**
+ * Lists every settlement the account is party to, newest first. `UNSETTLED` rows stay in the list because
+ * work that merged and scored zero is part of the record a balance was built from.
+ */
+export async function listSettlementHistory(
+  accountId: string,
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<SettlementHistoryProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<SettlementHistoryRow[]>`
+    select
+      settlements.id,
+      settlements.status::text as status,
+      repositories.owner_name as repository_name,
+      issues.issue_number,
+      issues.title as issue_title,
+      issues.url as issue_url,
+      settlements.credits,
+      settlements.review_rounds,
+      settlements.created_at as settled_at,
+      case
+        when settlements.status = 'SETTLED' and settlements.creditor_id = ${accountId} then settlements.credits
+        when settlements.status = 'SETTLED' and settlements.debtor_id = ${accountId} then -settlements.credits
+        else 0
+      end::integer as balance_effect
+    from settlements
+    join issues on issues.id = settlements.issue_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where (settlements.creditor_id = ${accountId} or settlements.debtor_id = ${accountId})
+    order by settlements.created_at desc, settlements.id desc
+    limit ${SETTLEMENT_HISTORY_LIMIT}
+  `;
+  return rows.map((row) => ({
+    id: readText(row.id, "Settlement identifier"),
+    status: readSettlementStatus(row.status),
+    repositoryName: readText(row.repository_name, "Repository name"),
+    issueNumber: readNumber(row.issue_number, "Issue number"),
+    issueTitle: readText(row.issue_title, "Issue title"),
+    issueUrl: readText(row.issue_url, "Issue URL"),
+    credits: readNumber(row.credits, "Credits"),
+    reviewRounds: readNumber(row.review_rounds, "Review rounds"),
+    balanceEffect: readNumber(row.balance_effect, "Balance effect"),
+    settledAt: readTimestamp(row.settled_at, "Settlement time"),
+  }));
 }
 
 export async function getSettlementProof(
@@ -854,7 +932,7 @@ function normalizedFilter(value: string | undefined): string | null {
   return normalized === undefined || normalized.length === 0 ? null : normalized;
 }
 
-function readSettlementStatus(value: string): SettlementProofProjection["status"] {
+function readSettlementStatus(value: string): SettlementStatus {
   if (value === "SETTLED" || value === "UNSETTLED" || value === "UNCLAIMED") {
     return value;
   }
