@@ -36,6 +36,38 @@ describe("integrated rejected settlement closure reasons", () => {
   });
 });
 
+describe("policy audit across participation eligibility", () => {
+  const cases = (["SETTLED_LABEL_UNAUTHORIZED", "SETTLED_RATIONALE_EDITED"] as const).flatMap((code) =>
+    (["BANNED", "RECALIBRATING"] as const).flatMap((state) =>
+      (["sponsor", "contributor"] as const).map((actor) => ({ code, state, actor })),
+    ),
+  );
+
+  it.each(cases)("audits $code when $actor was $state at merge", ({ code, state, actor }) => {
+    const snapshot = evidenceFixture({
+      issueAuthor: "contributor",
+      settler: code === "SETTLED_LABEL_UNAUTHORIZED" ? "contributor" : "sponsor",
+    });
+    if (code === "SETTLED_RATIONALE_EDITED") {
+      snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-01T12:20:00.000Z";
+    }
+    const user = snapshot.users.find((candidate) => candidate.id === actor)!;
+    user.moderationEvents = [
+      { id: "sanction", priorState: "ACTIVE", newState: state, occurredAt: "2026-09-01T11:59:00.000Z" },
+      { id: "reinstatement", priorState: state, newState: "ACTIVE", occurredAt: "2026-09-01T13:00:00.000Z" },
+    ];
+    if (actor === "sponsor") {
+      snapshot.repository.sponsor = user;
+    }
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{ code, githubIssueId: 101 }]);
+    expect(result.settlements).toEqual([]);
+    expect(result.ledgerEntries).toEqual([]);
+  });
+});
+
 describe("rating authority", () => {
   it("does not let an outsider who filed, priced and closed an issue earn credit against the sponsor", () => {
     const snapshot = evidenceFixture({
