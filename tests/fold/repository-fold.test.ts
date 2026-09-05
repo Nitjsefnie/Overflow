@@ -449,3 +449,44 @@ function setActualLabelAppliedAt(snapshot: RepositoryFoldSnapshot, createdAt: st
 function setRationaleCommentAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
   snapshot.issues[0]!.comments[0] = { ...snapshot.issues[0]!.comments[0]!, createdAt };
 }
+
+describe("opening evidence timing grace", () => {
+  it("resolves an opening label applied moments after the first assignment", () => {
+    const snapshot = outsiderFixture();
+    assignAt(snapshot, "2026-08-30T09:59:58.000Z");
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
+      openingLabel: "M",
+      openingComparisonPoints: 5,
+      openingSourceEventId: "opening-1",
+    });
+  });
+
+  it("keeps the issue out of the fold when the opening label is applied well after the first assignment", () => {
+    const snapshot = outsiderFixture();
+    assignAt(snapshot, "2026-08-30T09:44:00.000Z");
+
+    expect(foldRepository(snapshot).issues).toHaveLength(0);
+    expect(foldRepository(snapshot).policyViolations).toContainEqual({
+      code: "OPENING_LABEL_MISSING",
+      githubIssueId: 101,
+    });
+  });
+
+  it("still resolves an opening label applied before any assignment", () => {
+    const snapshot = outsiderFixture();
+    assignAt(snapshot, "2026-08-30T11:00:00.000Z");
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({ openingLabel: "M" });
+  });
+});
+
+function assignAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
+  snapshot.issues[0]!.history.push({
+    kind: "ASSIGNED",
+    id: "assignment-1",
+    actorLogin: "sponsor",
+    assigneeLogin: "contributor",
+    createdAt,
+  });
+}
