@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 
 describe("GitHubGraphqlClient failures", () => {
@@ -1212,3 +1213,89 @@ type LabelConnectionFixture = {
 function firstHundredLabels(prefix: string): string[] {
   return Array.from({ length: 100 }, (_, index) => `${prefix}/${index + 1}`);
 }
+
+
+describe.each(["GraphQL", "REST"] as const)("%s HTTP failures", (transport) => {
+  function request(fetch: typeof globalThis.fetch, timeoutMs?: number) {
+    const options = { accessToken: "test-access-token", fetch, timeoutMs };
+    return transport === "GraphQL"
+      ? new GitHubGraphqlClient(options).query("query { viewer { login } }", {})
+      : new GitHubGateway(options).getRepository({ owner: "octo", name: "overflow" });
+  }
+
+  it.each([
+    ["secondary limit", 403, {}, "You have exceeded a secondary rate limit.", true, null],
+    ["mixed-case secondary limit", 429, {}, "SECONDARY RATE LIMIT", true, null],
+    ["abuse detection", 403, {}, "AbUsE DeTeCtIoN mechanism triggered.", true, null],
+    ["abuse detection on 429", 429, {}, "abuse detection", true, null],
+    ["exhausted primary limit", 403, { "x-ratelimit-remaining": "0" }, "Forbidden", true, null],
+    ["authorization failure", 401, {}, "Bad credentials", false, null],
+    ["forbidden without limit signals", 403, {}, "Resource not accessible", false, null],
+    ["429 without limit signals", 429, {}, "Too many requests", false, null],
+    ["numeric retry delay", 403, { "retry-after": "60" }, "Forbidden", true, 60],
+    ["nonnumeric retry delay", 403, { "retry-after": "soon" }, "Forbidden", true, null],
+    ["unsafe retry delay", 429, { "retry-after": "9007199254740992" }, "Forbidden", true, null],
+    ["non-limit status with signals", 401, { "retry-after": "60", "x-ratelimit-remaining": "0" }, "secondary rate limit", false, 60],
+  ] satisfies Array<[string, number, Record<string, string>, string, boolean, number | null]>)(
+    "reports %s", async (_case, status, headers, body, rateLimited, retryAfterSeconds) => {
+      const error = await request(async () => new Response(body, { status, headers }))
+        .catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(GitHubApiError);
+      expect(error).toMatchObject({ status, rateLimited, retryAfterSeconds, body });
+    },
+  );
+
+  it("caps the diagnostic body while classifying the full response", async () => {
+    const error = await request(async () => new Response("x".repeat(500) + "secondary rate limit", { status: 403 }))
+      .catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toMatchObject({ status: 403, rateLimited: true, body: "x".repeat(500) });
+    expect((error as GitHubApiError).body).toHaveLength(500);
+  });
+
+  it("preserves the HTTP failure when its body was already consumed", async () => {
+    const response = new Response("Forbidden", { status: 403, headers: { "retry-after": "60" } });
+    await response.text();
+    const error = await request(async () => response).catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toMatchObject({ status: 403, rateLimited: true, retryAfterSeconds: 60, body: null });
+  });
+
+  it("preserves the HTTP failure when reading its body is aborted", async () => {
+    vi.useFakeTimers();
+    const interactions: string[] = [];
+    try {
+      const result = request(async (_input, init) => new Response(new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => {
+            interactions.push("body aborted");
+            controller.error(new Error("body read aborted"));
+          }, { once: true });
+        },
+      }), { status: 403, headers: { "x-ratelimit-remaining": "0" } }), 100)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      const error = await result;
+
+      expect(error).toMatchObject({ status: 403, rateLimited: true, body: null });
+      expect(error).toBeInstanceOf(GitHubApiError);
+      expect(interactions).toEqual(["body aborted"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("GitHubGraphqlClient transport errors", () => {
+  it("sanitizes a transport error whose message impersonates an HTTP failure", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => { throw new Error("GitHub API request failed with status 403."); },
+    });
+
+    await expect(client.query("query { viewer { login } }", {})).rejects.toThrow("GitHub GraphQL request failed.");
+  });
+});
