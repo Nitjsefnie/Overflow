@@ -138,6 +138,11 @@ db/*
 db/migrations/*
 !db/migrations/*.sql
 
+!deploy/
+deploy/*
+!deploy/*.service
+!deploy/*.md
+
 !public/
 public/*
 !public/*.svg
@@ -163,6 +168,9 @@ tests/dashboard/*
 !tests/db/
 tests/db/*
 !tests/db/*.ts
+!tests/deploy/
+tests/deploy/*
+!tests/deploy/*.ts
 !tests/domain/
 tests/domain/*
 !tests/domain/*.ts
