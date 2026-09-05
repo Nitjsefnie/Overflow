@@ -485,11 +485,10 @@ function resolveSettledDifficulty(
         commentTime <= mergeTime + EVIDENCE_ORDERING_GRACE_MS
       );
     });
-  // The rationale belongs to the label application actually being recorded:
-  // the earliest qualifying comment at or after it. A comment inside the grace
-  // window before the label is accepted only when nothing later qualifies, so a
-  // removed-and-reapplied label is never paired with the comment written for
-  // the application it replaced.
+  // Prefer the earliest qualifying rationale at or after the standing label,
+  // avoiding an older application's rationale when such a comment exists.
+  // An earlier comment inside the grace window is the fallback only when no
+  // qualifying rationale exists at or after the standing label.
   const rationale =
     qualifyingRationales.find((comment) => Date.parse(comment.createdAt) >= sourceTime) ??
     qualifyingRationales[0];
