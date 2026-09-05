@@ -4,6 +4,7 @@ import {
   expectNoDependencyCall,
   foreignOrigin,
   guardedRequests,
+  requestHost,
   trustedOrigin,
   useTrustedOrigin,
 } from "../support/trusted-origin";
@@ -690,7 +691,7 @@ describe("Overflow token registration", () => {
       readSession.mockResolvedValue({ user: account });
       const response = await mintToken(
         // Minting is a cookie-authenticated mutation, so it is same-origin only.
-        new Request("https://overflow.example/api/tokens", {
+        new Request(`${requestHost}/api/tokens`, {
           method: "POST",
           headers: { origin: trustedOrigin },
         }),
@@ -783,13 +784,13 @@ describe("Overflow token registration", () => {
   });
 });
 
-const routeUrl = "https://overflow.example/api/repositories";
 const {
+  url: routeUrl,
   json: jsonRequest,
   foreignJson: foreignJsonRequest,
   foreignText: foreignTextRequest,
   trustedText: trustedTextRequest,
-} = guardedRequests(routeUrl);
+} = guardedRequests("/api/repositories");
 
 function validInput() {
   return {

@@ -361,7 +361,7 @@ const roleChange: ModeratorRoleChange = {
 };
 
 const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
-  guardedRequests("https://overflow.example/api/moderation");
+  guardedRequests("/api/moderation");
 
 async function expectRejection(
   response: Response,
