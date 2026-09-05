@@ -1,187 +1,124 @@
 import { posix } from "node:path";
 
+/** The only sections `deploy/overflow.service` is written to carry. */
+export const CANONICAL_SECTIONS = ["Unit", "Service", "Install"] as const;
+
+export type UnitSection = (typeof CANONICAL_SECTIONS)[number];
+
 export type UnitEntry = {
-  section: string;
+  section: UnitSection;
   key: string;
-  /** The assignment as written, after continuation joining and trimming. */
+  /** Everything after the `=`, verbatim, with `%%` resolved to a literal `%`. */
   value: string;
-  /** The value split into words, with quotes removed where systemd removes them. */
+  /** The value split on runs of spaces. */
   words: string[];
 };
 
 /**
- * A shape of systemd's configuration grammar this parser does not model.
+ * A unit written outside the canonical subset this guard enforces.
  *
- * The parser reads a unit without systemd, so it can only defend the shapes it
- * models. Guessing at the rest is how a directive hides: a backslash-terminated
- * comment reads as "commented out" to a naive parser while systemd applies the
- * line beneath it. Anything unmodelled is refused instead, so an unrecognised
- * shape fails the suite rather than passing it silently.
+ * The guard reads the unit without systemd, so every shape it accepts is a
+ * claim about what systemd would do with that shape — and each such claim has
+ * been wrong at least once. A space inside the brackets of `[Service ]` is an
+ * unknown section systemd discards whole; a no-break space appended to `User`
+ * is an unknown key systemd drops while JavaScript's `trim()` eats it; a
+ * backslash before trailing whitespace continues the line for one parser and
+ * not the other. Each of those made the suite report the hardening as pinned
+ * while systemd ran the service as root.
+ *
+ * So the guard stops modelling systemd's grammar. `deploy/overflow.service` is
+ * a file we control completely: it needs no continuations, no quoting, no
+ * specifiers, no unusual whitespace and no sections beyond three, so the guard
+ * requires exactly that and refuses everything else by name. A refusal is a
+ * test failure naming the rule and the line, never a silent pass and never a
+ * guess about which of two parsers is right.
  */
-export class UnmodelledUnitShape extends Error {
+export class NonCanonicalUnit extends Error {
   constructor(description: string) {
-    super(`the guard does not model ${description}; systemd may read it differently`);
-    this.name = "UnmodelledUnitShape";
+    super(`the unit is outside the canonical subset the guard enforces: ${description}`);
+    this.name = "NonCanonicalUnit";
   }
 }
 
+/** Rule 3: a section header, written byte for byte with nothing around the name. */
+const SECTION_HEADER = new RegExp(`^\\[(${CANONICAL_SECTIONS.join("|")})\\]$`);
+
+/** Rule 4: a key of letters and digits, then `=`, then the value verbatim. */
+const ASSIGNMENT = /^([A-Za-z][A-Za-z0-9]*)=(.*)$/;
+
 /**
- * Drops comments and joins backslash continuations, in that order.
- *
- * systemd.syntax(7): comment lines are ignored, and "lines ending in a
- * backslash are concatenated with the following line while reading and the
- * backslash is replaced by a space character". systemd reads that "ending in a
- * backslash" off the raw physical line, and it reads it the same way for the
- * first line of a continuation and for every line after it, so the decision
- * here is taken from `physicalLine` and never from a trimmed copy of it.
- *
- * A backslash followed by trailing whitespace therefore does *not* continue the
- * line, which cuts both ways and is refused rather than modelled: joining one
- * line too many hides the directive underneath from the guard while systemd
- * applies it, and joining one too few reports a restriction as pinned that
- * systemd discarded. Both are an ordinary editing accident away.
- *
- * Comment lines are dropped here as well, and both of their interactions with a
- * continuation are refused: a comment that ends in a backslash (systemd joins
- * the directive under it into the comment), and a comment inside a continuation
- * (systemd ignores it and carries the join on past it).
+ * A line that was *trying* to be an assignment, so a refusal can say which rule
+ * it broke rather than only that the line is unclassifiable.
  */
-function toLogicalLines(source: string): string[] {
-  const logicalLines: string[] = [];
-  let carried: string | null = null;
+const ASSIGNMENT_SHAPED = /^[A-Za-z0-9].*=/;
 
-  for (const physicalLine of source.split(/\r?\n/)) {
-    const trimmed = physicalLine.trim();
-    const isComment = trimmed.startsWith("#") || trimmed.startsWith(";");
+/**
+ * Rule 1: splits the file into lines, refusing any byte that is not printable
+ * ASCII or a newline.
+ *
+ * This is the rule that needs no imagination. JavaScript's whitespace is not
+ * systemd's: `String.prototype.trim()` and `\s` strip U+00A0, U+000B, U+000C,
+ * U+2002 and a dozen more, while systemd strips only space, tab, CR and LF. One
+ * such character appended to a key made systemd discard `User=` while the guard
+ * read the directive as pinned. Enumerating those code points is how the next
+ * one gets missed, so the file is required to carry none of them — nor a tab,
+ * nor a CR, nor a BOM, nor an em dash in a comment.
+ *
+ * A `Uint8Array` is read byte by byte, so a multi-byte UTF-8 sequence is
+ * refused at its first byte rather than after a decoder has turned it into
+ * something else. A string is read by code point, which refuses the same
+ * characters when a caller has already decoded the file.
+ */
+function toCanonicalLines(source: string | Uint8Array): string[] {
+  const codes =
+    typeof source === "string"
+      ? Array.from(source, (character) => character.codePointAt(0)!)
+      : Array.from(source);
+  const text: string[] = [];
+  let line = 1;
 
-    if (isComment) {
-      if (trimmed.endsWith("\\")) {
-        throw new UnmodelledUnitShape("a comment line that ends in a backslash");
-      }
-      if (carried !== null) {
-        throw new UnmodelledUnitShape("a comment line inside a continuation");
-      }
+  for (const code of codes) {
+    if (code === 0x0a) {
+      line += 1;
+      text.push("\n");
       continue;
     }
-
-    if (carried !== null) {
-      if (/^\[.*\]$/.test(trimmed)) {
-        throw new UnmodelledUnitShape("a continuation that runs into a section header");
-      }
-      if (trimmed === "") {
-        throw new UnmodelledUnitShape("a continuation broken by a blank line");
-      }
-    }
-
-    if (/\\[^\S\n]+$/.test(physicalLine)) {
-      throw new UnmodelledUnitShape(
-        "a line continuation with trailing whitespace after the backslash",
+    if (code < 0x20 || code > 0x7e) {
+      throw new NonCanonicalUnit(
+        `line ${line} carries byte 0x${code.toString(16)}, ` +
+          "and the canonical subset is printable ASCII and newline only",
       );
     }
 
-    const continued = physicalLine.endsWith("\\");
-    const body = continued ? physicalLine.slice(0, -1) : physicalLine;
-    const line: string = carried === null ? body : `${carried} ${body.trim()}`;
-
-    if (continued) {
-      carried = line.trimEnd();
-      continue;
-    }
-
-    carried = null;
-    logicalLines.push(line);
+    text.push(String.fromCodePoint(code));
   }
 
-  if (carried !== null) {
-    throw new UnmodelledUnitShape("a continuation that runs off the end of the file");
-  }
-
-  return logicalLines;
+  return text.join("").split("\n");
 }
 
 /**
- * The `[Service]` directives whose values systemd unquotes, verified against
- * systemd 257.13 with `systemd-analyze verify`: quoting is per-directive, not
- * global. `ExecStart=`, `Environment=`, `ReadWritePaths=`,
- * `RestrictAddressFamilies=`, `CapabilityBoundingSet=` and
- * `AmbientCapabilities=` all accept a quoted value and strip the quotes, while
- * `ProtectSystem="strict"`, `NoNewPrivileges="yes"`, `ProcSubset="pid"`,
- * `UMask="0077"`, `SystemCallFilter="@system-service"`, `WorkingDirectory=` and
- * `EnvironmentFile=` all fail to parse and are *ignored* — leaving the property
- * unset. A quote anywhere else is therefore refused rather than stripped.
+ * Rule 4: splits a value on spaces, refusing the two characters whose meaning
+ * depends on which directive is reading them.
+ *
+ * systemd unquotes per-directive — `Environment="PATH=/x"` loses its quotes and
+ * `ProtectSystem="strict"` fails to parse and leaves the property unset — and
+ * it unescapes backslashes in some values and not others. Neither is a
+ * distinction the unit needs, so neither character appears in it.
  */
-const UNQUOTING_KEYS: ReadonlySet<string> = new Set([
-  "Environment",
-  "ReadWritePaths",
-  "RestrictAddressFamilies",
-  "CapabilityBoundingSet",
-  "AmbientCapabilities",
-]);
-
-function unquotesItsValue(key: string): boolean {
-  return key.startsWith("Exec") || UNQUOTING_KEYS.has(key);
-}
-
-/** Splits a value into words the way the directive's own parser would. */
 export function toWords(key: string, value: string): string[] {
   if (value.includes("\\")) {
-    throw new UnmodelledUnitShape(`a backslash inside the value of ${key}=`);
+    throw new NonCanonicalUnit(`a backslash inside the value of ${key}=`);
+  }
+  if (/["']/.test(value)) {
+    throw new NonCanonicalUnit(`a quote in ${key}=, which the canonical subset does not allow`);
   }
 
-  if (!unquotesItsValue(key)) {
-    if (/["']/.test(value)) {
-      throw new UnmodelledUnitShape(`a quote in ${key}=, which systemd does not unquote`);
-    }
-    return value.split(/\s+/).filter((word) => word !== "");
-  }
-
-  const words: string[] = [];
-  let current = "";
-  let started = false;
-  let quote: string | null = null;
-
-  for (const character of value) {
-    if (quote !== null) {
-      if (character === quote) {
-        quote = null;
-      } else {
-        current += character;
-      }
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      quote = character;
-      started = true;
-      continue;
-    }
-
-    if (/\s/.test(character)) {
-      if (started) {
-        words.push(current);
-        current = "";
-        started = false;
-      }
-      continue;
-    }
-
-    current += character;
-    started = true;
-  }
-
-  if (quote !== null) {
-    throw new UnmodelledUnitShape(`an unterminated ${quote} quote in ${key}=`);
-  }
-  if (started) {
-    words.push(current);
-  }
-
-  return words;
+  return value.split(" ").filter((word) => word !== "");
 }
 
 /**
- * Replaces systemd's `%%` escape with the literal percent it stands for, and
- * refuses every other specifier.
+ * Rule 4: replaces systemd's `%%` escape with the literal percent it stands
+ * for, and refuses every other specifier.
  *
  * systemd expands specifiers while it reads a unit file, and several of them
  * resolve to a filesystem path: verified against systemd 257.13, `%h` is `/root`
@@ -206,7 +143,7 @@ function withoutSpecifiers(key: string, value: string): string {
       continue;
     }
     if (value[index + 1] !== "%") {
-      throw new UnmodelledUnitShape(`the specifier %${value[index + 1] ?? ""} in ${key}=`);
+      throw new NonCanonicalUnit(`the specifier %${value[index + 1] ?? ""} in ${key}=`);
     }
 
     resolved += "%";
@@ -217,36 +154,83 @@ function withoutSpecifiers(key: string, value: string): string {
 }
 
 /**
- * Parses a systemd unit into its assignments. Comments are dropped, keys are
- * scoped to their section, and every assignment of a repeated key is kept in
- * file order, so a directive reset and then widened further down does not read
- * as the hardened one. Every value is split at parse time, so a shape the parser
- * cannot classify fails the whole file rather than one assertion.
+ * Parses a unit written in the canonical subset into its assignments, refusing
+ * anything outside it.
+ *
+ * Every assignment of a repeated key is kept in file order, so a directive
+ * reset and then widened further down does not read as the hardened one, and
+ * every value is split at parse time, so a value the subset forbids fails the
+ * whole file rather than one assertion.
  */
-export function parseUnitFile(source: string): UnitEntry[] {
+export function parseUnitFile(source: string | Uint8Array): UnitEntry[] {
   const entries: UnitEntry[] = [];
-  let section = "";
+  const opened = new Set<UnitSection>();
+  let section: UnitSection | null = null;
 
-  for (const logicalLine of toLogicalLines(source)) {
-    const line = logicalLine.trim();
+  const lines = toCanonicalLines(source);
 
-    if (line === "") {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const number = index + 1;
+
+    if (line.endsWith("\\")) {
+      throw new NonCanonicalUnit(
+        `line ${number} ends in a backslash, and the canonical subset has no line continuations`,
+      );
+    }
+    if (line.startsWith(" ")) {
+      throw new NonCanonicalUnit(
+        `line ${number} begins with a space, and the canonical subset allows no leading whitespace`,
+      );
+    }
+    if (line.endsWith(" ")) {
+      throw new NonCanonicalUnit(
+        `line ${number} ends in a space, and the canonical subset allows no trailing whitespace`,
+      );
+    }
+    if (line === "" || line.startsWith("#")) {
       continue;
     }
 
-    const sectionHeader = /^\[(.+)\]$/.exec(line);
-    if (sectionHeader) {
-      section = sectionHeader[1]!.trim();
+    if (line.startsWith("[")) {
+      const header = SECTION_HEADER.exec(line);
+
+      if (!header) {
+        throw new NonCanonicalUnit(
+          `line ${number} is not [Unit], [Service] or [Install] written exactly: "${line}"`,
+        );
+      }
+
+      const name = header[1] as UnitSection;
+
+      if (opened.has(name)) {
+        throw new NonCanonicalUnit(`line ${number} repeats the [${name}] section header`);
+      }
+
+      opened.add(name);
+      section = name;
       continue;
     }
 
-    const separator = line.indexOf("=");
-    if (separator === -1) {
-      throw new UnmodelledUnitShape(`a line that is neither a section header nor an assignment: ${line}`);
+    const assignment = ASSIGNMENT.exec(line);
+
+    if (!assignment) {
+      throw new NonCanonicalUnit(
+        ASSIGNMENT_SHAPED.test(line)
+          ? `line ${number} is not an exact assignment; a canonical key is a letter followed by` +
+            ` letters and digits, then "=" with no space before it: "${line}"`
+          : `line ${number} is neither a section header, an assignment, a "#" comment nor` +
+            ` empty: "${line}"`,
+      );
     }
 
-    const key = line.slice(0, separator).trim();
-    const value = withoutSpecifiers(key, line.slice(separator + 1).trim());
+    const key = assignment[1]!;
+
+    if (section === null) {
+      throw new NonCanonicalUnit(`line ${number} assigns ${key}= before any section header`);
+    }
+
+    const value = withoutSpecifiers(key, assignment[2]!);
 
     entries.push({ section, key, value, words: toWords(key, value) });
   }
