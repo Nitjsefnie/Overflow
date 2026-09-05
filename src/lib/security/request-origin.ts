@@ -55,6 +55,7 @@ export function rejectUntrustedRequest(
   // body, and a body-carrying request that omits the header still fails its own
   // schema parse.
   const contentType = request.headers.get("content-type");
+  // Absent and empty differ on purpose: "" is a header that names no media type.
   if (contentType !== null && !isJsonMediaType(contentType)) {
     return errorResponse(
       415,
