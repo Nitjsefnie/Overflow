@@ -180,6 +180,43 @@ export function toWords(key: string, value: string): string[] {
 }
 
 /**
+ * Replaces systemd's `%%` escape with the literal percent it stands for, and
+ * refuses every other specifier.
+ *
+ * systemd expands specifiers while it reads a unit file, and several of them
+ * resolve to a filesystem path: verified against systemd 257.13, `%h` is `/root`
+ * in a system unit *regardless of `User=`*, `%t` is `/run` and `%S` is
+ * `/var/lib`. So `EnvironmentFile=%h/overflow.env` is a live reference to
+ * `/root` that a scan of the written text cannot see, and it is as easily an
+ * honest misreading of `%h` as "the service account's home" as it is an attack.
+ *
+ * Expansion is not modelled here — every value the parser hands back is scanned
+ * for paths, so an unexpanded specifier anywhere means the guard is reading a
+ * different string than systemd does. `%%` is the one case with no expansion
+ * context at all, so it is resolved rather than refused.
+ */
+function withoutSpecifiers(key: string, value: string): string {
+  let resolved = "";
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+
+    if (character !== "%") {
+      resolved += character;
+      continue;
+    }
+    if (value[index + 1] !== "%") {
+      throw new UnmodelledUnitShape(`the specifier %${value[index + 1] ?? ""} in ${key}=`);
+    }
+
+    resolved += "%";
+    index += 1;
+  }
+
+  return resolved;
+}
+
+/**
  * Parses a systemd unit into its assignments. Comments are dropped, keys are
  * scoped to their section, and every assignment of a repeated key is kept in
  * file order, so a directive reset and then widened further down does not read
@@ -209,7 +246,7 @@ export function parseUnitFile(source: string): UnitEntry[] {
     }
 
     const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
+    const value = withoutSpecifiers(key, line.slice(separator + 1).trim());
 
     entries.push({ section, key, value, words: toWords(key, value) });
   }
