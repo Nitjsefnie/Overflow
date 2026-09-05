@@ -1,0 +1,89 @@
+# Overflow production web application.
+#
+# Install as /etc/systemd/system/overflow.service. deploy/README.md carries the
+# procedure that stands the deployment tree, the service account and the
+# environment file up in the shape this unit expects, and the rollback.
+
+[Unit]
+Description=Overflow production web application
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+
+# The service account owns nothing it runs. The deployment tree is
+# root-owned and group-readable, so a compromise of the web process cannot
+# rewrite the code the next restart will execute.
+User=overflow
+Group=overflow
+WorkingDirectory=/srv/overflow
+
+# Secrets are read from a file the service can read and cannot write
+# (root:overflow 0640). The PATH carries no component under /root, which an
+# unprivileged account cannot traverse anyway.
+EnvironmentFile=/etc/overflow/overflow.env
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Next's own CLI is started directly. Running pnpm here would drag corepack in,
+# and corepack demands a writable cache under the service account's home for
+# every start — a writable path this unit then would not need to grant.
+ExecStart=/usr/local/bin/node /srv/overflow/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000
+
+# Nothing this process runs can gain privilege it did not start with: no setuid
+# binary elevates it, it holds no capabilities and can acquire none, and it
+# cannot hand itself a different kernel personality or realtime scheduling.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only to the service except the one directory
+# Next writes at runtime (the image optimizer's output and the .previewinfo and
+# .rscinfo files). Home directories are unreachable and /tmp and /dev are
+# private, so a leak cannot reach other accounts' data or the host's devices.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/srv/overflow/.next/cache
+
+# The host itself is off limits: no kernel tuning, no module loading, no kernel
+# log, no cgroup writes, no clock changes, no hostname changes, and /proc shows
+# this service's own processes only.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# The process may speak IP and local sockets and nothing else, on this
+# architecture only, and any syscall outside the ordinary service set fails with
+# EPERM rather than killing the process, so a blocked call is visible in the
+# journal instead of looking like a crash.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# MemoryDenyWriteExecute is deliberately not set: V8 compiles JavaScript into
+# writable-executable pages, and the process does not start without them.
+
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow
+
+[Install]
+WantedBy=multi-user.target
