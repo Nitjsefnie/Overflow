@@ -1,3 +1,8 @@
+-- PostgreSQL refuses to read an enum label added by ALTER TYPE ... ADD VALUE until the
+-- transaction that added it has committed, unless that transaction also created the type.
+-- Every use of 'UNCLAIMED' below is therefore written against status::text rather than the
+-- enum, which needs no catalogue lookup of the new label. 015 restates the check with the
+-- enum literal once this migration has committed.
 alter type settlement_status add value if not exists 'UNCLAIMED';
 
 alter table reconciliation_runs
@@ -74,7 +79,7 @@ add constraint settlements_materialized_status_check check (
     and credits = greatest(0, settled_points - review_rounds)
   )
   or (
-    status = 'UNCLAIMED'
+    status::text = 'UNCLAIMED'
     and creditor_id is null
     and creditor_github_login is not null
     and length(trim(creditor_github_login)) > 0
