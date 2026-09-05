@@ -25,6 +25,10 @@ describe("the configured moderator list names GitHub account ids", () => {
       .toEqual(new Set([1, 1024]));
   });
 
+  it.each(["0042", "42abc", "1e3"])("ignores malformed id %s without a valid prefix masking it", (entry) => {
+    expect(normalizeModeratorGitHubUserIds(entry)).toEqual(new Set());
+  });
+
   it("treats an unset variable as no configured moderators", () => {
     expect(normalizeModeratorGitHubUserIds(undefined)).toEqual(new Set());
     expect(normalizeModeratorGitHubUserIds("")).toEqual(new Set());
