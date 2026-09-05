@@ -10,100 +10,55 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
       <section className="page-heading" aria-labelledby="rules-title">
-        <p className="eyebrow">How the ledger decides</p>
-        <h1 id="rules-title">The rules you are scored by.</h1>
-        <p>
-          Every number on your dashboard comes from the rules below. Nothing here is discretionary: the ledger
-          reads GitHub and applies them the same way every time.
-        </p>
+        <h1 id="rules-title">Rules</h1>
+        <p>How work earns credits and how accounts are reviewed.</p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-opening-heading">
-        <p className="eyebrow">Before the work starts</p>
-        <h2 id="rules-opening-heading">What work is worth before it starts</h2>
+        <h2 id="rules-opening-heading">Before work starts</h2>
         <p>
-          Each repository names its own opening catalog. The labels are the repository&apos;s to choose; the points
-          from 1 through 10 are the shared scale everything settles against.
+          Repositories choose their own difficulty labels, worth 1–10 points. The issue owner&apos;s earliest
+          starting-difficulty label before the first assignment sets the opening estimate.
         </p>
         <p>
-          Opening difficulty is the earliest opening label the issue owner applied <strong>before the first
-          assignment</strong>. Pricing the work has to happen before it is spoken for, so a label applied after
-          someone has already taken the issue cannot set its price.
-        </p>
-        <p>
-          Reserve points on an open issue assigned to an outside contributor are held against the sponsor&apos;s
-          balance. Available headroom is settled balance minus those reservations, and it is allowed to go
-          negative.
+          Open issues assigned to outside contributors reserve points from the sponsor&apos;s balance. Your
+          available balance is your settled balance minus these reservations; it can be negative.
         </p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-settlement-heading">
-        <p className="eyebrow">Closing the loop</p>
-        <h2 id="rules-settlement-heading">What makes work settle</h2>
-        <p>Work settles only when all of this is true, and every part of it comes from GitHub:</p>
+        <h2 id="rules-settlement-heading">When work counts</h2>
         <ol className="rules-list">
+          <li>A merged pull request must close the issue in GitHub. A link alone does not count.</li>
           <li>
-            The issue was closed by a merged pull request that GitHub reports through
-            <code> closedByPullRequestsReferences</code>. No other link counts.
+            Between the pull request&apos;s final commit and merge, the issue owner must apply exactly one
+            final-difficulty label to the issue and leave a comment naming it.
           </li>
-          <li>
-            The issue owner applied exactly one actual-catalog label,
-            <strong> between the closing pull request&apos;s final commit and its merge</strong>. Two such labels
-            active at once settle nothing.
-          </li>
-          <li>
-            The issue owner left a comment in that same window whose text <strong>names that label</strong>. A
-            blank comment, or one that does not name it, does not count.
-          </li>
+          <li>Only issue labels count; pull request labels do not. A 15-minute tolerance applies to timing.</li>
         </ol>
-        <p>
-          <strong>Pull request labels never price work.</strong> Only labels on the issue, applied by its owner,
-          decide anything.
-        </p>
-        <p>
-          Those orderings are checked with a tolerance of <strong>fifteen minutes</strong>, because they are a
-          sequence people perform by hand and the order things land in is routinely off by a little. Evidence
-          outside that tolerance is still rejected.
-        </p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-credits-heading">
-        <p className="eyebrow">What you earn</p>
-        <h2 id="rules-credits-heading">How credits are calculated</h2>
-        <p className="rules-formula">credits = max(0, actual points − distinct review rounds)</p>
+        <h2 id="rules-credits-heading">Credits</h2>
+        <p className="rules-formula">Credits = final difficulty points − distinct review rounds, with a minimum of 0.</p>
         <p>
-          Each distinct round of review on the closing pull request subtracts one point. Credits never go below
-          zero, so heavy review costs you the credit for the work but never puts you in debt for it.
+          Work in a repository you sponsor earns no credits; it is calibration evidence that helps check that
+          difficulty ratings are consistent.
         </p>
         <p>
-          There is no churn metric and no activity measure. Nothing you do outside a settled issue changes your
-          balance.
+          Credits earned before signing in remain unclaimed until the contributor claims their GitHub identity.
         </p>
-        <p>
-          Work you complete in a repository you sponsor is <strong>self-work</strong>. It is recorded as
-          calibration evidence and <strong>creates no ledger entry</strong> — you cannot pay yourself.
-        </p>
-        <p>
-          If the contributor has not signed in yet, the settlement is held as unclaimed until someone claims that
-          GitHub identity.
-        </p>
+        <p>Activity and inactivity do not affect your score.</p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-moderation-heading">
-        <p className="eyebrow">When something is wrong</p>
         <h2 id="rules-moderation-heading">Moderation</h2>
-        <p className="rules-formula">audit → warn → recalibrate → ban</p>
+        <p className="rules-formula">Audit → warn → recalibrate → ban</p>
         <p>
-          Moderation is account-level and evidence-led. An audit compares paired samples of your self-work against
-          your outsider settlements, and may only be opened when those paired samples exist.
-        </p>
-        <p>
-          A warning is issued only when the record supports it. Recalibration is required before an account is
-          reactivated. A ban follows only after confirmed patterns persist.
-        </p>
-        <p>
-          Calibration compares those paired samples. It does not measure how active you are, and being quiet is
-          not evidence of anything.
+          Moderation applies to accounts. An audit requires examples comparing work you completed in your
+          sponsored repositories with work completed there by outside contributors. Warnings require supporting
+          evidence. A nonblank recalibration plan to correct difficulty ratings is required before an account is
+          reactivated. Bans require confirmed problems that continue.
         </p>
       </section>
     </AppShell>
