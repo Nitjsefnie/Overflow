@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
+import {
+  expectNoDependencyCall,
+  guardedRequests,
+  unusedDependencies,
+  useTrustedOrigin,
+} from "../support/trusted-origin";
 
 const { productionAuth, productionRole } = vi.hoisted(() => ({
   productionAuth: vi.fn(),
@@ -31,19 +36,8 @@ const recorded: SettlementOverrideRequest = {
   decidedAt: null,
 };
 
-function jsonRequest(body: unknown, headers: Record<string, string> = {}): Request {
-  return new Request("https://overflow.test/api/overrides", {
-    method: "POST",
-    headers: { origin: trustedOrigin, "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-  });
-}
-
-const foreignTextRequest = (body: unknown): Request =>
-  jsonRequest(body, { origin: foreignOrigin, "content-type": "text/plain" });
-
-const trustedTextRequest = (body: unknown): Request =>
-  jsonRequest(body, { "content-type": "text/plain" });
+const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
+  guardedRequests("https://overflow.test/api/overrides");
 
 useTrustedOrigin();
 
@@ -135,10 +129,8 @@ describe("settlement override request API", () => {
   // A forged request must cost the server nothing: no session read, no role
   // lookup, no service.
   it("refuses a foreign-origin request before reading the session or the role", async () => {
-    const getSession = vi.fn();
-    const getCurrentRole = vi.fn();
-    const createService = vi.fn();
-    const handler = createSettlementOverridePostHandler({ getSession, getCurrentRole, createService });
+    const dependencies = unusedDependencies();
+    const handler = createSettlementOverridePostHandler(dependencies);
 
     const response = await handler(foreignTextRequest({ settlementId, reason: "Forged." }));
 
@@ -146,16 +138,12 @@ describe("settlement override request API", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
     });
-    expect(getSession).not.toHaveBeenCalled();
-    expect(getCurrentRole).not.toHaveBeenCalled();
-    expect(createService).not.toHaveBeenCalled();
+    expectNoDependencyCall(dependencies);
   });
 
   it("refuses a trusted-origin request that is not JSON", async () => {
-    const getSession = vi.fn();
-    const getCurrentRole = vi.fn();
-    const createService = vi.fn();
-    const handler = createSettlementOverridePostHandler({ getSession, getCurrentRole, createService });
+    const dependencies = unusedDependencies();
+    const handler = createSettlementOverridePostHandler(dependencies);
 
     const response = await handler(trustedTextRequest({ settlementId, reason: "Wrong type." }));
 
@@ -166,9 +154,7 @@ describe("settlement override request API", () => {
         message: "The request must use the application/json content type.",
       },
     });
-    expect(getSession).not.toHaveBeenCalled();
-    expect(getCurrentRole).not.toHaveBeenCalled();
-    expect(createService).not.toHaveBeenCalled();
+    expectNoDependencyCall(dependencies);
   });
 });
 
@@ -295,10 +281,8 @@ describe("settlement override decision API", () => {
   });
 
   it("refuses a foreign-origin decision before reading the session or the role", async () => {
-    const getSession = vi.fn();
-    const getCurrentRole = vi.fn();
-    const createService = vi.fn();
-    const handler = createSettlementOverridePatchHandler({ getSession, getCurrentRole, createService });
+    const dependencies = unusedDependencies();
+    const handler = createSettlementOverridePatchHandler(dependencies);
 
     const response = await handler(
       foreignTextRequest({ action: "grant", settledPoints: 6, reason: "Forged." }),
@@ -309,16 +293,12 @@ describe("settlement override decision API", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
     });
-    expect(getSession).not.toHaveBeenCalled();
-    expect(getCurrentRole).not.toHaveBeenCalled();
-    expect(createService).not.toHaveBeenCalled();
+    expectNoDependencyCall(dependencies);
   });
 
   it("refuses a trusted-origin decision that is not JSON", async () => {
-    const getSession = vi.fn();
-    const getCurrentRole = vi.fn();
-    const createService = vi.fn();
-    const handler = createSettlementOverridePatchHandler({ getSession, getCurrentRole, createService });
+    const dependencies = unusedDependencies();
+    const handler = createSettlementOverridePatchHandler(dependencies);
 
     const response = await handler(
       trustedTextRequest({ action: "decline", reason: "Wrong type." }),
@@ -332,8 +312,6 @@ describe("settlement override decision API", () => {
         message: "The request must use the application/json content type.",
       },
     });
-    expect(getSession).not.toHaveBeenCalled();
-    expect(getCurrentRole).not.toHaveBeenCalled();
-    expect(createService).not.toHaveBeenCalled();
+    expectNoDependencyCall(dependencies);
   });
 });
