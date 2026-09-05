@@ -171,20 +171,25 @@ export type FoldResult = {
 };
 
 /**
- * Tolerance applied to every settlement-evidence ordering comparison.
+ * Tolerance applied to every evidence-ordering comparison in the fold.
  *
- * The evidence window is a sequence a person performs by hand — push the final
- * commit, apply the settled label, comment naming it, merge — and the order it
- * lands in is routinely off by a few minutes: the comment written before the
- * label, both remembered just after the merge, the label applied while the last
- * commit is still going up. Enforced to the second, each of those discards work
- * that was genuinely settled, and the window cannot be reopened afterwards.
+ * Both evidence windows are sequences a person performs by hand, and the order
+ * things land in is routinely off by seconds or minutes. Settlement: push the
+ * final commit, apply the settled label, comment naming it, merge — the comment
+ * gets written before the label, or both are remembered just after the merge.
+ * Opening: label the issue, then assign it — but `gh issue create --label
+ * --assignee` applies the assignee FIRST, so the opening label lands a second
+ * after the assignment it was meant to precede.
  *
- * The grace absorbs that without widening the window into a different rule:
- * evidence outside it is still rejected, so a label applied an hour after merge
- * still proves nothing about what the reviewer saw.
+ * Enforced to the second, each of those discards a real record, and neither
+ * window can be reopened afterwards. The grace absorbs the ordering mistake
+ * without widening either window into a different rule: evidence outside it is
+ * still rejected, so a settled label applied an hour after merge still proves
+ * nothing about what the reviewer saw, and an opening label applied an hour
+ * after the assignment still fails to show the work was priced before it was
+ * spoken for.
  */
-const SETTLEMENT_EVIDENCE_GRACE_MS = 15 * 60 * 1000;
+const EVIDENCE_ORDERING_GRACE_MS = 15 * 60 * 1000;
 
 type OpeningResolution = {
   githubIssueId: number;
@@ -362,16 +367,22 @@ function resolveOpening(
   }
   const openingByLabel = new Map(scheme.openingLabels.map((entry) => [entry.label, entry]));
   const orderedHistory = issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems);
-  const firstAssignmentIndex = orderedHistory.findIndex((event) => event.kind === "ASSIGNED");
-  const openingSearchLimit = firstAssignmentIndex < 0 ? orderedHistory.length : firstAssignmentIndex;
+  // Bounded by TIME rather than by position in the history. Ordering here is
+  // decided by whichever event GitHub happened to record first, and creating an
+  // issue with labels and an assignee in one call records the assignment first
+  // — which used to drop the issue from the fold entirely.
+  const firstAssignment = orderedHistory.find((event) => event.kind === "ASSIGNED");
+  const openingDeadline = firstAssignment === undefined
+    ? Number.POSITIVE_INFINITY
+    : Date.parse(firstAssignment.createdAt) + EVIDENCE_ORDERING_GRACE_MS;
   const issueCreatedTime = Date.parse(issue.createdAt);
   const sourceIndex = orderedHistory.findIndex(
-    (event, index) =>
-      index < openingSearchLimit &&
+    (event) =>
       event.kind === "LABELED" &&
       openingByLabel.has(event.label) &&
       normalizedNonblankLogin(event.actorLogin) === ownerLogin &&
-      Date.parse(event.createdAt) >= issueCreatedTime,
+      Date.parse(event.createdAt) >= issueCreatedTime &&
+      Date.parse(event.createdAt) <= openingDeadline,
   );
   if (sourceIndex < 0) {
     return null;
@@ -439,7 +450,7 @@ function resolveSettledDifficulty(
     if (
       (event.kind !== "LABELED" && event.kind !== "UNLABELED") ||
       !actualByLabel.has(event.label) ||
-      Date.parse(event.createdAt) > mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
+      Date.parse(event.createdAt) > mergeTime + EVIDENCE_ORDERING_GRACE_MS
     ) {
       continue;
     }
@@ -456,8 +467,8 @@ function resolveSettledDifficulty(
   const sourceTime = Date.parse(source.createdAt);
   if (
     normalizedNonblankLogin(source.actorLogin) !== ownerLogin ||
-    sourceTime < finalCommitTime - SETTLEMENT_EVIDENCE_GRACE_MS ||
-    sourceTime > mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
+    sourceTime < finalCommitTime - EVIDENCE_ORDERING_GRACE_MS ||
+    sourceTime > mergeTime + EVIDENCE_ORDERING_GRACE_MS
   ) {
     return null;
   }
@@ -470,8 +481,8 @@ function resolveSettledDifficulty(
         normalizedNonblankLogin(comment.authorLogin) === ownerLogin &&
         comment.body.trim().length > 0 &&
         comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
-        commentTime >= sourceTime - SETTLEMENT_EVIDENCE_GRACE_MS &&
-        commentTime <= mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
+        commentTime >= sourceTime - EVIDENCE_ORDERING_GRACE_MS &&
+        commentTime <= mergeTime + EVIDENCE_ORDERING_GRACE_MS
       );
     });
   if (rationale === undefined) {
