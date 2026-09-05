@@ -215,6 +215,45 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
     expect(() => encodeURIComponent(error.message)).not.toThrow();
   });
 
+  function maximumFullEntries() {
+    return Array.from({ length: 5 }, (_, index) => ({
+      type: `${index}${"t".repeat(511)}`,
+      message: "m".repeat(512),
+      path: Array.from({ length: 11 }, () => "p".repeat(46)),
+    }));
+  }
+
+  it("retains the 7674-unit maximum full prefix within the aggregate ceiling", async () => {
+    const error = await failureFor(maximumFullEntries());
+
+    expect(error.message.length).toBeLessThanOrEqual(8_000);
+    expect(error.message.length).toBe(7_674);
+  });
+
+  it.each([
+    { tailLength: 221, expectedLength: 8_000, retained: true },
+    { tailLength: 222, expectedLength: 7_777, retained: false },
+    { tailLength: 324, expectedLength: 7_777, retained: false },
+  ])("checks the exact aggregate boundary with a $tailLength-unit tail type", async ({ tailLength, expectedLength, retained }) => {
+    const fullEntries = maximumFullEntries();
+    const tailType = "a".repeat(tailLength);
+    // 25 entries: both counts have the same two-digit width as the input
+    // length. The 103-unit suffix leaves 7,897 units for rendered details.
+    const error = await failureFor([
+      ...fullEntries,
+      ...Array.from({ length: 10 }, () => fullEntries[0]),
+      { type: tailType, message: "Tail detail" },
+      ...Array.from({ length: 9 }, () => ({ type: "z".repeat(512), message: "Overflow" })),
+    ]);
+
+    expect(error.message.length).toBeLessThanOrEqual(8_000);
+    expect(error.message.length).toBe(expectedLength);
+    expect(error.message.includes(`; ${tailType};`)).toBe(retained);
+    expect(error.message).toContain("10 duplicate error(s) collapsed");
+    expect(error.message).toContain("10 more error(s) without full details");
+    expect(error.message).toContain("summary budget exceeded");
+  });
+
   it.each(["type", "message", "path", "later type"])("redacts repeated reflected tokens in %s", async (field) => {
     const reflected = "before test-access-token middle test-access-token after";
     const entry = {
@@ -223,7 +262,7 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
       path: field === "path" ? [reflected] : ["repository"],
     };
     const entries = field === "later type"
-      ? [...Array.from({ length: 5 }, () => ({ type: "undefinedField" })), entry]
+      ? [...Array.from({ length: 5 }, (_, index) => ({ type: "undefinedField", message: `Field ${index}` })), entry]
       : [entry];
     const error = await failureFor(entries);
 
