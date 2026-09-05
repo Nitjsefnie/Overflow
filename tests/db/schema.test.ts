@@ -195,6 +195,7 @@ describe("initial PostgreSQL materialization", () => {
       "011_api_tokens.sql",
       "012_unwritable_closure_kinds.sql",
       "013_immutable_github_identity.sql",
+      "013_reconciliation_cooldown.sql",
       "014_opening_authority_precondition.sql",
     ].map((name) => ({ name, count: 1 })));
   });
@@ -316,6 +317,18 @@ describe("initial PostgreSQL materialization", () => {
       insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
       values (${pullRequest.issueId}, ${hasPullRequest ? pullRequest.id : null}, ${kind}, ${"Rejected evidence"})
     `).rejects.toThrow(/unwritable_closures_kind_pull_request_check/);
+  });
+
+  it("defaults the reconciliation cooldown to null in a nullable timestamp column", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    await expect(sql`
+      select data_type, is_nullable from information_schema.columns
+      where table_name = 'registered_repositories' and column_name = 'reconciliation_not_before'
+    `).resolves.toEqual([{ data_type: "timestamp with time zone", is_nullable: "YES" }]);
+    await expect(sql`
+      select reconciliation_not_before from registered_repositories where id = ${repositoryId}
+    `).resolves.toEqual([{ reconciliation_not_before: null }]);
   });
 
   it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
