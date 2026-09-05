@@ -15,6 +15,156 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 
 Closing work needs no repository of your own. Take an issue in a repository that is already registered; the sections that follow are the terms the credit settles on, including what happens when you have not signed in yet.
 
+## Programmatic repository registration
+
+Members can register repositories with an **Overflow-issued API token**. Account
+registration still happens manually in a browser through **Sign in with GitHub**;
+after that, repositories can be registered over the API. The existing web form
+remains unchanged and available — programmatic registration is an additional way
+to submit the same repository and catalogs.
+
+### Get or replace a token
+
+Sign in, open **Register a repository** (`/repositories/new`), and use **Generate
+token** in the **Overflow API token** panel. Copy the token when it appears: it is
+shown only at generation and cannot be redisplayed after leaving or reloading
+the page. The server stores only its hash, so it cannot recover the plaintext.
+
+Each account has at most one active token. **Regenerate token** issues a new token
+and invalidates the previous one in the same step. Use regeneration if you lose
+the token or it leaks, and replace the credential in your scripts. Keep the token
+private; do not commit it.
+
+The panel calls `POST /api/tokens` with the signed-in browser session cookie and
+no request body. An API token alone cannot mint or regenerate a token. Success
+is HTTP `201` with `{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>" }`.
+Failures use `{ "error": { "code": "...", "message": "..." } }`:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | Sign in through GitHub in the browser. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to issue an API token.` | Session lookup or token storage failed; retry when the service recovers. |
+
+### Submit a repository
+
+Send `POST /api/repositories` with `Authorization: Bearer <token>` and
+`Content-Type: application/json`. Use the Overflow-issued token; registration
+uses the account's stored GitHub OAuth credential for its GitHub operations.
+The repository must be public, and that account must have GitHub administrator
+permission for it. Registration creates the catalog labels and installs a webhook.
+
+The JSON body contains exactly these required fields. Extra fields, including
+extra fields inside label objects, are rejected.
+
+| Field | Type and requirements |
+| --- | --- |
+| `repositoryUrl` | String: one `owner/name` or canonical GitHub repository URL. |
+| `openingName` | Nonblank string: opening catalog display name. |
+| `actualName` | Nonblank string: actual catalog display name. |
+| `openingLabels` | Nonempty array of `{ "label": string, "comparisonPoints": number, "reservePoints": number }`. Both point values must be integers from 1 through 10. |
+| `actualLabels` | Array of `{ "label": string, "points": number }` with exactly ten entries, covering every integer from 1 through 10 exactly once. |
+
+All label text must be nonblank and unique across both catalogs. Opening labels
+can use any names and need not cover every point. Do not shorten the actual
+catalog to S/M/L: missing points cause rejection.
+
+Replace `<overflow-origin>` with the origin of the Overflow instance you use
+(scheme and authority, without a trailing slash), `<your-token>` with the token
+from its panel, and `your-org/your-repository` with a public repository you
+administer that is not already registered. Then run this complete example:
+
+```bash
+OVERFLOW_ORIGIN='<overflow-origin>'
+OVERFLOW_API_TOKEN='<your-token>'
+
+curl --include --request POST "${OVERFLOW_ORIGIN}/api/repositories" \
+  --header "Authorization: Bearer ${OVERFLOW_API_TOKEN}" \
+  --header 'Content-Type: application/json' \
+  --data-binary @- <<'JSON'
+{
+  "repositoryUrl": "your-org/your-repository",
+  "openingName": "Estimated scope",
+  "actualName": "Delivered difficulty",
+  "openingLabels": [
+    { "label": "offered: small", "comparisonPoints": 2, "reservePoints": 2 },
+    { "label": "offered: medium", "comparisonPoints": 5, "reservePoints": 5 },
+    { "label": "offered: large", "comparisonPoints": 8, "reservePoints": 8 }
+  ],
+  "actualLabels": [
+    { "label": "settled: 1", "points": 1 },
+    { "label": "settled: 2", "points": 2 },
+    { "label": "settled: 3", "points": 3 },
+    { "label": "settled: 4", "points": 4 },
+    { "label": "settled: 5", "points": 5 },
+    { "label": "settled: 6", "points": 6 },
+    { "label": "settled: 7", "points": 7 },
+    { "label": "settled: 8", "points": 8 },
+    { "label": "settled: 9", "points": 9 },
+    { "label": "settled: 10", "points": 10 }
+  ]
+}
+JSON
+```
+
+### Registration responses
+
+Success is HTTP `201`. Example body (identifiers vary):
+
+```json
+{
+  "repository": {
+    "id": "<repository-id>",
+    "githubRepositoryId": 123456789,
+    "ownerName": "your-org/your-repository",
+    "sponsorId": "<account-id>",
+    "visibility": "PUBLIC",
+    "githubWebhookId": 987654321
+  },
+  "existingWorkIngested": true
+}
+```
+
+`existingWorkIngested` reports whether the initial reconciliation imported
+existing work. If it is `false`, the repository is still registered; arrange a
+[reconciliation](#reconciliation) to retry the import instead of registering it again.
+
+Errors have `{ "error": { "code": "...", "message": "..." } }`. Match the HTTP
+status and code, then use the message to distinguish causes:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `Invalid repository registration request.` | Invalid JSON, missing or extra fields, or wrong field types. Correct the body. |
+| 400 | `INVALID_INPUT` | `Submit one GitHub repository as owner/name or a canonical GitHub URL.` | Correct the repository reference. |
+| 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
+| 403 | `FORBIDDEN` | `The account is not eligible to register repositories.` | The account is banned or recalibrating. Resolve the account restriction; regenerating the token does not remove it. |
+| 403 | `FORBIDDEN` | `Only public GitHub repositories can be registered.` | Choose a public repository. |
+| 403 | `FORBIDDEN` | `GitHub administrator permission is required for the submitted repository.` | Use an account with administrator permission for that repository. |
+| 409 | `CONFLICT` | `This GitHub repository is already registered.` | Use the existing registration. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Credential/session lookup or registration setup failed; check service configuration and account GitHub access before retrying. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to retrieve the submitted GitHub repository.` | GitHub repository lookup failed; check the reference, access, and GitHub availability. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to register the repository with GitHub.` | Creating catalog labels or the webhook failed; check GitHub access and availability. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Database lookup or saving the registration failed; check service health before retrying. |
+
+Catalog validation returns one of these exact `INVALID_INPUT` messages:
+
+- `Display names must not be empty.`
+- `At least one opening label is required.`
+- `Opening label text must not be empty.`
+- `Difficulty label text must be unique.`
+- `Opening point mappings must be integers from one through ten.`
+- `Actual label text must not be empty.`
+- `Difficulty label text must be unique across catalogs.`
+- `Actual point mappings must be integers from one through ten.`
+- `Actual point mappings must be unique.`
+- `Actual labels must cover points one through ten exactly once.`
+
+Authentication runs before body validation. A recognized bearer credential takes
+precedence over the browser cookie: a rejected token is not rescued by a valid
+session. An absent or malformed bearer header falls back to cookie authentication,
+which continues to serve the web form.
+
 ## What the ledger records
 
 - GitHub OAuth signs a member in at `/api/auth/callback/github`.
