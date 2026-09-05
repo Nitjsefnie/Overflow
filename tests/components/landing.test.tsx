@@ -381,8 +381,9 @@ describe("landing hero fold budget", () => {
     ).toEqual([]);
     expect(
       atRuleNames,
-      "an at-rule in the stylesheet that jsdom did not parse into the CSSOM, or a new one to pin; the " +
-        "browser may apply what jsdom silently dropped, so measure the fold before changing this list",
+      "jsdom drops an at-rule it does not implement without a word, and the browser may still apply it; " +
+        "this compares the at-rules it parsed against the ones in the stylesheet source, so a difference " +
+        "means one of them vanished on the way in",
     ).toEqual([...(readFileSync("src/app/globals.css", "utf8").matchAll(/^[ \t]*@([a-z-]+)/gm))].map((match) => match[1]));
   });
 });
