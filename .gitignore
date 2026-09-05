@@ -94,6 +94,9 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/async/
+src/lib/async/*
+!src/lib/async/*.ts
 !src/lib/calibration/
 src/lib/calibration/*
 !src/lib/calibration/*.ts
@@ -148,6 +151,9 @@ scripts/*
 
 !tests/
 tests/*
+!tests/async/
+tests/async/*
+!tests/async/*.ts
 !tests/api/
 tests/api/*
 !tests/api/*.ts
