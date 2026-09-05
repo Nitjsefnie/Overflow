@@ -272,6 +272,10 @@ GITHUB_WEBHOOK_SECRET=<the-webhook-secret-configured-in-github>
 
 GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`.
 
+## Operating an instance: the production service
+
+The production deployment runs the application as a dedicated unprivileged system account rather than as root, under a systemd unit that keeps the filesystem read-only apart from the one cache directory Next writes at runtime. `deploy/overflow.service` is that unit, and `deploy/README.md` is the procedure that stands it up on a host, deploys a new revision under it, and rolls it back. `tests/deploy/unit-file.test.ts` fails if the unit loses any of that hardening.
+
 ## Reconciliation
 
 Webhook processing updates repository state incrementally. Run reconciliation when GitHub history must be re-read:
