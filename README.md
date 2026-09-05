@@ -232,6 +232,8 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    docker compose ps
    ```
 
+   That service publishes PostgreSQL on `127.0.0.1:5432` only, and its password is a committed, well-known string; `POSTGRES_HOST_BIND` widens the binding, so set it only when you mean to expose a known-credential database beyond this machine.
+
 3. Point `DATABASE_URL` at that database, then install and migrate:
 
    ```bash
