@@ -188,7 +188,7 @@ function githubSetupError(
   if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
     const observation = error.status === 403
       ? `GitHub refused to ${step} (HTTP 403).`
-      : `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
+      : `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
     let cause = repository?.ownerType === "ORGANIZATION"
       ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`
       : "This may be caused by missing authorization for the Overflow OAuth application.";
