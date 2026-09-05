@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -64,6 +65,7 @@ describe("initial PostgreSQL materialization", () => {
       "calibration_audits",
       "moderation_events",
       "settlement_override_requests",
+      "api_tokens",
     ]) {
       expect(rows.some((row) => row.table_name === table)).toBe(true);
     }
@@ -94,6 +96,7 @@ describe("initial PostgreSQL materialization", () => {
       "007_authoritative_history_and_merge_proof.sql",
       "008_moderator_role_changes.sql",
       "009_settlement_override_requests.sql",
+      "010_api_tokens.sql",
       "010_settled_evidence_ordering_grace.sql",
     ].map((name) => ({ name, count: 1 })));
   });
@@ -1786,6 +1789,70 @@ describe("initial PostgreSQL materialization", () => {
     `;
     expect(record).toEqual({ processing_state: "PROCESSED", error_message: null });
   });
+
+  it("keeps at most one API token per account", async () => {
+    const userId = await insertUser(sql);
+    await insertApiToken(sql, userId, "one-token-per-account-first");
+
+    await expect(
+      insertApiToken(sql, userId, "one-token-per-account-second"),
+    ).rejects.toThrow();
+
+    const [record] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from api_tokens where user_id = ${userId}
+    `;
+    expect(record).toEqual({ count: 1 });
+  });
+
+  it("refuses to hand the same API token hash to two accounts", async () => {
+    const firstUserId = await insertUser(sql);
+    const secondUserId = await insertUser(sql);
+    await insertApiToken(sql, firstUserId, "shared-token-hash");
+
+    await expect(insertApiToken(sql, secondUserId, "shared-token-hash")).rejects.toThrow();
+
+    const [record] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from api_tokens where user_id = ${secondUserId}
+    `;
+    expect(record).toEqual({ count: 0 });
+  });
+
+  it("refuses to delete an account that still holds an API token", async () => {
+    const userId = await insertUser(sql);
+    await insertApiToken(sql, userId, "outlives-its-account");
+
+    await expect(sql`delete from users where id = ${userId}`).rejects.toThrow();
+
+    const [record] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from api_tokens where user_id = ${userId}
+    `;
+    expect(record).toEqual({ count: 1 });
+  });
+
+  it("stores only an account, its token hash and a creation time", async () => {
+    const userId = await insertUser(sql);
+    await insertApiToken(sql, userId, "column-shape");
+
+    const [record] = await sql<
+      { user_id: string; token_hash: Uint8Array; created_at: Date }[]
+    >`
+      select user_id, token_hash, created_at from api_tokens where user_id = ${userId}
+    `;
+    expect(record.user_id).toBe(userId);
+    expect(Buffer.from(record.token_hash)).toEqual(apiTokenHash("column-shape"));
+    expect(record.created_at).toBeInstanceOf(Date);
+
+    const columns = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'api_tokens'
+    `;
+    expect(columns.map((column) => column.column_name).sort()).toEqual([
+      "created_at",
+      "id",
+      "token_hash",
+      "user_id",
+    ]);
+  });
 });
 
 function nextExternalId(): number {
@@ -1843,6 +1910,21 @@ async function insertUser(client: QueryableSql, githubUserId = nextExternalId())
     returning id
   `;
   return user.id;
+}
+
+function apiTokenHash(label: string): Buffer {
+  return createHash("sha256").update(label).digest();
+}
+
+async function insertApiToken(
+  client: QueryableSql,
+  userId: string,
+  label: string,
+): Promise<void> {
+  await client`
+    insert into api_tokens (user_id, token_hash)
+    values (${userId}, ${apiTokenHash(label)})
+  `;
 }
 
 async function insertRepository(
