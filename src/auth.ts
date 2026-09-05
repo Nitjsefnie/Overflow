@@ -122,7 +122,7 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
     throw new Error("GitHub identity upsert returned no user.");
   }
 
-  await claimGitHubIdentity(getSql(), user.id, identity.login);
+  await claimGitHubIdentity(getSql(), user.id, identity.githubUserId);
 
   return user;
 }
