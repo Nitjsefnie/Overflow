@@ -192,7 +192,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
                   required
                 />
               </label>
-              <p className="points-stamp">{actualLabel.points} points</p>
+              <p className="points-stamp">{actualLabel.points} point{actualLabel.points === 1 ? "" : "s"}</p>
             </div>
           ))}
         </div>

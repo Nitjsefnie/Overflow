@@ -41,8 +41,11 @@ describe("repository registration form", () => {
     expect(screen.getByLabelText("Actual label for 10 points")).toHaveValue("ocean");
 
     for (const points of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-      expect(screen.getByText(`${points} points`)).toBeVisible();
+      expect(screen.getByText(`Actual label for ${points} point${points === 1 ? "" : "s"}`)).toBeVisible();
     }
+    expect(screen.getByText("1 point")).toBeVisible();
+    expect(screen.queryByText("1 points")).not.toBeInTheDocument();
+    expect(screen.getByText("10 points")).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("Actual label for 7 points"), { target: { value: "shelf" } });
     expect(screen.getByLabelText("Actual label for 7 points")).toHaveValue("shelf");
