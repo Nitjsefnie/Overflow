@@ -7,9 +7,11 @@ export type ReconciliationSweepDependencies = {
 };
 
 export type ReconciliationSweepSummary = {
+  /** Repositories reconciled or failed during this sweep; excludes cooldown skips. */
   attempted: number;
   reconciled: number;
   failed: number;
+  /** Repositories deferred by cooldown, at the precheck or after acquiring the repository lock. */
   skipped: number;
 };
 
