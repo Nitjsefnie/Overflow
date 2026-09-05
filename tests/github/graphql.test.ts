@@ -465,7 +465,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
 
   it.each([21, 121])("appends %i closing references after the nested twenty in order", async (total) => {
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
-    const nodes = Array.from({ length: total }, (_, index) => pullRequestNode(201 + index, 11 + index));
+    const nodes = Array.from({ length: total }, (_, index) => pullRequestNode(
+      201 + index, 11 + index, { login: `contributor-${index}`, databaseId: 7001 + index },
+    ));
     const gateway = new GitHubGateway({
       accessToken: "test-token",
       fetch: async (_input, init) => {
@@ -500,7 +502,8 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(issue?.closingPullRequests).toEqual(nodes.map((node) => ({
       id: node.databaseId, number: node.number, title: node.title, body: node.body, url: node.url,
       state: node.state, mergedAt: node.mergedAt, mergeCommitOid: node.mergeCommit.oid,
-      finalCommitAt: node.commits.nodes[0]!.commit.committedDate, authorLogin: node.author.login,
+      finalCommitAt: node.commits.nodes[0]!.commit.committedDate, authorLogin: node.author!.login,
+      authorGitHubUserId: node.author!.databaseId,
     })));
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
