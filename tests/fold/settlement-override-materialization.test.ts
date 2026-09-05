@@ -286,8 +286,9 @@ function gateway(): ReconciliationGateway {
     { id: 8_400_001, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
   ];
   return {
-    listIssues: async () => issues,
-    getIssueClosingPullRequests: async (_repository, issueNumber) => pullRequests.get(issueNumber) ?? [],
+    listIssues: async () => issues.map((issue) => ({
+      ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
+    })),
     getPullRequestReviews: async (_repository, pullRequestNumber) => (
       reviews.map((review) => ({ ...review, id: review.id + pullRequestNumber }))
     ),
@@ -317,6 +318,7 @@ function unsettledIssue(input: { id: number; number: number }): GitHubIssue {
       },
     ],
     comments: [],
+    closingPullRequests: [],
   };
 }
 

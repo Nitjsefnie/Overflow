@@ -1653,7 +1653,6 @@ describe("initial PostgreSQL materialization", () => {
       },
     ];
     let snapshotIndex = 0;
-    let currentSnapshot = snapshots[0]!;
     const github: ReconciliationGateway = {
       listIssues: async () => {
         const snapshot = snapshots[snapshotIndex];
@@ -1661,12 +1660,10 @@ describe("initial PostgreSQL materialization", () => {
         if (snapshot === undefined) {
           throw new Error("No authoritative reconciliation snapshot remained.");
         }
-        currentSnapshot = snapshot;
-        return snapshot.issues;
+        return snapshot.issues.map((issue) => ({
+          ...issue, closingPullRequests: snapshot.closingPullRequests.get(issue.number) ?? [],
+        }));
       },
-      getIssueClosingPullRequests: async (_repository, issueNumber) => (
-        currentSnapshot.closingPullRequests.get(issueNumber) ?? []
-      ),
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async (_repository, pullRequestNumber) => (
         pullRequestNumber === 11 ? "materialized diff" : "added materialized diff"
@@ -3043,6 +3040,7 @@ function authoritativeIssue(input: { id: number; number: number; ownerLogin: str
     authorLogin: input.ownerLogin,
     labels: ["M", "delivered/6"],
     claimAssigneeGitHubLogin: null,
+    closingPullRequests: [],
     history: [
       { kind: "LABELED", id: `opening-${input.id}`, actorLogin: input.ownerLogin, label: "M", createdAt: "2026-09-01T08:01:00.000Z" },
       { kind: "LABELED", id: `actual-${input.id}`, actorLogin: input.ownerLogin, label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z" },
@@ -3198,10 +3196,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin ?? null,
     history: issue.history,
     comments: issue.comments,
-  }));
-  const pullRequestsByIssue = new Map(snapshot.issues.map((issue) => [
-    issue.number,
-    issue.closingPullRequests.map((pullRequest): GitHubPullRequest => ({
+    closingPullRequests: issue.closingPullRequests.map((pullRequest): GitHubPullRequest => ({
       id: pullRequest.id,
       number: pullRequest.number,
       title: pullRequest.title,
@@ -3214,13 +3209,12 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       authorLogin: pullRequest.authorLogin,
       authorGitHubUserId: pullRequest.authorGitHubUserId,
     })),
-  ]));
+  }));
   const evidenceByPullRequest = new Map(snapshot.issues.flatMap((issue) => (
     issue.closingPullRequests.map((pullRequest) => [pullRequest.number, pullRequest] as const)
   )));
   return {
     listIssues: async () => issues,
-    getIssueClosingPullRequests: async (_repository, issueNumber) => pullRequestsByIssue.get(issueNumber) ?? [],
     getPullRequestReviews: async (_repository, pullRequestNumber) => (
       evidenceByPullRequest.get(pullRequestNumber)?.reviews ?? []
     ),
