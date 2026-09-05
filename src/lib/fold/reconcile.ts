@@ -129,9 +129,14 @@ async function reconcileRepositoryWhileCoordinated(
       changed: deltas.changes,
       removed: deltas.removals,
     };
-  } catch {
+  } catch (error) {
+    // The stored message stays fixed: an upstream error can carry the sponsor's
+    // GitHub token in a URL, and reconciliation_runs is read by the product.
+    // The cause reaches the service log here and rides on the thrown error, so
+    // a caller that reports the failure reports what actually went wrong.
+    console.error(`Reconciliation of repository ${repositoryId} failed.`, error);
     await dependencies.store.failRun(runId, "Reconciliation failed.");
-    throw new Error("Unable to reconcile repository.");
+    throw new Error("Unable to reconcile repository.", { cause: error });
   }
 }
 
