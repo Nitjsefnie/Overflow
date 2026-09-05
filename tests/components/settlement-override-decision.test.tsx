@@ -100,7 +100,7 @@ describe("settlement correction decision controls", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: { message: "The settlement correction request was not found." } }), {
+        new Response(JSON.stringify({ error: { message: "No settlement, calibration or correction request was found under that identifier." } }), {
           status: 404,
           headers: { "content-type": "application/json" },
         }),
@@ -112,7 +112,7 @@ describe("settlement correction decision controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Decline correction" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The settlement correction request was not found.",
+      "No settlement, calibration or correction request was found under that identifier.",
     );
   });
 });
