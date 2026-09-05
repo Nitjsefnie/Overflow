@@ -5,6 +5,13 @@ offers an issue, an outside contributor closes it through GitHub, and Overflow
 records a settled credit transfer with auditable proof. `README.md` describes
 what the ledger records. This file describes how to change it.
 
+**Overflow is already running at <https://overflow.nitjsefni.eu>, and that
+instance is what this repository exists to serve.** If you have not looked at it
+yet, sign in there first — the ledger, the settlement proofs and the rules page
+are much easier to reason about from the inside than from a description of them.
+Using Overflow never requires running your own copy; the setup in this file is a
+development environment.
+
 Issues and pull requests are welcome. So is the smaller kind of contribution —
 a report that says "the rules page claims X and the fold code does Y, here is
 the query" is worth as much as a patch, because everything here is meant to be
@@ -41,7 +48,14 @@ Two conditions, and both are about honesty rather than provenance:
    fifteen-minute tolerance decide the outcome, and a plausible reading of the
    code and its actual behaviour part company quietly.
 
-## Getting it running
+## Getting a development copy running
+
+What follows builds a **development environment for working on Overflow's own
+code**. It is not how you use Overflow — that is
+<https://overflow.nitjsefni.eu>. A copy you run yourself keeps its own ledger in
+its own PostgreSQL database, and nothing in this codebase moves balances,
+settlements or calibration between deployments, so a local instance starts empty
+and stays private to itself. Run it to change Overflow, not to participate in it.
 
 Node and pnpm are pinned in `package.json`. `engines` names Node `24.17.0` and
 pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
