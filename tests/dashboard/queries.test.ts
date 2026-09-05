@@ -104,6 +104,13 @@ describe("unwritable closures", () => {
       }),
     ]);
     const query = captures[0]?.text ?? "";
+    const projection = query.match(/^\s*select\s+([\s\S]*?)\s+from\s+unwritable_closures\b/i)?.[1] ?? "";
+    expect(projection).toMatch(/(?:^|,)\s*unwritable_closures\.reason(?:\s+as\s+reason)?\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*unwritable_closures\.kind::text(?:\s+as\s+kind)?\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.pull_request_number(?:\s+as\s+pull_request_number)?\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.title\s+as\s+pull_request_title\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.url\s+as\s+pull_request_url\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*settlements\.id\s+as\s+settlement_id\s*(?:,|$)/i);
     expect(query).toMatch(/left join pull_requests on pull_requests\.id = unwritable_closures\.pull_request_id/i);
     expect(query).toMatch(/left join settlements on settlements\.issue_id = issues\.id/i);
     expect(query).toMatch(/order by unwritable_closures\.created_at desc, issues\.github_issue_id asc/i);
