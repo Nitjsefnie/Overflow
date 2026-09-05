@@ -8,13 +8,42 @@ const githubApiVersion = "2022-11-28";
 const maxErrorEntries = 5;
 const maxErrorFieldLength = 512;
 const maxErrorPathSegments = 10;
+// Ten serialized segments of at most 48 units, commas, brackets and an optional
+// omission marker fit in 495 units, while retaining every previewed position.
+const maxSerializedPathSegmentLength = 48;
 
 class GitHubGraphqlRequestError extends Error {}
 
 function boundedErrorText(value: string, accessToken: string): string {
   const redacted = accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
   const text = redacted.slice(0, maxErrorFieldLength).replace(/\s/g, " ");
-  return redacted.length > maxErrorFieldLength ? `${text.slice(0, -1)}…` : text;
+  if (redacted.length <= maxErrorFieldLength) return text;
+  // Do not leave half of a surrogate pair at the retained-prefix boundary.
+  const prefix = text.slice(0, -1).replace(/[\uD800-\uDBFF]$/u, "");
+  return `${prefix}…`;
+}
+
+function boundedErrorPath(path: unknown[], accessToken: string): string {
+  const segments = path.slice(0, maxErrorPathSegments).map((segment: unknown) => {
+    if (typeof segment === "number") return JSON.stringify(segment);
+    if (typeof segment !== "string") return "null";
+
+    const text = boundedErrorText(segment, accessToken);
+    const serialized = JSON.stringify(text);
+    if (serialized.length <= maxSerializedPathSegmentLength) return serialized;
+
+    let prefix = "";
+    let length = 3; // Reserve the JSON quotes and truncation ellipsis.
+    for (const character of text) {
+      const encodedLength = JSON.stringify(character).length - 2;
+      if (length + encodedLength > maxSerializedPathSegmentLength) break;
+      prefix += character;
+      length += encodedLength;
+    }
+    return JSON.stringify(`${prefix}…`);
+  });
+  if (path.length > maxErrorPathSegments) segments.push('"…"');
+  return `[${segments.join(",")}]`;
 }
 
 function graphqlFailureMessage(errors: unknown, accessToken: string): string {
@@ -36,13 +65,7 @@ function graphqlFailureMessage(errors: unknown, accessToken: string): string {
       ? boundedErrorText(error.message, accessToken) : "No message supplied";
     let path = "";
     if (Array.isArray(error.path)) {
-      const segments = error.path.slice(0, maxErrorPathSegments).map((segment: unknown) => {
-        if (typeof segment === "string") return boundedErrorText(segment, accessToken);
-        if (typeof segment === "number") return segment;
-        return "?";
-      });
-      if (error.path.length > maxErrorPathSegments) segments.push("…");
-      path = ` path=${boundedErrorText(JSON.stringify(segments), accessToken)}`;
+      path = ` path=${boundedErrorPath(error.path, accessToken)}`;
     }
     return `${type}: ${detail}${path}`;
   });
