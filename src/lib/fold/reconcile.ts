@@ -26,7 +26,7 @@ export type ReconciliationStore = {
   withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
-  findUsersByGitHubLogins(logins: readonly string[]): Promise<FoldUser[]>;
+  findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]>;
   beginRun(repositoryId: string): Promise<string>;
   completeRun(runId: string): Promise<void>;
   materialize(input: { repositoryId: string; runId: string; fold: FoldResult }): Promise<ReconciliationDeltas>;
@@ -99,12 +99,12 @@ async function reconcileRepositoryWhileCoordinated(
       reference,
       issuePullRequests.flatMap(({ closingPullRequests }) => closingPullRequests),
     );
-    const logins = [...new Set(
+    const authorGitHubUserIds = [...new Set(
       issuePullRequests
-        .flatMap(({ closingPullRequests }) => closingPullRequests.map((pullRequest) => pullRequest.authorLogin))
-        .filter((login): login is string => login !== null),
+        .flatMap(({ closingPullRequests }) => closingPullRequests.map((pullRequest) => pullRequest.authorGitHubUserId))
+        .filter((githubUserId): githubUserId is number => githubUserId !== null),
     )];
-    const users = await dependencies.store.findUsersByGitHubLogins(logins);
+    const users = await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
     const snapshot: RepositoryFoldSnapshot = {
       repository,
       users,

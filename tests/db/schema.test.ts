@@ -79,6 +79,33 @@ describe("initial PostgreSQL materialization", () => {
     );
   });
 
+  it("loads fold users and the repository sponsor by immutable GitHub ids", async () => {
+    const firstId = await insertUserWithLogin(sql, "id-lookup-before-rename");
+    const secondId = await insertUserWithLogin(sql, "id-lookup-second");
+    const firstGitHubId = await githubUserIdOf(sql, firstId);
+    const secondGitHubId = await githubUserIdOf(sql, secondId);
+    await sql`update users set github_login = ${"id-lookup-renamed"} where id = ${firstId}`;
+    const store = new PostgresFoldStore(sql);
+    const repositoryId = await insertRepository(sql, firstId, nextExternalId());
+
+    expect((await store.getRepository(repositoryId))?.sponsor).toMatchObject({
+      id: firstId, githubUserId: firstGitHubId, githubLogin: "id-lookup-renamed",
+    });
+    const users = await store.findUsersByGitHubUserIds([
+      firstGitHubId, secondGitHubId, firstGitHubId, 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1,
+    ]);
+    expect(users).toHaveLength(2);
+    expect(users).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: firstId, githubUserId: firstGitHubId, githubLogin: "id-lookup-renamed" }),
+      expect.objectContaining({ id: secondId, githubUserId: secondGitHubId, githubLogin: "id-lookup-second" }),
+    ]));
+    expect(await store.findUsersByGitHubUserIds([secondGitHubId])).toEqual([
+      expect.objectContaining({ id: secondId, githubUserId: secondGitHubId }),
+    ]);
+    expect(await store.findUsersByGitHubUserIds([])).toEqual([]);
+    expect(await store.findUsersByGitHubUserIds([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])).toEqual([]);
+  });
+
   it("records each numbered migration only once", async () => {
     const rows = await sql<{ name: string; count: number }[]>`
       select name, count(*)::integer as count
@@ -838,6 +865,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -913,6 +942,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -964,6 +995,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       issueLabels: ["M"],
       actualLabel: "delivered/6",
     }));
@@ -980,6 +1013,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       issueLabels: ["M"],
       actualLabel: "delivered/7",
     });
@@ -1041,6 +1076,8 @@ describe("initial PostgreSQL materialization", () => {
             ownerName: repository.owner_name,
             sponsorId,
             contributorId,
+            sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+            contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
             issueLabels: ["M"],
             actualLabel: "delivered/6",
           }),
@@ -1073,6 +1110,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1145,6 +1184,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1157,6 +1198,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1191,11 +1234,13 @@ describe("initial PostgreSQL materialization", () => {
             id: changedPullRequestId,
             number: 11,
             authorLogin: contributorLogin,
+            authorGitHubUserId: await githubUserIdOf(sql, contributorId),
           })]],
           [3, [authoritativePullRequest({
             id: addedPullRequestId,
             number: 13,
             authorLogin: contributorLogin,
+            authorGitHubUserId: await githubUserIdOf(sql, contributorId),
           })]],
         ]),
       },
@@ -1209,11 +1254,13 @@ describe("initial PostgreSQL materialization", () => {
             id: addedPullRequestId,
             number: 13,
             authorLogin: contributorLogin,
+            authorGitHubUserId: await githubUserIdOf(sql, contributorId),
           })]],
           [1, [authoritativePullRequest({
             id: changedPullRequestId,
             number: 11,
             authorLogin: contributorLogin,
+            authorGitHubUserId: await githubUserIdOf(sql, contributorId),
           })]],
         ]),
       },
@@ -1321,6 +1368,8 @@ describe("initial PostgreSQL materialization", () => {
     const ownerFetchStarted = new Promise<void>((resolve) => { markOwnerFetchStarted = resolve; });
     const holdOwnerFetch = new Promise<void>((resolve) => { releaseOwnerFetch = resolve; });
 
+    const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
+    const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
     const trackedGateway = (
       runName: string,
       points: number,
@@ -1332,6 +1381,8 @@ describe("initial PostgreSQL materialization", () => {
         ownerName: repository.owner_name,
         sponsorId,
         contributorId,
+        sponsorGitHubUserId,
+        contributorGitHubUserId,
         sponsorLogin,
         contributorLogin,
         issueLabels: ["M"],
@@ -1473,6 +1524,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1485,6 +1538,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1559,6 +1614,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1571,6 +1628,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       sponsorLogin,
       contributorLogin,
       issueLabels: ["M"],
@@ -1581,6 +1640,7 @@ describe("initial PostgreSQL materialization", () => {
     selfWorkSnapshot.issues[0]!.number = 2;
     selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.number = 12;
     selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorLogin = sponsorLogin;
+    selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = await githubUserIdOf(sql, sponsorId);
     outsiderSnapshot.issues.push(selfWorkSnapshot.issues[0]!);
 
     const store = new PostgresFoldStore(sql, tokenEncryptionKey);
@@ -1631,6 +1691,8 @@ describe("initial PostgreSQL materialization", () => {
         ownerName: repository.owner_name,
         sponsorId,
         contributorId,
+        sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+        contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
         sponsorLogin,
         contributorLogin,
         issueLabels: ["M"],
@@ -1738,6 +1800,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: selfWorkRepository.owner_name,
       sponsorId: selfWorkSponsorId,
       contributorId: selfWorkContributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, selfWorkSponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, selfWorkContributorId),
       sponsorLogin: selfWorkSponsorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
@@ -1745,6 +1809,7 @@ describe("initial PostgreSQL materialization", () => {
       githubPullRequestId: nextExternalId(),
     });
     selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorLogin = selfWorkSponsorLogin;
+    selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = await githubUserIdOf(sql, selfWorkSponsorId);
 
     const selfWorkAddRun = await store.beginRun(selfWorkRepositoryId);
     await expect(store.materialize({
@@ -1819,6 +1884,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: closureRepository.owner_name,
       sponsorId: closureSponsorId,
       contributorId: closureContributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, closureSponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, closureContributorId),
       issueLabels: ["M"],
       actualLabel: "delivered/6",
       githubIssueId: nextExternalId(),
@@ -2443,11 +2510,20 @@ async function insertUserWithLogin(client: QueryableSql, githubLogin: string): P
   return user.id;
 }
 
+async function githubUserIdOf(client: QueryableSql, userId: string): Promise<number> {
+  const [row] = await client<{ github_user_id: number | string }[]>`
+    select github_user_id from users where id = ${userId}
+  `;
+  return Number(row.github_user_id);
+}
+
 function materializationSnapshot(input: {
   repositoryId: string;
   ownerName: string;
   sponsorId: string;
   contributorId: string;
+  sponsorGitHubUserId: number;
+  contributorGitHubUserId: number;
   sponsorLogin?: string;
   contributorLogin?: string;
   issueLabels: string[];
@@ -2464,12 +2540,12 @@ function materializationSnapshot(input: {
       id: input.repositoryId,
       ownerName: input.ownerName,
       active: true,
-      sponsor: { id: input.sponsorId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
+      sponsor: { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
       difficultyScheme: validDifficultyScheme(),
     },
     users: [
-      { id: input.sponsorId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
-      { id: input.contributorId, githubLogin: contributorLogin, enforcementState: "ACTIVE" },
+      { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
+      { id: input.contributorId, githubUserId: input.contributorGitHubUserId, githubLogin: contributorLogin, enforcementState: "ACTIVE" },
     ],
     issues: [
       {
@@ -2526,6 +2602,7 @@ function materializationSnapshot(input: {
             mergeCommitOid: githubPullRequestId.toString(16).padStart(40, "0"),
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: contributorLogin,
+            authorGitHubUserId: input.contributorGitHubUserId,
             reviews: [],
             rawDiff: "materialized diff",
           },
@@ -2719,7 +2796,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       mergeCommitOid: pullRequest.mergeCommitOid,
       finalCommitAt: pullRequest.finalCommitAt,
       authorLogin: pullRequest.authorLogin,
-      authorGitHubUserId: null,
+      authorGitHubUserId: pullRequest.authorGitHubUserId,
     })),
   ]));
   const evidenceByPullRequest = new Map(snapshot.issues.flatMap((issue) => (

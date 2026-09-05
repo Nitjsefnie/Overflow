@@ -8,6 +8,7 @@ function unsettled(overrides: Partial<FoldSettlement> = {}): FoldSettlement {
     githubPullRequestId: 4_400,
     creditorId: "creditor-id",
     creditorGitHubLogin: "ada",
+    creditorGitHubUserId: 2001,
     debtorId: "debtor-id",
     openingComparisonPoints: 5,
     settledLabel: null,

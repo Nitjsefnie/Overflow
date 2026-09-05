@@ -15,6 +15,7 @@ describe("reconcileRepository", () => {
 
     const summary = await reconcileRepository(dependencies, "repository");
 
+    expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledWith([2001]);
     expect(summary).toMatchObject({
       repositoryId: "repository",
       adds: 2,
@@ -37,10 +38,28 @@ describe("reconcileRepository", () => {
       expect.objectContaining({
         repositoryId: "repository",
         fold: expect.objectContaining({
-          settlements: [expect.objectContaining({ proofSha256: expect.stringMatching(/^[0-9a-f]{64}$/) })],
+          settlements: [expect.objectContaining({ creditorId: "contributor", creditorGitHubUserId: 2001, proofSha256: expect.stringMatching(/^[0-9a-f]{64}$/) })],
+          pullRequests: [expect.objectContaining({ authorId: "contributor", authorGitHubUserId: 2001 })],
         }),
       }),
     );
+  });
+
+  it("looks up distinct author ids once and excludes authors without an id", async () => {
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssueClosingPullRequests: vi.fn().mockResolvedValue([
+          reconciliationPullRequest({ id: 201, number: 11 }),
+          { ...reconciliationPullRequest({ id: 202, number: 12 }), authorGitHubUserId: 3001 },
+          reconciliationPullRequest({ id: 203, number: 13 }),
+          { ...reconciliationPullRequest({ id: 204, number: 14 }), authorGitHubUserId: null },
+        ]),
+      },
+    });
+
+    await reconcileRepository(dependencies, "repository");
+
+    expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledExactlyOnceWith([2001, 3001]);
   });
 
   it("converges when a full reconciliation is repeated after missed or reordered webhook deliveries", async () => {
@@ -280,6 +299,7 @@ function reconciliationDependencies(
         mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
         finalCommitAt: "2026-09-01T10:00:00.000Z",
         authorLogin: "contributor",
+        authorGitHubUserId: 2001,
       },
     ]),
     getPullRequestReviews: vi.fn().mockResolvedValue([]),
@@ -293,7 +313,7 @@ function reconciliationDependencies(
       id: "repository",
       ownerName: "octo/example",
       active: true,
-      sponsor: { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: {
         openingName: "Size",
         actualName: "Delivered",
@@ -302,9 +322,9 @@ function reconciliationDependencies(
       },
     }),
     getGitHubAccessToken: vi.fn().mockResolvedValue("token"),
-    findUsersByGitHubLogins: vi.fn().mockResolvedValue([
-      { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE" },
-      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE" },
+    findUsersByGitHubUserIds: vi.fn().mockResolvedValue([
+      { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      { id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE" },
     ]),
     beginRun: vi.fn().mockResolvedValue("run-1"),
     completeRun: vi.fn().mockResolvedValue(undefined),
@@ -394,6 +414,6 @@ function reconciliationPullRequest(input: { id: number; number: number }) {
     mergeCommitOid: `${input.id.toString(16).padStart(40, "0")}`,
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: "contributor",
-    authorGitHubUserId: null,
+    authorGitHubUserId: 2001,
   };
 }

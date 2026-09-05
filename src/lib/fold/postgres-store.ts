@@ -31,6 +31,7 @@ type RepositoryRow = {
   active: boolean;
   difficulty_scheme: DifficultyScheme;
   sponsor_id: string;
+  sponsor_github_user_id: number | string;
   sponsor_github_login: string;
   sponsor_enforcement_state: EnforcementState;
   sponsor_moderation_events: unknown;
@@ -38,6 +39,7 @@ type RepositoryRow = {
 
 type UserRow = {
   id: string;
+  github_user_id: number | string;
   github_login: string;
   enforcement_state: EnforcementState;
   moderation_events: unknown;
@@ -243,6 +245,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repositories.active,
         repositories.difficulty_scheme,
         sponsors.id as sponsor_id,
+        sponsors.github_user_id as sponsor_github_user_id,
         sponsors.github_login as sponsor_github_login,
         sponsors.enforcement_state as sponsor_enforcement_state,
         coalesce((
@@ -293,14 +296,15 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), this.tokenEncryptionKey);
   }
 
-  public async findUsersByGitHubLogins(logins: readonly string[]): Promise<FoldUser[]> {
-    const normalized = [...new Set(logins.map(normalizeLogin).filter((login) => login.length > 0))];
+  public async findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]> {
+    const normalized = [...new Set(githubUserIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
     if (normalized.length === 0) {
       return [];
     }
     const rows = await this.sql<UserRow[]>`
       select
         users.id,
+        users.github_user_id,
         users.github_login,
         users.enforcement_state,
         coalesce((
@@ -314,7 +318,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           where events.target_user_id = users.id
         ), '[]'::jsonb) as moderation_events
       from users
-      where lower(users.github_login) = any(${this.sql.array(normalized)})
+      where users.github_user_id = any(${this.sql.array(normalized.map(String))}::bigint[])
     `;
     return rows.map(toFoldUser);
   }
@@ -1266,6 +1270,7 @@ function toReconciliationRepository(row: RepositoryRow): ReconciliationRepositor
     difficultyScheme: row.difficulty_scheme,
     sponsor: {
       id: row.sponsor_id,
+      githubUserId: toSafeInteger(row.sponsor_github_user_id),
       githubLogin: row.sponsor_github_login,
       enforcementState: row.sponsor_enforcement_state,
       moderationEvents: moderationEventsFromJson(row.sponsor_moderation_events),
@@ -1276,6 +1281,7 @@ function toReconciliationRepository(row: RepositoryRow): ReconciliationRepositor
 function toFoldUser(row: UserRow): FoldUser {
   return {
     id: row.id,
+    githubUserId: toSafeInteger(row.github_user_id),
     githubLogin: row.github_login,
     enforcementState: row.enforcement_state,
     moderationEvents: moderationEventsFromJson(row.moderation_events),

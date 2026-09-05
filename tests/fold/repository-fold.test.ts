@@ -103,7 +103,7 @@ describe("foldRepository", () => {
 
   it("uses the PR author as contributor while keeping an issue assignee as only a claim lock", () => {
     const snapshot = outsiderFixture();
-    snapshot.users.push({ id: "assignee", githubLogin: "claim-holder", enforcementState: "ACTIVE", moderationEvents: [] });
+    snapshot.users.push({ id: "assignee", githubUserId: 3001, githubLogin: "claim-holder", enforcementState: "ACTIVE", moderationEvents: [] });
     snapshot.issues[0]!.claimAssigneeGitHubLogin = "claim-holder";
 
     const result = foldRepository(snapshot);
@@ -139,8 +139,69 @@ describe("foldRepository", () => {
       status: "UNCLAIMED",
       creditorId: null,
       creditorGitHubLogin: "contributor",
+      creditorGitHubUserId: 2001,
       credits: 6,
       proofSha256: sha256("diff"),
+    });
+  });
+
+  it("credits the pull request author by immutable GitHub id, never by login", () => {
+    const snapshot = outsiderFixture();
+    // Same login as the joined contributor, different GitHub account.
+    snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = 9999;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNCLAIMED",
+      creditorId: null,
+      creditorGitHubUserId: 9999,
+      creditorGitHubLogin: "contributor",
+      credits: 6,
+    });
+    expect(result.pullRequests[0]).toMatchObject({ authorId: null, authorGitHubUserId: 9999 });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("still credits a contributor who renamed their GitHub account", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "contributor-renamed";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      creditorId: "contributor",
+      creditorGitHubUserId: 2001,
+      creditorGitHubLogin: "contributor-renamed",
+      credits: 6,
+    });
+    expect(result.pullRequests[0]).toMatchObject({ authorId: "contributor", authorGitHubUserId: 2001 });
+  });
+
+  it("keeps a renamed sponsor's own work as calibration evidence", () => {
+    const snapshot = selfWorkFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor-renamed";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([]);
+    expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({ userId: "sponsor" })]);
+    expect(result.pullRequests[0]).toMatchObject({ authorId: "sponsor", authorGitHubUserId: 1001 });
+  });
+
+  it("leaves a closing pull request without an author id unclaimed and unclaimable", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "release-bot[bot]";
+    snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNCLAIMED",
+      creditorId: null,
+      creditorGitHubUserId: null,
+      creditorGitHubLogin: "release-bot[bot]",
     });
   });
 
@@ -253,6 +314,7 @@ describe("foldRepository", () => {
 function selfWorkFixture(): RepositoryFoldSnapshot {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor";
+  snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = 1001;
   return snapshot;
 }
 
@@ -283,12 +345,12 @@ function outsiderFixture(): RepositoryFoldSnapshot {
       id: "repository",
       ownerName: "octo/example",
       active: true,
-      sponsor: { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
+      sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
       difficultyScheme: difficultyScheme(),
     },
     users: [
-      { id: "sponsor", githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
-      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
     ],
     issues: [
       {
@@ -339,6 +401,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: "contributor",
+            authorGitHubUserId: 2001,
             reviews: [],
             rawDiff: "diff",
           },
