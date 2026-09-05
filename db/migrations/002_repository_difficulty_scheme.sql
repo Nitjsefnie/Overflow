@@ -1,4 +1,4 @@
-create function is_valid_repository_difficulty_scheme(scheme jsonb)
+create or replace function is_valid_repository_difficulty_scheme(scheme jsonb)
 returns boolean
 language plpgsql
 immutable
@@ -107,24 +107,37 @@ declare
   affected_count bigint;
   affected_owner_names text;
 begin
-  if not exists (
+  if exists (
     select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'registered_repositories'
-      and column_name = 'difficulty_scheme'
+    from pg_attribute
+    where attrelid = to_regclass('registered_repositories')
+      and attname = 'difficulty_scheme'
+      and attnum > 0
+      and not attisdropped
   ) then
+    select count(*), (
+      select string_agg(sample.owner_name, ', ' order by sample.owner_name)
+      from (
+        select owner_name from registered_repositories
+        where difficulty_scheme is null
+        order by owner_name limit 5
+      ) as sample
+    )
+    into affected_count, affected_owner_names
+    from registered_repositories
+    where difficulty_scheme is null;
+  else
     select count(*), (
       select string_agg(sample.owner_name, ', ' order by sample.owner_name)
       from (select owner_name from registered_repositories order by owner_name limit 5) as sample
     )
     into affected_count, affected_owner_names
     from registered_repositories;
+  end if;
 
-    if affected_count > 0 then
-      raise exception 'Repository difficulty scheme precondition failed: % repository(ies) predate the difficulty scheme. Repositories: %. Give each repository a difficulty scheme by adding the difficulty_scheme column and backfilling it by hand, or remove the legacy repositories, before upgrading.',
-        affected_count, affected_owner_names;
-    end if;
+  if affected_count > 0 then
+    raise exception 'Repository difficulty scheme precondition failed: % repository(ies) predate the difficulty scheme. Repositories: %. Give each repository a difficulty scheme by adding the difficulty_scheme column and backfilling it by hand, or remove the legacy repositories, before upgrading.',
+      affected_count, affected_owner_names;
   end if;
 end;
 $$;
