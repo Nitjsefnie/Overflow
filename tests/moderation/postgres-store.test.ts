@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { NextAuthConfig, Profile } from "next-auth";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -11,12 +12,23 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { RepositoryRegistrationEnforcementError } from "@/lib/repositories/register";
 
+const capturedAuth = vi.hoisted(() => ({ config: null as NextAuthConfig | null }));
+vi.mock("next-auth", () => ({
+  default: (config: NextAuthConfig) => {
+    capturedAuth.config = config;
+    return { handlers: { GET: vi.fn(), POST: vi.fn() }, auth: vi.fn(), signIn: vi.fn() };
+  },
+}));
+vi.mock("next-auth/providers/github", () => ({ default: () => ({ id: "github" }) }));
+
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 40_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 describe("PostgreSQL account moderation transitions", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   beforeAll(async () => {
     const started = await startPostgresContainer({
       database: "overflow_moderation_test",
@@ -466,6 +478,57 @@ describe("PostgreSQL account moderation transitions", () => {
         process.env.MODERATOR_GITHUB_USER_IDS = previous;
       }
     }
+  });
+
+  it.each([
+    { storedRole: "MODERATOR", configured: false },
+    { storedRole: "MEMBER", configured: true },
+  ] as const)("sign-in preserves the SQL role floor for stored $storedRole with configured=$configured", async ({ storedRole, configured }) => {
+    const githubUserId = nextExternalId();
+    const [account] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login, role)
+      values (${githubUserId}, ${`before-sign-in-${githubUserId}`}, ${storedRole})
+      returning id
+    `;
+    vi.stubEnv("TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64url"));
+    vi.stubEnv("MODERATOR_GITHUB_USER_IDS", configured ? String(githubUserId) : "");
+    vi.stubEnv("MODERATOR_GITHUB_LOGINS", undefined);
+    await import("@/auth");
+    const signIn = capturedAuth.config!.callbacks!.signIn!;
+    const login = `after-sign-in-${githubUserId}`;
+
+    await expect(signIn({
+      user: { id: String(githubUserId) },
+      account: { provider: "github", providerAccountId: String(githubUserId), type: "oauth", access_token: "test-token" },
+      profile: { id: githubUserId, login, avatar_url: null } as unknown as Profile,
+    })).resolves.toBe(true);
+
+    await expect(sql<{ id: string; github_login: string; role: string }[]>`
+      select id, github_login, role from users where github_user_id = ${githubUserId}
+    `).resolves.toEqual([{ id: account.id, github_login: login, role: "MODERATOR" }]);
+  });
+
+  it.each([
+    { name: "whitespace and junk alongside a valid id", form: "mixed", expected: true },
+    { name: "a leading-zero id", form: "leading-zero", expected: false },
+    { name: "junk and a trailing-garbage id", form: "junk", expected: false },
+  ])("the moderator roster parses $name", async ({ form, expected }) => {
+    const githubUserId = nextExternalId();
+    const [account] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login, role)
+      values (${githubUserId}, ${`roster-${githubUserId}`}, ${"MODERATOR"})
+      returning id
+    `;
+    const configuration = form === "mixed"
+      ? `junk,0,-1, ${githubUserId} ,1e3`
+      : form === "leading-zero" ? `0${githubUserId}` : `junk,0,-1,${githubUserId}abc`;
+    vi.stubEnv("MODERATOR_GITHUB_USER_IDS", configuration);
+    const roster = await new PostgresModerationStore(sql).listModerators();
+    expect(roster.find((entry) => entry.accountId === account.id)).toEqual({
+      accountId: account.id,
+      githubLogin: `roster-${githubUserId}`,
+      isConfigured: expected,
+    });
   });
 
   it.each([
