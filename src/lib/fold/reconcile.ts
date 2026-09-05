@@ -3,7 +3,8 @@ import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
 
-// Protect GitHub's secondary concurrency limit; each worker makes one request at a time.
+// Cap this reconciliation at four HTTP requests: each PR worker paginates
+// reviews, then dismissals, then fetches its diff, one request at a time.
 const reconciliationConcurrency = 4;
 
 // A large repository can exhaust an hourly GitHub budget; without retry guidance,
