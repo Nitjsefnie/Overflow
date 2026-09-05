@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -73,6 +74,20 @@ describe("session recovery route", () => {
     expect(mocks.redirect).not.toHaveBeenCalled();
     expect(mocks.getSql).not.toHaveBeenCalled();
     expect(mocks.getCurrentUserRole).not.toHaveBeenCalled();
+  });
+
+  it("narrows a repeated reason search param instead of handing the array to the view", async () => {
+    const page = (await SessionPage({
+      searchParams: Promise.resolve({ reason: ["stale", "unavailable"] }),
+    })) as ReactElement<{ reason: unknown }>;
+
+    // The rendered branch alone cannot see this: an array is not "unavailable" either, so a page that
+    // forwards the array still renders the fallback. Read the prop the view was handed.
+    expect(page.props.reason).toBeUndefined();
+    render(page);
+
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
+    expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
   });
 
   it("falls back to the stale copy when the route is opened with an empty search-param set", async () => {
