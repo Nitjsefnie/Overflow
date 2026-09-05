@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<!-- Adapted from audit-register template. Copyright 2026 Anthropic PBC · SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Overflow full-application audit: 20 unresolved findings, a resolved OAuth scope correction, evidence, verification boundaries, and remediation decisions.">
+  <title>Overflow — full-application audit · 2026-09-05</title>
+  <style>
+    :root { --ivory:#1B1A17; --slate:#F5F3EC; --clay:#D97757; --oat:#3A352B; --olive:#A9C387; --rust:#F2A28E; --warn:#E0B47F; --gray-150:#2E2C27; --gray-300:#49463E; --gray-500:#B0ADA1; --gray-700:#CFCCC2; --white:#252420; --code-bg:#121110; --serif:ui-serif,Georgia,'Times New Roman',serif; --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; --mono:ui-monospace,'SF Mono',Menlo,Monaco,monospace; --radius:12px; --border:1.5px solid var(--gray-300); }
+    * { box-sizing:border-box; }
+    html { scroll-padding-top:20px; }
+    body { margin:0; font-family:var(--sans); background:var(--ivory); color:var(--gray-700); line-height:1.65; padding:48px 28px 64px; -webkit-font-smoothing:antialiased; }
+    .page { margin:0 auto; max-width:1120px; }
+    a { color:#E8AE92; text-underline-offset:3px; overflow-wrap:anywhere; }
+    a:hover { color:var(--slate); }
+    :focus-visible { outline:3px solid var(--warn); outline-offset:4px; }
+    .skip-link { position:absolute; top:0; left:20px; padding:12px; background:var(--white); transform:translateY(-150%); }
+    .skip-link:focus { transform:translateY(0); }
+    p { margin:0 0 14px; }
+    p:last-child { margin-bottom:0; }
+    ul,ol { padding-left:24px; }
+    li { margin:8px 0; }
+    h1,h2,h3 { color:var(--slate); }
+    h1 { font:500 clamp(30px,4vw,46px)/1.15 var(--serif); letter-spacing:-.02em; margin:0 0 20px; }
+    h2 { font:500 28px/1.25 var(--serif); margin:0; }
+    h3 { font:500 21px/1.35 var(--serif); margin:26px 0 12px; }
+    strong { color:var(--slate); }
+    .eyebrow,.label,.k,.bk,.f-id,.sev,legend { font-family:var(--mono); }
+    .eyebrow { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-500); margin-bottom:12px; }
+    header.page-head { margin-bottom:28px; }
+    .context-box { background:var(--gray-150); border:var(--border); border-radius:var(--radius); padding:18px 22px; font-size:15px; }
+    .label,.k,.bk { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-500); margin-bottom:6px; }
+    .summary { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin:28px 0; }
+    .cell { background:var(--white); border:var(--border); border-radius:var(--radius); padding:16px; }
+    .v { color:var(--slate); font-weight:650; font-size:20px; }
+    .bad { color:var(--rust); } .warn { color:var(--warn); } .ok { color:var(--olive); }
+    .verdict { background:var(--white); border:var(--border); border-left:4px solid var(--rust); border-radius:var(--radius); padding:22px 26px; margin-bottom:28px; }
+    .verdict h2 { margin:6px 0 12px; font-size:25px; }
+    .toc { background:var(--gray-150); border:var(--border); border-radius:var(--radius); padding:18px 22px; margin-bottom:42px; }
+    .toc ol { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px 28px; margin:14px 0 0; }
+    .toc li { margin:0; }
+    section { margin-bottom:48px; }
+    .sec-head { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; }
+    .num { font:12px var(--mono); padding:3px 9px; background:var(--oat); color:var(--slate); border-radius:8px; }
+    .sec-intro { color:var(--gray-500); font-size:14px; margin-bottom:24px; }
+    code { font: .88em var(--mono); background:var(--gray-150); border:1px solid var(--gray-300); border-radius:5px; padding:1px 5px; color:#D5C699; overflow-wrap:anywhere; }
+    pre { background:var(--code-bg); border:var(--border); border-radius:8px; padding:14px; overflow-x:auto; font:12px/1.65 var(--mono); color:#D5C699; }
+    pre code { padding:0; border:0; background:none; }
+    .finding { background:var(--white); border:var(--border); border-radius:var(--radius); margin-bottom:20px; overflow:hidden; }
+    .f-head { display:flex; align-items:center; gap:12px; padding:15px 20px; background:var(--gray-150); border-bottom:var(--border); flex-wrap:wrap; }
+    .f-id { color:var(--gray-500); font-size:12px; }
+    .f-title { font:500 20px/1.3 var(--serif); color:var(--slate); flex:1; min-width:220px; margin:0; }
+    .f-head a { font:12px var(--mono); }
+    .sev,.badge { display:inline-block; font:600 11px var(--mono); padding:4px 8px; border-radius:6px; }
+    .sev.crit { background:#54231A; color:#F2A28E; } .sev.high { background:#4A2A1C; color:#F0B79C; } .sev.low { background:var(--oat); color:var(--warn); } .sev.fixed,.badge.fixed { background:#2D3A24; color:#B6CC96; }
+    .f-body { padding:18px 20px; display:grid; grid-template-columns:1fr 1fr; gap:18px 28px; font-size:14px; }
+    .f-block.full { grid-column:1/-1; }
+    .cite { display:inline-block; font:11px var(--mono); background:var(--oat); color:#E8AE92; border-radius:6px; padding:2px 7px; margin:3px 4px 3px 0; overflow-wrap:anywhere; }
+    .f-decide { border:0; margin:0; padding:0 20px 12px; display:flex; gap:10px; flex-wrap:wrap; }
+    .f-decide legend { padding:0 0 8px; font-size:11px; color:var(--gray-500); }
+    .opt { background:var(--ivory); border:var(--border); border-radius:8px; padding:7px 12px; cursor:pointer; font-size:12px; user-select:none; }
+    .opt input { accent-color:var(--clay); margin-right:6px; }
+    .opt[data-selected="true"] { border-color:var(--clay); color:var(--slate); box-shadow:0 0 0 1px var(--clay) inset; }
+    .note-label { display:block; margin:0 20px 6px; font-size:12px; color:var(--gray-500); }
+    .finding textarea { display:block; width:calc(100% - 40px); margin:0 20px 20px; }
+    textarea { border:var(--border); border-radius:8px; padding:10px; background:var(--ivory); color:var(--slate); font:14px var(--sans); resize:vertical; }
+    .scope,.flow { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .col,.flow-step { background:var(--white); border:var(--border); border-radius:var(--radius); padding:18px 20px; }
+    .col h3,.flow-step h3 { margin-top:0; }
+    .flow { margin:22px 0; }
+    .flow-step .label { color:var(--clay); }
+    .table-wrap { overflow-x:auto; border:var(--border); border-radius:var(--radius); margin:18px 0; }
+    .tbl { width:100%; border-collapse:collapse; font-size:14px; }
+    .tbl th,.tbl td { padding:12px 14px; text-align:left; vertical-align:top; border-bottom:1px solid var(--gray-300); }
+    .tbl th { background:var(--gray-150); font:600 11px var(--mono); text-transform:uppercase; color:var(--gray-500); }
+    .tbl tr:last-child td { border-bottom:0; }
+    .callout { padding:16px 20px; border-left:3px solid var(--warn); background:var(--white); margin:20px 0; }
+    .selections { background:var(--white); border:var(--border); border-left:4px solid var(--clay); border-radius:var(--radius); padding:22px; }
+    .sel-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 24px; margin:16px 0; font-size:13px; }
+    .sel-row { display:flex; justify-content:space-between; gap:12px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:16px 0; }
+    button.action { font:12px var(--mono); padding:10px 16px; background:var(--ivory); color:#E8AE92; border:1.5px solid var(--clay); border-radius:8px; cursor:pointer; }
+    button.action:hover { background:#2A2521; }
+    .toast { color:var(--olive); font-size:13px; }
+    #exportText { display:block; width:100%; min-height:150px; }
+    .footer { border-top:1px solid var(--gray-300); padding-top:22px; margin-top:48px; color:var(--gray-500); font-size:13px; }
+    @media (max-width:850px) { .summary { grid-template-columns:repeat(2,1fr); } .f-body,.scope,.flow { grid-template-columns:1fr; } .toc ol { grid-template-columns:1fr; } }
+    @media (max-width:520px) { body { padding:28px 12px 40px; } .f-head,.f-body,.col { padding:14px; } .f-title { min-width:160px; } .sel-grid { grid-template-columns:1fr; } .context-box,.verdict { padding:18px; } }
+    @media print { body { background:white; color:#222; padding:0; } h1,h2,h3,strong,.v,.f-title { color:#111; } .actions,.f-decide,.note-label,.finding textarea,.skip-link,#manualExport { display:none; } .finding,.col,.cell,.verdict { break-inside:avoid; } a { color:#333; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#findings">Skip to finding register</a>
+  <main class="page" id="top">
+    <header class="page-head">
+      <div class="eyebrow">Overflow · comprehensive application review · 5 September 2026 CEST</div>
+      <h1>A sound accounting core, with unsafe identity and recovery boundaries</h1>
+      <div class="context-box">
+        <span class="label">Review context</span>
+        <p>Full-application audit of <a href="https://github.com/Nitjsefnie/Overflow">Nitjsefnie/Overflow</a>, covering source, database, GitHub integration, security, UX, tests, CI, and read-only live checks. The source review ran at <code>a6459b7752e9242994bae8d536ace58bf520a4bc</code>. A verified two-file deployment update at <code>d9312709a90a385e735612d4011282738a6f1681</code> corrected the OAuth scope request.</p>
+        <p>The register records <strong>20 unresolved findings plus one resolved primary finding with follow-ups</strong>. It does not claim production corruption or active exploitation. Detailed evidence and limitations are preserved below.</p>
+      </div>
+    </header>
+    <div class="summary" aria-label="Finding totals after OAuth scope correction">
+      <div class="cell"><span class="k">Unresolved</span><div class="v warn">20</div></div>
+      <div class="cell"><span class="k">Critical</span><div class="v bad">1</div></div>
+      <div class="cell"><span class="k">Important</span><div class="v warn">15</div></div>
+      <div class="cell"><span class="k">Minor</span><div class="v">4</div></div>
+      <div class="cell"><span class="k">Primary defect fixed</span><div class="v ok">I1 scope</div></div>
+    </div>
+    <div class="verdict" id="verdict">
+      <span class="label bad">Release verdict</span>
+      <h2>No — not ready for broader production use</h2>
+      <p>The baseline's 241 tests, lint, typecheck, build, and local workflow checks passed. Nine isolated probes nevertheless demonstrate incorrect identity claims, unsupported pricing authority, lifted sanctions, stalled ingestion, and other boundary failures. The repair CLI also fails at startup. OAuth scope removal addresses one primary defect; the remaining paths were unchanged.</p>
+      <p><strong>First priorities:</strong> durable GitHub identities (<a href="#C1">C1</a>), correct registered-source proof (<a href="#I2">I2–I3</a>), and a functioning repair path (<a href="#I4">I4–I6</a>). This is a release-readiness assessment, not an instruction to roll back the service.</p>
+    </div>
+    <nav class="toc" id="toc" aria-labelledby="toc-title">
+      <h2 id="toc-title">Contents</h2>
+      <ol>
+        <li><a href="#findings">Finding register and issue links</a></li>
+        <li><a href="#scope">Scope and evidence boundaries</a></li>
+        <li><a href="#architecture">Architecture, data flow, and ownership</a></li>
+        <li><a href="#verification">Verification and retained probes</a></li>
+        <li><a href="#coverage">Product-contract coverage</a></li>
+        <li><a href="#strengths">Strengths to preserve</a></li>
+        <li><a href="#security">Security and least privilege</a></li>
+        <li><a href="#correctness">Database and accounting invariants</a></li>
+        <li><a href="#experience">UX, accessibility, and decomposition</a></li>
+        <li><a href="#operations">CI, operations, and test quality</a></li>
+        <li><a href="#priorities">Prioritized next steps</a></li>
+        <li><a href="#addendum">Newer deployment addendum</a></li>
+        <li><a href="#decisions">Review decisions and exports</a></li>
+      </ol>
+    </nav>
+    <section id="findings" aria-labelledby="findings-title">
+      <div class="sec-head"><span class="num">1</span><h2 id="findings-title">Finding register</h2></div>
+      <p class="sec-intro">Critical: must fix. Important: should fix, with urgency stated per card. Minor: lower-risk improvements. Evidence paths refer to the reviewed baseline unless a card explicitly names the newer deployment. Decisions are local notes for review; using these controls does not change GitHub issues or authorize deployments.</p>
+      <article class="finding" id="C1" data-severity="Critical" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">C1</span><h3 class="f-title">Mutable GitHub logins control credit ownership and privileged roles</h3><span class="sev crit">CRITICAL</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/7">Issue #7</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/auth.ts:91,125</span><span class="cite">src/lib/github/client.ts:460,506</span><span class="cite">src/lib/fold/postgres-store.ts:292,468,608</span><span class="cite">src/lib/fold/repository-fold.ts:203</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Login creates a user by numeric GitHub ID, but PR authors and historical creditors are matched by login. <code>claimGitHubIdentity</code> assigns unclaimed settlements and updates PR authors by the caller's current login without checking the original numeric identity. The isolated DB probe assigned six historical credits to a newly created identity on that basis. Moderator privileges use <code>MODERATOR_GITHUB_LOGINS</code>.</p><p>A recycled username can claim stale unclaimed credit before reconciliation; a stale moderator allowlist can privilege a different person once the old local login is unoccupied. Ordinary renames also make immutable owner/actor comparisons reject the repository transaction. These are code-verified paths; no live takeover was attempted. <a href="https://docs.github.com/en/account-and-profile/concepts/username-changes">GitHub username-change behavior</a>.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Carry immutable GitHub node/database user IDs through authors, actors, assignees, moderator allowlists, and unclaimed-credit records. Treat logins as display metadata. Backfill from authoritative IDs and quarantine ambiguous legacy claims.</p><p>Verify rename/reuse, normal display-login refresh, self-work classification, and moderator allowlist behavior; a new identity must never inherit credit or authority solely from a recycled name.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="C1"><legend>Decision for C1</legend><label class="opt"><input type="radio" name="C1" value="fix">Fix now</label><label class="opt"><input type="radio" name="C1" value="defer">Defer</label><label class="opt"><input type="radio" name="C1" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-C1">Notes, owner, or conditions</label><textarea id="note-C1" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I1" data-severity="Important" data-status="resolved" data-priority="now-follow-up">
+        <div class="f-head"><span class="f-id">I1</span><h3 class="f-title">Private-profile scope removed; provider and prior-grant checks remain</h3><span class="sev fixed">PRIMARY FIXED</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/8">Follow-up #8</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence and deployment update</span><div class="evidence"><span class="cite">src/auth.ts:9,140</span><span class="cite">tests/security/github-oauth-scope.test.ts:16</span><span class="cite">@auth/core@0.41.3/providers/github.js:79</span></div><p><strong>Resolved at <code>d9312709a90a385e735612d4011282738a6f1681</code>:</strong> the requested scope is exactly <code>public_repo</code>. The earlier <code>read:user public_repo</code> string is baseline evidence only. This card is excluded from the 20 unresolved primary findings.</p></div>
+          <div class="f-block"><span class="bk">Original defect and remaining boundary</span><p>Persistence needs numeric ID, login, and avatar. GitHub allows public identity without a user scope; <code>read:user</code> or <code>user</code> enables the private <code>/user</code> response. The baseline scope violated the no-private-profile contract. See <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps">OAuth scope definitions</a> and the <a href="https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json">GitHub-maintained REST description</a>.</p><p>The pinned provider still attempts <code>/user/emails</code> if public email is absent. No <code>user:email</code> scope is requested and no private email disclosure was observed. Updating the authorization string does not prove that previously stored grants narrowed.</p></div>
+          <div class="f-block"><span class="bk">Follow-up remediation · now</span><div class="remediation"><p>Retain only <code>public_repo</code> for the current integration. Configure public userinfo/profile handling to tolerate absent email without calling <code>/user/emails</code>; test the actual provider boundary. Inspect and, within an authorized rollout, revoke previously broader grants as appropriate.</p><p>The two-file delta and 2/2 scope tests were independently verified at the newer SHA. Real OAuth consent, email fallback behavior, and effective old-token scopes remain unverified in production. See the <a href="#addendum">deployment addendum</a>.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I1"><legend>Decision for I1 follow-ups only — primary scope defect is fixed</legend><label class="opt"><input type="radio" name="I1" value="fix">Fix follow-ups</label><label class="opt"><input type="radio" name="I1" value="defer">Defer follow-ups</label><label class="opt"><input type="radio" name="I1" value="accept">Accept remaining risk</label></fieldset>
+        <label class="note-label" for="note-I1">Notes, owner, or conditions for the follow-ups</label><textarea id="note-I1" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I2" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I2</span><h3 class="f-title">Registered repository identity and public visibility are not revalidated</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/9">Issue #9</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/repositories/register.ts:105</span><span class="cite">src/lib/fold/postgres-store.ts:234</span><span class="cite">src/lib/fold/reconcile.ts:89</span><span class="cite">src/lib/webhooks/processor.ts:39</span><span class="cite">src/lib/github/client.ts:117</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Registration stores the numeric repository ID, but reconciliation omits it and visibility. Crawls use stored <code>owner/name</code> without verifying the same public repository. Webhook lookup uses numeric ID but ignores the supplied full name. Rename, transfer, privacy, and availability events are neither subscribed to nor parsed.</p><p>Name reuse can materialize an unregistered repository under the original sponsor and remove old derived rows. A private/deleted source remains active with old issue metadata visible. A current <code>public_repo</code> token should prevent fresh private reads; this is not lifecycle enforcement or proof of prior grants. <a href="https://docs.github.com/en/account-and-profile/concepts/username-changes">GitHub repository-reference behavior</a>.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Resolve and compare the stable repository ID before materializing; require current public visibility and update only verified names. Mark inaccessible, private, deleted, or removed integrations unavailable. Handle lifecycle events and periodic availability checks.</p><p>Verify rename, transfer, old-name reuse, public-to-private, and deletion paths. An unrelated source at an old path must never replace the registered repository's facts.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I2"><legend>Decision for I2</legend><label class="opt"><input type="radio" name="I2" value="fix">Fix now</label><label class="opt"><input type="radio" name="I2" value="defer">Defer</label><label class="opt"><input type="radio" name="I2" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I2">Notes, owner, or conditions</label><textarea id="note-I2" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I3" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I3</span><h3 class="f-title">Foreign closing PRs use the issue repository for reviews and diff proof</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/10">Issue #10</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/github/client.ts:493</span><span class="cite">src/lib/fold/reconcile.ts:138,152</span><span class="cite">db/migrations/005_harden_materialization_invariants.sql:61</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Closing references retain PR ID, number, and URL but omit the PR's repository. Review and diff collection then uses the issue repository and that number. The isolated probe retained a <code>different/foreign/pull/11</code> identity while hashing the local PR #11 diff. Without a local #11, reconciliation fails.</p><p>Composite foreign keys cannot detect this because the adapter assigns the local repository ID to the imported PR. Cross-repository closing syntax is supported by <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue">GitHub's issue/PR linking rules</a>.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Fetch the PR repository's stable ID/name and enforce the supported registration boundary before collecting evidence. If cross-repository settlement is outside the MVP, reject or flag it explicitly. If supported, collect from the actual registered source and model the relationship.</p><p>Verify foreign-source cases both with and without a coincidentally matching local PR number; evidence must belong to the imported PR.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I3"><legend>Decision for I3</legend><label class="opt"><input type="radio" name="I3" value="fix">Fix now</label><label class="opt"><input type="radio" name="I3" value="defer">Defer</label><label class="opt"><input type="radio" name="I3" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I3">Notes, owner, or conditions</label><textarea id="note-I3" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I4" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I4</span><h3 class="f-title">Distinct repository reconcilers can deadlock the shared database pool</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/11">Issue #11</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/db/client.ts:13</span><span class="cite">src/lib/fold/postgres-store.ts:172,185,200</span><span class="cite">tests/db/schema.test.ts:1142</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Each successful advisory-lock holder reserves one connection throughout <code>work()</code>, whose queries then borrow from the same pool. Ten distinct repositories can hold all ten connections and wait indefinitely for another. The 60-second deadline covers losing lock contenders, not acquired-lock work or an unbounded reserve wait.</p><p>The two-connection/two-repository probe reached two granted locks and zero completed work queries; an injected deadline had to release a holder. The existing one-repository test exercises losers that release connections, so it misses this case. Dashboard reads and delivery heartbeats share the pool.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Execute work through a correctly scoped reserved connection, or isolate and bound coordinator connections and admission so lock holders cannot exhaust the work pool. Preserve serialization beginning before snapshot collection.</p><p>Test both same-repository contention and distinct-repository saturation, with ordinary reads and delivery heartbeats completing under load.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I4"><legend>Decision for I4</legend><label class="opt"><input type="radio" name="I4" value="fix">Fix now</label><label class="opt"><input type="radio" name="I4" value="defer">Defer</label><label class="opt"><input type="radio" name="I4" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I4">Notes, owner, or conditions</label><textarea id="note-I4" rows="2"></textarea>
+      </article>
+      <article class="finding" id="I5" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I5</span><h3 class="f-title">The documented reconciliation CLI cannot start in the pinned runtime</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/12">Issue #12</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">package.json:20</span><span class="cite">scripts/reconcile.ts:1,35</span><span class="cite">src/lib/fold/postgres-store.ts:168</span><span class="cite">README.md:83</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>With a deliberately unusable loopback test database URL, <code>pnpm reconcile -- --invalid</code> fails on import with <code>ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX</code>: Node 24.17.0 strip-only mode does not support parameter properties. Adding <code>--experimental-transform-types</code> reaches <code>ERR_MODULE_NOT_FOUND</code> for <code>@/lib</code>. No database operation occurred.</p><p>Next/Vitest transpilation hides both failures. Separately, pnpm forwards the documented extra <code>--</code> literally, but selected-repository parsing requires exactly <code>['--repository', 'owner/name']</code>. Transpilation alone will not repair that invocation.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Provide a supported compiled CLI or pinned TypeScript execution path that resolves imports. Document and test the exact pnpm command. Add child-process smoke tests under the pinned Node binary for all-repository and selected-repository modes against an isolated database.</p><p>This command is the currently unusable correctness backstop; restore it before depending on manual data repair.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I5"><legend>Decision for I5</legend><label class="opt"><input type="radio" name="I5" value="fix">Fix now</label><label class="opt"><input type="radio" name="I5" value="defer">Defer</label><label class="opt"><input type="radio" name="I5" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I5">Notes, owner, or conditions</label><textarea id="note-I5" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I6" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I6</span><h3 class="f-title">Webhook processing lacks durable repair and initial repository import</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/13">Issue #13</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/app/api/github/webhooks/route.ts:45</span><span class="cite">src/lib/webhooks/processor.ts:41</span><span class="cite">src/lib/fold/postgres-store.ts:387</span><span class="cite">src/lib/repositories/register.ts:129</span><span class="cite">src/lib/github/webhook-schema.ts:23</span><span class="cite">scripts/reconcile.ts:21</span><span class="cite">src/lib/github/client.ts:363</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The endpoint awaits a full GitHub crawl/materialization before HTTP 202. There is no bounded repository queue or retry worker; persisted delivery rows omit the repository/payload needed for replay. Reclamation requires another invocation supplying the delivery. No Overflow repair timer/cron was found in inspected live paths, and the manual CLI fails (<a href="#I5">I5</a>).</p><p>GitHub expects acknowledgement within ten seconds and does not automatically redeliver failures. Temporary errors can leave balances stale until a later relevant event or operator repair. Registration schedules no initial import, its hook ping is unsupported, and authority-changing issue-comment updates/deletions are not subscribed to. <a href="https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks">Webhook best practices</a>; <a href="https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries">failed-delivery behavior</a>.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Persist repository-scoped jobs before prompt acknowledgement. Run bounded workers with retry/backoff, visible failures, initial import, supported pings, all authority-changing events, and a periodic repair sweep. Retain the one authoritative fold.</p><p>Bound response-body reads as well as fetch headers: REST <code>request()</code> currently clears its timeout before body consumption. Verify retry after upstream failure, restart recovery, large-repository acknowledgement time, and enrollment of a repository with existing issues.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I6"><legend>Decision for I6</legend><label class="opt"><input type="radio" name="I6" value="fix">Fix now</label><label class="opt"><input type="radio" name="I6" value="defer">Defer</label><label class="opt"><input type="radio" name="I6" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I6">Notes, owner, or conditions</label><textarea id="note-I6" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I7" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I7</span><h3 class="f-title">Opening another audit restores banned or recalibrating participation</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/14">Issue #14</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/moderation/postgres-store.ts:68,127</span><span class="cite">src/lib/db/types.ts:11</span><span class="cite">src/lib/moderation/service.ts:118</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Audit opening checks the account and existing open audit, but not banned/recalibrating state. It unconditionally writes participation-eligible <code>UNDER_AUDIT</code>. The DB probe confirmed <code>BANNED → UNDER_AUDIT</code> without recalibration closure.</p><p>Existing repos remain inactive, but new registration and contributor eligibility resume. Moderator-role and sample-count checks do not supply the missing prior-state guard.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Disallow opening an audit from suspended states, or separate audit-open state from effective participation restrictions. Auditing must not lift sanctions.</p><p>Preserve explicit recalibration closure as the authorized reactivation path and test the complete prior-state matrix, including registration and contribution eligibility.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I7"><legend>Decision for I7</legend><label class="opt"><input type="radio" name="I7" value="fix">Fix now</label><label class="opt"><input type="radio" name="I7" value="defer">Defer</label><label class="opt"><input type="radio" name="I7" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I7">Notes, owner, or conditions</label><textarea id="note-I7" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I8" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I8</span><h3 class="f-title">An outside PR author can price their own work when they authored the issue</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/15">Issue #15</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/fold/repository-fold.ts:289,343,414</span><span class="cite">tests/fold/history-authority.test.ts:45</span><span class="cite">docs/superpowers/specs/2026-09-04-overflow-mvp-design.md:41</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Issue owner means <code>issue.authorLogin</code>; rating checks only compare label/comment actors to that author. They do not require the rater to differ from an outside PR author.</p><p>The isolated fold probe made one contributor the issue author, label actor, rationale author, and PR author, and produced six credits against a different sponsor. It requires GitHub label permission and a merged PR, not just issue creation, but violates the rule that workers do not price their own outsider work.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Require independent rating authority for outsider work using durable identities. Preserve intentional sponsor self-work calibration. Define how a maintainer adopts and rates an issue opened by its eventual contributor.</p><p>Add the exact same-author fixture alongside the existing different-author case; a contributor's own label/rationale must not satisfy independent review.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I8"><legend>Decision for I8</legend><label class="opt"><input type="radio" name="I8" value="fix">Fix now</label><label class="opt"><input type="radio" name="I8" value="defer">Defer</label><label class="opt"><input type="radio" name="I8" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I8">Notes, owner, or conditions</label><textarea id="note-I8" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I9" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I9</span><h3 class="f-title">Editable current metadata serves as proof of what existed before merge</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/16">Issue #16</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/github/client.ts:478</span><span class="cite">src/lib/github/types.ts:61</span><span class="cite">src/lib/fold/repository-fold.ts:448,514</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Rationale selection combines the current comment body with its creation timestamp, without edit timestamps or historical body evidence. A pre-merge comment can be edited after merge to add the required actual label and become accepted as timely rationale. The probe changed an unsettled result to a six-credit unclaimed settlement.</p><p>A review currently marked <code>DISMISSED</code> also loses its penalty, so post-merge dismissal increases rebuilt credit. The probe confirmed that change; whether dismissal should annul a completed formal round requires explicit policy.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now for rationale authority</span><div class="remediation"><p>Record/check edit provenance and reject unverifiable post-merge rationale, or retain verifiable event-time evidence under an explicit policy. IDs and creation time alone do not establish when accepted wording existed.</p><p>Define and test historical review-dismissal semantics. Treat Git <code>committedDate</code> as a Git-supplied timestamp, not proof of when the final diff became available on GitHub. Verify both post-merge rationale edits and post-merge review dismissals.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I9"><legend>Decision for I9</legend><label class="opt"><input type="radio" name="I9" value="fix">Fix now</label><label class="opt"><input type="radio" name="I9" value="defer">Defer</label><label class="opt"><input type="radio" name="I9" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I9">Notes, owner, or conditions</label><textarea id="note-I9" rows="2"></textarea>
+      </article>
+      <article class="finding" id="I10" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I10</span><h3 class="f-title">Custom cookie-authenticated POST routes lack an origin/CSRF boundary</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/17">Issue #17</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/app/api/repositories/route.ts:48,112</span><span class="cite">src/app/api/moderation/route.ts:48</span><span class="cite">Auth.js lib/utils/cookie.js:48</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Custom POST handlers authenticate the session and parse JSON regardless of Content-Type or Origin. They do not inherit Auth.js's own endpoint CSRF protection. An isolated moderation-handler probe accepted <code>Origin: https://untrusted.nitjsefni.eu</code> and <code>Content-Type: text/plain</code>, then invoked the authorized mutation.</p><p>SameSite=Lax does not isolate sibling origins. An untrusted HTTPS sibling can submit a simple credentialed POST without a CORS preflight. This requires an authenticated victim and an untrusted same-site origin; the probe supplied the session and was not a live-browser exploit. <a href="https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF">MDN CSRF guidance</a>.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Validate the exact allowed Origin and JSON Content-Type for custom mutations, or use a tested CSRF-token/server-action boundary. Apply one policy consistently to all mutating routes.</p><p>Add negative foreign-origin and unsupported-content-type tests, including a same-site sibling, alongside successful authorized mutations.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I10"><legend>Decision for I10</legend><label class="opt"><input type="radio" name="I10" value="fix">Fix now</label><label class="opt"><input type="radio" name="I10" value="defer">Defer</label><label class="opt"><input type="radio" name="I10" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I10">Notes, owner, or conditions</label><textarea id="note-I10" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I11" data-severity="Important" data-status="unresolved" data-priority="before-affected-upgrade">
+        <div class="f-head"><span class="f-id">I11</span><h3 class="f-title">Empty-database migration success masks broken upgrade paths</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/18">Issue #18</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">scripts/migrate.ts:16</span><span class="cite">db/migrations/003_multi_issue_settlements_and_claims.sql:1,77</span><span class="cite">db/migrations/006_account_moderation_snapshots.sql:1</span><span class="cite">db/migrations/007_authoritative_history_and_merge_proof.sql:150</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The runner wraps all pending files in one transaction. Migration 003 adds <code>UNCLAIMED</code> and uses it in a constraint before commit. Fresh initialization works because the enum itself is new in that transaction; a database with 001+002 committed fails with PostgreSQL <code>55P04</code>, reproduced by the isolated probe.</p><p>Later enforcement enum additions/use also need intentional transaction boundaries. Migration 002 adds a NOT NULL difficulty scheme without a populated-repository backfill strategy. The already deployed seven-migration database is not claimed to be failing.</p></div>
+          <div class="f-block"><span class="bk">Remediation · before an affected-version upgrade</span><div class="remediation"><p>Establish a staged, data-preserving upgrade with committed enum additions before dependent use, explicit legacy-row handling, and migration serialization. One transaction per file alone does not fix 003's within-file add-and-use.</p><p>Test supported previously deployed schemas and populated rows, not only empty initialization followed by rerun.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I11"><legend>Decision for I11</legend><label class="opt"><input type="radio" name="I11" value="fix">Fix now</label><label class="opt"><input type="radio" name="I11" value="defer">Defer</label><label class="opt"><input type="radio" name="I11" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I11">Notes, owner, or conditions</label><textarea id="note-I11" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I12" data-severity="Important" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">I12</span><h3 class="f-title">Evidence completeness constraints accept partial NULL records</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/19">Issue #19</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">db/migrations/007_authoritative_history_and_merge_proof.sql:16,30</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The complete-evidence branches use <code>length(trim(field)) &gt; 0</code> and numeric comparisons without explicit non-NULL checks. PostgreSQL accepts a CHECK expression whose result is NULL.</p><p>The isolated insert supplied only opening/settlement timestamps and omitted owner, event IDs, rationale IDs, labels, and settled points. Both constraints accepted it. The normal fold currently supplies complete tuples; this is a schema-integrity gap, not evidence of existing production corruption.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Require every mandatory value to be non-NULL in the complete branch, or require the predicate to be explicitly <code>IS TRUE</code>. Preserve the intentional all-absent legacy case.</p><p>Test every missing field independently against PostgreSQL in the next schema-hardening change.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I12"><legend>Decision for I12</legend><label class="opt"><input type="radio" name="I12" value="fix">Fix now</label><label class="opt"><input type="radio" name="I12" value="defer">Defer</label><label class="opt"><input type="radio" name="I12" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I12">Notes, owner, or conditions</label><textarea id="note-I12" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I13" data-severity="Important" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">I13</span><h3 class="f-title">Issues with multiple GitHub assignees are advertised as unclaimed</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/20">Issue #20</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/github/client.ts:465,590</span><span class="cite">src/lib/dashboard/queries.ts:338,493</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The adapter fetches up to two assignees and returns NULL unless exactly one exists. UI/query code treats NULL as unclaimed and excludes it from reserved headroom. An issue assigned to two people therefore appears on the default available-work board and reserves zero points.</p><p>Avoiding an arbitrary creditor choice is correct, but an ambiguous occupied assignment is not unassigned. PR-author credit is already a separate concept.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon, before relying on the work board</span><div class="remediation"><p>Preserve unassigned, single-assignee, and multiple-assignee states. Keep occupied ambiguous issues off the available board and define conservative reservation behavior.</p><p>Test the adapter through real dashboard queries for two assignees and sponsor-plus-outsider assignment.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I13"><legend>Decision for I13</legend><label class="opt"><input type="radio" name="I13" value="fix">Fix now</label><label class="opt"><input type="radio" name="I13" value="defer">Defer</label><label class="opt"><input type="radio" name="I13" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I13">Notes, owner, or conditions</label><textarea id="note-I13" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I14" data-severity="Important" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">I14</span><h3 class="f-title">Moderators have no UI path to open the first audit</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/21">Issue #21</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/app/moderation/page.tsx:44</span><span class="cite">src/components/moderation-controls.tsx:17,120</span><span class="cite">src/app/api/moderation/route.ts:48</span><span class="cite">src/app/calibration/page.tsx:10</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The server exposes audit-opening POST, but the UI offers only decisions on existing audits and recalibration closure. No account/cohort selector or POST caller exists. The empty queue asks moderators to review comparisons without a target-account path.</p><p>Calibration shows only the signed-in account's aggregate comparison, not a selectable target/window with evidence rows. Starting the ladder requires an out-of-band UUID and handcrafted API request. This is an MVP completeness gap; the API is not alleged to be unauthorized or nonfunctional.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon, before operator handover</span><div class="remediation"><p>Add a small moderator target/cohort preview and audit-opening form using the existing service. Expose linked rows so the sample can be inspected before submission.</p><p>Verify empty-queue initiation, target selection, sample inspection, and resulting queue state with an ordinary moderator account.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I14"><legend>Decision for I14</legend><label class="opt"><input type="radio" name="I14" value="fix">Fix now</label><label class="opt"><input type="radio" name="I14" value="defer">Defer</label><label class="opt"><input type="radio" name="I14" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I14">Notes, owner, or conditions</label><textarea id="note-I14" rows="2"></textarea>
+      </article>
+      <article class="finding" id="I15" data-severity="Important" data-status="unresolved" data-priority="now">
+        <div class="f-head"><span class="f-id">I15</span><h3 class="f-title">The production application runs as root without process hardening</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/22">Issue #22</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">/etc/systemd/system/overflow.service:9,11,16</span><span class="cite">systemctl show overflow.service</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The read-only unit inspection reported <code>User=root</code>, <code>Group=root</code>, <code>NoNewPrivileges=no</code>, <code>ProtectSystem=no</code>, <code>ProtectHome=no</code>, and <code>PrivateTmp=no</code>.</p><p>This internet-facing process decrypts public-repository OAuth credentials. A future application/dependency code-execution defect would inherit host-root authority and extend impact beyond Overflow. No RCE was found or attempted; the directly observed finding is the process's privilege and blast radius.</p></div>
+          <div class="f-block"><span class="bk">Remediation · now, before broader enrollment</span><div class="remediation"><p>Deploy as a dedicated unprivileged service account outside <code>/root</code>. Narrow access to environment/runtime files and enable compatible systemd filesystem and privilege restrictions. Preserve the loopback listener and TLS proxy.</p><p>Verify file permissions, restart, and rollback behavior during an authorized deployment.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I15"><legend>Decision for I15</legend><label class="opt"><input type="radio" name="I15" value="fix">Fix now</label><label class="opt"><input type="radio" name="I15" value="defer">Defer</label><label class="opt"><input type="radio" name="I15" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I15">Notes, owner, or conditions</label><textarea id="note-I15" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="I16" data-severity="Important" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">I16</span><h3 class="f-title">Stale sessions and database authorization failures create a redirect loop</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/23">Issue #23</a></div>
+        <div class="f-body">
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/lib/dashboard/session.ts:21</span><span class="cite">src/app/page.tsx:43</span><span class="cite">src/components/app-shell.tsx:42</span></div></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Protected pages redirect to <code>/</code> when the current-role query fails or a user row is missing. The landing page trusts the still-valid JWT ID/role and redirects back to <code>/dashboard</code>.</p><p>A database outage or removed user with an unexpired session therefore loops instead of reaching an unavailable/sign-in state. The shell also lacks sign-out, leaving no easy UI recovery. This is recovery failure, not an authorization bypass.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Distinguish missing authorization from dependency failure. Render a nonredirecting error/retry path, consistently clear/reject stale sessions, and add sign-out.</p><p>Test the interaction between both pages for a deleted user and a database failure; neither should bounce indefinitely.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="I16"><legend>Decision for I16</legend><label class="opt"><input type="radio" name="I16" value="fix">Fix now</label><label class="opt"><input type="radio" name="I16" value="defer">Defer</label><label class="opt"><input type="radio" name="I16" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-I16">Notes, owner, or conditions</label><textarea id="note-I16" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="M1" data-severity="Minor" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">M1</span><h3 class="f-title">Unclaimed amounts look like credits that already moved</h3><span class="sev low">MINOR</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/24">Issue #24</a></div>
+        <div class="f-body">
+          <div class="f-block"><span class="bk">Evidence and impact</span><div class="evidence"><span class="cite">src/lib/dashboard/queries.ts:362,379</span><span class="cite">src/app/dashboard/page.tsx:49</span><span class="cite">src/app/settlements/[id]/page.tsx:63</span></div><p>Recent-settlement projections include <code>UNCLAIMED</code> rows but omit status. The proof page says “Credits moved” even though the balance effect is correctly zero. “Open claims” describes claims against the viewer's sponsored repositories, not their contributed work.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Preserve/display settlement status and label amounts pending or unclaimed until identity binding settles them. Name sponsored-repository claims explicitly. Verify pending and settled presentations against their actual balance effects.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="M1"><legend>Decision for M1</legend><label class="opt"><input type="radio" name="M1" value="fix">Fix now</label><label class="opt"><input type="radio" name="M1" value="defer">Defer</label><label class="opt"><input type="radio" name="M1" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-M1">Notes, owner, or conditions</label><textarea id="note-M1" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="M2" data-severity="Minor" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">M2</span><h3 class="f-title">Product and security documents contradict the current contract</h3><span class="sev low">MINOR</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/25">Issue #25</a></div>
+        <div class="f-body">
+          <div class="f-block"><span class="bk">Evidence and impact</span><div class="evidence"><span class="cite">docs/superpowers/specs/2026-09-04-overflow-mvp-design.md:29</span><span class="cite">docs/superpowers/plans/2026-09-04-overflow-mvp.md:169</span><span class="cite">README.md:79,83</span></div><p>The design/plan still prescribe private-repository/email scopes, README calls the full webhook crawl “incremental,” and the CLI example has an incompatible extra separator. These are documentation defects; they do not authorize restoring old scopes.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Update authoritative product/security sections and runnable examples with the relevant fixes. Distinguish application-owned database state from rebuildable GitHub facts. Verify examples in the pinned runtime and describe the deployed public-only scope accurately.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="M2"><legend>Decision for M2</legend><label class="opt"><input type="radio" name="M2" value="fix">Fix now</label><label class="opt"><input type="radio" name="M2" value="defer">Defer</label><label class="opt"><input type="radio" name="M2" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-M2">Notes, owner, or conditions</label><textarea id="note-M2" rows="2"></textarea>
+      </article>
+
+      <article class="finding" id="M3" data-severity="Minor" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">M3</span><h3 class="f-title">Local Compose exposes a known-password database on all interfaces</h3><span class="sev low">MINOR</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/26">Issue #26</a></div>
+        <div class="f-body">
+          <div class="f-block"><span class="bk">Evidence and impact</span><div class="evidence"><span class="cite">docker-compose.yml:8,10</span></div><p>The local-only password is checked in, and <code>5432:5432</code> binds all host interfaces by default. A network-reachable developer host exposes more than the stated local workflow needs. The inspected live deployment uses host PostgreSQL; this is not a claim that production runs this Compose service.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Bind <code>127.0.0.1:5432:5432</code> and keep credentials clearly nonproduction. Verify the resolved Compose port mapping is loopback-only.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="M3"><legend>Decision for M3</legend><label class="opt"><input type="radio" name="M3" value="fix">Fix now</label><label class="opt"><input type="radio" name="M3" value="defer">Defer</label><label class="opt"><input type="radio" name="M3" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-M3">Notes, owner, or conditions</label><textarea id="note-M3" rows="2"></textarea>
+      </article>
+      <article class="finding" id="M4" data-severity="Minor" data-status="unresolved" data-priority="soon">
+        <div class="f-head"><span class="f-id">M4</span><h3 class="f-title">Successful moderation leaves stale server-rendered controls visible</h3><span class="sev low">MINOR</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/27">Issue #27</a></div>
+        <div class="f-body">
+          <div class="f-block"><span class="bk">Evidence and impact</span><div class="evidence"><span class="cite">src/components/moderation-controls.tsx:46,134</span></div><p>Successful actions change only local feedback. The queue/account list and enforcement history are not refreshed, and completed controls become clickable again. Backend guards prevent repeated transitions; the defect is confusing stale UI, not duplicate-ban corruption.</p></div>
+          <div class="f-block"><span class="bk">Remediation · soon</span><div class="remediation"><p>Refresh or revalidate the server projection after success, or remove the completed item. Verify that queue membership, available controls, and enforcement history reflect the completed transition.</p></div></div>
+        </div>
+        <fieldset class="f-decide" data-picker="M4"><legend>Decision for M4</legend><label class="opt"><input type="radio" name="M4" value="fix">Fix now</label><label class="opt"><input type="radio" name="M4" value="defer">Defer</label><label class="opt"><input type="radio" name="M4" value="accept">Accept risk</label></fieldset>
+        <label class="note-label" for="note-M4">Notes, owner, or conditions</label><textarea id="note-M4" rows="2"></textarea>
+      </article>
+    </section>
+    <section id="scope" aria-labelledby="scope-title">
+      <div class="sec-head"><span class="num">2</span><h2 id="scope-title">Scope and evidence boundaries</h2></div>
+      <div class="scope">
+        <div class="col"><h3>Inspected</h3><ul>
+          <li>Every tracked path was inventoried: package/lock/config files, both CI workflows, all seven migrations, both operational scripts, application/API/components/domain/adapters, tests, README variants, and design/plan/deployment reports.</li>
+          <li>Manual review concentrated on executable source, migration behavior, security boundaries, and representative assertions. Generated or duplicate document renderings were not counted as independent implementation evidence.</li>
+          <li>Read-only deployment checks covered source/live SHAs and status, the service unit, nginx loopback proxy, anonymous HTTPS/auth/dashboard responses, and source-repository merge settings.</li>
+          <li>Bounded diagnostic fixtures stayed under <code>/tmp</code>; database probes used disposable PostgreSQL 17 containers.</li>
+        </ul></div>
+        <div class="col"><h3>Not exercised</h3><ul>
+          <li>No real OAuth consent/login, legitimate repository enrollment, real authenticated webhook-to-settlement journey, or production write was attempted by the source reviewer.</li>
+          <li>No live takeover, CSRF, RCE, XSS, clickjacking, or corruption experiment was attempted. Isolated probes are identified as such.</li>
+          <li>No real-browser viewport, screen-reader, keyboard-only end-to-end, or automated axe audit was run.</li>
+          <li>No private backup inventory/restore, online dependency/advisory audit, or fresh remote CI job-provenance audit was performed.</li>
+        </ul></div>
+      </div>
+      <p class="callout"><strong>Evidence attribution:</strong> this HTML preserves the source review and its newer-deployment addendum. Baseline file/line references resolve in <a href="https://github.com/Nitjsefnie/Overflow/tree/a6459b7752e9242994bae8d536ace58bf520a4bc">the exact reviewed tree</a>; absolute service paths describe separately inspected live files. The source reviewer changed no application source, production data, service, deployment, DNS, or GitHub setting. The independently authorized lead/deployment work accounts for the later SHA.</p>
+      <p><strong>Confidence:</strong> high in source/probe-supported defects and exact-SHA local checks; moderate in full operational readiness because the unexercised boundaries above remain. This report records observed evidence, not a claim that every possible defect was found.</p>
+    </section>
+
+    <section id="architecture" aria-labelledby="architecture-title">
+      <div class="sec-head"><span class="num">3</span><h2 id="architecture-title">Architecture, data flow, and ownership</h2></div>
+      <p>Overflow is a GitHub-native mutual-credit application: Next.js serves member UI and HTTP boundaries; Auth.js supplies GitHub OAuth/JWT sessions; PostgreSQL holds registration, credentials, moderation authority, and derived GitHub facts. A pure fold turns closing PRs, ratings, review rounds, and eligibility history into settlements or self-work calibration. SQL views emit equal-and-opposite ledger entries.</p>
+      <div class="flow" aria-label="Four connected application flows">
+        <div class="flow-step"><span class="label">A · member → registration</span><h3>Identity and explicit enrollment</h3><p>Browser → Auth.js GitHub OAuth → <code>/user</code> identity and token → numeric ID/login/role plus AES-GCM encrypted credentials and JWT. Explicit public/admin-gated registration → labels and webhook → repository/sponsor/label-scheme configuration.</p></div>
+        <div class="flow-step"><span class="label">B · signed delivery → collection</span><h3>One authoritative reconciliation path</h3><p>Raw-body HMAC → delivery lease/deduplication → awaited full crawl under a repository advisory lock. GraphQL collects issues, label/assignment/comment history, closing PRs, and reviews. REST fetches raw PR diffs, retaining only SHA-256 fingerprints.</p></div>
+        <div class="flow-step"><span class="label">C · facts → balances → browser</span><h3>Atomic materialization</h3><p>Pure fold + merge-time participation history → one PostgreSQL transaction replacing issues, PRs, links, review rounds, settlements/self-work/unwritable closures, and reconciliation deltas/completion → <code>ledger_entries</code> → balances → account-scoped server projections.</p></div>
+        <div class="flow-step"><span class="label">D · moderator → future eligibility</span><h3>Independent authority and recovery</h3><p>Moderator → fresh database role → paired cohort snapshot → locked transition → immutable enforcement events → participation as of merge. Manual CLI enters the same reconciliation path, but currently fails at startup (<a href="#I5">I5</a>).</p></div>
+      </div>
+      <p class="sec-intro">Interfaces: <code>src/lib/fold/reconcile.ts:6,25</code>; <code>src/lib/fold/repository-fold.ts:26</code>; <code>src/lib/fold/postgres-store.ts:347</code>; <code>src/lib/moderation/service.ts:73</code>. The HTTP 202 currently follows reconciliation completion; it does not acknowledge a durable queued job.</p>
+      <div class="table-wrap"><table class="tbl"><caption>Data authority and recovery boundaries</caption><thead><tr><th>Data</th><th>Authority and recovery implication</th></tr></thead><tbody>
+        <tr><td>Issues, PRs, closing relationships, labels, reviews, diff fingerprints</td><td>GitHub-derived, subject to history availability and the identity/temporal findings.</td></tr>
+        <tr><td>Ledger entries and balances</td><td>SQL views over materialized settlements; no separate writable accounting journal.</td></tr>
+        <tr><td>Repository enrollment, accountable sponsor, difficulty scheme</td><td>Application-owned PostgreSQL configuration. GitHub cannot reconstruct sponsors or arbitrary point mappings.</td></tr>
+        <tr><td>Member identity binding and encrypted OAuth credentials</td><td>Application-owned. Public metadata does not restore grants or encryption keys.</td></tr>
+        <tr><td>Audits, cohort snapshots, enforcement events and plans</td><td>Application-owned authority affecting merge-time eligibility; not rebuildable from GitHub alone.</td></tr>
+      </tbody></table></div>
+      <p>The design's blanket “rebuildable” database description (<code>docs/superpowers/specs/2026-09-04-overflow-mvp-design.md:7</code>) needs qualification. Application-owned state and the token-encryption key require backups/recovery even if derived ledger tables can be rebuilt.</p>
+    </section>
+    <section id="verification" aria-labelledby="verification-title">
+      <div class="sec-head"><span class="num">4</span><h2 id="verification-title">Verification and retained probes</h2></div>
+      <p><strong>Full-gate SHA:</strong> <code>a6459b7752e9242994bae8d536ace58bf520a4bc</code>. The checkout initially lacked <code>node_modules</code>: initial test/lint/build launches could not find executables and typecheck picked up an unrelated global compiler. After <code>pnpm install --frozen-lockfile</code>, all requested gates were relaunched and terminal results collected. These setup failures are disclosed, not counted as application test failures.</p>
+      <div class="table-wrap"><table class="tbl"><caption>Recorded exact-baseline verification results</caption><thead><tr><th>Check</th><th>Result and limit</th></tr></thead><tbody>
+        <tr><td><code>pnpm test -- --run</code></td><td><strong class="ok">PASS</strong> — 30 files, 241 tests, exit 0. Includes real PostgreSQL 17 schema/materialization and moderation tests.</td></tr>
+        <tr><td><code>pnpm lint</code></td><td><strong class="ok">PASS</strong> — exit 0.</td></tr>
+        <tr><td><code>pnpm typecheck</code></td><td><strong class="ok">PASS</strong> — exit 0, pinned TypeScript 5.9.3.</td></tr>
+        <tr><td><code>pnpm build</code></td><td><strong class="ok">PASS</strong> — exit 0, Next.js 16.3.4 production build.</td></tr>
+        <tr><td><code>git diff --check</code></td><td><strong class="ok">PASS</strong> — exit 0.</td></tr>
+        <tr><td><code>/usr/local/bin/actionlint -color</code></td><td><strong class="ok">PASS</strong> — exit 0.</td></tr>
+        <tr><td><code>zizmor --offline --no-progress .github/workflows/</code></td><td><strong class="ok">PASS</strong> — no findings, three tool-reported suppressions. Offline; not a fresh remote dependency audit.</td></tr>
+        <tr><td><code>git status --porcelain=v1</code> and <code>git rev-parse HEAD</code></td><td>Empty tracked-worktree status and exact baseline SHA after diagnostics.</td></tr>
+        <tr><td>Native reconciliation CLI startup</td><td><strong class="bad">FAIL</strong> — independently reproduced import/runtime failures, <a href="#I5">I5</a>.</td></tr>
+        <tr><td>Additional isolated regression probes</td><td><strong class="warn">9/9 demonstrate bad behavior</strong>. Their green result confirms reproduction, not product acceptance.</td></tr>
+      </tbody></table></div>
+      <h3>Nine retained reproductions</h3>
+      <p>Probe source: <code>/tmp/overflow-review-probes.DWCN8u/probes.test.ts</code>. From <code>/root/overflow</code>, the recorded command uses its external configuration:</p>
+      <pre><code>pnpm exec vitest run --config /tmp/overflow-review-probes.DWCN8u/vitest.config.mjs --reporter verbose</code></pre>
+      <p>The probes start a disposable <code>postgres:17-alpine</code> container and stop it afterward; they do not use the production <code>DATABASE_URL</code>. Retained evidence establishes:</p>
+      <ol>
+        <li><a href="#I11">I11:</a> upgrading committed 001+002 fails with <code>55P04</code>, unsafe new enum value <code>UNCLAIMED</code>.</li>
+        <li><a href="#I12">I12:</a> evidence CHECKs accept timestamps with NULL owner/event/rationale IDs and settled points.</li>
+        <li><a href="#C1">C1:</a> a new numeric identity claims six historical credits solely through a matching login.</li>
+        <li><a href="#I7">I7:</a> opening an audit changes <code>BANNED</code> into participation-eligible <code>UNDER_AUDIT</code>.</li>
+        <li><a href="#I4">I4:</a> two distinct lock holders exhaust a two-connection pool; work queries wait until an injected test deadline releases one.</li>
+        <li><a href="#I3">I3:</a> foreign closing-PR identity/URL is retained while review and diff evidence comes from the issue repository.</li>
+        <li><a href="#I8">I8:</a> the issue-author/outside-contributor can supply their own ratings/rationale and create six credits against the sponsor.</li>
+        <li><a href="#I9">I9:</a> current edited rationale is accepted using old creation time, and current review dismissal removes its penalty.</li>
+        <li><a href="#I10">I10:</a> a custom POST accepts a foreign sibling Origin and <code>text/plain</code> JSON and invokes a mutation. Session supplied by the test; not a live exploit.</li>
+      </ol>
+      <h3>Read-only live checks</h3>
+      <p>At baseline, source/live SHA and clean-status checks matched. <code>systemctl show overflow.service</code> reported active/running and zero restarts, with the privileges in <a href="#I15">I15</a>. The live service uses <code>/root/overflow-mvp</code>, so the verification build in <code>/root/overflow</code> did not overwrite live <code>.next</code> files.</p>
+      <p>HTTP checks observed HTTP→HTTPS redirect, HTTPS 200, private/no-store caching, HSTS, anonymous <code>/api/auth/session</code> returning <code>null</code>, and anonymous <code>/dashboard</code> redirecting to <code>/</code>. The nginx vhost at <code>/etc/nginx/sites-available/overflow.nitjsefni.eu:23</code> proxies to loopback port 3000. Supporting deployment reports did not substitute for these checks.</p>
+      <p>A fresh read-only <code>gh api repos/Nitjsefnie/Overflow</code> returned <code>private=false</code>, <code>allow_merge_commit=false</code>, <code>allow_squash_merge=false</code>, and <code>allow_rebase_merge=true</code>. These settings concern the Overflow source repository.</p>
+    </section>
+
+    <section id="coverage" aria-labelledby="coverage-title">
+      <div class="sec-head"><span class="num">5</span><h2 id="coverage-title">Product-contract coverage</h2></div>
+      <div class="table-wrap"><table class="tbl"><caption>Implementation coverage with the newer OAuth correction acknowledged</caption><thead><tr><th>Contract</th><th>Assessment</th></tr></thead><tbody>
+        <tr><td>Coordinate otherwise-expiring weekly LLM capacity</td><td>MVP mechanism is reciprocal GitHub work/credit. Provider-capacity measurement and scheduling are explicitly deferred, not inferred requirements.</td></tr>
+        <tr><td>Explicitly registered repositories</td><td>Initial public/admin-gated, one-at-a-time enrollment is implemented. Ongoing source/visibility and foreign-PR boundaries remain partial (<a href="#I2">I2–I3</a>).</td></tr>
+        <tr><td>Repository-specific opening labels with neutral semantics</td><td>Implemented: arbitrary labels/display names, separate comparison/reserve values, no S/M/L or perceived/actual name inference in scoring (<code>src/lib/domain/difficulty-scheme.ts:37</code>).</td></tr>
+        <tr><td>Actual difficulty maps exactly 1–10</td><td>Implemented: validation rejects duplicates, gaps, overlaps, and out-of-range mappings; SQL validates stored schemes.</td></tr>
+        <tr><td>Only merged PRs award credit; issue plus diff, no churn</td><td>Core implemented through GraphQL closing relations, merge OID, human rating, and diff fingerprint. Cross-source, self-pricing, and temporal authority fail in <a href="#I3">I3</a>, <a href="#I8">I8–I9</a>. Automated difficulty judging is intentionally absent.</td></tr>
+        <tr><td>Formal review rounds reduce credit</td><td>Distinct current pre-merge <code>CHANGES_REQUESTED</code> IDs feed <code>max(0, actual − rounds)</code>. Historical dismissal policy remains undefined (<a href="#I9">I9</a>).</td></tr>
+        <tr><td>Self-work creates no ledger and feeds calibration</td><td>Implemented for correctly bound sponsor/author identities. Login-based binding threatens this distinction (<a href="#C1">C1</a>).</td></tr>
+        <tr><td>Audit → warn → recalibrate → ban</td><td>Backend largely implemented with locked transitions and immutable cohorts. Enforcement and audit initiation UI remain incomplete (<a href="#I7">I7</a>, <a href="#I14">I14</a>).</td></tr>
+        <tr><td>GitHub login and PostgreSQL</td><td>Implemented and baseline gates pass. Real consent/login not exercised. The private-profile scope request was corrected at the newer SHA (<a href="#I1">I1</a>).</td></tr>
+        <tr><td>Public repos only; no private profile/repository scopes</td><td>The newer request is exactly <code>public_repo</code>: <code>repo</code>, <code>read:user</code>, and <code>user:email</code> are absent. Initial private registration is denied. Ongoing visibility enforcement and prior grants still need work (<a href="#I1">I1 follow-ups</a>, <a href="#I2">I2</a>).</td></tr>
+        <tr><td>Only rebase merging</td><td>Verified for Overflow's source repository. The platform does not merge PRs or inspect participant repositories' merge settings. If this is meant to constrain every rewarded PR, that requires an explicit participant policy and enforcement.</td></tr>
+        <tr><td>Production target overflow.nitjsefni.eu</td><td>Available over HTTPS at the inspected deployment. Availability does not prove end-to-end acceptance, hardening, or recovery.</td></tr>
+      </tbody></table></div>
+      <p>The checked-in design's private-repository scope requirement (<code>docs/superpowers/specs/2026-09-04-overflow-mvp-design.md:29</code>) is superseded by the public-only/no-private-profile contract. Removing broad scopes is justified; optional credit floors, notifications, cash settlement, agent execution, and capacity pooling remain outside corrective scope.</p>
+    </section>
+    <section id="strengths" aria-labelledby="strengths-title">
+      <div class="sec-head"><span class="num">6</span><h2 id="strengths-title">Strengths to preserve</h2></div>
+      <ul>
+        <li><strong>Small, vocabulary-neutral scoring.</strong> Exact mapped points and distinct formal review IDs determine awards; churn cannot enter the domain interface. <code>src/lib/domain/settlement.ts:27</code>; <code>src/lib/domain/difficulty-scheme.ts:37</code>.</li>
+        <li><strong>Structural ledger conservation.</strong> The ledger view emits matching positive/negative entries only for positive settled outsider work; balances are derived. The fold keeps self-work out of settlement/ledger output. <code>db/migrations/001_initial.sql:214</code>; <code>src/lib/fold/repository-fold.ts:289</code>.</li>
+        <li><strong>Explicit source relationships.</strong> The gateway uses <code>closedByPullRequestsReferences</code>, paginates issue history/labels/reviews, and stores merge OID plus diff fingerprint. No REST cross-reference guessing or raw patch storage was found. <code>src/lib/github/client.ts:489</code>; <code>src/lib/github/graphql.ts:89</code>.</li>
+        <li><strong>Atomic, auditable materialization.</strong> Facts, removals, review rows, deltas, and run completion share one transaction. Migration 004 retains provenance when derived rows disappear. <code>src/lib/fold/postgres-store.ts:347</code>.</li>
+        <li><strong>Correctly placed security primitives.</strong> Raw-body HMAC precedes parsing; AES-256-GCM uses random 12-byte IVs; errors avoid token and upstream-body disclosure. <code>src/app/api/github/webhooks/route.ts:28</code>; <code>src/lib/security/token-cipher.ts:8</code>.</li>
+        <li><strong>Fresh moderator authority and scoped proof reads.</strong> APIs/member-page authorization refresh roles from PostgreSQL instead of trusting cached JWT roles. Proof queries require account membership. <code>src/app/api/moderation/route.ts:132</code>; <code>src/lib/dashboard/session.ts:21</code>; <code>src/lib/dashboard/queries.ts:571</code>.</li>
+        <li><strong>Historical accounting in moderation.</strong> Cohorts use merge timestamps; enforcement events/audit snapshots are immutable; transitions do not directly rerate settlements. <code>db/migrations/006_account_moderation_snapshots.sql:47</code>; <code>db/migrations/007_authoritative_history_and_merge_proof.sql:142</code>; <code>tests/moderation/postgres-store.test.ts:47</code>.</li>
+        <li><strong>Real relational verification.</strong> Schema, concurrency, materialization, and moderation tests use disposable PostgreSQL 17. UI tests include focus-preservation regression coverage. <code>tests/db/schema.test.ts:24</code>; <code>tests/moderation/postgres-store.test.ts:17</code>; <code>tests/components/repository-form.test.tsx:51</code>.</li>
+        <li><strong>Sound UI foundations.</strong> Server components predominate; client state is concentrated in mutation forms. The shell has a skip link/semantic navigation, forms have labels/status/error announcements, and CSS includes narrow layouts and reduced motion. <code>src/components/app-shell.tsx:13</code>; <code>src/components/repository-form.tsx:89</code>; <code>src/app/globals.css:702,784</code>. This is code evidence, not a completed browser accessibility audit.</li>
+        <li><strong>Reproducible CI.</strong> Exact Node/pnpm/dependency pins, frozen installs, PostgreSQL migration, full gates, read-only workflow permissions, commit-pinned actions, and no persisted checkout credentials are present. <code>.github/workflows/ci.yml:12,53</code>.</li>
+      </ul>
+    </section>
+
+    <section id="security" aria-labelledby="security-title">
+      <div class="sec-head"><span class="num">7</span><h2 id="security-title">Security and least privilege</h2></div>
+      <h3>OAuth App versus GitHub App</h3>
+      <p>The OAuth App can satisfy logical explicit registration: application code chooses the submitted repository, verifies administrator permission, and does not enumerate/enroll everything accessible. A <code>public_repo</code> token itself is not restricted to that registered repository. Its broader public-repository read/write authority includes code and hooks, while Overflow needs only a subset. Removing <code>admin:repo_hook</code> was correct because <code>public_repo</code> already covers repository hooks. <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps">GitHub OAuth scopes</a>.</p>
+      <p>A GitHub App offers selected-repository installation, finer permissions, lifecycle events, and short-lived installation tokens. It still needs explicit enrollment, stable numeric-ID checks, public-only validation, and correctly scoped proof collection. Evaluate metadata/read-only source access and minimum issue-label permissions against actual endpoints; avoid default content-write or private-profile authority. <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps">GitHub's App/OAuth comparison</a>.</p>
+      <p class="callout"><strong>Migration is not an automatic prerequisite.</strong> The unnecessary user-scope request is already fixed. Disclose the coarse <code>public_repo</code> grant accurately and finish <a href="#I1">I1 follow-ups</a>. A GitHub App is a focused next step when smaller grants are required, and an architectural requirement if “explicit registration” means the token must be incapable of accessing any other repository. Changing login product branding alone does not fix <a href="#C1">C1</a> or <a href="#I2">I2–I3</a>.</p>
+      <div class="table-wrap"><table class="tbl"><caption>Threat boundaries and inspection limits</caption><thead><tr><th>Threat</th><th>Protection and remaining risk</th></tr></thead><tbody>
+        <tr><td>Forged webhook / malformed body</td><td>HMAC before parsing and delivery-lease ownership are strong. Genuine public-repository activity can still trigger expensive reconciliation; <a href="#I4">I4</a>/<a href="#I6">I6</a> govern availability.</td></tr>
+        <tr><td>Token theft</td><td>Authenticated encryption protects DB-only disclosure, not a compromised application process holding the key. <a href="#I1">I1</a> reduces unnecessary authority; <a href="#I15">I15</a> reduces host consequences. No plaintext token was observed in reviewed outputs.</td></tr>
+        <tr><td>Stale moderator JWT</td><td>Fresh role checks protect APIs/pages, but initial privileged-identity assignment remains unsafe (<a href="#C1">C1</a>).</td></tr>
+        <tr><td>Cross-account proof access</td><td>Proof queries require creditor/debtor membership; parameters and rendered text avoid obvious SQL-injection/stored raw-HTML paths. No unauthenticated ledger-read bypass was found.</td></tr>
+        <tr><td>Cross-origin mutation</td><td>Auth.js endpoint protections do not cover custom JSON routes. Missing boundary: <a href="#I10">I10</a>.</td></tr>
+        <tr><td>Renamed / public-to-private source</td><td>Initial registration is insufficient over time. Source-boundary validation: <a href="#I2">I2–I3</a>.</td></tr>
+        <tr><td>Browser framing / script containment</td><td>Live responses had HSTS but no observed CSP/frame-ancestors or X-Frame-Options; <code>next.config.ts:3</code> supplies no headers. Add compatible restrictions after testing Next/Auth behavior. No XSS or clickjacking exploit was attempted.</td></tr>
+      </tbody></table></div>
+      <p>Exact dependency pinning and an offline workflow scan do not establish that every upstream package is vulnerability-free. This was not an online advisory audit.</p>
+    </section>
+
+    <section id="correctness" aria-labelledby="correctness-title">
+      <div class="sec-head"><span class="num">8</span><h2 id="correctness-title">Database and accounting invariants</h2></div>
+      <p>Pure tests and real PostgreSQL constraints/views support exact mapped difficulty, no churn input, only merged closing PRs with OID, separate assignee/creditor semantics, nonnegative review-penalized credit, no sponsor self-work ledger, one settlement per issue, and equal/opposite entries (<code>tests/domain/settlement.test.ts</code>, <code>tests/domain/ledger.test.ts</code>, <code>tests/db/schema.test.ts</code>). Eligibility at merge time avoids erasing past contributions solely because an account is punished now.</p>
+      <p><strong>A zero-sum ledger can still credit the wrong member.</strong> Arithmetic does not establish source/identity authority (<a href="#C1">C1</a>, <a href="#I2">I2–I3</a>), independent/event-time pricing (<a href="#I8">I8–I9</a>), or a valid eligible interval (<a href="#I7">I7</a>).</p>
+      <div class="table-wrap"><table class="tbl"><caption>All seven migrations reviewed</caption><thead><tr><th>Migration</th><th>Responsibility and boundary</th></tr></thead><tbody>
+        <tr><td>001</td><td>Core tables/enums, unique GitHub IDs, opening immutability, settlement constraints, and derived views.</td></tr>
+        <tr><td>002</td><td>Explicit JSON difficulty schemes and SQL validation; populated repositories need an upgrade/backfill strategy.</td></tr>
+        <tr><td>003</td><td>Multi-issue PR links, unclaimed contributors/claims, and revised constraints. Committed-enum upgrade failure reproduced.</td></tr>
+        <tr><td>004</td><td>Preserves reconciliation provenance when materialized entities disappear.</td></tr>
+        <tr><td>005</td><td>Same-repository link constraints, allowed run kinds, delivery leases/attempts. Does not verify remote PR repository identity.</td></tr>
+        <tr><td>006</td><td>Audit cohorts/prior state, one-open-audit-per-account, immutable cohort snapshots.</td></tr>
+        <tr><td>007</td><td>Owner label/rationale/merge proof, moderation history, and as-of-time eligibility. NULL-completeness gaps reproduced.</td></tr>
+      </tbody></table></div>
+      <p>Transactions and row locks protect registration versus sanctions, duplicate audit transitions, and atomic replacement. Correct connection ownership (<a href="#I4">I4</a>) while retaining that design. Also test identity claiming concurrently with reconciliation and cohort extraction with rematerialization: the cohort loader makes separate queries before snapshot insertion (<code>src/lib/moderation/postgres-store.ts:58</code>), so consistent snapshot selection should be guaranteed explicitly.</p>
+      <p>The all-repositories CLI loop stops at the first failed repository (<code>scripts/reconcile.ts:22</code>). Once it runs, continuing with an aggregate failure summary/nonzero exit would prevent one broken integration starving later repositories. This is a reliability follow-up, not an additional finding count.</p>
+    </section>
+    <section id="experience" aria-labelledby="experience-title">
+      <div class="sec-head"><span class="num">9</span><h2 id="experience-title">UX, accessibility, and decomposition</h2></div>
+      <p>Semantic structure, labelled forms, native links/buttons, proof panels, visible focus styling, reduced motion, and narrow-screen CSS are good foundations. The registration form preserves input identity during editing and explains configurable catalogs.</p>
+      <p>The larger gaps are workflow completeness and truthful state: initial-import status (<a href="#I6">I6</a>), moderator initiation (<a href="#I14">I14</a>), stale-session recovery (<a href="#I16">I16</a>), unclaimed amounts (<a href="#M1">M1</a>), and stale moderation controls (<a href="#M4">M4</a>). “Check the database connection” at <code>src/app/dashboard/page.tsx:117</code> addresses an operator; a member-safe retry/status message with an operator correlation ID would fit the product better.</p>
+      <p>Settlement proof shows opaque event/comment IDs and a fingerprint without direct rationale-comment/commit links (<code>src/app/settlements/[id]/page.tsx:71</code>); moderation evidence is raw JSON (<code>src/app/moderation/page.tsx:60</code>). Small linked proof/cohort tables would make the audit promise usable without developer tools.</p>
+      <p>No browser viewport, screen-reader, keyboard-only end-to-end, or axe audit was performed. jsdom component checks do not prove contrast, 360px reflow, navigation focus, or accessible JSON overflow. Add a small real-browser flow for login denial/no public email, registration errors, issue filters, settlement status, and moderator transitions.</p>
+      <p>Domain, service, adapter, projection, and route-factory separation is sound. The fold PostgreSQL store spans 1,302 lines, dashboard queries 869, and GitHub gateway 709; their growing responsibility warrants splitting as relevant defects are fixed, while preserving interfaces and focused behavior tests. A wholesale rewrite is not warranted.</p>
+    </section>
+
+    <section id="operations" aria-labelledby="operations-title">
+      <div class="sec-head"><span class="num">10</span><h2 id="operations-title">CI, operations, and test quality</h2></div>
+      <h3>Operational readiness</h3>
+      <p>The service is reachable behind TLS/HSTS and a loopback reverse proxy, but root execution is inappropriate before broader enrollment (<a href="#I15">I15</a>). The reviewed tree contains no tracked production deployment/rollback/backup runbook, and inspected live paths contained no application-specific periodic repair service. Deployment reports describe successful setup; they are not executable release/restore procedures.</p>
+      <p>Before production acceptance, demonstrate encrypted backup and restore of enrollment, sponsors, label schemes, immutable moderation history, and secure recovery of the token-encryption key. Private backup storage was not inspected and no production restore was performed, so this report does <strong>not</strong> assert that backups are absent.</p>
+      <p>Add a narrow health/freshness signal and sanitized failure categories/correlation IDs. The persisted generic reconciliation error protects secrets but cannot distinguish expired tokens, rate limits, permissions, changed repository identity, or schema failures (<code>src/lib/fold/reconcile.ts:132</code>).</p>
+      <h3>Acceptance gaps in otherwise useful tests</h3>
+      <p>The baseline's 241 tests credibly cover arithmetic, configurable vocabulary, raw signatures, cryptography, fresh schema, ordinary relational transitions, and earlier concurrency/history regressions. Both workflow validators passed locally; fresh remote job provenance was not re-audited. Missing cases cluster around assumptions shared by fixtures and production:</p>
+      <ul>
+        <li><strong>Provider mocks:</strong> the baseline OAuth test called the unwanted scope least privilege and mocked provider behavior (<code>tests/security/github-oauth-scope.test.ts:16</code>). The newer scope expectation fixes the primary request, not provider email fallback coverage.</li>
+        <li><strong>Distinct actors:</strong> history-authority tests keep issue owner and contributor different, missing the same-author case (<code>tests/fold/history-authority.test.ts:45</code>).</li>
+        <li><strong>One repository:</strong> contention tests omit enough distinct successful lock holders to exhaust the pool (<code>tests/db/schema.test.ts:1142</code>).</li>
+        <li><strong>Transpiled CLI imports:</strong> Vitest bypasses native runtime syntax/import behavior (<code>tests/fold/reconcile.test.ts:10</code>).</li>
+        <li><strong>Fresh-only migrations:</strong> applying migrations twice omits committed older-schema upgrades (<code>tests/db/schema.test.ts:34</code>).</li>
+        <li><strong>Canned query results:</strong> SQL-string/dashboard mocks cannot independently prove multiple-assignee semantics, real account scoping, or projection consistency (<code>tests/dashboard/queries.test.ts:15</code>).</li>
+        <li><strong>Stable external names:</strong> important integration fixtures omit username rename/reuse, repository identity changes, and cross-repository PRs.</li>
+      </ul>
+      <p class="callout">Convert the retained nine probes from assertions that bad behavior exists into expected-correct regression tests as each defect is fixed. Add bounded native-process, provider, prior-schema, real-query, sibling-origin, distinct-repository, and browser checks; expanding workflow complexity by itself will not close these gaps.</p>
+    </section>
+
+    <section id="priorities" aria-labelledby="priorities-title">
+      <div class="sec-head"><span class="num">11</span><h2 id="priorities-title">Prioritized next steps</h2></div>
+      <h3>Now — make the current contract safe and repairable</h3>
+      <ol>
+        <li>Replace mutable-login credit/role authority with durable GitHub IDs (<a href="#C1">C1</a>). Preserve the corrected scope and complete provider email/prior-grant checks (<a href="#I1">I1 follow-ups</a>).</li>
+        <li>Validate stable public-repository identity and the actual PR source (<a href="#I2">I2–I3</a>). Clarify whether rebase-only constrains participant repositories or only the source repository.</li>
+        <li>Fix native CLI startup and pool connection ownership before relying on repair; then implement durable acknowledgement/retry/initial import (<a href="#I4">I4–I6</a>).</li>
+        <li>Close sanction-state and independent-rater bypasses, enforce pre-merge rationale evidence, and add the custom-route CSRF boundary (<a href="#I7">I7–I10</a>). Resolve historical review-dismissal policy explicitly.</li>
+        <li>Move production to an unprivileged service identity and demonstrate release/rollback/restore behavior before expanding enrollment (<a href="#I15">I15</a> and <a href="#operations">operations</a>).</li>
+      </ol>
+      <h3>Soon — finish operator and state-integrity paths</h3>
+      <ol>
+        <li>Implement supported populated-schema upgrades before any affected-version upgrade; harden NULL evidence guards (<a href="#I11">I11–I12</a>).</li>
+        <li>Represent occupied multiple-assignee claims correctly and complete audit creation/cohort inspection (<a href="#I13">I13–I14</a>).</li>
+        <li>Repair stale-session recovery/sign-out, post-mutation refresh, and unclaimed amount presentation (<a href="#I16">I16</a>, <a href="#M1">M1</a>, <a href="#M4">M4</a>).</li>
+        <li>Add bounded native/provider/query/browser acceptance checks and freshness/failure visibility. Correct stale documents and bind local Compose to loopback (<a href="#M2">M2–M3</a>).</li>
+      </ol>
+      <h3>Later — focused follow-ups</h3>
+      <ul>
+        <li>Evaluate a GitHub App using an actual endpoint-permission inventory if repository-scoped grants or a smaller credential blast radius are required.</li>
+        <li>Add linked human-readable proof/cohort rows and bounded listing pagination; split adapters/projections as relevant fixes touch them.</li>
+        <li>Keep provider-capacity pooling, automated LLM rating, credit floors, notifications, billing, and hosted agent execution deferred unless explicitly requested.</li>
+      </ul>
+      <p class="callout"><strong>Overall assessment remains No.</strong> The model's arithmetic and architecture are strong, but deterministic evidence shows the reviewed system can misbind credit, accept unsupported proof authority, lift sanctions, stall ingestion, and fail to run repair. “Important” includes both immediate blockers and stated lower-risk follow-ups; those items do not all have equal urgency.</p>
+    </section>
+
+    <section id="addendum" aria-labelledby="addendum-title">
+      <div class="sec-head"><span class="num">12</span><h2 id="addendum-title">Newer deployment addendum</h2></div>
+      <p><a href="https://github.com/Nitjsefnie/Overflow/pull/6">PR #6</a> was landed and deployed while the source review was being finalized. The read-only comparison to <code>d9312709a90a385e735612d4011282738a6f1681</code> showed exactly two changed files, seven insertions, and six deletions: <code>src/auth.ts</code> requests only <code>public_repo</code>, and <code>tests/security/github-oauth-scope.test.ts</code> updates the expectation and explicitly excludes <code>read:user</code>. No other application, schema, CLI, pool, or policy path changed.</p>
+      <div class="table-wrap"><table class="tbl"><caption>Evidence stays attached to the commit actually checked</caption><thead><tr><th>Commit / evidence owner</th><th>Verification and finding disposition</th></tr></thead><tbody>
+        <tr><td>Baseline <code>a6459b7752e9242994bae8d536ace58bf520a4bc</code></td><td>Full 241-test/lint/typecheck/build and local workflow checks described above. Baseline count: 1 Critical, 16 Important, 4 Minor.</td></tr>
+        <tr><td>Updated deployment <code>d9312709a90a385e735612d4011282738a6f1681</code></td><td>The source reviewer independently confirmed clean <code>/root/overflow</code> and <code>/root/overflow-mvp</code> at this SHA and ran <code>pnpm test --run tests/security/github-oauth-scope.test.ts</code>: <strong>2/2 passed, exit 0</strong>.</td></tr>
+        <tr><td>Lead/deployment agent report</td><td><code>/tmp/overflow-public-profile-redeploy.md:9</code> records frozen install, migrations, production build, restart, loopback listener, and public endpoint checks. Those actions belong to the deployment agent, not the read-only source reviewer.</td></tr>
+        <tr><td>Current audit disposition</td><td><span class="badge fixed">I1 primary scope fixed</span> — remaining provider/prior-grant work is <a href="https://github.com/Nitjsefnie/Overflow/issues/8">follow-up #8</a>. Other paths unchanged: 1 Critical + 15 Important + 4 Minor = <strong>20 unresolved findings</strong>.</td></tr>
+      </tbody></table></div>
+      <p>The 241-test full-gate evidence is not relabeled as a fresh full run at the newer SHA. Real OAuth consent, provider email fallback, and effective scopes of stored tokens remain unverified in production. The source review's finite jobs completed and disposable probe containers were cleaned up; its report and probes were retained under <code>/tmp</code>.</p>
+    </section>
+    <section class="selections" id="decisions" aria-labelledby="decisions-title">
+      <div class="sec-head"><span class="num">13</span><h2 id="decisions-title">Review decisions and exports</h2></div>
+      <p>Select fix, defer, or accept risk and add notes on each card. I1's controls apply only to its remaining follow-ups. Selections stay in this open page; copy them before closing. These controls do not change issues, trigger fixes, or grant deployment authority.</p>
+      <p id="decisionSummary" role="status" aria-live="polite">0 of 21 cards have a recorded decision.</p>
+      <div class="sel-grid" id="selGrid"></div>
+      <div class="actions">
+        <button class="action" type="button" id="copyJson">Copy as JSON</button>
+        <button class="action" type="button" id="copyPrompt">Copy as remediation prompt</button>
+        <span class="toast" id="toast" role="status" aria-live="polite"></span>
+      </div>
+      <details id="manualExport"><summary>Export preview and manual copy</summary><p>The last generated export appears here. If clipboard access is unavailable, select and copy this text.</p><label class="note-label" for="exportText">Generated export</label><textarea id="exportText" rows="10" readonly></textarea></details>
+      <noscript><p>JavaScript is disabled. You can still read the report and use native radio buttons/notes, but automatic export is unavailable. Copy your selected decisions manually before closing.</p></noscript>
+    </section>
+    <footer class="footer">
+      <p>Overflow full-application audit · 2026-09-05 CEST · source review and HTML author: GPT-6-Astra. Human-facing register adapted from the audit-register template. <a href="#top">Back to top</a>.</p>
+      <p>Durable artifact: <code>docs/reviews/2026-09-05-full-application-audit.html</code>. <a href="https://docs.nitjsefni.eu/#/d/overflow/2026-09-05-full-application-audit">Published report</a>. Re-audit when the prioritized corrections land, using each final commit's own verification evidence.</p>
+    </footer>
+  </main>
+  <script>
+    (function () {
+      'use strict';
+      const cards = Array.from(document.querySelectorAll('.finding'));
+      const labels = { fix: 'Fix', defer: 'Defer', accept: 'Accept risk' };
+      const docUrl = 'https://docs.nitjsefni.eu/#/d/overflow/2026-09-05-full-application-audit';
+      const clean = (value) => value.replace(/\s+/g, ' ').trim();
+      function paragraphText(element) {
+        const paragraphs = Array.from(element.querySelectorAll('p'));
+        return paragraphs.length ? paragraphs.map((p) => clean(p.textContent)).join('\n') : clean(element.textContent);
+      }
+      function report() {
+        return {
+          title: 'Overflow — full-application audit',
+          reviewedOn: '2026-09-05 CEST',
+          source: docUrl,
+          baselineSha: 'a6459b7752e9242994bae8d536ace58bf520a4bc',
+          deploymentAddendumSha: 'd9312709a90a385e735612d4011282738a6f1681',
+          releaseVerdict: 'Not ready for broader production use',
+          unresolvedCounts: { Critical: 1, Important: 15, Minor: 4, total: 20 },
+          findings: cards.map((card) => {
+            const chosen = card.querySelector('input[type="radio"]:checked');
+            return {
+              id: card.id,
+              title: clean(card.querySelector('.f-title').textContent),
+              severity: card.dataset.severity,
+              status: card.dataset.status,
+              priority: card.dataset.priority,
+              decisionScope: card.id === 'I1' ? 'Remaining follow-ups only; primary scope defect fixed' : 'Finding',
+              issue: card.querySelector('.issue').href,
+              decision: chosen ? chosen.value : null,
+              notes: card.querySelector('textarea').value.trim(),
+              evidence: Array.from(card.querySelectorAll('.evidence .cite')).map((cite) => clean(cite.textContent)),
+              remediation: paragraphText(card.querySelector('.remediation'))
+            };
+          })
+        };
+      }
+      function render() {
+        const selected = report().findings.filter((finding) => finding.decision !== null);
+        document.getElementById('decisionSummary').textContent = selected.length + ' of 21 cards have a recorded decision. I1 covers follow-ups only.';
+        const grid = document.getElementById('selGrid');
+        grid.replaceChildren();
+        selected.forEach((finding) => {
+          const row = document.createElement('div');
+          row.className = 'sel-row';
+          const key = document.createElement('a');
+          key.href = '#' + finding.id;
+          key.textContent = finding.id + (finding.id === 'I1' ? ' follow-ups' : '');
+          const value = document.createElement('span');
+          value.textContent = labels[finding.decision];
+          row.append(key, value);
+          grid.appendChild(row);
+        });
+        cards.forEach((card) => card.querySelectorAll('.opt').forEach((option) => {
+          option.dataset.selected = String(option.querySelector('input').checked);
+        }));
+      }
+      function remediationPrompt() {
+        const current = report();
+        const chosen = current.findings.filter((finding) => finding.decision !== null || finding.notes);
+        const lines = [
+          'Use this Overflow audit register: ' + docUrl,
+          'Baseline full-suite evidence belongs to ' + current.baselineSha + '.',
+          'OAuth scope correction: ' + current.deploymentAddendumSha + '. I1 is primary-fixed; its decisions cover remaining follow-ups only.',
+          'Review decisions below are planning input. Apply recorded fix decisions within the authorized task; retain defer/accept decisions and their conditions. Unreviewed items are not approved changes.',
+          'Preserve one authoritative scoring fold, public-only integration, durable identities, and the stated verification boundaries. Verify each correction with expected-correct regression evidence; the retained probes currently assert bad behavior.',
+          ''
+        ];
+        if (!chosen.length) lines.push('No decisions recorded. Review the register before starting remediation.');
+        chosen.forEach((finding) => {
+          lines.push(finding.id + ': ' + (finding.decision ? labels[finding.decision] : 'Unreviewed; notes only') + ' — ' + finding.title);
+          lines.push('Scope: ' + finding.decisionScope + '. Status: ' + finding.status + '. Priority: ' + finding.priority + '.');
+          lines.push('Issue: ' + finding.issue);
+          lines.push('Evidence: ' + finding.evidence.join('; '));
+          lines.push('Remediation and verification: ' + finding.remediation);
+          if (finding.notes) lines.push('Reviewer notes: ' + finding.notes);
+          lines.push('');
+        });
+        return lines.join('\n');
+      }
+      async function copy(text, label) {
+        const preview = document.getElementById('exportText');
+        const details = document.getElementById('manualExport');
+        const toast = document.getElementById('toast');
+        preview.value = text;
+        let copied = false;
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { copied = false; }
+        }
+        if (!copied) {
+          const previousFocus = document.activeElement;
+          details.open = true;
+          preview.focus();
+          preview.select();
+          try { copied = typeof document.execCommand === 'function' && document.execCommand('copy'); } catch (_) { copied = false; }
+          if (copied && previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        }
+        toast.textContent = copied ? label + ' copied.' : 'Clipboard unavailable. The export is selected below for manual copy.';
+      }
+      cards.forEach((card) => {
+        card.querySelectorAll('input[type="radio"]').forEach((radio) => radio.addEventListener('change', render));
+        card.querySelector('textarea').addEventListener('input', render);
+      });
+      document.getElementById('copyJson').addEventListener('click', () => copy(JSON.stringify(report(), null, 2), 'JSON'));
+      document.getElementById('copyPrompt').addEventListener('click', () => copy(remediationPrompt(), 'Remediation prompt'));
+      render();
+    })();
+  </script>
+</body>
+</html>

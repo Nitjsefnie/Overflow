@@ -174,3 +174,7 @@ docs/superpowers/plans/*
 docs/superpowers/specs/*
 !docs/superpowers/specs/*.md
 !docs/superpowers/specs/*.html
+
+!docs/reviews/
+docs/reviews/*
+!docs/reviews/2026-09-05-full-application-audit.html
