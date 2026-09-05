@@ -103,6 +103,7 @@ export default async function ModerationPage() {
           A closed issue with a merged pull request settles nothing when its label or rationale missed the
           evidence window. The reason is recorded here so a moderator can review it, and a member or the
           sponsor can request a correction from the settlement page.
+          A moderator who is not a party cannot open the settlement; the parties named on each entry can.
         </p>
         {unwritableClosures === null ? (
           <p>The closure queue could not be loaded.</p>

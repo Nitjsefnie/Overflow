@@ -44,6 +44,8 @@ describe("unwritable closures", () => {
     pull_request_title: "Repair the gate",
     pull_request_url: "https://github.com/co-op/harbour/pull/18",
     settlement_id: "settlement-1",
+    creditor_login: "mira",
+    debtor_login: "quinn",
     correction_state: null,
     correction_requested_at: null,
   };
@@ -62,8 +64,11 @@ describe("unwritable closures", () => {
         pull_request_title: null,
         pull_request_url: null,
         settlement_id: null,
+        creditor_login: null,
+        debtor_login: null,
       },
-      { ...rejected, id: "closure-3", settlement_id: null },
+      { ...rejected, id: "closure-3", settlement_id: null, creditor_login: null, debtor_login: null },
+      { ...rejected, id: "closure-4", creditor_login: null },
     ]]);
 
     const closures = await listUnwritableClosures({ sql });
@@ -84,6 +89,7 @@ describe("unwritable closures", () => {
           url: "https://github.com/co-op/harbour/pull/18",
         },
         settlementId: "settlement-1",
+        settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
         latestCorrection: null,
       },
       expect.objectContaining({
@@ -94,6 +100,7 @@ describe("unwritable closures", () => {
         issueNumber: 19,
         pullRequest: null,
         settlementId: null,
+        settlementParties: null,
         latestCorrection: null,
       }),
       expect.objectContaining({
@@ -101,6 +108,12 @@ describe("unwritable closures", () => {
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         pullRequest: { number: 18, title: "Repair the gate", url: "https://github.com/co-op/harbour/pull/18" },
         settlementId: null,
+        settlementParties: null,
+      }),
+      expect.objectContaining({
+        id: "closure-4",
+        settlementId: "settlement-1",
+        settlementParties: { creditorLogin: null, debtorLogin: "quinn" },
       }),
     ]);
     const query = captures[0]?.text ?? "";
@@ -111,8 +124,12 @@ describe("unwritable closures", () => {
     expect(projection).toMatch(/(?:^|,)\s*pull_requests\.title\s+as\s+pull_request_title\s*(?:,|$)/i);
     expect(projection).toMatch(/(?:^|,)\s*pull_requests\.url\s+as\s+pull_request_url\s*(?:,|$)/i);
     expect(projection).toMatch(/(?:^|,)\s*settlements\.id\s+as\s+settlement_id\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*creditors\.github_login\s+as\s+creditor_login\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*debtors\.github_login\s+as\s+debtor_login\s*(?:,|$)/i);
     expect(query).toMatch(/left join pull_requests on pull_requests\.id = unwritable_closures\.pull_request_id/i);
     expect(query).toMatch(/left join settlements on settlements\.issue_id = issues\.id/i);
+    expect(query).toMatch(/left join users as creditors on creditors\.id = settlements\.creditor_id/i);
+    expect(query).toMatch(/left join users as debtors on debtors\.id = settlements\.debtor_id/i);
     expect(query).toMatch(/order by unwritable_closures\.created_at desc, issues\.github_issue_id asc/i);
   });
 
