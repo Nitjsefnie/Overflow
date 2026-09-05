@@ -480,7 +480,7 @@ describe("Overflow token registration", () => {
     ["write-time enforcement", 403, "FORBIDDEN", "The account is not eligible to register repositories."],
     ["permissions", 403, "FORBIDDEN", "GitHub administrator permission is required for the submitted repository."],
     ["conflict", 409, "CONFLICT", "This GitHub repository is already registered."],
-    ["github", 502, "UPSTREAM_FAILURE", "Unable to register the repository with GitHub."],
+    ["github", 502, "UPSTREAM_FAILURE", "Unable to create the repository webhook on GitHub."],
     ["initialization", 502, "UPSTREAM_FAILURE", "Unable to initialize repository registration."],
   ] as const)("does not expose the token on %s failure", async (failure, status, code, message) => {
     const fixture = tokenFixture();
