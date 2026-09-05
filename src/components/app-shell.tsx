@@ -32,6 +32,9 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
             <li>
               <Link href="/calibration">Calibration</Link>
             </li>
+            <li>
+              <Link href="/rules">Rules</Link>
+            </li>
             {isModerator ? (
               <li>
                 <Link href="/moderation">Moderation</Link>
