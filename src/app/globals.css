@@ -875,3 +875,79 @@ button:disabled {
 .moderator-list .mono-meta {
   margin-bottom: 0;
 }
+.settlement-history-card {
+  padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+.settlement-history-cue {
+  max-width: 62ch;
+  margin: 0.9rem 0 0;
+  color: var(--ink-muted);
+}
+
+.settlement-history-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 1.4rem 0 0;
+  list-style: none;
+  border-top: 2px solid var(--line);
+}
+
+.settlement-history-row {
+  padding: 1.1rem 0;
+  border-bottom: 1px solid #8a8479;
+}
+
+.settlement-history-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  margin: 0 0 0.5rem;
+}
+
+.settlement-history-status .mono-meta {
+  margin-bottom: 0;
+}
+
+.settlement-status {
+  padding: 0.15rem 0.55rem;
+  border: 2px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settlement-status-settled {
+  background: var(--credit);
+  color: var(--credit-ink);
+}
+
+.settlement-status-unclaimed {
+  background: var(--paper-deep);
+  color: var(--ink);
+}
+
+.settlement-status-unsettled {
+  background: var(--surface);
+  color: var(--ink-muted);
+  border-style: dashed;
+}
+
+.settlement-history-links {
+  margin: 0 0 0.55rem;
+  font-weight: 800;
+}
+
+.settlement-history-links a:hover {
+  background: var(--credit);
+}
+
+.settlement-history-note {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
