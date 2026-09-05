@@ -93,6 +93,7 @@ describe("initial PostgreSQL materialization", () => {
       "005_harden_materialization_invariants.sql",
       "006_account_moderation_snapshots.sql",
       "007_authoritative_history_and_merge_proof.sql",
+      "008_moderator_role_changes.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
