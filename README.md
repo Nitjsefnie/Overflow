@@ -194,6 +194,8 @@ Closing-link evidence comes only from GitHub GraphQL `closedByPullRequestsRefere
 
 A 15-minute tolerance applies to label and comment timing; the settlement window closes 15 minutes after merge. A rationale comment edited after that close does not count. The earliest qualifying comment at or after the standing label is used, including when a label is reapplied; if none exists, a comment up to 15 minutes before that label can count. Overflow retains the accepted event/comment identifiers and timestamps, the exact merge commit OID, and the diff fingerprint so every scoring input is reproducible.
 
+Contributors and moderators are identified by their immutable GitHub account id; a GitHub login is displayed but never decides who is credited or who is a moderator.
+
 ## Scoring and calibration
 
 For an outside contributor, settled credits are:
@@ -298,6 +300,6 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
 | `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub webhook URL and shared secret |
-| `MODERATOR_GITHUB_LOGINS` | Comma-separated moderator GitHub logins |
+| `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
