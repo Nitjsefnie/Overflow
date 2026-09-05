@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CalibrationStatisticsError,
   compareCalibration,
+  MINIMUM_CALIBRATION_SAMPLE_SIZE,
   summarizeCalibration,
   type CalibrationPair,
 } from "@/lib/calibration/statistics";
@@ -56,6 +57,10 @@ describe("calibration statistics", () => {
         }),
       ]),
     ).toThrow(CalibrationStatisticsError);
+  });
+
+  it("pins the audit sample-size floor at ten pairs per cohort", () => {
+    expect(MINIMUM_CALIBRATION_SAMPLE_SIZE).toBe(10);
   });
 
   it("rejects a cohort pair without a Task 3 GitHub proof fingerprint", () => {
