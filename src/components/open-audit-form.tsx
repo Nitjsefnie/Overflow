@@ -50,7 +50,7 @@ type CohortPreviewResponse = {
 };
 
 type OpenAuditResponse = {
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
 };
 
 export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) {
@@ -62,6 +62,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<LoadedCohortPreview | null>(null);
   const [pending, setPending] = useState<PendingRequest | null>(null);
+  const [openingTargetLogin, setOpeningTargetLogin] = useState("");
   const [feedback, setFeedback] = useState<Feedback>(null);
 
   const target = candidates.find((candidate) => candidate.id === targetAccountId) ?? null;
@@ -141,6 +142,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       return;
     }
 
+    setOpeningTargetLogin(target.githubLogin);
     setPending("open");
     try {
       const response = await fetch("/api/moderation", {
@@ -159,7 +161,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       if (!response.ok) {
         setFeedback({
           kind: "error",
-          message: body?.error?.message ?? "The audit could not be opened. Check the cohort and try again.",
+          message: describeOpenAuditError(body?.error),
         });
         return;
       }
@@ -289,12 +291,23 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       </button>
       {pending === "preview" ? <p className="feedback pending" role="status">Loading the cohort preview…</p> : null}
       {pending === "open" ? (
-        <p className="feedback pending" role="status">Opening the audit for {target?.githubLogin}…</p>
+        <p className="feedback pending" role="status">Opening the audit for {openingTargetLogin}…</p>
       ) : null}
       {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
       {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
     </div>
   );
+}
+
+function describeOpenAuditError(error: OpenAuditResponse["error"]): string {
+  switch (error?.code) {
+    case "INSUFFICIENT_SAMPLES":
+      return `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required. Widen the sample window or choose all repositories, then preview again.`;
+    case "INVALID_INPUT":
+      return "Check the audit target, repository, sample window bounds, and reason, then try again.";
+    default:
+      return error?.message ?? "The audit could not be opened. Check the cohort and try again.";
+  }
 }
 
 function readSampleWindow(sampleStartedAt: string, sampleEndedAt: string): SampleWindow | null {

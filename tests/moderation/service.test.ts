@@ -235,10 +235,15 @@ describe("calibration cohort preview", () => {
     expect(store.cohortReadCount).toBe(0);
   });
 
-  it("returns the compared cohort over the normalized window without opening an audit", async () => {
+  it.each([
+    { selfSettled: 7, outsiderSettled: 5, selfMean: 3, outsiderMean: 1, difference: 2 },
+    { selfSettled: 5, outsiderSettled: 7, selfMean: 1, outsiderMean: 3, difference: -2 },
+  ])("returns the compared cohort with signed difference $difference over the normalized window without opening an audit", async ({ selfSettled, outsiderSettled, selfMean, outsiderMean, difference }) => {
     const store = new TestModerationStore({
-      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
-      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000)
+        .map((pair) => ({ ...pair, settledDifficulty: selfSettled })),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000)
+        .map((pair) => ({ ...pair, settledDifficulty: outsiderSettled })),
     });
 
     const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
@@ -254,9 +259,9 @@ describe("calibration cohort preview", () => {
       sampleStartedAt: "2026-01-01T00:00:00.000Z",
       sampleEndedAt: "2026-02-01T00:00:00.000Z",
       comparison: {
-        selfWork: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: 1, medianDelta: 1 },
-        outsider: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: 1, medianDelta: 1 },
-        differenceBetweenMeans: 0,
+        selfWork: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: selfMean, medianDelta: selfMean },
+        outsider: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: outsiderMean, medianDelta: outsiderMean },
+        differenceBetweenMeans: difference,
       },
       meetsMinimumSampleSize: true,
     });
