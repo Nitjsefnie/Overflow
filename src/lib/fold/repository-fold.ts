@@ -152,6 +152,8 @@ export type SelfWorkCalibration = {
 
 export type UnwritableClosure = {
   githubIssueId: number;
+  kind: "NO_CLOSING_PULL_REQUEST" | "SETTLEMENT_EVIDENCE_REJECTED";
+  githubPullRequestId: number | null;
   reason: string;
 };
 
@@ -246,9 +248,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     const pullRequest = issue.state === "CLOSED"
       ? selectClosingPullRequest(issue.closingPullRequests)
       : null;
-    const settledDifficulty = pullRequest === null
+    const settledResolution = pullRequest === null
       ? null
       : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme);
+    const settledDifficulty = settledResolution?.kind === "accepted" ? settledResolution.evidence : null;
 
     issues.push({
       githubIssueId: issue.id,
@@ -282,6 +285,8 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     if (pullRequest === null) {
       unwritableClosures.push({
         githubIssueId: issue.id,
+        kind: "NO_CLOSING_PULL_REQUEST",
+        githubPullRequestId: null,
         reason: "No merged GitHub GraphQL closing pull request was found.",
       });
       continue;
@@ -298,6 +303,15 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       proofSha256,
       reviewRounds,
     );
+
+    if (settledResolution?.kind === "rejected") {
+      unwritableClosures.push({
+        githubIssueId: issue.id,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: pullRequest.id,
+        reason: settledResolution.reason,
+      });
+    }
 
     if (!isParticipationEligibleAt(snapshot.repository.sponsor, pullRequest.mergedAt)) {
       continue;
@@ -437,21 +451,30 @@ function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,
   pullRequest: AuthoritativeClosingPullRequest,
   scheme: DifficultyScheme,
-): SettledDifficultyEvidence | null {
+): { kind: "accepted"; evidence: SettledDifficultyEvidence } | { kind: "rejected"; reason: string } {
   const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
   if (ownerLogin === null) {
-    return null;
+    return {
+      kind: "rejected",
+      reason: "The issue has no author login, so no settled label can be attributed to the issue owner.",
+    };
   }
   const actualByLabel = new Map(scheme.actualLabels.map((entry) => [entry.label, entry]));
   const mergeTime = Date.parse(pullRequest.mergedAt);
   const finalCommitTime = Date.parse(pullRequest.finalCommitAt);
   const activeLabels = new Map<string, Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>>();
+  let earliestLaterApplication: Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }> | undefined;
   for (const event of issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems)) {
     if (
       (event.kind !== "LABELED" && event.kind !== "UNLABELED") ||
-      !actualByLabel.has(event.label) ||
-      Date.parse(event.createdAt) > mergeTime + EVIDENCE_ORDERING_GRACE_MS
+      !actualByLabel.has(event.label)
     ) {
+      continue;
+    }
+    if (Date.parse(event.createdAt) > mergeTime + EVIDENCE_ORDERING_GRACE_MS) {
+      if (event.kind === "LABELED" && earliestLaterApplication === undefined) {
+        earliestLaterApplication = event;
+      }
       continue;
     }
     if (event.kind === "LABELED") {
@@ -460,17 +483,37 @@ function resolveSettledDifficulty(
       activeLabels.delete(event.label);
     }
   }
-  if (activeLabels.size !== 1) {
-    return null;
+  if (activeLabels.size === 0) {
+    const laterApplication = earliestLaterApplication === undefined
+      ? ""
+      : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
+    return {
+      kind: "rejected",
+      reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
+    };
+  }
+  if (activeLabels.size > 1) {
+    return {
+      kind: "rejected",
+      reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
+    };
   }
   const [[label, source]] = [...activeLabels.entries()];
   const sourceTime = Date.parse(source.createdAt);
+  if (normalizedNonblankLogin(source.actorLogin) !== ownerLogin) {
+    return {
+      kind: "rejected",
+      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the issue owner \`${issue.authorLogin!.trim()}\`.`,
+    };
+  }
   if (
-    normalizedNonblankLogin(source.actorLogin) !== ownerLogin ||
     sourceTime < finalCommitTime - EVIDENCE_ORDERING_GRACE_MS ||
     sourceTime > mergeTime + EVIDENCE_ORDERING_GRACE_MS
   ) {
-    return null;
+    return {
+      kind: "rejected",
+      reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+    };
   }
   const qualifyingRationales = issue.comments
     .filter(validIssueComment)
@@ -493,18 +536,24 @@ function resolveSettledDifficulty(
     qualifyingRationales.find((comment) => Date.parse(comment.createdAt) >= sourceTime) ??
     qualifyingRationales[0];
   if (rationale === undefined) {
-    return null;
+    return {
+      kind: "rejected",
+      reason: `No rationale comment by \`${issue.authorLogin!.trim()}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+    };
   }
   const configured = actualByLabel.get(label)!;
   return {
-    label: configured.label,
-    points: configured.points,
-    labelEventId: source.id,
-    labelActorLogin: source.actorLogin!.trim(),
-    labelAppliedAt: new Date(source.createdAt).toISOString(),
-    rationaleCommentId: rationale.id,
-    rationaleActorLogin: rationale.authorLogin!.trim(),
-    rationaleCommentedAt: new Date(rationale.createdAt).toISOString(),
+    kind: "accepted",
+    evidence: {
+      label: configured.label,
+      points: configured.points,
+      labelEventId: source.id,
+      labelActorLogin: source.actorLogin!.trim(),
+      labelAppliedAt: new Date(source.createdAt).toISOString(),
+      rationaleCommentId: rationale.id,
+      rationaleActorLogin: rationale.authorLogin!.trim(),
+      rationaleCommentedAt: new Date(rationale.createdAt).toISOString(),
+    },
   };
 }
 
