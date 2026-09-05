@@ -112,10 +112,26 @@ pnpm dev
 ```
 
 `pnpm db:migrate` runs `scripts/migrate.ts`, which applies every
-`db/migrations/NNN_*.sql` in sorted order inside one transaction and records
-each name in a `schema_migrations` table. It skips what is already recorded, so
-running it twice is safe and running it after a `git pull` is the habit to
-build.
+`db/migrations/NNN_*.sql` in sorted order and records each name in a
+`schema_migrations` table. It skips what is already recorded, so running it
+twice is safe and running it after a `git pull` is the habit to build.
+
+**Each migration gets its own transaction, together with the
+`schema_migrations` row that records it.** The two commit together or not at
+all, so no migration is ever half-applied or applied without being recorded.
+The run is not one transaction: PostgreSQL refuses to read an enum label that
+`alter type ... add value` added until the adding transaction has committed, so
+a migration can only build on the catalogue an earlier one committed.
+
+**A failed upgrade therefore keeps every migration before the failure.** The
+run stops at the migration that raised, and a re-run resumes there rather than
+replaying from the start. Fix whatever the failure named and run
+`pnpm db:migrate` again — do not restore a backup on the assumption the run
+rolled back, and do not expect a half-migrated database to be an error state in
+itself. Trip `014`'s opening-authority precondition, for instance, and `013`
+stays applied, having already dropped the `users_github_login_key` constraint;
+that is the intended resting place until the data the precondition names is
+corrected.
 
 ## The checks
 
