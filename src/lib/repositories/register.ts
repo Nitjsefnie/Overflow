@@ -1,5 +1,5 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
-import { GitHubApiError } from "@/lib/github/client";
+import { GitHubApiError } from "@/lib/github/errors";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -63,7 +63,7 @@ export type RepositoryRegistrationResult = RegisteredRepository & {
 
 export class RepositoryRegistrationError extends Error {
   public constructor(
-    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
+    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
     message: string,
   ) {
     super(message);
@@ -182,20 +182,39 @@ export async function registerRepository(
 
 function githubSetupError(
   error: unknown,
-  repository: GitHubRepository,
-  step: "configure difficulty labels" | "create the repository webhook",
+  repository: GitHubRepository | null,
+  step: "retrieve the submitted GitHub repository" | "configure difficulty labels" | "create the repository webhook",
 ): RepositoryRegistrationError {
-  if (error instanceof GitHubApiError && (error.status === 403 || error.status === 404)) {
-    const cause = repository.ownerType === "ORGANIZATION"
+  if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
+    const observation = error.status === 403
+      ? `GitHub refused to ${step} (HTTP 403).`
+      : `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
+    let cause = repository?.ownerType === "ORGANIZATION"
       ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`
-      : "GitHub denied Overflow access to this repository.";
+      : "This may be caused by missing authorization for the Overflow OAuth application.";
+    if (repository === null) {
+      cause += " For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy.";
+    }
     return new RepositoryRegistrationError(
       "GITHUB_ACCESS",
-      `GitHub refused to ${step} (HTTP ${error.status}). ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
+      `${observation} ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
     );
   }
 
-  return new RepositoryRegistrationError("UPSTREAM_FAILURE", `Unable to ${step} on GitHub.`);
+  if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
+    const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} seconds.`;
+    return new RepositoryRegistrationError(
+      "GITHUB_RATE_LIMITED",
+      `GitHub rate-limited the request to ${step} (HTTP ${error.status}).${delay} Please retry registration later.`,
+    );
+  }
+
+  return new RepositoryRegistrationError(
+    "UPSTREAM_FAILURE",
+    step === "retrieve the submitted GitHub repository"
+      ? "Unable to retrieve the submitted GitHub repository."
+      : `Unable to ${step} on GitHub.`,
+  );
 }
 
 async function ingestExistingWork(
@@ -276,8 +295,8 @@ async function getSubmittedRepository(
 ): Promise<GitHubRepository> {
   try {
     return await github.getRepository(repository);
-  } catch {
-    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to retrieve the submitted GitHub repository.");
+  } catch (error) {
+    throw githubSetupError(error, null, "retrieve the submitted GitHub repository");
   }
 }
 

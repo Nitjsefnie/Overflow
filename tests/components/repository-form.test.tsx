@@ -31,6 +31,18 @@ afterEach(() => {
 });
 
 describe("repository registration form", () => {
+  it("shows a non-ok API response's actionable error message verbatim", async () => {
+    const message = "GitHub rate-limited the request to create the repository webhook (HTTP 403). Retry after 60 seconds. Please retry registration later.";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      error: { code: "GITHUB_RATE_LIMITED", message },
+    }, { status: 429 })));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+  });
+
   it("keeps configured display names, arbitrary labels, and all actual mappings editable", () => {
     render(<RepositoryForm initialValues={initialValues} />);
 
