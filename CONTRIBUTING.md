@@ -80,8 +80,7 @@ default:
   application URL and the webhook endpoint GitHub must be able to reach over
   public HTTPS, plus the shared secret. You only need these to exercise the
   webhook path end to end; the test suite does not.
-- `MODERATOR_GITHUB_LOGINS` — comma-separated GitHub logins granted the
-  moderator role at sign-in.
+- `MODERATOR_GITHUB_USER_IDS` — comma-separated GitHub account ids granted the moderator role at sign-in (`gh api users/<login> --jq .id`).
 
 Placeholders only in anything checked in. Never commit OAuth credentials,
 webhook secrets, database passwords or encryption keys.

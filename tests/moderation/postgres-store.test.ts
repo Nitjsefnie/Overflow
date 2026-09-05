@@ -433,6 +433,41 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(scopedAfterSecondaryMaterialization).toEqual(primaryPairs);
   });
 
+  it("marks a moderator as configured by GitHub user id, not by login", async () => {
+    const configuredGitHubUserId = nextExternalId();
+    const [configured] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login, role)
+      values (${configuredGitHubUserId}, ${"shared-moderator-login"}, ${"MODERATOR"})
+      returning id
+    `;
+    const [sameLogin] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login, role)
+      values (${nextExternalId()}, ${"shared-moderator-login"}, ${"MODERATOR"})
+      returning id
+    `;
+    const previous = process.env.MODERATOR_GITHUB_USER_IDS;
+    process.env.MODERATOR_GITHUB_USER_IDS = String(configuredGitHubUserId);
+    try {
+      const roster = await new PostgresModerationStore(sql).listModerators();
+      expect(roster.find((entry) => entry.accountId === configured.id)).toEqual({
+        accountId: configured.id,
+        githubLogin: "shared-moderator-login",
+        isConfigured: true,
+      });
+      expect(roster.find((entry) => entry.accountId === sameLogin.id)).toEqual({
+        accountId: sameLogin.id,
+        githubLogin: "shared-moderator-login",
+        isConfigured: false,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MODERATOR_GITHUB_USER_IDS;
+      } else {
+        process.env.MODERATOR_GITHUB_USER_IDS = previous;
+      }
+    }
+  });
+
   it.each([
     ["WARNED", true],
     ["UNDER_AUDIT", true],

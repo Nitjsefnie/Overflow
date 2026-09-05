@@ -5,7 +5,31 @@ import {
   type ModerationStore,
   type ModeratorRoleChange,
 } from "@/lib/moderation/service";
-import { resolveSignInRole } from "@/lib/moderation/roles";
+import { normalizeModeratorGitHubUserIds, resolveSignInRole } from "@/lib/moderation/roles";
+
+describe("the configured moderator list names GitHub account ids", () => {
+  it("parses comma-separated positive integers and ignores whitespace", () => {
+    expect(normalizeModeratorGitHubUserIds(" 583231, 1024 ,7")).toEqual(new Set([583231, 1024, 7]));
+  });
+
+  it("accepts the positive safe-integer boundaries and deduplicates ids", () => {
+    expect(normalizeModeratorGitHubUserIds("1,9007199254740991,1")).toEqual(new Set([1, 9007199254740991]));
+  });
+
+  it("never matches a login, a zero, a negative, a fraction, or an empty entry", () => {
+    expect(normalizeModeratorGitHubUserIds("octocat,0,-5,1.5,,  ,9007199254740993")).toEqual(new Set());
+  });
+
+  it("ignores non-decimal forms without discarding valid entries", () => {
+    expect(normalizeModeratorGitHubUserIds("octocat,1,1e3,0x10,+7,Infinity,NaN,9007199254740992,1024"))
+      .toEqual(new Set([1, 1024]));
+  });
+
+  it("treats an unset variable as no configured moderators", () => {
+    expect(normalizeModeratorGitHubUserIds(undefined)).toEqual(new Set());
+    expect(normalizeModeratorGitHubUserIds("")).toEqual(new Set());
+  });
+});
 
 describe("granting and revoking moderator status", () => {
   it("promotes a member and records who did it", async () => {
@@ -64,11 +88,11 @@ describe("granting and revoking moderator status", () => {
 });
 
 describe("the configured moderator list is a floor, not an override", () => {
-  it("promotes a configured login that is stored as a member", () => {
+  it("promotes a configured account that is stored as a member", () => {
     expect(resolveSignInRole("MEMBER", true)).toBe("MODERATOR");
   });
 
-  it("keeps a moderator granted in the product when the login is not configured", () => {
+  it("keeps a moderator granted in the product when the account is not configured", () => {
     expect(resolveSignInRole("MODERATOR", false)).toBe("MODERATOR");
   });
 

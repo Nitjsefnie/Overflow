@@ -4,8 +4,7 @@ import type { Profile } from "next-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
-export { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
-import { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
+import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 export const githubOAuthScope = "public_repo";
@@ -82,9 +81,7 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
     throw new Error("Token encryption key must be configured.");
   }
 
-  const role = normalizeModeratorGitHubLogins(process.env.MODERATOR_GITHUB_LOGINS).has(
-    identity.login.toLowerCase(),
-  )
+  const role = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).has(identity.githubUserId)
     ? "MODERATOR"
     : "MEMBER";
   const encryptedAccessToken = Buffer.from(encryptToken(accessToken, tokenEncryptionKey), "utf8");
