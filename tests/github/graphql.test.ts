@@ -822,17 +822,19 @@ describe("GitHubGateway GraphQL source adapter", () => {
 
   it("collects pull request reviews and their dismissals through cursor-paginated GraphQL", async () => {
     const reviewCursors: Array<string | null> = [];
-    const dismissalCursors: Array<string | null> = [];
+    const dismissalRequests: Array<{
+      query: string;
+      variables: { owner: string; name: string; pullRequestNumber: number; cursor: string | null };
+    }> = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
         const request = JSON.parse(String(init?.body)) as {
           query: string;
-          variables: { cursor: string | null };
+          variables: { owner: string; name: string; pullRequestNumber: number; cursor: string | null };
         };
         if (request.query.includes("query PullRequestReviewDismissals")) {
-          dismissalCursors.push(request.variables.cursor);
-          expect(request.query).toMatch(/timelineItems\([^)]*itemTypes:\s*\[REVIEW_DISMISSED_EVENT\]/);
+          dismissalRequests.push(request);
           return Response.json({
             data: {
               repository: {
@@ -857,8 +859,8 @@ describe("GitHubGateway GraphQL source adapter", () => {
               pullRequest: {
                 reviews: {
                   nodes: request.variables.cursor === null
-                    ? [reviewNode(301, "DISMISSED"), reviewNode(303, "DISMISSED")]
-                    : [reviewNode(302, "APPROVED")],
+                    ? [{ ...reviewNode(301, "DISMISSED"), submittedAt: "2026-09-04T10:00:00.000Z" }]
+                    : [reviewNode(303, "DISMISSED"), reviewNode(302, "APPROVED")],
                   pageInfo: request.variables.cursor === null
                     ? { hasNextPage: true, endCursor: "review-cursor-2" }
                     : { hasNextPage: false, endCursor: null },
@@ -876,7 +878,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
       {
         id: 301,
         state: "DISMISSED",
-        submittedAt: "2026-09-04T12:00:00.000Z",
+        submittedAt: "2026-09-04T10:00:00.000Z",
         dismissal: { at: "2026-09-04T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
       {
@@ -888,7 +890,84 @@ describe("GitHubGateway GraphQL source adapter", () => {
       { id: 302, state: "APPROVED", submittedAt: "2026-09-04T12:00:00.000Z", dismissal: null },
     ]);
     expect(reviewCursors).toEqual([null, "review-cursor-2"]);
-    expect(dismissalCursors).toEqual([null, "dismissal-cursor-2"]);
+    expect(dismissalRequests.map((request) => request.variables)).toEqual([
+      { owner: "octo", name: "overflow", pullRequestNumber: 4, cursor: null },
+      { owner: "octo", name: "overflow", pullRequestNumber: 4, cursor: "dismissal-cursor-2" },
+    ]);
+    for (const { query } of dismissalRequests) {
+      expect(query).toMatch(/timelineItems\([^)]*itemTypes:\s*\[REVIEW_DISMISSED_EVENT\]/);
+      expect(query).toMatch(/timelineItems\([^)]*after:\s*\$cursor\b/);
+      expect(query).toMatch(/\.\.\. on ReviewDismissedEvent\s*\{[^}]*\bcreatedAt\b/);
+      expect(query).toMatch(/\.\.\. on ReviewDismissedEvent\s*\{[^}]*\bpreviousReviewState\b/);
+      expect(query).toMatch(/\.\.\. on ReviewDismissedEvent\s*\{[^}]*\breview\s*\{\s*databaseId\s*\}/);
+    }
+  });
+
+  it("rejects a review with a null database id", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string };
+        const connection = request.query.includes("query PullRequestReviewDismissals")
+          ? { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+          : { reviews: {
+            nodes: [{ ...reviewNode(301, "DISMISSED"), databaseId: null }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } };
+        return Response.json({ data: { repository: { pullRequest: connection } } });
+      },
+    });
+
+    await expect(gateway.getPullRequestReviews({ owner: "octo", name: "overflow" }, 4))
+      .rejects.toThrow("GitHub GraphQL response was invalid.");
+  });
+
+  it("preserves a null submittedAt for a pending review", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string };
+        const connection = request.query.includes("query PullRequestReviewDismissals")
+          ? { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+          : { reviews: {
+            nodes: [{ ...reviewNode(304, "PENDING"), submittedAt: null }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } };
+        return Response.json({ data: { repository: { pullRequest: connection } } });
+      },
+    });
+
+    await expect(gateway.getPullRequestReviews({ owner: "octo", name: "overflow" }, 4)).resolves.toEqual([
+      { id: 304, state: "PENDING", submittedAt: null, dismissal: null },
+    ]);
+  });
+
+  it.each(["COMMENTED", "APPROVED"])("attaches a dismissal whose previous review state was %s", async (previousState) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string };
+        const connection = request.query.includes("query PullRequestReviewDismissals")
+          ? { timelineItems: {
+            nodes: [{ __typename: "ReviewDismissedEvent", createdAt: "2026-09-04T13:00:00.000Z", previousReviewState: previousState, review: { databaseId: 305 } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } }
+          : { reviews: {
+            nodes: [reviewNode(305, "DISMISSED")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } };
+        return Response.json({ data: { repository: { pullRequest: connection } } });
+      },
+    });
+
+    await expect(gateway.getPullRequestReviews({ owner: "octo", name: "overflow" }, 4)).resolves.toEqual([
+      {
+        id: 305,
+        state: "DISMISSED",
+        submittedAt: "2026-09-04T12:00:00.000Z",
+        dismissal: { at: "2026-09-04T13:00:00.000Z", previousState },
+      },
+    ]);
   });
 
   it.each([
