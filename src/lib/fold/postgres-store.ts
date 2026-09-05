@@ -13,6 +13,7 @@ import type {
   FoldSettlement,
   FoldUser,
   SelfWorkCalibration,
+  UnwritableClosure,
 } from "@/lib/fold/repository-fold";
 import type {
   ReconciliationDeltas,
@@ -135,6 +136,8 @@ type UnwritableClosureRow = {
   id: string;
   issue_id: string;
   github_issue_id: number | string;
+  kind: UnwritableClosure["kind"];
+  github_pull_request_id: number | string | null;
   reason: string;
 };
 
@@ -372,7 +375,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         pullRequestIds,
         existingSelfWorkCalibrations,
       );
-      const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds);
+      const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds, pullRequestIds);
       await materializeReviewRounds(transaction, input.fold, pullRequestIds);
       await deleteAbsentMaterialization(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
       await recordPolicyViolations(transaction, input.runId, input.fold);
@@ -931,11 +934,14 @@ async function materializeUnwritableClosures(
   sql: TransactionClient,
   input: { repositoryId: string; runId: string; fold: FoldResult },
   issueIds: Map<number, string>,
+  pullRequestIds: Map<number, string>,
 ): Promise<ReconciliationDeltas> {
   const existingRows = await sql<UnwritableClosureRow[]>`
-    select unwritable_closures.id, unwritable_closures.issue_id, issues.github_issue_id, unwritable_closures.reason
+    select unwritable_closures.id, unwritable_closures.issue_id, issues.github_issue_id,
+      unwritable_closures.kind::text, pull_requests.github_pull_request_id, unwritable_closures.reason
     from unwritable_closures
     join issues on issues.id = unwritable_closures.issue_id
+    left join pull_requests on pull_requests.id = unwritable_closures.pull_request_id
     where issues.repository_id = ${input.repositoryId}
     order by issues.github_issue_id
   `;
@@ -948,12 +954,15 @@ async function materializeUnwritableClosures(
 
   for (const closure of input.fold.unwritableClosures) {
     const issueId = requiredId(issueIds, closure.githubIssueId, "Issue");
+    const pullRequestId = closure.githubPullRequestId === null
+      ? null
+      : requiredId(pullRequestIds, closure.githubPullRequestId, "Pull request");
     const current = existingByIssue.get(closure.githubIssueId);
-    const desired = unwritableClosureState(closure.githubIssueId, closure.reason);
+    const desired = unwritableClosureState(closure);
     if (current === undefined) {
       await sql`
-        insert into unwritable_closures (issue_id, reason)
-        values (${issueId}, ${closure.reason})
+        insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+        values (${issueId}, ${pullRequestId}, ${closure.kind}, ${closure.reason})
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "ADD", null, desired);
       adds += 1;
@@ -965,7 +974,7 @@ async function materializeUnwritableClosures(
     if (JSON.stringify(before) !== JSON.stringify(desired)) {
       await sql`
         update unwritable_closures
-        set reason = ${closure.reason}
+        set pull_request_id = ${pullRequestId}, kind = ${closure.kind}, reason = ${closure.reason}
         where id = ${current.id}
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "CHANGE", before, desired);
@@ -1220,15 +1229,22 @@ function selfWorkCalibrationStateFromRow(row: SelfWorkCalibrationRow): JSONValue
   };
 }
 
-function unwritableClosureState(githubIssueId: number, reason: string): JSONValue {
+function unwritableClosureState(closure: UnwritableClosure): JSONValue {
   return {
-    githubIssueId,
-    reason,
+    githubIssueId: closure.githubIssueId,
+    kind: closure.kind,
+    githubPullRequestId: closure.githubPullRequestId,
+    reason: closure.reason,
   };
 }
 
 function unwritableClosureStateFromRow(row: UnwritableClosureRow): JSONValue {
-  return unwritableClosureState(toSafeInteger(row.github_issue_id), row.reason);
+  return unwritableClosureState({
+    githubIssueId: toSafeInteger(row.github_issue_id),
+    kind: row.kind,
+    githubPullRequestId: row.github_pull_request_id === null ? null : toSafeInteger(row.github_pull_request_id),
+    reason: row.reason,
+  });
 }
 
 function combineDeltas(...deltas: readonly ReconciliationDeltas[]): ReconciliationDeltas {
