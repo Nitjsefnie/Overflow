@@ -110,7 +110,7 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
       role = case
         when excluded.role = 'MODERATOR' or users.role = 'MODERATOR' then 'MODERATOR'
         else 'MEMBER'
-      end,
+      end::user_role,
       encrypted_oauth_token = excluded.encrypted_oauth_token,
       updated_at = now()
     returning id, role
