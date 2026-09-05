@@ -104,10 +104,11 @@ export class GitHubGateway {
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
   ): Promise<GitHubPullRequestReview[]> {
-    const [reviewNodes, dismissalNodes] = await Promise.all([
-      collectCursorPages((cursor) => this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor)),
-      collectCursorPages((cursor) => this.getPullRequestReviewDismissalsPage(repository, pullRequestNumber, cursor)),
-    ]);
+    // Keep one HTTP request per reconciliation worker, including continuation pages.
+    const reviewNodes = await collectCursorPages((cursor) =>
+      this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor));
+    const dismissalNodes = await collectCursorPages((cursor) =>
+      this.getPullRequestReviewDismissalsPage(repository, pullRequestNumber, cursor));
     const dismissals = new Map<number, GitHubPullRequestReviewDismissal>();
     for (const node of dismissalNodes) {
       if (node.__typename !== "ReviewDismissedEvent" || node.review?.databaseId == null) {
