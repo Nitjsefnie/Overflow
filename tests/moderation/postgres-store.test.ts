@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import type { CalibrationPair } from "@/lib/calibration/statistics";
 import { closeSql, getSql } from "@/lib/db/client";
+import { isParticipationEligible } from "@/lib/db/types";
 import type { OpenAccountAuditStoreInput } from "@/lib/moderation/service";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -223,6 +224,84 @@ describe("PostgreSQL account moderation transitions", () => {
       }),
     );
   }, 60_000);
+
+  it.each([
+    ["ACTIVE", 0, "UNDER_AUDIT", true, "WARNED"],
+    ["WARNED", 1, "UNDER_AUDIT", true, "RECALIBRATING"],
+    ["UNDER_AUDIT", 1, "UNDER_AUDIT", true, "RECALIBRATING"],
+    ["RECALIBRATING", 2, "RECALIBRATING", false, "BANNED"],
+    ["BANNED", 3, "BANNED", false, "BANNED"],
+  ] as const)("opening an audit preserves participation restrictions for %s", async (
+    priorState, confirmedCount, openedState, eligible, substantiatedState,
+  ) => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const repositoryId = await insertRepository(targetId);
+    const pairs = await insertCalibrationPairs({ targetId, repositoryId, count: 10 });
+    await sql`
+      update users
+      set enforcement_state = ${priorState}, confirmed_miscalibration_count = ${confirmedCount}
+      where id = ${targetId}
+    `;
+    const store = new PostgresModerationStore(sql);
+    const input = auditInput({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      repositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+      ...pairs,
+    });
+
+    const opened = await openAudit(store, input);
+    expect(await targetState(targetId)).toEqual({ state: openedState, confirmedCount });
+    expect(opened).toMatchObject({
+      state: "OPEN", targetState: openedState, confirmedPatternCount: confirmedCount,
+    });
+    expect(isParticipationEligible(opened.targetState)).toBe(eligible);
+    await expect(sql`
+      select state, prior_enforcement_state from calibration_audits where id = ${opened.id}
+    `).resolves.toEqual([{ state: "OPEN", prior_enforcement_state: priorState }]);
+    await expect(sql`
+      select prior_state, new_state from moderation_events where audit_id = ${opened.id}
+    `).resolves.toEqual([{ prior_state: priorState, new_state: openedState }]);
+    await expect(sql`
+      select participation_eligible_at(${targetId}, now()) as eligible
+    `).resolves.toEqual([{ eligible }]);
+
+    const dismissed = await store.dismissAccountAudit({
+      actorId: moderatorId,
+      auditId: opened.id,
+      reason: "This cohort did not substantiate another pattern.",
+    });
+    expect(dismissed).toMatchObject({
+      kind: "ok",
+      value: { state: "DISMISSED", targetState: priorState, confirmedPatternCount: confirmedCount },
+    });
+    expect(await targetState(targetId)).toEqual({ state: priorState, confirmedCount });
+    await expect(sql`
+      select prior_state, new_state from moderation_events
+      where audit_id = ${opened.id} and reason = ${"This cohort did not substantiate another pattern."}
+    `).resolves.toEqual([{ prior_state: openedState, new_state: priorState }]);
+
+    const reopened = await openAudit(store, input);
+    const substantiated = await store.substantiateAccountAudit({
+      actorId: moderatorId,
+      auditId: reopened.id,
+      reason: "Independent review confirms another account-level pattern.",
+    });
+    expect(substantiated).toMatchObject({
+      kind: "ok",
+      value: {
+        state: "SUBSTANTIATED", targetState: substantiatedState, confirmedPatternCount: confirmedCount + 1,
+      },
+    });
+    expect(await targetState(targetId)).toEqual({ state: substantiatedState, confirmedCount: confirmedCount + 1 });
+    await expect(sql`
+      select prior_state, new_state from moderation_events
+      where audit_id = ${reopened.id} and reason = ${"Independent review confirms another account-level pattern."}
+    `).resolves.toEqual([{ prior_state: openedState, new_state: substantiatedState }]);
+  });
 
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");

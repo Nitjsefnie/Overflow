@@ -2,6 +2,7 @@ import type { JSONValue } from "postgres";
 import type { CalibrationPair } from "@/lib/calibration/statistics";
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, SqlClient, TransactionClient } from "@/lib/db/types";
+import { isParticipationEligible } from "@/lib/db/types";
 import {
   type AccountAudit,
   type CalibrationCohortSnapshot,
@@ -127,9 +128,12 @@ export class PostgresModerationStore implements ModerationStore {
         throw new Error("Calibration audit insert returned no row.");
       }
 
+      const newState = isParticipationEligible(target.enforcement_state)
+        ? "UNDER_AUDIT"
+        : target.enforcement_state;
       await transaction`
         update users
-        set enforcement_state = ${"UNDER_AUDIT"}, updated_at = now()
+        set enforcement_state = ${newState}, updated_at = now()
         where id = ${input.targetAccountId}
       `;
       await insertModerationEvent(transaction, {
@@ -137,14 +141,14 @@ export class PostgresModerationStore implements ModerationStore {
         actorId: input.actorId,
         auditId: audit.id,
         priorState: target.enforcement_state,
-        newState: "UNDER_AUDIT",
+        newState,
         reason: input.reason,
         cohort: input.cohort,
         recalibrationPlan: null,
       });
       return {
         kind: "ok",
-        value: toAccountAudit(audit, "UNDER_AUDIT", toSafeInteger(target.confirmed_miscalibration_count)),
+        value: toAccountAudit(audit, newState, toSafeInteger(target.confirmed_miscalibration_count)),
       };
     }) as Promise<ModerationStoreResult<AccountAudit>>;
   }
