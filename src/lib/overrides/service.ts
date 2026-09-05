@@ -47,6 +47,18 @@ export type OpenSettlementOverrideRequest = {
   settlement: SettlementOverrideEvidence | null;
 };
 
+/**
+ * The row a correction request names.
+ *
+ * An issue's priced outcome is materialized as a settlement when someone else
+ * closed it and as a self-work calibration when its sponsor closed it
+ * themselves, so a request has to be able to name either. The request itself is
+ * still keyed on the issue behind whichever row was named.
+ */
+export type SettlementOverrideTarget =
+  | { kind: "settlement"; settlementId: string }
+  | { kind: "calibration"; calibrationId: string };
+
 export type SettlementOverrideStoreResult<T> =
   | { kind: "ok"; value: T }
   | { kind: "not_found" }
@@ -60,11 +72,12 @@ export type SettlementOverrideDecisionInput =
 export type SettlementOverrideStore = {
   createRequest(input: {
     requesterId: string;
-    settlementId: string;
+    target: SettlementOverrideTarget;
     reason: string;
   }): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>>;
   listOpenRequests(): Promise<OpenSettlementOverrideRequest[]>;
   listRequestsForSettlement(settlementId: string, viewerId: string): Promise<SettlementOverrideRequest[]>;
+  listRequestsForCalibration(calibrationId: string, viewerId: string): Promise<SettlementOverrideRequest[]>;
   decideRequest(
     input: { actorId: string; requestId: string } & SettlementOverrideDecisionInput,
   ): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>>;
@@ -102,12 +115,12 @@ export class SettlementOverrideService {
 
   public async requestOverride(
     requester: SettlementOverrideRequester,
-    input: { settlementId: string; reason: string },
+    input: { target: SettlementOverrideTarget; reason: string },
   ): Promise<SettlementOverrideRequest> {
     return unwrap(
       await this.store.createRequest({
         requesterId: requester.id,
-        settlementId: normalizeIdentifier(input.settlementId, "Settlement identifier"),
+        target: normalizeTarget(input.target),
         reason: normalizeReason(input.reason),
       }),
     );
@@ -126,6 +139,16 @@ export class SettlementOverrideService {
   ): Promise<SettlementOverrideRequest[]> {
     return this.store.listRequestsForSettlement(
       normalizeIdentifier(settlementId, "Settlement identifier"),
+      viewer.id,
+    );
+  }
+
+  public async listRequestsForCalibration(
+    viewer: SettlementOverrideRequester,
+    calibrationId: string,
+  ): Promise<SettlementOverrideRequest[]> {
+    return this.store.listRequestsForCalibration(
+      normalizeIdentifier(calibrationId, "Calibration identifier"),
       viewer.id,
     );
   }
@@ -174,6 +197,18 @@ function normalizeReason(value: unknown): string {
   return value.trim();
 }
 
+function normalizeTarget(target: SettlementOverrideTarget): SettlementOverrideTarget {
+  return target.kind === "settlement"
+    ? {
+        kind: "settlement",
+        settlementId: normalizeIdentifier(target.settlementId, "Settlement identifier"),
+      }
+    : {
+        kind: "calibration",
+        calibrationId: normalizeIdentifier(target.calibrationId, "Calibration identifier"),
+      };
+}
+
 function normalizeIdentifier(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new SettlementOverrideError("INVALID_INPUT", `${label} is required.`);
@@ -205,7 +240,7 @@ function unwrap<T>(result: SettlementOverrideStoreResult<T>): T {
     case "forbidden":
       throw new SettlementOverrideError(
         "FORBIDDEN",
-        "Only the creditor or the debtor of a settlement can report it as incorrect.",
+        "Only the creditor or the debtor of a settlement, or the account a self-work calibration belongs to, can report it as incorrect.",
       );
     case "conflict":
       throw new SettlementOverrideError(
