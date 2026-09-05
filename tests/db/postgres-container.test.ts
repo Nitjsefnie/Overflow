@@ -6,6 +6,7 @@ import { postgresWaitStrategy, startPostgresContainer } from "../support/postgre
 const database = "overflow_wait_test";
 const postgresPortInHex = ":1538";
 const listenState = "0A";
+const dockerStreamHeaderLength = 8;
 
 /** `Wait.forListeningPorts()` is the only route to its class: testcontainers does not export it. */
 const listeningPortsStrategyClass = Wait.forListeningPorts().constructor as new () => WaitStrategy;
@@ -114,5 +115,35 @@ async function readContainerLogs(containerId: string): Promise<string> {
   const client = await getContainerRuntimeClient();
   const logs = await client.container.getById(containerId).logs({ follow: false, stdout: true, stderr: true });
 
-  return logs.toString("utf8");
+  return demultiplexDockerStream(logs);
+}
+
+/**
+ * Docker multiplexes stdout and stderr into a single stream of frames: an eight-byte header
+ * carrying the source stream, three reserved zero bytes and a big-endian payload length, then the
+ * payload. Matching against the raw buffer would miss any line a frame boundary splits in two.
+ */
+function demultiplexDockerStream(stream: Buffer): string {
+  const payloads: Buffer[] = [];
+  let offset = 0;
+
+  while (offset < stream.length) {
+    const header = stream.subarray(offset, offset + dockerStreamHeaderLength);
+
+    if (header.length < dockerStreamHeaderLength || header[0] > 2 || header.readUIntBE(1, 3) !== 0) {
+      throw new Error(`Not a multiplexed docker stream frame at byte ${offset}`);
+    }
+
+    const payloadStart = offset + dockerStreamHeaderLength;
+    const payloadEnd = payloadStart + header.readUInt32BE(4);
+
+    if (payloadEnd > stream.length) {
+      throw new Error(`Truncated docker stream frame at byte ${offset}`);
+    }
+
+    payloads.push(stream.subarray(payloadStart, payloadEnd));
+    offset = payloadEnd;
+  }
+
+  return Buffer.concat(payloads).toString("utf8");
 }
