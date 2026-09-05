@@ -350,16 +350,20 @@ describe("open audit form", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the structured error message when the ledger refuses the audit", async () => {
+  it.each([
+    ["INSUFFICIENT_SAMPLES", `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required. Widen the sample window or choose all repositories, then preview again.`],
+    ["INVALID_INPUT", "Check the audit target, repository, sample window bounds, and reason, then try again."],
+    ["INTERNAL_ERROR", "Unable to process moderation request."],
+  ])("explains the route's sanitized %s error when the ledger refuses the audit", async (code, message) => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
           error: {
-            code: "INSUFFICIENT_SAMPLES",
-            message: `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required.`,
+            code,
+            message: "Unable to process moderation request.",
           },
         }),
-        { status: 422, headers: { "content-type": "application/json" } },
+        { status: code === "INTERNAL_ERROR" ? 500 : 422, headers: { "content-type": "application/json" } },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -371,9 +375,7 @@ describe("open audit form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open audit" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required.`,
-      );
+      expect(screen.getByRole("alert")).toHaveTextContent(message);
     });
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -427,6 +429,10 @@ describe("open audit form", () => {
       }),
     });
 
+    chooseTarget(nilsId);
+    expect(screen.getByLabelText("Audit target")).toHaveValue(nilsId);
+    expect(screen.getByRole("status")).toHaveTextContent("Opening the audit for mira…");
+
     resolveResponse?.(new Response(JSON.stringify({ audit: { id: auditId } }), { status: 201 }));
 
     await waitFor(() => {
@@ -462,6 +468,49 @@ describe("open audit form", () => {
 });
 
 describe("moderation page open-audit section", () => {
+  it.each([
+    ["as self_work_pair_count", "The audit targets could not be loaded."],
+    ["from registered_repositories", "The audit repositories could not be loaded."],
+  ])("preserves populated moderation sections when %s fails", async (failedQuery, message) => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes(failedQuery)) throw new Error("Statement timeout");
+      return populatedModerationRows(query);
+    });
+
+    render(await ModerationPage());
+
+    expect(within(screen.getByRole("region", { name: "Open audits" })).getByText("audited-member")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Audit actions for audited-member" })).getByRole("button", { name: "Dismiss audit" })).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "Recalibration plans and reactivation" })).getByText("recalibrating-member")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Enforcement history" })).getByText(/A confirmed calibration pattern/)).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Moderators" })).getByText("existing-moderator")).toBeVisible();
+    expect(screen.getByText(message)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open audit" })).toBeNull();
+  });
+
+  it("keeps audit targeting usable and reports failed existing sections when the old query group fails", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes("from calibration_audits") && !query.includes("as self_work_pair_count")) {
+        throw new Error("Audit queue unavailable");
+      }
+      return populatedModerationRows(query);
+    });
+
+    render(await ModerationPage());
+
+    expect(screen.getByRole("option", { name: "mira · 12 self-work · 30 outsider settlements" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "overflow/ledger" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open audit" })).toBeEnabled();
+    expect(screen.getByText("The audit queue could not be loaded.")).toBeVisible();
+    expect(screen.getByText("The recalibrating accounts could not be loaded.")).toBeVisible();
+    expect(screen.getByText("The enforcement history could not be loaded.")).toBeVisible();
+    expect(screen.getByText("The moderators could not be loaded.")).toBeVisible();
+    expect(screen.queryByText("No accounts are recalibrating.")).toBeNull();
+    expect(screen.queryByText("No enforcement events are recorded.")).toBeNull();
+  });
+
   it("offers the open-audit form above an empty audit queue", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
       const query = strings.join("?");
@@ -509,3 +558,34 @@ describe("moderation page open-audit section", () => {
     expect(screen.queryByRole("button", { name: "Open audit" })).toBeNull();
   });
 });
+
+function populatedModerationRows(query: string) {
+  if (query.includes("as self_work_pair_count")) {
+    return [{ id: miraId, github_login: "mira", enforcement_state: "ACTIVE", self_work_pair_count: 12, outsider_pair_count: 30, open_audit_id: null }];
+  }
+  if (query.includes("from registered_repositories")) {
+    return [{ id: repositoryId, owner_name: "overflow/ledger" }];
+  }
+  if (query.includes("from calibration_audits")) {
+    return [{
+      id: auditId, target_account_id: nilsId, target_login: "audited-member", reporter_login: "existing-moderator",
+      repository_name: null, state: "OPEN", prior_enforcement_state: "WARNED", opened_at: startedAtInstant,
+      sample_started_at: startedAtInstant, sample_ended_at: endedAtInstant, settled_sample_size: 12,
+      cohort_definition: {}, cohort_statistics: comparison(),
+    }];
+  }
+  if (query.includes("from moderation_events")) {
+    return [{
+      id: "event-1", target_account_id: nilsId, target_login: "audited-member", actor_login: "existing-moderator",
+      prior_state: "UNDER_AUDIT", new_state: "WARNED", reason: "A confirmed calibration pattern",
+      recalibration_plan: null, created_at: startedAtInstant,
+    }];
+  }
+  if (query.includes("where enforcement_state = 'RECALIBRATING'")) {
+    return [{ id: "recalibrating-1", github_login: "recalibrating-member", confirmed_miscalibration_count: 2 }];
+  }
+  if (query.includes("where role = 'MODERATOR'")) {
+    return [{ id: "moderator-1", github_user_id: 42, github_login: "existing-moderator" }];
+  }
+  return [];
+}

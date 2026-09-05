@@ -16,6 +16,8 @@ const seeded = {
   carolId: "",
   aliceId: "",
   bobId: "",
+  daveId: "",
+  erinId: "",
   openAuditId: "",
   activeRepositoryIds: [] as string[],
   inactiveRepositoryId: "",
@@ -52,7 +54,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.aliceId,
         githubLogin: "alice",
-        enforcementState: "ACTIVE",
+        enforcementState: "WARNED",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
         openAuditId: null,
@@ -60,7 +62,7 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.bobId,
         githubLogin: "bob",
-        enforcementState: "ACTIVE",
+        enforcementState: "RECALIBRATING",
         selfWorkPairCount: 0,
         outsiderPairCount: 0,
         openAuditId: null,
@@ -68,12 +70,39 @@ describe("audit targeting against PostgreSQL", () => {
       {
         id: seeded.carolId,
         githubLogin: "carol",
-        enforcementState: "ACTIVE",
+        enforcementState: "UNDER_AUDIT",
         selfWorkPairCount: 3,
         outsiderPairCount: 1,
         openAuditId: seeded.openAuditId,
       },
+      {
+        id: seeded.daveId,
+        githubLogin: "dave",
+        enforcementState: "BANNED",
+        selfWorkPairCount: 0,
+        outsiderPairCount: 0,
+        openAuditId: null,
+      },
+      {
+        id: seeded.erinId,
+        githubLogin: "erin",
+        enforcementState: "ACTIVE",
+        selfWorkPairCount: 0,
+        outsiderPairCount: 0,
+        openAuditId: null,
+      },
     ]);
+  });
+
+  it("keeps warned, recalibrating, banned, and already audited accounts available as audit targets", async () => {
+    const candidates = await listAuditCandidates();
+
+    expect(candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: seeded.aliceId, githubLogin: "alice", enforcementState: "WARNED", openAuditId: null }),
+      expect.objectContaining({ id: seeded.bobId, githubLogin: "bob", enforcementState: "RECALIBRATING", openAuditId: null }),
+      expect.objectContaining({ id: seeded.carolId, githubLogin: "carol", enforcementState: "UNDER_AUDIT", openAuditId: seeded.openAuditId }),
+      expect.objectContaining({ id: seeded.daveId, githubLogin: "dave", enforcementState: "BANNED", openAuditId: null }),
+    ]));
   });
 
   it("reports an open audit's id and nothing for an account whose only audit was dismissed", async () => {
@@ -171,6 +200,12 @@ async function seedAuditTargetingWorld(): Promise<void> {
   seeded.carolId = await insertUser("carol");
   seeded.bobId = await insertUser("bob");
   seeded.aliceId = await insertUser("alice");
+  seeded.daveId = await insertUser("dave");
+  seeded.erinId = await insertUser("erin");
+  await sql`update users set enforcement_state = 'WARNED' where id = ${seeded.aliceId}`;
+  await sql`update users set enforcement_state = 'RECALIBRATING' where id = ${seeded.bobId}`;
+  await sql`update users set enforcement_state = 'UNDER_AUDIT' where id = ${seeded.carolId}`;
+  await sql`update users set enforcement_state = 'BANNED' where id = ${seeded.daveId}`;
 
   const harbourId = await insertRepository({ ownerName: "example/harbour", sponsorId: seeded.bobId, active: true });
   const anchorId = await insertRepository({ ownerName: "example/anchor", sponsorId: seeded.bobId, active: true });

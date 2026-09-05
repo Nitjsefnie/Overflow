@@ -29,32 +29,39 @@ export default async function ModerationPage() {
 
   let audits: OpenAuditProjection[] | null;
   let auditCandidates: AuditCandidateProjection[] | null;
-  let auditRepositories: ModerationRepositoryProjection[] = [];
-  let history: EnforcementHistoryProjection[] = [];
-  let recalibratingAccounts: RecalibratingAccountProjection[] = [];
-  let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] = [];
+  let auditRepositories: ModerationRepositoryProjection[] | null;
+  let history: EnforcementHistoryProjection[] | null = null;
+  let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
+  let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
   const settlementCorrections = await listSettlementCorrections(session.user);
   const unwritableClosures = await loadUnwritableClosures();
   try {
     const {
-      listAuditCandidates,
       listEnforcementHistory,
-      listModerationRepositories,
       listOpenAudits,
       listRecalibratingAccounts,
     } = await import("@/lib/dashboard/queries");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
-    [audits, auditCandidates, auditRepositories, history, recalibratingAccounts, moderators] = await Promise.all([
+    [audits, history, recalibratingAccounts, moderators] = await Promise.all([
       listOpenAudits(),
-      listAuditCandidates(),
-      listModerationRepositories(),
       listEnforcementHistory(),
       listRecalibratingAccounts(),
       new PostgresModerationStore().listModerators(),
     ]);
   } catch {
     audits = null;
+  }
+  try {
+    const { listAuditCandidates } = await import("@/lib/dashboard/queries");
+    auditCandidates = await listAuditCandidates();
+  } catch {
     auditCandidates = null;
+  }
+  try {
+    const { listModerationRepositories } = await import("@/lib/dashboard/queries");
+    auditRepositories = await listModerationRepositories();
+  } catch {
+    auditRepositories = null;
   }
 
   return (
@@ -73,6 +80,8 @@ export default async function ModerationPage() {
         </p>
         {auditCandidates === null ? (
           <p>The audit targets could not be loaded.</p>
+        ) : auditRepositories === null ? (
+          <p>The audit repositories could not be loaded.</p>
         ) : (
           <OpenAuditForm candidates={auditCandidates} repositories={auditRepositories} />
         )}
@@ -140,7 +149,11 @@ export default async function ModerationPage() {
       </section>
       <section className="surface" aria-labelledby="recalibrating-heading">
         <h2 id="recalibrating-heading">Recalibration plans and reactivation</h2>
-        {recalibratingAccounts.length === 0 ? <p>No accounts are recalibrating.</p> : (
+        {recalibratingAccounts === null ? (
+          <p>The recalibrating accounts could not be loaded.</p>
+        ) : recalibratingAccounts.length === 0 ? (
+          <p>No accounts are recalibrating.</p>
+        ) : (
           <ol>
             {recalibratingAccounts.map((account) => (
               <li key={account.id}>
@@ -159,11 +172,19 @@ export default async function ModerationPage() {
           configuration is promoted again at its next sign-in, so removing it from that list is part of revoking
           it for good.
         </p>
-        <ModeratorRoster moderators={moderators} currentAccountId={session.user.id} />
+        {moderators === null ? (
+          <p>The moderators could not be loaded.</p>
+        ) : (
+          <ModeratorRoster moderators={moderators} currentAccountId={session.user.id} />
+        )}
       </section>
       <section className="surface" aria-labelledby="enforcement-history-heading">
         <h2 id="enforcement-history-heading">Enforcement history</h2>
-        {history.length === 0 ? <p>No enforcement events are recorded.</p> : (
+        {history === null ? (
+          <p>The enforcement history could not be loaded.</p>
+        ) : history.length === 0 ? (
+          <p>No enforcement events are recorded.</p>
+        ) : (
           <ol>
             {history.map((event) => (
               <li key={event.id}>
