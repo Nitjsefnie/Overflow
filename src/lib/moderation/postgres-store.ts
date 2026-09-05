@@ -14,7 +14,7 @@ import {
   type ModeratorRoleChange,
   type ModeratorSummary,
 } from "@/lib/moderation/service";
-import { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
+import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { deriveSubstantiatedState } from "@/lib/moderation/transitions";
 
 type UserRow = {
@@ -327,14 +327,14 @@ export class PostgresModerationStore implements ModerationStore {
   }
 
   public async listModerators(): Promise<ModeratorSummary[]> {
-    const configured = normalizeModeratorGitHubLogins(process.env.MODERATOR_GITHUB_LOGINS);
-    const rows = await this.sql<{ id: string; github_login: string }[]>`
-      select id, github_login from users where role = 'MODERATOR' order by github_login asc
+    const configured = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS);
+    const rows = await this.sql<{ id: string; github_user_id: number | string; github_login: string }[]>`
+      select id, github_user_id, github_login from users where role = 'MODERATOR' order by github_login asc, id asc
     `;
     return rows.map((row) => ({
       accountId: row.id,
       githubLogin: row.github_login,
-      isConfigured: configured.has(row.github_login.toLowerCase()),
+      isConfigured: configured.has(toSafeInteger(row.github_user_id)),
     }));
   }
 
