@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { GitHubGateway } from "@/lib/github/client";
+import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
@@ -374,15 +376,22 @@ function authorizedRequest(body: unknown = validInput(), credential = apiToken):
 
 describe("Overflow token registration", () => {
   it.each([
-    tokenAccount,
-    { id: "second-token-account-id", role: "MODERATOR", enforcementState: "ACTIVE" } as const,
-  ])("registers with a valid token for $id using the resolved account and never reads the cookie", async (account) => {
+    { account: tokenAccount, credential: apiToken },
+    {
+      account: { id: "second-token-account-id", role: "MODERATOR", enforcementState: "ACTIVE" } as const,
+      credential: `ovf_${"second-api-credential".padEnd(43, "_")}`,
+    },
+  ])("registers with a valid token for $account.id using the resolved account and never reads the cookie", async ({ account, credential }) => {
     const fixture = tokenFixture(account);
-    const response = await fixture.handler(authorizedRequest());
+    const expectedHash = createHash("sha256").update(credential).digest();
+    fixture.findAccountByTokenHash.mockImplementation(async (hash) =>
+      hash.equals(expectedHash) ? account : null,
+    );
+    const response = await fixture.handler(authorizedRequest(validInput(), credential));
     expect(response.status).toBe(201);
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
-      Buffer.from("51b3006ae4667cdab12fc9e6cff7af0bc53f857338b2cbbe074efd5e27a83fd1", "hex"),
+      expectedHash,
     );
     expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
       user: { id: account.id, role: account.role },
@@ -399,7 +408,7 @@ describe("Overflow token registration", () => {
       },
       existingWorkIngested: true,
     });
-    expect(JSON.stringify(body)).not.toContain(apiToken);
+    expect(JSON.stringify(body)).not.toContain(credential);
   });
 
   it.each([
@@ -547,25 +556,72 @@ describe("Overflow token registration", () => {
     },
   );
 
-  it("uses the stored account OAuth token for GitHub in the production dependency factory", async () => {
-    vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+  it("carries each minted account identity through bearer lookup to its own GitHub OAuth credential", async () => {
+    const identities = [
+      { account: tokenAccount, oauth: "stored-github-oauth-token" },
+      {
+        account: { id: "second-token-account-id", role: "MEMBER", enforcementState: "ACTIVE" } as const,
+        oauth: "second-account-github-oauth-token",
+      },
+    ];
+    // Keep both accounts' issued hashes live so a constant cannot stand in for
+    // the session, bearer hash, or OAuth account at any connected boundary.
+    const issuedHashes = new Map<string, Buffer>();
+    const issueToken = vi.spyOn(PostgresApiTokenStore.prototype, "issueToken")
+      .mockImplementation(async (userId, hash) => {
+        issuedHashes.set(userId, hash);
+        return { createdAt: new Date("2026-09-05T10:00:00.000Z") };
+      });
+    const bearerLookup = vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash")
+      .mockImplementation(async (hash) =>
+        identities.find(({ account }) => issuedHashes.get(account.id)?.equals(hash))?.account ?? null,
+      );
     const storedToken = vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken")
-      .mockResolvedValue("stored-github-oauth-token");
-    vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+      .mockImplementation(async (userId) =>
+        identities.find(({ account }) => account.id === userId)?.oauth ?? null,
+      );
+    const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
+      .mockResolvedValue("ACTIVE");
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
     const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchGitHub);
-    const response = await POST(authorizedRequest());
-    expect(storedToken).toHaveBeenCalledExactlyOnceWith("token-account-id");
-    expect(readSession).toHaveBeenCalledTimes(0);
-    expect(fetchGitHub).toHaveBeenCalledExactlyOnceWith(
-      "https://api.github.com/repos/octo/overflow", expect.objectContaining({ headers: expect.any(Headers) }),
-    );
-    const [, init] = fetchGitHub.mock.calls[0];
-    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer stored-github-oauth-token");
-    expect(response.status).toBe(502);
-    expect(await response.text()).not.toContain(apiToken);
+
+    const credentials: string[] = [];
+    for (const [index, { account }] of identities.entries()) {
+      readSession.mockResolvedValue({ user: account });
+      const response = await mintToken(new Request("https://overflow.example/api/tokens", { method: "POST" }));
+      expect(response.status).toBe(201);
+      const body = await response.json() as { token: string };
+      expect(body.token).toMatch(/^ovf_[A-Za-z0-9_-]{43}$/);
+      credentials.push(body.token);
+      expect(issueToken).toHaveBeenNthCalledWith(index + 1, account.id,
+        createHash("sha256").update(body.token).digest());
+    }
+    expect(credentials[1]).not.toBe(credentials[0]);
+    expect(issueToken).toHaveBeenCalledTimes(identities.length);
+    readSession.mockClear();
+
+    for (const [index, { account, oauth }] of identities.entries()) {
+      const credential = credentials[index];
+      const response = await POST(authorizedRequest(validInput(), credential));
+      expect(bearerLookup).toHaveBeenNthCalledWith(index + 1,
+        createHash("sha256").update(credential).digest());
+      expect(storedToken).toHaveBeenNthCalledWith(index + 1, account.id);
+      expect(enforcement).toHaveBeenNthCalledWith(index + 1, account.id);
+      expect(fetchGitHub).toHaveBeenNthCalledWith(index + 1,
+        "https://api.github.com/repos/octo/overflow", expect.objectContaining({ headers: expect.any(Headers) }),
+      );
+      const [, init] = fetchGitHub.mock.calls[index];
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${oauth}`);
+      expect(response.status).toBe(502);
+      expect(await response.text()).not.toContain(credential);
+    }
+    expect(readSession).not.toHaveBeenCalled();
+    expect(bearerLookup).toHaveBeenCalledTimes(identities.length);
+    expect(storedToken).toHaveBeenCalledTimes(identities.length);
+    expect(enforcement).toHaveBeenCalledTimes(identities.length);
+    expect(fetchGitHub).toHaveBeenCalledTimes(identities.length);
   });
 });
 
