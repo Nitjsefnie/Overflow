@@ -186,7 +186,7 @@ For an outside contributor, settled credits are:
 credits = max(0, actual points − distinct review rounds)
 ```
 
-There is no churn metric. Review rounds are the distinct changes-requested reviews submitted before merge, counted as they stood when the pull request merged: a review dismissed after the merge still counts, and one dismissed before the merge does not. A dismissal exactly at merge also leaves the round counted; no timing tolerance applies to reviews.
+There is no churn metric. Review rounds are the distinct changes-requested reviews submitted before merge, counted as they stood when the pull request merged: a review dismissed after the merge still counts, and one dismissed before the merge does not. A dismissal exactly at merge also leaves the round counted; no timing tolerance applies to reviews. A dismissed review counts only if its dismissal history establishes that it requested changes; missing history or an unknown previous state does not count.
 
 Calibration compares paired self-work samples with outsider settlements; it does not measure activity retention. Self-work is useful calibration evidence, but it creates no ledger entry. If an outside contributor has not signed in yet, their completed work remains an unclaimed settlement until their GitHub identity is claimed.
 

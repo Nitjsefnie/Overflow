@@ -350,6 +350,8 @@ review rounds)` counts the changes-requested reviews submitted before merge as
 they stood when the pull request merged: dismissing one after the merge does
 not remove it, and dismissing one before the merge does. A dismissal exactly at
 merge also leaves the round counted; no timing tolerance applies to reviews.
+A dismissed review counts only if its dismissal history establishes that it
+requested changes; missing history or an unknown previous state does not count.
 
 So: labels are never applied to tidy an issue up, and never adjusted because a
 branch turned out harder or easier than expected. Retitling an issue is
