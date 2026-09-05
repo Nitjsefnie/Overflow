@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 
 describe("mapWithConcurrency", () => {
+  it("preserves a legitimate undefined result and its input position", async () => {
+    const result = await mapWithConcurrency([1], 4, async () => undefined);
+
+    expect(result).toStrictEqual([undefined]);
+  });
+
   it("stops starting queued calls after a rejection", async () => {
     const ongoing = deferred<number>();
     const failing = deferred<number>();
@@ -50,6 +56,30 @@ describe("mapWithConcurrency", () => {
     await expect(result).resolves.toEqual(inputs.map((index) => index * 2));
     expect(active).toBe(0);
     expect(highWaterMark).toBeLessThanOrEqual(4);
+  });
+
+  it("preserves input order when refilled workers complete out of order", async () => {
+    const inputs = [0, 1, 2, 3, 4];
+    const gates = inputs.map(() => deferred<void>());
+    const started = inputs.map(() => deferred<void>());
+    const finished = inputs.map(() => deferred<void>());
+    const completionOrder: number[] = [];
+    const result = mapWithConcurrency(inputs, 2, async (index) => {
+      started[index].resolve();
+      await gates[index].promise;
+      completionOrder.push(index);
+      finished[index].resolve();
+      return index * 10;
+    });
+
+    for (const index of [1, 0, 3, 4, 2]) {
+      await started[index].promise;
+      gates[index].resolve();
+      await finished[index].promise;
+    }
+
+    expect(completionOrder).toEqual([1, 0, 3, 4, 2]);
+    await expect(result).resolves.toEqual([0, 10, 20, 30, 40]);
   });
 
   it("returns results in input order regardless of completion order", async () => {
