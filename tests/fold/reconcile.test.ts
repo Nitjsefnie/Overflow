@@ -12,6 +12,54 @@ import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("reconcileRepository", () => {
+  it("bounds in-flight gateway calls for many merged closing pull requests", async () => {
+    const pullRequestCount = 24;
+    const issues = Array.from({ length: pullRequestCount }, (_, index) => ({
+      ...reconciliationIssue({ id: 101 + index, number: 1 + index }),
+      closingPullRequests: [reconciliationPullRequest({ id: 201 + index, number: 101 + index })],
+    }));
+    const gates = Array.from({ length: 1 + pullRequestCount * 2 }, () => deferredCall());
+    const started = gates.map(() => deferredCall());
+    const calls: Array<{ operation: string; number?: number }> = [];
+    let active = 0;
+    let highWaterMark = 0;
+    const record = async <T>(operation: string, value: T, number?: number): Promise<T> => {
+      const index = calls.length;
+      calls.push({ operation, number });
+      active += 1;
+      highWaterMark = Math.max(highWaterMark, active);
+      started[index].resolve();
+      await gates[index].promise;
+      active -= 1;
+      return value;
+    };
+    const materialize = vi.fn().mockResolvedValue({ adds: pullRequestCount, changes: 0, removals: 0 });
+    const { store } = reconciliationDependencies({ materialize });
+    const result = reconcileRepository({
+      store,
+      github: {
+        listIssues: () => record("issues", issues),
+        getPullRequestReviews: (_repository, number) => record("reviews", [], number),
+        getPullRequestDiff: (_repository, number) => record("diff", `diff ${number}`, number),
+      },
+    }, "repository");
+
+    for (let index = 0; index < gates.length; index += 1) {
+      await started[index].promise;
+      gates[index].resolve();
+    }
+    await result;
+
+    expect(highWaterMark).toBeLessThanOrEqual(4);
+    expect(active).toBe(0);
+    expect(calls.filter(({ operation }) => operation === "issues")).toHaveLength(1);
+    for (const operation of ["reviews", "diff"]) {
+      expect(calls.filter((call) => call.operation === operation).map(({ number }) => number).sort((a, b) => a! - b!))
+        .toEqual(issues.map((issue) => issue.closingPullRequests[0].number));
+    }
+    expect(materialize.mock.calls[0]![0].fold.settlements).toHaveLength(pullRequestCount);
+  });
+
   it("reconciles closing references with exactly one GraphQL request per issue page", async () => {
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
     const materialize = vi.fn().mockResolvedValue({ adds: 3, changes: 0, removals: 0 });
@@ -372,6 +420,14 @@ describe("reconcileRepository", () => {
     );
   });
 });
+
+function deferredCall() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function reconciliationDependencies(
   overrides: Partial<{

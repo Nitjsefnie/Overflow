@@ -1,5 +1,9 @@
+import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
+
+// Protect GitHub's secondary concurrency limit; each worker makes one request at a time.
+const reconciliationConcurrency = 4;
 
 export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
 
@@ -140,14 +144,16 @@ async function collectPullRequestEvidence(
       .filter((pullRequest) => pullRequest.state === "MERGED" && pullRequest.mergedAt !== null)
       .map((pullRequest) => [pullRequest.id, pullRequest]),
   );
-  const evidence = await Promise.all(
-    [...uniqueMergedPullRequests.values()].map(async (pullRequest) => [
+  const evidence = await mapWithConcurrency(
+    [...uniqueMergedPullRequests.values()],
+    reconciliationConcurrency,
+    async (pullRequest) => [
       pullRequest.id,
       {
         reviews: await github.getPullRequestReviews(repository, pullRequest.number),
         rawDiff: await github.getPullRequestDiff(repository, pullRequest.number),
       },
-    ] as const),
+    ] as const,
   );
   return new Map(evidence);
 }
