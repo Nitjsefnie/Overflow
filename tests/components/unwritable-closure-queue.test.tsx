@@ -8,6 +8,12 @@ import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
 
 const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
 
+// The moderation page now renders the client-side open-audit form, which reads the
+// app router; a bare render has no router mounted.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...await importOriginal<typeof import("next/navigation")>(),
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 vi.mock("@/lib/db/client", () => ({ getSql: () => sql }));
 vi.mock("@/lib/dashboard/session", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/dashboard/session")>(),
