@@ -951,3 +951,79 @@ button:disabled {
   color: var(--ink-muted);
   font-size: 0.85rem;
 }
+
+/*
+ * The bare `.surface` class carries no padding, so every card names its own.
+ */
+.override-card {
+  margin-top: 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+.override-card h2 {
+  margin-bottom: 0.9rem;
+}
+
+.override-card > p {
+  max-width: 68ch;
+  margin-bottom: 1.4rem;
+}
+
+.override-history,
+.override-queue {
+  display: grid;
+  gap: 1.2rem;
+  margin: 0 0 1.4rem;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.override-history li,
+.override-queue li {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.override-state {
+  font-weight: 700;
+}
+
+.override-reason {
+  max-width: 68ch;
+  font-style: italic;
+}
+
+.override-evidence {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  margin: 0.3rem 0;
+}
+
+.override-evidence dt {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.override-evidence dd {
+  margin: 0.2rem 0 0;
+  font-weight: 700;
+}
+
+.override-request,
+.override-decision {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 46rem;
+}
+
+.override-request .feedback,
+.override-decision .feedback {
+  margin-bottom: 0;
+}

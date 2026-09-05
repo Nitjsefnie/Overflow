@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { SettlementCorrections } from "@/components/settlement-corrections";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import type { SettlementOverrideRequest } from "@/lib/overrides/service";
 
 type SettlementPageProps = {
   params: Promise<{ id: string }>;
@@ -25,6 +27,7 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
         </AppShell>
       );
     }
+    const corrections = await listCorrections(session.user.id, settlement.id);
     return (
       <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
         <article className="proof-card surface shadow-offset" aria-labelledby="settlement-proof-heading">
@@ -82,6 +85,7 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
             GitHub closing-link proof <code>{settlement.proofSha256}</code>
           </p>
         </article>
+        <SettlementCorrections settlementId={settlement.id} requests={corrections} />
       </AppShell>
     );
   } catch {
@@ -96,6 +100,26 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
         </section>
       </AppShell>
     );
+  }
+}
+
+/**
+ * The correction requests already raised against this settlement.
+ *
+ * A failure here loses the correction history, not the proof, so the page still
+ * renders its evidence rather than falling back to the error state.
+ */
+async function listCorrections(
+  viewerId: string,
+  settlementId: string,
+): Promise<SettlementOverrideRequest[]> {
+  try {
+    const { PostgresSettlementOverrideStore } = await import("@/lib/overrides/postgres-store");
+    const { SettlementOverrideService } = await import("@/lib/overrides/service");
+    const service = new SettlementOverrideService(new PostgresSettlementOverrideStore());
+    return await service.listRequestsForSettlement({ id: viewerId }, settlementId);
+  } catch {
+    return [];
   }
 }
 

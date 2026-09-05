@@ -46,8 +46,17 @@ export function calculateSettlement(input: SettlementInput): SettlementDecision 
     opening: input.opening,
     settled,
     reviewRounds,
-    credits: Math.max(0, settled - reviewRounds),
+    credits: creditsForSettledPoints(settled, reviewRounds),
   };
+}
+
+/**
+ * The one credit rule: settled points less the distinct review rounds, never
+ * below zero. Exported so a moderator's correction recomputes credits from the
+ * same expression the fold uses instead of storing a figure beside it.
+ */
+export function creditsForSettledPoints(settledPoints: number, reviewRounds: number): number {
+  return Math.max(0, settledPoints - reviewRounds);
 }
 
 function resolveActualPoints(settled: SettlementInput["settled"]): number | null {
@@ -62,7 +71,7 @@ function resolveActualPoints(settled: SettlementInput["settled"]): number | null
   return null;
 }
 
-function isPointsValue(value: number): boolean {
+export function isPointsValue(value: number): boolean {
   return Number.isInteger(value) && value >= minimumPoints && value <= maximumPoints;
 }
 

@@ -1,0 +1,64 @@
+import { SettlementOverrideRequestForm } from "@/components/settlement-override-request";
+import type { SettlementOverrideRequest } from "@/lib/overrides/service";
+
+type SettlementCorrectionsProps = {
+  settlementId: string;
+  requests: readonly SettlementOverrideRequest[];
+};
+
+/**
+ * What a member can do about a settlement they believe is wrong, and what has
+ * already been done about it.
+ *
+ * The form is withheld while a request is open, because the ledger holds one
+ * open request per settlement; the reason is stated rather than the button
+ * being silently absent.
+ */
+export function SettlementCorrections({ settlementId, requests }: SettlementCorrectionsProps) {
+  const open = requests.find((request) => request.state === "OPEN");
+
+  return (
+    <section className="surface override-card" aria-labelledby="settlement-corrections-heading">
+      <p className="eyebrow">Recourse</p>
+      <h2 id="settlement-corrections-heading">Is this settlement wrong?</h2>
+      <p>
+        A settlement is rebuilt from GitHub history on every reconciliation, so re-running it changes nothing.
+        A moderator can record a corrected settled figure instead; credits are recomputed from it and the
+        review rounds already counted.
+      </p>
+      {requests.length === 0 ? (
+        <p className="mono-meta">No correction has been requested for this settlement.</p>
+      ) : (
+        <ol className="override-history">
+          {requests.map((request) => (
+            <li key={request.id}>
+              <p className="override-state">{stateSummary(request)}</p>
+              <p>Reported {request.createdAt}: “{request.reason}”</p>
+              {request.decisionReason === null ? null : (
+                <p className="mono-meta">
+                  Decided {request.decidedAt ?? "unknown"}: “{request.decisionReason}”
+                </p>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+      {open === undefined ? (
+        <SettlementOverrideRequestForm settlementId={settlementId} />
+      ) : (
+        <p className="mono-meta">One correction request at a time; this one is still with a moderator.</p>
+      )}
+    </section>
+  );
+}
+
+function stateSummary(request: SettlementOverrideRequest): string {
+  switch (request.state) {
+    case "OPEN":
+      return "Awaiting a moderator";
+    case "GRANTED":
+      return `Granted at ${request.settledPoints ?? "unknown"} settled points`;
+    case "DECLINED":
+      return "Declined";
+  }
+}
