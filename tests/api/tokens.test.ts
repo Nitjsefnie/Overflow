@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
+import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 import { apiTokenPrefix, hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import {
   createApiTokenPostHandler,
@@ -8,6 +9,8 @@ import {
 } from "@/app/api/tokens/route";
 
 describe("POST /api/tokens", () => {
+  useTrustedOrigin();
+
   beforeEach(() => {
     spyOnConsoleOutput();
   });
@@ -135,6 +138,42 @@ describe("POST /api/tokens", () => {
     expect(store.calls).toEqual([]);
     expect(store.accountLookups).toEqual([]);
   });
+
+  // A forged request must cost the server nothing: no session read, no store.
+  it("refuses a foreign-origin request before reading the session or the store", async () => {
+    const getSession = vi.fn();
+    const createTokenStore = vi.fn();
+    const handler = createApiTokenPostHandler({ getSession, createTokenStore });
+
+    const response = await handler(
+      mintRequest({ origin: foreignOrigin, "content-type": "text/plain" }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(createTokenStore).not.toHaveBeenCalled();
+  });
+
+  it("refuses a trusted-origin request that is not JSON", async () => {
+    const getSession = vi.fn();
+    const createTokenStore = vi.fn();
+    const handler = createApiTokenPostHandler({ getSession, createTokenStore });
+
+    const response = await handler(mintRequest({ "content-type": "text/plain" }));
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(createTokenStore).not.toHaveBeenCalled();
+  });
 });
 
 const issuedAt = new Date("2026-09-05T10:00:00.000Z");
@@ -184,6 +223,9 @@ function signedInAs(userId: string, store: ApiTokenIssuer): ApiTokenRouteDepende
   };
 }
 
-function mintRequest(headers: HeadersInit = {}): Request {
-  return new Request("https://overflow.example/api/tokens", { method: "POST", headers });
+function mintRequest(headers: Record<string, string> = {}): Request {
+  return new Request("https://overflow.example/api/tokens", {
+    method: "POST",
+    headers: { origin: trustedOrigin, ...headers },
+  });
 }

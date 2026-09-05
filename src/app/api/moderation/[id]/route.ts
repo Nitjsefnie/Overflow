@@ -8,6 +8,7 @@ import {
 import { AccountModerationService } from "@/lib/moderation/service";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import type { UserRole } from "@/lib/db/types";
 
 const auditActionSchema = z.discriminatedUnion("action", [
@@ -24,6 +25,11 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
     request: Request,
     context: ModerationAuditRouteContext,
   ): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;
