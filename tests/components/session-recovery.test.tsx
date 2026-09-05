@@ -75,8 +75,8 @@ describe("session recovery route", () => {
     expect(mocks.getCurrentUserRole).not.toHaveBeenCalled();
   });
 
-  it("falls back to the stale copy when the route is opened with no search params at all", async () => {
-    render(await SessionPage({}));
+  it("falls back to the stale copy when the route is opened with an empty search-param set", async () => {
+    render(await SessionPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
     expect(mocks.redirect).not.toHaveBeenCalled();
