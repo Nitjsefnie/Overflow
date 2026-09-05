@@ -252,6 +252,14 @@ class TestModerationStore implements ModerationStore {
     this.lastCloseInput = input;
     return this.options.closeResult ?? { kind: "not_found" };
   }
+
+  public async listModerators() {
+    return [];
+  }
+
+  public async setModeratorRole(): Promise<ModerationStoreResult<never>> {
+    return { kind: "not_found" };
+  }
 }
 
 function moderator() {

@@ -70,6 +70,20 @@ export type ModerationStoreResult<T> =
   | { kind: "conflict" }
   | { kind: "invalid_state" };
 
+export type ModeratorSummary = {
+  accountId: string;
+  githubLogin: string;
+  isConfigured: boolean;
+};
+
+export type ModeratorRoleChange = {
+  targetAccountId: string;
+  targetGitHubLogin: string;
+  role: "MEMBER" | "MODERATOR";
+  actorId: string;
+  changedAt: string;
+};
+
 export type ModerationStore = {
   loadCalibrationCohort(input: {
     targetAccountId: string;
@@ -93,6 +107,12 @@ export type ModerationStore = {
     targetAccountId: string;
     plan: string;
   }): Promise<ModerationStoreResult<RecalibrationClosure>>;
+  listModerators(): Promise<ModeratorSummary[]>;
+  setModeratorRole(input: {
+    actorId: string;
+    targetAccountId: string;
+    moderator: boolean;
+  }): Promise<ModerationStoreResult<ModeratorRoleChange>>;
 };
 
 export type ModerationServiceErrorCode =
@@ -114,6 +134,38 @@ export class ModerationServiceError extends Error {
 
 export class AccountModerationService {
   public constructor(private readonly store: ModerationStore) {}
+
+  public async listModerators(actor: ModerationActor): Promise<ModeratorSummary[]> {
+    requireModerator(actor);
+    return this.store.listModerators();
+  }
+
+  /**
+   * Grants or revokes moderator status.
+   *
+   * Revoking yourself is refused rather than merely discouraged: it is the one
+   * move that can leave an instance with nobody able to undo it, and the actor
+   * is by definition the person least in need of protection from it. The store
+   * additionally refuses to revoke the last remaining moderator, which covers
+   * the case of two moderators revoking each other.
+   */
+  public async setModeratorRole(
+    actor: ModerationActor,
+    targetAccountId: string,
+    moderator: boolean,
+  ): Promise<ModeratorRoleChange> {
+    requireModerator(actor);
+    if (!moderator && actor.id === targetAccountId) {
+      throw new ModerationServiceError(
+        "INVALID_INPUT",
+        "Revoke your own moderator status from another moderator's account.",
+      );
+    }
+
+    return unwrapStoreResult(
+      await this.store.setModeratorRole({ actorId: actor.id, targetAccountId, moderator }),
+    );
+  }
 
   public async openAccountAudit(
     actor: ModerationActor,

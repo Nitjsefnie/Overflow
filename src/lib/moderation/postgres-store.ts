@@ -10,7 +10,10 @@ import {
   type ModerationStoreResult,
   type OpenAccountAuditStoreInput,
   type RecalibrationClosure,
+  type ModeratorRoleChange,
+  type ModeratorSummary,
 } from "@/lib/moderation/service";
+import { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
 import { deriveSubstantiatedState } from "@/lib/moderation/transitions";
 
 type UserRow = {
@@ -316,6 +319,67 @@ export class PostgresModerationStore implements ModerationStore {
         },
       };
     }) as Promise<ModerationStoreResult<RecalibrationClosure>>;
+  }
+
+  public async listModerators(): Promise<ModeratorSummary[]> {
+    const configured = normalizeModeratorGitHubLogins(process.env.MODERATOR_GITHUB_LOGINS);
+    const rows = await this.sql<{ id: string; github_login: string }[]>`
+      select id, github_login from users where role = 'MODERATOR' order by github_login asc
+    `;
+    return rows.map((row) => ({
+      accountId: row.id,
+      githubLogin: row.github_login,
+      isConfigured: configured.has(row.github_login.toLowerCase()),
+    }));
+  }
+
+  public async setModeratorRole(input: {
+    actorId: string;
+    targetAccountId: string;
+    moderator: boolean;
+  }): Promise<ModerationStoreResult<ModeratorRoleChange>> {
+    return this.sql.begin(async (transaction) => {
+      const [target] = await transaction<{ id: string; github_login: string; role: "MEMBER" | "MODERATOR" }[]>`
+        select id, github_login, role from users where id = ${input.targetAccountId} for update
+      `;
+      if (target === undefined) {
+        return { kind: "not_found" };
+      }
+
+      // Counted inside the transaction, with the target row already locked, so
+      // two moderators revoking each other at the same moment cannot both see a
+      // survivor and leave the instance with none.
+      if (!input.moderator) {
+        const [remaining] = await transaction<{ count: string }[]>`
+          select count(*)::text as count from users where role = 'MODERATOR' and id <> ${input.targetAccountId}
+        `;
+        if (toSafeInteger(remaining?.count ?? "0") === 0) {
+          return { kind: "invalid_state" };
+        }
+      }
+
+      const newRole = input.moderator ? "MODERATOR" : "MEMBER";
+      const [changed] = await transaction<{ updated_at: string }[]>`
+        update users set role = ${newRole}, updated_at = now()
+        where id = ${input.targetAccountId}
+        returning updated_at
+      `;
+      await transaction`
+        insert into moderator_role_changes (target_account_id, actor_id, new_role)
+        values (${input.targetAccountId}, ${input.actorId}, ${newRole})
+      `;
+
+      return {
+        kind: "ok",
+        value: {
+          targetAccountId: target.id,
+          targetGitHubLogin: target.github_login,
+          role: newRole,
+          actorId: input.actorId,
+          changedAt: toTimestamp(changed?.updated_at ?? new Date()),
+        },
+      };
+    }) as Promise<ModerationStoreResult<ModeratorRoleChange>>;
   }
 
   private async listSelfWorkPairs(input: {
