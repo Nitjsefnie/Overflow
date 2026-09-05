@@ -324,6 +324,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             authorLogin: "sponsor",
             body: "Settled as delivered/6 after reviewing the final diff.",
             createdAt: "2026-09-01T11:30:00.000Z",
+            lastEditedAt: null,
           },
         ],
         closingPullRequests: [
