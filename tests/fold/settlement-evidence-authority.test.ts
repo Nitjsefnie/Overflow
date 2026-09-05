@@ -166,6 +166,28 @@ describe("rationale comment edits", () => {
 });
 
 describe("settled label authority boundaries", () => {
+  it.each([
+    { name: "exactly at final commit minus grace", createdAt: "2026-09-01T09:45:00.000Z", accepted: true },
+    { name: "one millisecond before final commit minus grace", createdAt: "2026-09-01T09:44:59.999Z", accepted: false },
+  ])("handles a settled label $name", ({ createdAt, accepted }) => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.history[1]!.createdAt = createdAt;
+    snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T09:45:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: accepted ? "SETTLED" : "UNSETTLED",
+      settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0,
+      settledLabelEventId: accepted ? "actual-1" : null,
+    });
+    expect(result.policyViolations).toEqual([]);
+    if (!accepted) {
+      expect(result.ledgerEntries).toEqual([]);
+    }
+  });
+
   it("ignores an unauthorized settled label before the window without a policy violation", () => {
     const snapshot = evidenceFixture({ settler: "maintainer" });
     snapshot.issues[0]!.history[1]!.createdAt = "2026-09-01T09:00:00.000Z";
@@ -442,19 +464,25 @@ describe("rationale selection boundaries", () => {
     }
   });
 
-  it("accepts a rationale created exactly at window close", () => {
+  it.each([
+    { name: "exactly at window close", createdAt: "2026-09-01T12:15:00.000Z", accepted: true },
+    { name: "one millisecond after window close", createdAt: "2026-09-01T12:15:00.001Z", accepted: false },
+  ])("handles a rationale created $name", ({ createdAt, accepted }) => {
     const snapshot = evidenceFixture();
-    snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T12:15:00.000Z";
+    snapshot.issues[0]!.comments[0]!.createdAt = createdAt;
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
-      credits: 6,
-      settledRationaleCommentId: "comment-1",
+      status: accepted ? "SETTLED" : "UNSETTLED",
+      settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0,
+      settledRationaleCommentId: accepted ? "comment-1" : null,
     });
     expect(result.policyViolations).toEqual([]);
+    if (!accepted) {
+      expect(result.ledgerEntries).toEqual([]);
+    }
   });
 
   it("accepts a rationale created exactly at label time minus grace", () => {
@@ -503,6 +531,48 @@ describe("rationale selection boundaries", () => {
       settledPoints: 6,
       credits: 6,
       settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("selects the earliest of multiple qualifying grace fallbacks", () => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.history.push(
+      { kind: "UNLABELED", id: "removed", actorLogin: "sponsor", label: "delivered/6", createdAt: "2026-09-01T11:35:00.000Z" },
+      { kind: "LABELED", id: "actual-2", actorLogin: "sponsor", label: "delivered/6", createdAt: "2026-09-01T11:40:00.000Z" },
+    );
+    issue.comments.push({
+      ...issue.comments[0]!,
+      id: "comment-2",
+      databaseId: 402,
+      createdAt: "2026-09-01T11:34:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledLabelEventId: "actual-2",
+      settledRationaleCommentId: "comment-1",
+      settledRationaleCommentedAt: "2026-09-01T11:30:00.000Z",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("normalizes case and surrounding whitespace in the rationale author login", () => {
+    const snapshot = evidenceFixture({ commenter: " Sponsor " });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+      settledRationaleActorLogin: "Sponsor",
     });
     expect(result.policyViolations).toEqual([]);
   });
