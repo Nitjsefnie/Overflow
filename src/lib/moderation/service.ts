@@ -57,6 +57,15 @@ export type OpenAccountAuditInput = {
   reason: string;
 };
 
+export type CalibrationCohortPreview = {
+  targetAccountId: string;
+  repositoryId: string | null;
+  sampleStartedAt: string;
+  sampleEndedAt: string;
+  comparison: CalibrationComparison;
+  meetsMinimumSampleSize: boolean;
+};
+
 export type OpenAccountAuditStoreInput = {
   actorId: string;
   targetAccountId: string;
@@ -173,26 +182,8 @@ export class AccountModerationService {
     input: OpenAccountAuditInput,
   ): Promise<AccountAudit> {
     requireModerator(actor);
-    const normalized = normalizeOpenInput(input);
-    const loaded = await this.store.loadCalibrationCohort({
-      targetAccountId: normalized.targetAccountId,
-      repositoryId: normalized.repositoryId,
-      sampleStartedAt: normalized.sampleStartedAt,
-      sampleEndedAt: normalized.sampleEndedAt,
-    });
-    if (loaded === null) {
-      throw new ModerationServiceError("NOT_FOUND", "The target account was not found.");
-    }
-
-    let comparison: CalibrationComparison;
-    try {
-      comparison = compareCalibration(loaded.selfWorkPairs, loaded.outsiderSettlementPairs);
-    } catch (error) {
-      if (error instanceof CalibrationStatisticsError) {
-        throw new ModerationServiceError("INVALID_INPUT", "The selected calibration cohort is invalid.");
-      }
-      throw error;
-    }
+    const { reason, ...window } = normalizeOpenInput(input);
+    const { loaded, comparison } = await this.compareCohort(window);
     if (
       comparison.selfWork.count < MINIMUM_CALIBRATION_SAMPLE_SIZE ||
       comparison.outsider.count < MINIMUM_CALIBRATION_SAMPLE_SIZE
@@ -206,20 +197,42 @@ export class AccountModerationService {
     return unwrapStoreResult(
       await this.store.openAccountAudit({
         actorId: actor.id,
-        targetAccountId: normalized.targetAccountId,
-        repositoryId: normalized.repositoryId,
-        reason: normalized.reason,
+        targetAccountId: window.targetAccountId,
+        repositoryId: window.repositoryId,
+        reason,
         cohort: {
-          targetAccountId: normalized.targetAccountId,
-          repositoryId: normalized.repositoryId,
-          sampleStartedAt: normalized.sampleStartedAt,
-          sampleEndedAt: normalized.sampleEndedAt,
+          ...window,
           selfWorkPairs: [...loaded.selfWorkPairs],
           outsiderSettlementPairs: [...loaded.outsiderSettlementPairs],
           comparison,
         },
       }),
     );
+  }
+
+  /**
+   * Shows a moderator the paired evidence a window would put in front of them
+   * before they commit to opening an audit.
+   *
+   * A window too short to audit is exactly what a moderator needs to see, so
+   * this reports the shortfall as `meetsMinimumSampleSize: false` instead of
+   * refusing the read the way `openAccountAudit` does.
+   */
+  public async previewCalibrationCohort(
+    actor: ModerationActor,
+    input: Omit<OpenAccountAuditInput, "reason">,
+  ): Promise<CalibrationCohortPreview> {
+    requireModerator(actor);
+    const normalized = normalizeAuditWindow(input);
+    const { comparison } = await this.compareCohort(normalized);
+
+    return {
+      ...normalized,
+      comparison,
+      meetsMinimumSampleSize:
+        comparison.selfWork.count >= MINIMUM_CALIBRATION_SAMPLE_SIZE &&
+        comparison.outsider.count >= MINIMUM_CALIBRATION_SAMPLE_SIZE,
+    };
   }
 
   public async dismissAccountAudit(
@@ -272,6 +285,24 @@ export class AccountModerationService {
       }),
     );
   }
+
+  private async compareCohort(
+    window: NormalizedAuditWindow,
+  ): Promise<{ loaded: LoadedCalibrationCohort; comparison: CalibrationComparison }> {
+    const loaded = await this.store.loadCalibrationCohort(window);
+    if (loaded === null) {
+      throw new ModerationServiceError("NOT_FOUND", "The target account was not found.");
+    }
+
+    try {
+      return { loaded, comparison: compareCalibration(loaded.selfWorkPairs, loaded.outsiderSettlementPairs) };
+    } catch (error) {
+      if (error instanceof CalibrationStatisticsError) {
+        throw new ModerationServiceError("INVALID_INPUT", "The selected calibration cohort is invalid.");
+      }
+      throw error;
+    }
+  }
 }
 
 function requireModerator(actor: ModerationActor): void {
@@ -280,13 +311,14 @@ function requireModerator(actor: ModerationActor): void {
   }
 }
 
-function normalizeOpenInput(input: OpenAccountAuditInput): {
+type NormalizedAuditWindow = {
   targetAccountId: string;
   repositoryId: string | null;
   sampleStartedAt: string;
   sampleEndedAt: string;
-  reason: string;
-} {
+};
+
+function normalizeAuditWindow(input: Omit<OpenAccountAuditInput, "reason">): NormalizedAuditWindow {
   const sampleStartedAt = normalizeTimestamp(input.sampleStartedAt, "Sample start");
   const sampleEndedAt = normalizeTimestamp(input.sampleEndedAt, "Sample end");
   if (new Date(sampleEndedAt).getTime() <= new Date(sampleStartedAt).getTime()) {
@@ -299,8 +331,11 @@ function normalizeOpenInput(input: OpenAccountAuditInput): {
       input.repositoryId === undefined ? null : normalizeIdentifier(input.repositoryId, "Repository identifier"),
     sampleStartedAt,
     sampleEndedAt,
-    reason: normalizeReason(input.reason),
   };
+}
+
+function normalizeOpenInput(input: OpenAccountAuditInput): NormalizedAuditWindow & { reason: string } {
+  return { ...normalizeAuditWindow(input), reason: normalizeReason(input.reason) };
 }
 
 function normalizeTimestamp(value: unknown, label: string): string {
