@@ -194,11 +194,17 @@ Expected: `active`; the two `MainPID` values differ and the current one is not
 `200` from curl.
 
 The two `MainPID` values are the check that distinguishes a switch from a
-reload. `systemctl show` reports the *loaded fragment*, so it answers
+reload. `systemctl show` reports the merged effective configuration, so it answers
 `User=overflow` from the moment `daemon-reload` runs, whether or not anything
 restarted; only a new PID says the process serving requests is the one the
 hardened unit started. A pair that has not moved means the old process is still
 serving and section 6's `restart` did not run.
+
+A host drop-in under `/etc/systemd/system/overflow.service.d/` can override the
+installed unit. Section 6 installs only `overflow.service`; the repository guard
+does not inspect host drop-ins. The `systemctl show` check above reveals overrides
+to the properties it lists because it reports the merged configuration, including
+drop-ins, rather than just the unit file.
 
 Two details in those commands are the point of them. Ask `systemctl` for the
 PID instead of asking `ps` for Node processes: `ps -C node` matches on `comm`,

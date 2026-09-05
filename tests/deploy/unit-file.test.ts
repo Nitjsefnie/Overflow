@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -293,6 +293,17 @@ describe("start command tokens", () => {
 });
 
 describe("Overflow production unit", () => {
+  it("keeps deploy limited to the reviewed unit and operator procedure", async () => {
+    const files = await readdir(resolve("deploy"), { withFileTypes: true });
+
+    expect(files.map((file) => file.name).sort(),
+      "deploy/ may contain only README.md and overflow.service; review additions alongside the install procedure",
+    ).toEqual(["README.md", "overflow.service"]);
+    expect(files.filter((file) => !file.isFile()).map((file) => file.name),
+      "the reviewed deployment artifacts must be regular files",
+    ).toEqual([]);
+  });
+
   /**
    * The unit as bytes, not as a decoded string: the canonical subset is a rule
    * about what is on disk, and a decoder standing between the file and the
