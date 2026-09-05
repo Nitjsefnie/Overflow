@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import type {
+  AuditCandidateProjection,
   EnforcementHistoryProjection,
+  ModerationRepositoryProjection,
   OpenAuditProjection,
   RecalibratingAccountProjection,
   UnwritableClosureProjection,
@@ -20,27 +22,39 @@ export default async function ModerationPage() {
   }
 
   const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
+  const { OpenAuditForm } = await import("@/components/open-audit-form");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { SettlementOverrideQueue } = await import("@/components/settlement-override-queue");
   const { UnwritableClosureQueue } = await import("@/components/unwritable-closure-queue");
 
   let audits: OpenAuditProjection[] | null;
+  let auditCandidates: AuditCandidateProjection[] | null;
+  let auditRepositories: ModerationRepositoryProjection[] = [];
   let history: EnforcementHistoryProjection[] = [];
   let recalibratingAccounts: RecalibratingAccountProjection[] = [];
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] = [];
   const settlementCorrections = await listSettlementCorrections(session.user);
   const unwritableClosures = await loadUnwritableClosures();
   try {
-    const { listEnforcementHistory, listOpenAudits, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
+    const {
+      listAuditCandidates,
+      listEnforcementHistory,
+      listModerationRepositories,
+      listOpenAudits,
+      listRecalibratingAccounts,
+    } = await import("@/lib/dashboard/queries");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
-    [audits, history, recalibratingAccounts, moderators] = await Promise.all([
+    [audits, auditCandidates, auditRepositories, history, recalibratingAccounts, moderators] = await Promise.all([
       listOpenAudits(),
+      listAuditCandidates(),
+      listModerationRepositories(),
       listEnforcementHistory(),
       listRecalibratingAccounts(),
       new PostgresModerationStore().listModerators(),
     ]);
   } catch {
     audits = null;
+    auditCandidates = null;
   }
 
   return (
@@ -49,6 +63,19 @@ export default async function ModerationPage() {
         <p className="eyebrow">Moderator controls</p>
         <h1 id="moderation-title">Audit before changing a member’s state.</h1>
         <p>Open audits compare paired samples. The sequence is audit, warn, recalibrate, then ban when patterns persist.</p>
+      </section>
+      <section className="surface" aria-labelledby="open-audit-heading">
+        <p className="eyebrow">Start the ladder</p>
+        <h2 id="open-audit-heading">Open a calibration audit</h2>
+        <p>
+          An audit compares an account’s self-work sample against the settlements outsiders granted it over the
+          same window. Opening one is the first rung, and it is refused unless both samples clear the pair floor.
+        </p>
+        {auditCandidates === null ? (
+          <p>The audit targets could not be loaded.</p>
+        ) : (
+          <OpenAuditForm candidates={auditCandidates} repositories={auditRepositories} />
+        )}
       </section>
       {audits === null ? (
         <section className="empty-state" aria-labelledby="audit-error-heading">
