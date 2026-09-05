@@ -198,6 +198,312 @@ describe("settled label authority boundaries", () => {
   });
 });
 
+describe("review rounds at merge", () => {
+  it.each([
+    { at: "2026-09-01T11:59:59.999Z", rounds: 0, credits: 6 },
+    { at: "2026-09-01T12:00:00.000Z", rounds: 1, credits: 5 },
+    { at: "2026-09-01T12:00:00.001Z", rounds: 1, credits: 5 },
+    { at: "not-a-timestamp", rounds: 1, credits: 5 },
+  ])("counts $rounds rounds when dismissal is at $at", ({ at, rounds, credits }) => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [{
+      id: 310,
+      state: "DISMISSED",
+      submittedAt: "2026-09-01T10:30:00.000Z",
+      dismissal: { at, previousState: "CHANGES_REQUESTED" },
+    }];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: rounds, credits });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual(rounds === 0 ? [] : [
+      { githubReviewId: 310, submittedAt: "2026-09-01T10:30:00.000Z" },
+    ]);
+  });
+
+  it.each(["CHANGES_REQUESTED", "DISMISSED"] as const)(
+    "checks strict submission time and distinct ids for %s reviews",
+    (state) => {
+      const snapshot = evidenceFixture();
+      const reviews = [
+        { id: 320, submittedAt: "2026-09-01T11:59:59.999Z" },
+        { id: 321, submittedAt: "2026-09-01T12:00:00.000Z" },
+        { id: 322, submittedAt: "2026-09-01T12:00:00.001Z" },
+        { id: 323, submittedAt: "not-a-timestamp" },
+        { id: 324, submittedAt: null },
+        { id: 325, submittedAt: "2026-09-01T11:00:00.000Z" },
+      ].map((review) => ({
+        ...review,
+        state,
+        dismissal: state === "DISMISSED"
+          ? { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" as const }
+          : null,
+      }));
+      snapshot.issues[0]!.closingPullRequests[0]!.reviews = [...reviews, reviews[0]!];
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements[0]).toMatchObject({ reviewRounds: 2, credits: 4 });
+      expect(result.pullRequests[0]?.reviewRounds).toEqual([
+        { githubReviewId: 320, submittedAt: "2026-09-01T11:59:59.999Z" },
+        { githubReviewId: 325, submittedAt: "2026-09-01T11:00:00.000Z" },
+      ]);
+    },
+  );
+
+  it("keeps a changes-requested round that was dismissed after the merge", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 301,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 1, credits: 5 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([{ githubReviewId: 301, submittedAt: "2026-09-01T10:30:00.000Z" }]);
+  });
+
+  it("drops a changes-requested round that was dismissed before the merge", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 301,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 0, credits: 6 });
+  });
+
+  it("never counts a dismissed approval or a dismissal of unknown provenance", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 301,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "APPROVED" },
+      },
+      { id: 302, state: "DISMISSED", submittedAt: "2026-09-01T10:40:00.000Z", dismissal: null },
+      {
+        id: 303,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:50:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: null },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 0, credits: 6 });
+  });
+
+  it("still ignores a changes-requested review submitted at or after the merge, dismissed or not", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T12:00:00.000Z", dismissal: null },
+      {
+        id: 302,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T12:30:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 0, credits: 6 });
+  });
+});
+
+describe("rationale selection boundaries", () => {
+  it.each([
+    { name: "exactly at close", lastEditedAt: "2026-09-01T12:15:00.000Z", accepted: true },
+    { name: "one millisecond after close", lastEditedAt: "2026-09-01T12:15:00.001Z", accepted: false },
+    { name: "unparseable", lastEditedAt: "not-a-timestamp", accepted: true },
+  ])("handles an edit timestamp $name", ({ lastEditedAt, accepted }) => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = lastEditedAt;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: accepted ? "SETTLED" : "UNSETTLED",
+      settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0,
+      settledRationaleCommentId: accepted ? "comment-1" : null,
+    });
+    expect(result.policyViolations).toEqual(
+      accepted ? [] : [{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }],
+    );
+    if (!accepted) {
+      expect(result.ledgerEntries).toEqual([]);
+    }
+  });
+
+  it("accepts a rationale created exactly at window close", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T12:15:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("accepts a rationale created exactly at label time minus grace", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T10:45:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("accepts a rationale with a missing edit timestamp", () => {
+    const snapshot = evidenceFixture();
+    Reflect.deleteProperty(snapshot.issues[0]!.comments[0]!, "lastEditedAt");
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("selects the earliest valid rationale instead of the last", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments.push({
+      ...snapshot.issues[0]!.comments[0]!,
+      id: "comment-2",
+      databaseId: 402,
+      createdAt: "2026-09-01T11:45:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("sorts rationale candidates chronologically before selecting one", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments.unshift({
+      ...snapshot.issues[0]!.comments[0]!,
+      id: "comment-2",
+      databaseId: 402,
+      createdAt: "2026-09-01T11:45:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      credits: 6,
+      settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("records the comment author independently of the label actor", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.history[1]!.actorLogin = " Sponsor ";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledLabelActorLogin: "Sponsor",
+      settledRationaleActorLogin: "sponsor",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("rejects a rationale author whose login only starts with the sponsor login", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.authorLogin = "sponsor2";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED",
+      settledPoints: null,
+      credits: 0,
+      settledRationaleCommentId: null,
+    });
+    expect(result.ledgerEntries).toEqual([]);
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("filters an otherwise valid rationale with an empty comment id", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.id = "";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED",
+      settledPoints: null,
+      credits: 0,
+      settledRationaleCommentId: null,
+    });
+    expect(result.ledgerEntries).toEqual([]);
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("rejects every candidate when all rationales were edited after close", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-02T09:00:00.000Z";
+    snapshot.issues[0]!.comments.push({
+      ...snapshot.issues[0]!.comments[0]!,
+      id: "comment-2",
+      databaseId: 402,
+      createdAt: "2026-09-01T11:45:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED",
+      settledPoints: null,
+      credits: 0,
+      settledRationaleCommentId: null,
+    });
+    expect(result.ledgerEntries).toEqual([]);
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
+  });
+});
+
 export type EvidenceLogins = {
   sponsor: string;
   issueAuthor: string;

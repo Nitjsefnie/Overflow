@@ -631,11 +631,16 @@ function countReviewRounds(
   const mergeTime = Date.parse(mergedAt);
   const uniqueReviews = new Map<number, string>();
   for (const review of reviews) {
+    // Count rounds as they stood at merge; later dismissals cannot rewrite
+    // the settled price, while a pre-merge dismissal withdraws the round.
+    const submittedState = review.state === "DISMISSED"
+      ? review.dismissal?.previousState ?? null
+      : review.state;
     if (
-      review.state !== "CHANGES_REQUESTED" ||
-      review.submittedAt === null ||
+      submittedState !== "CHANGES_REQUESTED" ||
       !validTimestamp(review.submittedAt) ||
-      Date.parse(review.submittedAt) >= mergeTime
+      Date.parse(review.submittedAt) >= mergeTime ||
+      dismissedBefore(review, mergeTime)
     ) {
       continue;
     }
@@ -751,6 +756,12 @@ function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
 
 function validIssueComment(comment: GitHubIssueComment): boolean {
   return typeof comment.id === "string" && comment.id.length > 0 && validTimestamp(comment.createdAt);
+}
+
+function dismissedBefore(review: GitHubPullRequestReview, deadline: number): boolean {
+  return review.dismissal !== null &&
+    validTimestamp(review.dismissal.at) &&
+    Date.parse(review.dismissal.at) < deadline;
 }
 
 function editedAfter(comment: GitHubIssueComment, deadline: number): boolean {
