@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
-import { getContainerRuntimeClient, type StartedTestContainer } from "testcontainers";
-import { startPostgresContainer } from "../support/postgres-container";
+import { getContainerRuntimeClient, Wait, type StartedTestContainer, type WaitStrategy } from "testcontainers";
+import { postgresWaitStrategy, startPostgresContainer } from "../support/postgres-container";
 
 const database = "overflow_wait_test";
 const postgresPortInHex = ":1538";
 const listenState = "0A";
+
+/** `Wait.forListeningPorts()` is the only route to its class: testcontainers does not export it. */
+const listeningPortsStrategyClass = Wait.forListeningPorts().constructor as new () => WaitStrategy;
 
 interface StartupRecord {
   listeningEntries: string[];
@@ -66,7 +69,31 @@ describe("the shared postgres container is reachable over TCP the instant it res
     expect(record.queryFailure).toBeUndefined();
     expect(record.queryRows).toEqual([{ value: 1 }]);
   });
+
+  // Either limb alone gets this fixture past the three assertions above, so the behavioural test
+  // cannot tell whether both are still there. This pins the pair itself.
+  it("waits on a listening port and on a pg_isready handshake forced over TCP", () => {
+    const limbs = limbsOf(postgresWaitStrategy({ database, user: database }));
+
+    expect(limbs).toBeInstanceOf(Array);
+    expect(limbs?.filter((limb) => limb instanceof listeningPortsStrategyClass)).toHaveLength(1);
+
+    const commands = (limbs ?? []).flatMap((limb) => {
+      const { command } = limb as unknown as { command?: unknown };
+
+      return typeof command === "string" ? [command] : [];
+    });
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain("pg_isready");
+    expect(commands[0]).toContain("--host 127.0.0.1");
+  });
 });
+
+/** The members a composite wait strategy waits on, or undefined when it is not a composite. */
+function limbsOf(strategy: WaitStrategy): WaitStrategy[] | undefined {
+  return (strategy as unknown as { waitStrategies?: WaitStrategy[] }).waitStrategies;
+}
 
 /** Local listeners on 5432 (hex 1538) in the `/proc/net/tcp` and `/proc/net/tcp6` tables. */
 function listeningEntriesOnPostgresPort(procNetTcp: string): string[] {
