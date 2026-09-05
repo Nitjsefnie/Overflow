@@ -74,7 +74,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
       }
 
       const ownerName = body?.repository?.ownerName ?? values.repositoryUrl.trim();
-      setFeedback({ kind: "success", message: `${ownerName} is registered.` });
+      setFeedback({ kind: "success", message: registrationMessage(ownerName, body?.existingWorkIngested) });
     } catch {
       setFeedback({
         kind: "error",
@@ -209,8 +209,22 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 
 type RegistrationResponse = {
   repository?: { ownerName?: string };
+  existingWorkIngested?: boolean;
   error?: { message?: string };
 };
+
+// Registration ingests the issues that already exist in the repository. That step can
+// fail without invalidating the registration, so the sponsor is told which happened
+// rather than being left to wonder why an empty issue list is empty.
+function registrationMessage(ownerName: string, existingWorkIngested: boolean | undefined): string {
+  if (existingWorkIngested === true) {
+    return `${ownerName} is registered and its existing issues were imported.`;
+  }
+  if (existingWorkIngested === false) {
+    return `${ownerName} is registered, but its existing issues could not be imported yet. They will appear after the next reconciliation.`;
+  }
+  return `${ownerName} is registered.`;
+}
 
 function createFormState(values: RepositoryFormValues): RepositoryFormState {
   return {

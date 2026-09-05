@@ -53,6 +53,11 @@ export type RepositoryRegistrationDependencies = {
   github: RepositoryRegistrationGateway;
   store: RepositoryRegistrationStore;
   webhook: GitHubWebhookConfiguration;
+  reconcile?: (repositoryId: string) => Promise<unknown>;
+};
+
+export type RepositoryRegistrationResult = RegisteredRepository & {
+  existingWorkIngested: boolean;
 };
 
 export class RepositoryRegistrationError extends Error {
@@ -75,7 +80,7 @@ export class RepositoryRegistrationEnforcementError extends Error {
 export async function registerRepository(
   dependencies: RepositoryRegistrationDependencies,
   input: RepositoryRegistrationInput,
-): Promise<RegisteredRepository> {
+): Promise<RepositoryRegistrationResult> {
   if (
     dependencies.actor.enforcementState !== undefined &&
     !isParticipationEligible(dependencies.actor.enforcementState)
@@ -131,8 +136,9 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to register the repository with GitHub.");
   }
 
+  let created: RegisteredRepository | null;
   try {
-    const created = await dependencies.store.createRepository({
+    created = await dependencies.store.createRepository({
       githubRepositoryId: repository.id,
       ownerName: repository.fullName,
       sponsorId: dependencies.actor.id,
@@ -144,8 +150,6 @@ export async function registerRepository(
       await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
       throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
     }
-
-    return created;
   } catch (error) {
     if (error instanceof RepositoryRegistrationError) {
       throw error;
@@ -161,6 +165,28 @@ export async function registerRepository(
 
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
+  }
+
+  // The registration is committed by this point. Work that already exists in the
+  // repository only enters the ledger through a reconciliation, and a webhook can
+  // never deliver it because it was created after that work. So ingest it here, and
+  // report a failure to the sponsor rather than undoing a registration that stands.
+  return { ...created, existingWorkIngested: await ingestExistingWork(dependencies, created.id) };
+}
+
+async function ingestExistingWork(
+  dependencies: RepositoryRegistrationDependencies,
+  repositoryId: string,
+): Promise<boolean> {
+  if (dependencies.reconcile === undefined) {
+    return false;
+  }
+
+  try {
+    await dependencies.reconcile(repositoryId);
+    return true;
+  } catch {
+    return false;
   }
 }
 

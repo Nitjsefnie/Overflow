@@ -193,6 +193,37 @@ describe("explicit repository registration", () => {
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
+
+  it("ingests the repository's existing work once the registration is stored", async () => {
+    const harness = createHarness();
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      id: "registered-repository-id",
+      existingWorkIngested: true,
+    });
+
+    expect(harness.reconciledRepositoryIds).toEqual(["registered-repository-id"]);
+  });
+
+  it("keeps the registration and reports uningested work when reconciliation fails", async () => {
+    const harness = createHarness({ reconciliationFailure: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      id: "registered-repository-id",
+      existingWorkIngested: false,
+    });
+
+    expect(harness.createdRepositories).toHaveLength(1);
+    expect(harness.deletedWebhookIds).toEqual([]);
+  });
+
+  it("reports uningested work when no reconciliation is wired up", async () => {
+    const harness = createHarness({ withoutReconcile: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      existingWorkIngested: false,
+    });
+  });
 });
 
 type HarnessOptions = {
@@ -203,6 +234,8 @@ type HarnessOptions = {
   existing?: RegisteredRepository | null;
   webhookFailure?: boolean;
   databaseFailure?: boolean;
+  reconciliationFailure?: boolean;
+  withoutReconcile?: boolean;
 };
 
 function createHarness(options: HarnessOptions = {}) {
@@ -210,6 +243,7 @@ function createHarness(options: HarnessOptions = {}) {
   const configuredLabels: string[] = [];
   const deletedWebhookIds: number[] = [];
   const duplicateLookupIds: number[] = [];
+  const reconciledRepositoryIds: string[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const actor = {
@@ -266,6 +300,16 @@ function createHarness(options: HarnessOptions = {}) {
       callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
     },
+    ...(options.withoutReconcile === true
+      ? {}
+      : {
+          async reconcile(repositoryId: string) {
+            reconciledRepositoryIds.push(repositoryId);
+            if (options.reconciliationFailure) {
+              throw new Error("GitHub reconciliation failed");
+            }
+          },
+        }),
   };
 
   return {
@@ -275,6 +319,7 @@ function createHarness(options: HarnessOptions = {}) {
     deletedWebhookIds,
     duplicateLookupIds,
     createdRepositories,
+    reconciledRepositoryIds,
   };
 }
 

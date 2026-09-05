@@ -119,6 +119,27 @@ describe("POST /api/repositories", () => {
         visibility: "PUBLIC",
         githubWebhookId: 501,
       },
+      existingWorkIngested: true,
+    });
+  });
+
+  it("reports that existing work was not ingested when reconciliation fails", async () => {
+    const handler = createRepositoryPostHandler({
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async (session) => ({
+        ...successfulDependencies(session.user),
+        reconcile: async () => {
+          throw new Error("GitHub reconciliation failed");
+        },
+      }),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      repository: { ownerName: "octo/overflow" },
+      existingWorkIngested: false,
     });
   });
 });
@@ -211,6 +232,9 @@ function successfulDependencies(
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
+    },
+    async reconcile() {
+      return { adds: 0, changes: 0, removals: 0 };
     },
   };
 }
