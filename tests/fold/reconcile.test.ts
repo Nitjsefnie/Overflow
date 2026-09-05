@@ -127,6 +127,7 @@ describe("reconcileRepository", () => {
       expect((failure as Error).cause).toBe(upstream);
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
+      expect(errorLog).toHaveBeenCalledTimes(1);
     } finally {
       errorLog.mockRestore();
     }
