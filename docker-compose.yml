@@ -7,7 +7,8 @@ services:
       POSTGRES_USER: overflow
       POSTGRES_PASSWORD: overflow_local_only
     ports:
-      - "5432:5432"
+      # Loopback only by default; set POSTGRES_HOST_BIND to widen deliberately.
+      - "${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"
     volumes:
       - overflow-postgres-data:/var/lib/postgresql/data
     healthcheck:

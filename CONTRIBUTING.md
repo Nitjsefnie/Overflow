@@ -94,9 +94,11 @@ docker compose ps
 ```
 
 That service is `postgres:17-alpine` with database, user and password
-`overflow` / `overflow` / `overflow_local_only` on port 5432, and a
-`pg_isready` healthcheck, so `docker compose ps` telling you it is healthy is
-the signal to continue. Then install, migrate and run:
+`overflow` / `overflow` / `overflow_local_only`, published on loopback only as
+`127.0.0.1:5432`, and a `pg_isready` healthcheck, so `docker compose ps`
+telling you it is healthy is the signal to continue. Set `POSTGRES_HOST_BIND`
+to another address to publish it more widely on purpose. Then install, migrate
+and run:
 
 ```bash
 pnpm install --frozen-lockfile
