@@ -1,13 +1,42 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
+import type { RepositoryRouteSession } from "@/app/api/repositories/route";
+
 import type { RepositoryRegistrationDependencies } from "@/lib/repositories/register";
-import { createRepositoryPostHandler } from "@/app/api/repositories/route";
+import { POST, createRepositoryPostHandler } from "@/app/api/repositories/route";
+
+const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: readSession }));
+vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+
+beforeEach(() => {
+  readSession.mockReset().mockResolvedValue(null);
+  for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+    vi.spyOn(console, method).mockImplementation(() => {});
+  }
+});
+
+afterEach(() => {
+  try {
+    for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+      expect(console[method]).not.toHaveBeenCalled();
+    }
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});
 
 const temporaryLimitingAdvice = "GitHub also answers 403 when it is temporarily limiting requests, so if those settings look right, wait a minute and retry before changing anything.";
 
 describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -25,6 +54,7 @@ describe("POST /api/repositories", () => {
 
   it("returns a structured 401 without a session", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -39,6 +69,7 @@ describe("POST /api/repositories", () => {
 
   it("requires a session before validating a submitted repository payload", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -53,6 +84,7 @@ describe("POST /api/repositories", () => {
 
   it("returns a structured 403 for a signed-in user without GitHub administrator permission", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { canAdminister: false }),
@@ -71,6 +103,7 @@ describe("POST /api/repositories", () => {
 
   it("returns a structured 409 when the submitted repository is already registered", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { existingRepository: true }),
@@ -86,6 +119,7 @@ describe("POST /api/repositories", () => {
 
   it("returns a structured 502 without exposing a GitHub failure", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { webhookFailure: true }),
@@ -260,6 +294,7 @@ describe("POST /api/repositories", () => {
 
   it("returns the registered repository after a successful explicit registration", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) => successfulDependencies(session.user),
     });
@@ -282,6 +317,7 @@ describe("POST /api/repositories", () => {
 
   it("reports that existing work was not ingested when reconciliation fails", async () => {
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) => ({
         ...successfulDependencies(session.user),
@@ -298,6 +334,208 @@ describe("POST /api/repositories", () => {
       repository: { ownerName: "octo/overflow" },
       existingWorkIngested: false,
     });
+  });
+});
+
+const apiToken = `ovf_${"recognisable-api-credential".padEnd(43, "_")}`;
+const tokenAccount: ApiTokenAccount = {
+  id: "token-account-id",
+  role: "MEMBER",
+  enforcementState: "ACTIVE",
+};
+const tokenRejection = {
+  error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
+};
+
+function tokenFixture(account: ApiTokenAccount | null = tokenAccount) {
+  const getSession = vi.fn(async () => ({
+    user: { id: "cookie-account-id", role: "MODERATOR" as const },
+  }));
+  const findAccountByTokenHash = vi.fn<(hash: Buffer) => Promise<ApiTokenAccount | null>>(async () => account);
+  const createRegistrationDependencies = vi.fn(async (session: RepositoryRouteSession) =>
+    successfulDependencies(session.user),
+  );
+  const handler = createRepositoryPostHandler({
+    getSession,
+    findAccountByTokenHash,
+    createRegistrationDependencies,
+  });
+  return { handler, getSession, findAccountByTokenHash, createRegistrationDependencies };
+}
+
+function authorizedRequest(body: unknown = validInput(), credential = apiToken): Request {
+  const request = jsonRequest(body);
+  request.headers.set("authorization", `Bearer ${credential}`);
+  return request;
+}
+
+describe("Overflow token registration", () => {
+  it("registers with a valid token using the resolved account and never reads the cookie", async () => {
+    const fixture = tokenFixture();
+    const response = await fixture.handler(authorizedRequest());
+    expect(response.status).toBe(201);
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
+      Buffer.from("51b3006ae4667cdab12fc9e6cff7af0bc53f857338b2cbbe074efd5e27a83fd1", "hex"),
+    );
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
+      user: { id: "token-account-id", role: "MEMBER" },
+    });
+    const body = await response.json();
+    expect(body).toEqual({
+      repository: {
+        id: "repository-id",
+        githubRepositoryId: 42,
+        ownerName: "octo/overflow",
+        sponsorId: "token-account-id",
+        visibility: "PUBLIC",
+        githubWebhookId: 501,
+      },
+      existingWorkIngested: true,
+    });
+    expect(JSON.stringify(body)).not.toContain(apiToken);
+  });
+
+  it.each([
+    ["unknown", apiToken],
+    ["malformed", "malformed-recognisable-credential"],
+  ])(
+    "rejects the %s credential without being rescued by a valid cookie", async (_kind, credential) => {
+      const fixture = tokenFixture(null);
+      const response = await fixture.handler(authorizedRequest(validInput(), credential));
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body).toEqual(tokenRejection);
+      expect(JSON.stringify(body)).not.toContain(credential);
+      expect(fixture.getSession).toHaveBeenCalledTimes(0);
+      expect(fixture.createRegistrationDependencies).toHaveBeenCalledTimes(0);
+      expect(fixture.findAccountByTokenHash).toHaveBeenCalledTimes(credential === apiToken ? 1 : 0);
+    },
+  );
+
+  it.each([
+    ["unknown", apiToken],
+    ["malformed", "malformed-recognisable-credential"],
+  ])(
+    "authenticates the %s credential before reading or validating the payload", async (_kind, credential) => {
+      const fixture = tokenFixture(null);
+      const request = authorizedRequest({ invalid: true }, credential);
+      const readJson = vi.spyOn(request, "json");
+      const response = await fixture.handler(request);
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(tokenRejection);
+      expect(readJson).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  it("falls through to the cookie for a malformed Authorization header", async () => {
+    const fixture = tokenFixture();
+    const request = authorizedRequest();
+    request.headers.set("authorization", "Basic abc");
+    const response = await fixture.handler(request);
+    expect(response.status).toBe(201);
+    expect(fixture.getSession).toHaveBeenCalledTimes(1);
+    expect(fixture.findAccountByTokenHash).toHaveBeenCalledTimes(0);
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
+      user: { id: "cookie-account-id", role: "MODERATOR" },
+    });
+  });
+
+  it("sanitizes a token lookup failure without consulting the cookie or registration factory", async () => {
+    const fixture = tokenFixture();
+    fixture.findAccountByTokenHash.mockRejectedValue(new Error(apiToken));
+    const response = await fixture.handler(authorizedRequest());
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body).toEqual({ error: {
+      code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration.",
+    } });
+    expect(JSON.stringify(body)).not.toContain(apiToken);
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ["payload", 400, "INVALID_REQUEST", "Invalid repository registration request."],
+    ["domain input", 400, "INVALID_INPUT", "Submit one GitHub repository as owner/name or a canonical GitHub URL."],
+    ["banned", 403, "FORBIDDEN", "The account is not eligible to register repositories."],
+    ["permissions", 403, "FORBIDDEN", "GitHub administrator permission is required for the submitted repository."],
+    ["conflict", 409, "CONFLICT", "This GitHub repository is already registered."],
+    ["github", 502, "UPSTREAM_FAILURE", "Unable to register the repository with GitHub."],
+    ["initialization", 502, "UPSTREAM_FAILURE", "Unable to initialize repository registration."],
+  ] as const)("does not expose the token on %s failure", async (failure, status, code, message) => {
+    const fixture = tokenFixture();
+    fixture.createRegistrationDependencies.mockImplementation(async (session) => {
+      if (failure === "initialization") {
+        throw new Error(apiToken);
+      }
+      const dependencies = successfulDependencies(session.user, {
+        canAdminister: failure !== "permissions",
+        existingRepository: failure === "conflict",
+      });
+      if (failure === "banned") {
+        dependencies.actor.enforcementState = "BANNED";
+      }
+      if (failure === "github") {
+        dependencies.github.createWebhook = async () => { throw new Error(apiToken); };
+      }
+      return dependencies;
+    });
+    const input = failure === "payload" ? { invalid: true } : {
+      ...validInput(), repositoryUrl: failure === "domain input" ? apiToken : validInput().repositoryUrl,
+    };
+    const response = await fixture.handler(authorizedRequest(input));
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(response.status).toBe(status);
+    const body = await response.json();
+    expect(body).toEqual({ error: { code, message } });
+    expect(JSON.stringify(body)).not.toContain(apiToken);
+  });
+
+  it.each(["token", "cookie"] as const)(
+    "rejects a banned account through the production %s path before GitHub work", async (path) => {
+      vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash")
+        .mockResolvedValue({ ...tokenAccount, enforcementState: "BANNED" });
+      if (path === "cookie") readSession.mockResolvedValue({ user: tokenAccount });
+      vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken")
+        .mockResolvedValue("stored-github-oauth-token");
+      const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
+        .mockResolvedValue("BANNED");
+      vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+      vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
+      const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+      vi.stubGlobal("fetch", fetchGitHub);
+      const response = await POST(path === "token" ? authorizedRequest() : jsonRequest(validInput()));
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body).toEqual({ error: {
+        code: "FORBIDDEN", message: "The account is not eligible to register repositories.",
+      } });
+      expect(JSON.stringify(body)).not.toContain(apiToken);
+      expect(enforcement).toHaveBeenCalledExactlyOnceWith("token-account-id");
+      expect(fetchGitHub).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  it("uses the stored account OAuth token for GitHub in the production dependency factory", async () => {
+    vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+    const storedToken = vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken")
+      .mockResolvedValue("stored-github-oauth-token");
+    vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
+    const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchGitHub);
+    const response = await POST(authorizedRequest());
+    expect(storedToken).toHaveBeenCalledExactlyOnceWith("token-account-id");
+    expect(readSession).toHaveBeenCalledTimes(0);
+    expect(fetchGitHub).toHaveBeenCalledExactlyOnceWith(
+      "https://api.github.com/repos/octo/overflow", expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    const [, init] = fetchGitHub.mock.calls[0];
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer stored-github-oauth-token");
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain(apiToken);
   });
 });
 
@@ -376,12 +614,12 @@ function successfulDependencies(
             }
           : null;
       },
-      async createRepository() {
+      async createRepository(repository) {
         return {
           id: "repository-id",
           githubRepositoryId: 42,
           ownerName: "octo/overflow",
-          sponsorId: "moderator-id",
+          sponsorId: repository.sponsorId,
           visibility: "PUBLIC",
           githubWebhookId: 501,
         };
