@@ -3,9 +3,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
-import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -3072,21 +3072,6 @@ function difficultySchemePreconditionMessage(count: number, ...ownerNames: strin
   );
 }
 
-function validDifficultyScheme(): DifficultyScheme {
-  return {
-    openingName: "Scope",
-    actualName: "Delivered difficulty",
-    openingLabels: [
-      { label: "S", comparisonPoints: 2, reservePoints: 2 },
-      { label: "M", comparisonPoints: 5, reservePoints: 5 },
-      { label: "L", comparisonPoints: 8, reservePoints: 8 },
-    ],
-    actualLabels: Array.from({ length: 10 }, (_, index) => ({
-      label: `delivered/${index + 1}`,
-      points: index + 1,
-    })),
-  };
-}
 
 async function insertIssue(
   client: QueryableSql,
