@@ -42,6 +42,28 @@ const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trusted
 
 useTrustedOrigin();
 
+function memberPostHandler(): {
+  handler: ReturnType<typeof createSettlementOverridePostHandler>;
+  requestOverride: ReturnType<typeof vi.fn>;
+} {
+  const requestOverride = vi.fn();
+  return {
+    handler: createSettlementOverridePostHandler({
+      getSession: async () => ({ user: { id: memberId } }),
+      getCurrentRole: async () => "MEMBER",
+      createService: async () => ({ requestOverride }),
+    }),
+    requestOverride,
+  };
+}
+
+async function expectInvalidRequest(response: Response): Promise<void> {
+  expect(response.status).toBe(422);
+  await expect(response.json()).resolves.toEqual({
+    error: { code: "INVALID_REQUEST", message: "Invalid settlement correction request." },
+  });
+}
+
 describe("settlement override request API", () => {
   it("records a member's request against a settlement", async () => {
     const requestOverride = vi.fn().mockResolvedValue(recorded);
@@ -90,25 +112,35 @@ describe("settlement override request API", () => {
   });
 
   // A request corrects exactly one priced outcome, so a body that names both
-  // rows or neither has no target to carry and never reaches the service.
-  it("rejects a body naming both a settlement and a calibration, or neither", async () => {
-    const requestOverride = vi.fn();
-    const handler = createSettlementOverridePostHandler({
-      getSession: async () => ({ user: { id: memberId } }),
-      getCurrentRole: async () => "MEMBER",
-      createService: async () => ({ requestOverride }),
-    });
+  // rows, neither, or anything beyond one of them has no target to carry.
+  it("rejects a body naming both a settlement and a calibration", async () => {
+    const { handler, requestOverride } = memberPostHandler();
 
-    for (const payload of [
-      { settlementId, calibrationId, reason: "Both at once." },
-      { reason: "Neither one." },
-    ]) {
-      const response = await handler(jsonRequest(payload));
-      expect(response.status).toBe(422);
-      await expect(response.json()).resolves.toEqual({
-        error: { code: "INVALID_REQUEST", message: "Invalid settlement correction request." },
-      });
-    }
+    const response = await handler(
+      jsonRequest({ settlementId, calibrationId, reason: "Both at once." }),
+    );
+
+    await expectInvalidRequest(response);
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body naming neither a settlement nor a calibration", async () => {
+    const { handler, requestOverride } = memberPostHandler();
+
+    const response = await handler(jsonRequest({ reason: "Neither one." }));
+
+    await expectInvalidRequest(response);
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body carrying a key the route does not define", async () => {
+    const { handler, requestOverride } = memberPostHandler();
+
+    const response = await handler(
+      jsonRequest({ settlementId, reason: "An extra key rode along.", settledPoints: 9 }),
+    );
+
+    await expectInvalidRequest(response);
     expect(requestOverride).not.toHaveBeenCalled();
   });
 
@@ -317,7 +349,7 @@ describe("settlement override decision API", () => {
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({
         decideRequest: vi.fn().mockRejectedValue(
-          new SettlementOverrideError("NOT_FOUND", "The settlement correction request was not found."),
+          new SettlementOverrideError("NOT_FOUND", "No settlement, calibration or correction request was found under that identifier."),
         ),
       }),
     });
