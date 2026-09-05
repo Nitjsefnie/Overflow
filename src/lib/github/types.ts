@@ -27,6 +27,7 @@ export type GitHubIssue = {
   claimAssigneeGitHubLogin: string | null;
   history: GitHubIssueHistoryEvent[];
   comments: GitHubIssueComment[];
+  closingPullRequests: GitHubPullRequest[];
 };
 
 export type GitHubIssueHistoryEvent =

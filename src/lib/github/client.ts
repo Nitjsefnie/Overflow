@@ -77,11 +77,12 @@ export class GitHubGateway {
     );
     const issues: GitHubIssue[] = [];
     for (const node of nodes) {
-      const [labels, timeline] = await Promise.all([
+      const [labels, timeline, closingPullRequests] = await Promise.all([
         this.getIssueLabels(repository, node.number, node.labels),
         this.getIssueTimeline(repository, node.number, node.timelineItems),
+        this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
       ]);
-      issues.push(toGitHubIssue(node, labels, timeline));
+      issues.push(toGitHubIssue(node, labels, timeline, closingPullRequests));
     }
     return issues;
   }
@@ -89,9 +90,12 @@ export class GitHubGateway {
   public async getIssueClosingPullRequests(
     repository: GitHubRepositoryReference,
     issueNumber: number,
+    initialPage?: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>,
   ): Promise<GitHubPullRequest[]> {
     const nodes = await collectCursorPages((cursor) =>
-      this.getClosingPullRequestsPage(repository, issueNumber, cursor),
+      cursor === null && initialPage !== undefined
+        ? Promise.resolve(initialPage)
+        : this.getClosingPullRequestsPage(repository, issueNumber, cursor),
     );
     return nodes.map(toGitHubPullRequest);
   }
@@ -188,7 +192,16 @@ export class GitHubGateway {
   ): Promise<GitHubGraphqlPage<GitHubGraphqlIssueNode>> {
     const data = await this.graphql.query<{
       repository: { issues: GitHubGraphqlPage<GitHubGraphqlIssueNode> } | null;
+      rateLimit?: { cost: number; remaining: number } | null;
     }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor });
+    if (process.env.DEBUG_GITHUB_COST && data.rateLimit != null) {
+      console.info("GitHub RepositoryIssues cost", {
+        repository: `${repository.owner}/${repository.name}`,
+        cursor,
+        cost: data.rateLimit.cost,
+        remaining: data.rateLimit.remaining,
+      });
+    }
     const page = data.repository?.issues;
     if (page === undefined) {
       throw new Error("GitHub GraphQL response was invalid.");
@@ -435,6 +448,7 @@ type GitHubGraphqlIssueNode = {
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
   timelineItems: GitHubGraphqlIssueTimelineConnection;
+  closedByPullRequestsReferences: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>;
 };
 
 type GitHubGraphqlAssignee = { login: string };
@@ -494,6 +508,7 @@ type GitHubGraphqlReviewDismissedEventNode = {
 
 const issuesQuery = `
   query RepositoryIssues($owner: String!, $name: String!, $cursor: String) {
+    rateLimit { cost remaining }
     repository(owner: $owner, name: $name) {
       issues(first: 100, after: $cursor) {
         nodes {
@@ -505,15 +520,32 @@ const issuesQuery = `
           state
           createdAt
           author { login }
-          labels(first: 100) {
+          labels(first: 20) {
             nodes { name }
+            pageInfo { hasNextPage endCursor }
+          }
+          closedByPullRequestsReferences(first: 20, includeClosedPrs: true) {
+            nodes {
+              databaseId
+              number
+              title
+              body
+              url
+              state
+              mergedAt
+              mergeCommit { oid }
+              commits(last: 1) {
+                nodes { commit { committedDate } }
+              }
+              author { login ... on User { databaseId } }
+            }
             pageInfo { hasNextPage endCursor }
           }
           assignees(first: 2) {
             nodes { login }
           }
           timelineItems(
-            first: 100
+            first: 50
             itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
           ) {
             nodes {
@@ -629,6 +661,7 @@ function toGitHubIssue(
   node: GitHubGraphqlIssueNode,
   labels: string[],
   timeline: { history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] },
+  closingPullRequests: GitHubPullRequest[],
 ): GitHubIssue {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
@@ -647,6 +680,7 @@ function toGitHubIssue(
     claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),
     history: timeline.history,
     comments: timeline.comments,
+    closingPullRequests,
   };
 }
 

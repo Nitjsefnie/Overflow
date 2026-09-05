@@ -5,10 +5,6 @@ export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
 
 export type ReconciliationGateway = {
   listIssues(repository: GitHubRepositoryReference): Promise<GitHubIssue[]>;
-  getIssueClosingPullRequests(
-    repository: GitHubRepositoryReference,
-    issueNumber: number,
-  ): Promise<GitHubPullRequest[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
@@ -88,19 +84,13 @@ async function reconcileRepositoryWhileCoordinated(
 
     const reference = toRepositoryReference(repository.ownerName);
     const githubIssues = await dependencies.github.listIssues(reference);
-    const issuePullRequests = await Promise.all(
-      githubIssues.map(async (issue) => ({
-        issue,
-        closingPullRequests: await dependencies.github.getIssueClosingPullRequests(reference, issue.number),
-      })),
-    );
     const pullRequestEvidence = await collectPullRequestEvidence(
       dependencies.github,
       reference,
-      issuePullRequests.flatMap(({ closingPullRequests }) => closingPullRequests),
+      githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
     );
     const authorGitHubUserIds = [...new Set(
-      issuePullRequests
+      githubIssues
         .flatMap(({ closingPullRequests }) => closingPullRequests.map((pullRequest) => pullRequest.authorGitHubUserId))
         .filter((githubUserId): githubUserId is number => githubUserId !== null),
     )];
@@ -108,10 +98,10 @@ async function reconcileRepositoryWhileCoordinated(
     const snapshot: RepositoryFoldSnapshot = {
       repository,
       users,
-      issues: issuePullRequests.map(({ issue, closingPullRequests }) => ({
+      issues: githubIssues.map((issue) => ({
         ...issue,
         claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
-        closingPullRequests: closingPullRequests.map((pullRequest) => ({
+        closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
           ...pullRequest,
           reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],
           rawDiff: pullRequestEvidence.get(pullRequest.id)?.rawDiff ?? "",

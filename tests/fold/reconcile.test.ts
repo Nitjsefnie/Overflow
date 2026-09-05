@@ -5,11 +5,42 @@ import {
   type ReconciliationDependencies,
 } from "@/lib/fold/reconcile";
 import type { FoldResult } from "@/lib/fold/repository-fold";
-import type { GitHubRepositoryReference } from "@/lib/github/types";
+import { GitHubGateway } from "@/lib/github/client";
+import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
 import { runReconciliationCli } from "../../scripts/reconcile";
 
 describe("reconcileRepository", () => {
+  it("reconciles closing references with exactly one GraphQL request per issue page", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 3, changes: 0, removals: 0 });
+    const github = pagedReconciliationGateway(requests, false);
+    const { store } = reconciliationDependencies({ materialize });
+
+    await reconcileRepository({ store, github }, "repository");
+
+    expect(materialize.mock.calls[0]![0].fold.issues.map((issue: { githubIssueId: number }) => issue.githubIssueId))
+      .toEqual([101, 102, 103]);
+    expect(requests).toEqual([
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: null } },
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: "issues-next" } },
+    ]);
+  });
+
+  it("preserves the complete fold and ordering for a fixed paged fixture with merged closing references", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 3, changes: 0, removals: 0 });
+    const { store } = reconciliationDependencies({ materialize });
+    await reconcileRepository({ store, github: pagedReconciliationGateway(requests, true) }, "repository");
+    const fold = materialize.mock.calls[0]![0].fold as FoldResult;
+    expect(fold.issues.map((issue) => issue.githubIssueId)).toEqual([101, 102, 103]);
+    expect(fold.pullRequests.map((pullRequest) => pullRequest.githubPullRequestId)).toEqual([201, 202, 203]);
+    expect(fold.settlements.map((settlement) => [settlement.githubIssueId, settlement.githubPullRequestId]))
+      .toEqual([[101, 201], [102, 202], [103, 203]]);
+    // Captured from the pre-batching implementation at commit 136449c.
+    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+  });
+
   it("builds a complete authoritative snapshot from GraphQL closing PR references and reports deltas", async () => {
     const materialize = vi.fn().mockResolvedValue({ adds: 2, changes: 1, removals: 3 });
     const dependencies = reconciliationDependencies({ materialize });
@@ -23,10 +54,6 @@ describe("reconcileRepository", () => {
       changes: 1,
       removals: 3,
     });
-    expect(dependencies.github.getIssueClosingPullRequests).toHaveBeenCalledWith(
-      { owner: "octo", name: "example" },
-      1,
-    );
     expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(
       { owner: "octo", name: "example" },
       11,
@@ -49,12 +76,15 @@ describe("reconcileRepository", () => {
   it("looks up distinct author ids once and excludes authors without an id", async () => {
     const dependencies = reconciliationDependencies({
       github: {
-        getIssueClosingPullRequests: vi.fn().mockResolvedValue([
-          reconciliationPullRequest({ id: 201, number: 11 }),
-          { ...reconciliationPullRequest({ id: 202, number: 12 }), authorGitHubUserId: 3001 },
-          reconciliationPullRequest({ id: 203, number: 13 }),
-          { ...reconciliationPullRequest({ id: 204, number: 14 }), authorGitHubUserId: null },
-        ]),
+        listIssues: vi.fn().mockResolvedValue([{
+          ...reconciliationIssue({ id: 101, number: 1 }),
+          closingPullRequests: [
+            reconciliationPullRequest({ id: 201, number: 11 }),
+            { ...reconciliationPullRequest({ id: 202, number: 12 }), authorGitHubUserId: 3001 },
+            reconciliationPullRequest({ id: 203, number: 13 }),
+            { ...reconciliationPullRequest({ id: 204, number: 14 }), authorGitHubUserId: null },
+          ],
+        }]),
       },
     });
 
@@ -78,8 +108,9 @@ describe("reconcileRepository", () => {
     const dependencies = reconciliationDependencies({
       materialize,
       github: {
-        listIssues: vi.fn().mockResolvedValue(reverse ? [...issues].reverse() : issues),
-        getIssueClosingPullRequests: vi.fn(async (_repository, issueNumber: number) => pullRequests.get(issueNumber) ?? []),
+        listIssues: vi.fn().mockResolvedValue((reverse ? [...issues].reverse() : issues).map((issue) => ({
+          ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
+        }))),
       },
     });
     dependencies.store.findUsersByGitHubUserIds = vi.fn().mockResolvedValue([
@@ -140,7 +171,6 @@ describe("reconcileRepository", () => {
       },
     ];
     let snapshotIndex = 0;
-    let currentSnapshot = snapshots[0]!;
     const materialize = vi.fn((input: { repositoryId: string; runId: string; fold: FoldResult }) => (
       materializer.materialize(input)
     ));
@@ -153,13 +183,10 @@ describe("reconcileRepository", () => {
           if (snapshot === undefined) {
             throw new Error("No authoritative reconciliation snapshot remained.");
           }
-          currentSnapshot = snapshot;
-          return snapshot.issues;
+          return snapshot.issues.map((issue) => ({
+            ...issue, closingPullRequests: snapshot.closingPullRequests.get(issue.number) ?? [],
+          }));
         }),
-        getIssueClosingPullRequests: vi.fn(async (
-          _repository: GitHubRepositoryReference,
-          issueNumber: number,
-        ) => currentSnapshot.closingPullRequests.get(issueNumber) ?? []),
       },
     });
 
@@ -333,6 +360,21 @@ function reconciliationDependencies(
   const github = {
     listIssues: vi.fn().mockResolvedValue([
       {
+        closingPullRequests: [
+          {
+            id: 201,
+            number: 11,
+            title: "Pull request",
+            body: "Pull request body",
+            url: "https://github.com/octo/example/pull/11",
+            state: "MERGED",
+            mergedAt: "2026-09-01T12:00:00.000Z",
+            mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+            finalCommitAt: "2026-09-01T10:00:00.000Z",
+            authorLogin: "contributor",
+            authorGitHubUserId: 2001,
+          },
+        ],
         id: 101,
         number: 1,
         title: "Issue",
@@ -356,21 +398,6 @@ function reconciliationDependencies(
           createdAt: "2026-09-01T11:30:00.000Z",
           lastEditedAt: null,
         }],
-      },
-    ]),
-    getIssueClosingPullRequests: vi.fn().mockResolvedValue([
-      {
-        id: 201,
-        number: 11,
-        title: "Pull request",
-        body: "Pull request body",
-        url: "https://github.com/octo/example/pull/11",
-        state: "MERGED",
-        mergedAt: "2026-09-01T12:00:00.000Z",
-        mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
-        finalCommitAt: "2026-09-01T10:00:00.000Z",
-        authorLogin: "contributor",
-        authorGitHubUserId: 2001,
       },
     ]),
     getPullRequestReviews: vi.fn().mockResolvedValue([]),
@@ -487,4 +514,78 @@ function reconciliationPullRequest(input: { id: number; number: number }) {
     authorLogin: "contributor",
     authorGitHubUserId: 2001,
   };
+}
+
+function pagedReconciliationGateway(
+  requests: Array<{ operation: string; variables: Record<string, unknown> }>,
+  merged: boolean,
+): GitHubGateway {
+  const pageInfo = { hasNextPage: false, endCursor: null };
+  const pullRequestNode = (number: number) => {
+    const pullRequest = reconciliationPullRequest({ id: 200 + number, number: 10 + number });
+    return {
+      ...pullRequest,
+      databaseId: pullRequest.id,
+      state: merged ? "MERGED" : "OPEN",
+      mergedAt: merged ? pullRequest.mergedAt : null,
+      mergeCommit: merged ? { oid: pullRequest.mergeCommitOid } : null,
+      commits: { nodes: [{ commit: { committedDate: pullRequest.finalCommitAt } }] },
+      author: { __typename: "User", login: pullRequest.authorLogin, databaseId: pullRequest.authorGitHubUserId },
+    };
+  };
+  return new GitHubGateway({
+    accessToken: "test-token",
+    fetch: async (input, init) => {
+      if (String(input).endsWith("/graphql")) {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const operation = /query (\w+)/.exec(query)![1]!;
+        requests.push({ operation, variables });
+        if (operation === "RepositoryIssues") {
+          const numbers = variables.cursor === null ? [3, 1] : [2];
+          const nodes = numbers.map((number) => {
+            const issue = reconciliationIssue({ id: 100 + number, number });
+            return {
+              ...issue,
+              databaseId: issue.id,
+              author: { login: issue.authorLogin },
+              labels: { nodes: issue.labels.map((name) => ({ name })), pageInfo },
+              assignees: { nodes: [{ login: "contributor" }] },
+              timelineItems: {
+                nodes: [
+                  ...issue.history.map((event) => ({
+                    ...event,
+                    __typename: event.kind === "ASSIGNED" ? "AssignedEvent" : "LabeledEvent",
+                    actor: { login: event.actorLogin },
+                    label: { name: event.label },
+                    assignee: { login: event.assigneeLogin },
+                  })),
+                  ...issue.comments.map((comment) => ({
+                    ...comment, __typename: "IssueComment", author: { login: comment.authorLogin },
+                  })),
+                ],
+                pageInfo,
+              },
+              ...(/closedByPullRequestsReferences\(first: 20, includeClosedPrs: true\)/.test(query)
+                ? { closedByPullRequestsReferences: { nodes: [pullRequestNode(number)], pageInfo } }
+                : {}),
+            };
+          });
+          return Response.json({ data: { repository: { issues: {
+            nodes,
+            pageInfo: variables.cursor === null ? { hasNextPage: true, endCursor: "issues-next" } : pageInfo,
+          } } } });
+        }
+        if (operation === "ClosingPullRequests") {
+          return Response.json({ data: { repository: { issue: {
+            closedByPullRequestsReferences: { nodes: [pullRequestNode(variables.issueNumber)], pageInfo },
+          } } } });
+        }
+        if (operation === "PullRequestReviews") {
+          return Response.json({ data: { repository: { pullRequest: { reviews: { nodes: [], pageInfo } } } } });
+        }
+        throw new Error(`Unexpected operation ${operation}`);
+      }
+      return new Response("diff");
+    },
+  });
 }

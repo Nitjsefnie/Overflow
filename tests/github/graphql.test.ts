@@ -387,6 +387,118 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
 });
 
 describe("GitHubGateway GraphQL source adapter", () => {
+  it("logs optional per-page cost only with DEBUG_GITHUB_COST enabled", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const queries: string[] = [];
+    let includeRateLimit = true;
+    const gateway = new GitHubGateway({
+      accessToken: "test-token",
+      fetch: async (_input, init) => {
+        queries.push(JSON.parse(String(init?.body)).query);
+        return Response.json({ data: {
+          repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          ...(includeRateLimit ? { rateLimit: { cost: 17, remaining: 4983 } } : {}),
+        } });
+      },
+    });
+    try {
+      vi.stubEnv("DEBUG_GITHUB_COST", undefined);
+      await gateway.listIssues({ owner: "octo", name: "overflow" });
+      expect(info).not.toHaveBeenCalled();
+      vi.stubEnv("DEBUG_GITHUB_COST", "1");
+      await gateway.listIssues({ owner: "octo", name: "overflow" });
+      expect(info.mock.calls).toEqual([["GitHub RepositoryIssues cost", {
+        repository: "octo/overflow", cursor: null, cost: 17, remaining: 4983,
+      }]]);
+      includeRateLimit = false;
+      await expect(gateway.listIssues({ owner: "octo", name: "overflow" })).resolves.toEqual([]);
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(queries.every((query) => /rateLimit\s*\{\s*cost\s+remaining\s*\}/.test(query))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      info.mockRestore();
+    }
+  });
+
+  it.each([
+    { connection: "labels", first: 20, total: 25, operation: "IssueLabels" },
+    { connection: "timelineItems", first: 50, total: 60, operation: "IssueTimeline" },
+  ])("assembles all $total $connection from a smaller nested page and its remainder", async ({ connection, first, total, operation }) => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const queries: string[] = [];
+    const nodes = Array.from({ length: total }, (_, index) => connection === "labels"
+      ? { name: `label-${index}` }
+      : {
+          __typename: "LabeledEvent", id: `event-${index}`, actor: { login: "owner" },
+          createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(), label: { name: `label-${index}` },
+        });
+    const gateway = new GitHubGateway({
+      accessToken: "test-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const requestedOperation = /query (\w+)/.exec(query)![1]!;
+        requests.push({ operation: requestedOperation, variables });
+        queries.push(query);
+        if (requestedOperation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: {
+            nodes: [{ ...issueNode(101, 1, "Overflow"), [connection]: {
+              nodes: nodes.slice(0, first), pageInfo: { hasNextPage: true, endCursor: "nested-next" },
+            } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } });
+        }
+        return Response.json({ data: { repository: { issue: { [connection]: {
+          nodes: nodes.slice(first), pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } });
+      },
+    });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+    expect(connection === "labels" ? issue?.labels : issue?.history.map((event) => event.id))
+      .toEqual(Array.from({ length: total }, (_, index) => `${connection === "labels" ? "label" : "event"}-${index}`));
+    expect(requests).toEqual([
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
+      { operation, variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: "nested-next" } },
+    ]);
+    expect(queries[0]).toMatch(new RegExp(`${connection}\\(\\s*first: ${first}\\b`));
+  });
+
+  it("appends closing references after the nested twenty using one overflow request", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const nodes = Array.from({ length: 21 }, (_, index) => pullRequestNode(201 + index, 11 + index));
+    const gateway = new GitHubGateway({
+      accessToken: "test-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const operation = /query (\w+)/.exec(query)![1]!;
+        requests.push({ operation, variables });
+        if (operation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: {
+            nodes: [{ ...issueNode(101, 1, "Many references"), closedByPullRequestsReferences: {
+              nodes: nodes.slice(0, 20), pageInfo: { hasNextPage: true, endCursor: "closing-next" },
+            } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } });
+        }
+        return Response.json({ data: { repository: { issue: { closedByPullRequestsReferences: {
+          nodes: nodes.slice(20), pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } });
+      },
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+    expect(issue?.closingPullRequests).toEqual(nodes.map((node) => ({
+      id: node.databaseId, number: node.number, title: node.title, body: node.body, url: node.url,
+      state: node.state, mergedAt: node.mergedAt, mergeCommitOid: node.mergeCommit.oid,
+      finalCommitAt: node.commits.nodes[0]!.commit.committedDate, authorLogin: node.author.login,
+    })));
+    expect(requests).toEqual([
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
+      { operation: "ClosingPullRequests", variables: {
+        owner: "octo", name: "overflow", issueNumber: 1, cursor: "closing-next",
+      } },
+    ]);
+  });
+
   it("collects paginated immutable issue label, assignment, and owner-comment history", async () => {
     const historyCursors: Array<string | null> = [];
     const queries: string[] = [];
@@ -591,6 +703,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         claimAssigneeGitHubLogin: null,
         history: [],
         comments: [],
+        closingPullRequests: [],
       },
       {
         id: 102,
@@ -605,6 +718,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         claimAssigneeGitHubLogin: null,
         history: [],
         comments: [],
+        closingPullRequests: [],
       },
     ]);
     expect(cursors).toEqual([null, "cursor-2"]);
@@ -1162,6 +1276,7 @@ function issueNode(
     author: { login: "owner" },
     labels,
     assignees: { nodes: assignees },
+    closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
     timelineItems: {
       nodes: [],
       pageInfo: { hasNextPage: false, endCursor: null },
