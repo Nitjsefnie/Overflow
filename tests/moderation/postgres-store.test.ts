@@ -303,6 +303,72 @@ describe("PostgreSQL account moderation transitions", () => {
     `).resolves.toEqual([{ prior_state: openedState, new_state: substantiatedState }]);
   });
 
+  it.each(["open-then-close", "close-then-open"] as const)(
+    "dismissal preserves authorized recalibration closure in %s order",
+    async (order) => {
+      const moderatorId = await insertUser("MODERATOR");
+      const targetId = await insertUser("MEMBER");
+      const repositoryId = await insertRepository(targetId);
+      const pairs = await insertCalibrationPairs({ targetId, repositoryId, count: 10 });
+      const store = new PostgresModerationStore(sql);
+      const input = auditInput({
+        actorId: moderatorId,
+        targetAccountId: targetId,
+        repositoryId,
+        sampleStartedAt: "2020-01-01T00:00:00.000Z",
+        sampleEndedAt: "2030-01-01T00:00:00.000Z",
+        ...pairs,
+      });
+      for (const count of [1, 2]) {
+        const audit = await openAudit(store, input);
+        await expect(store.substantiateAccountAudit({
+          actorId: moderatorId,
+          auditId: audit.id,
+          reason: `Independent review confirms pattern ${count}.`,
+        })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
+      }
+      expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
+      expect(await repositoryStates(targetId)).toEqual([{ id: repositoryId, active: false }]);
+
+      const openedBeforeClosure = order === "open-then-close" ? await openAudit(store, input) : null;
+      await expect(store.closeRecalibration({
+        actorId: moderatorId,
+        targetAccountId: targetId,
+        plan: "The account completed the authorized recalibration plan.",
+      })).resolves.toMatchObject({
+        kind: "ok",
+        value: { targetState: "ACTIVE", confirmedPatternCount: 2, reactivatedRepositoryCount: 1 },
+      });
+      expect(await targetState(targetId)).toEqual({ state: "ACTIVE", confirmedCount: 2 });
+      const opened = openedBeforeClosure ?? await openAudit(store, input);
+      const stateBeforeDismissal = order === "open-then-close" ? "ACTIVE" : "UNDER_AUDIT";
+      await expect(sql`
+        select state, prior_enforcement_state from calibration_audits where id = ${opened.id}
+      `).resolves.toEqual([{
+        state: "OPEN",
+        prior_enforcement_state: order === "open-then-close" ? "RECALIBRATING" : "ACTIVE",
+      }]);
+
+      const dismissed = await store.dismissAccountAudit({
+        actorId: moderatorId,
+        auditId: opened.id,
+        reason: "The overlapping audit did not substantiate another pattern.",
+      });
+
+      expect.soft(await targetState(targetId)).toEqual({ state: "ACTIVE", confirmedCount: 2 });
+      expect.soft(await repositoryStates(targetId)).toEqual([{ id: repositoryId, active: true }]);
+      expect.soft(dismissed).toMatchObject({
+        kind: "ok",
+        value: { state: "DISMISSED", targetState: "ACTIVE", confirmedPatternCount: 2 },
+      });
+      await expect.soft(sql`
+        select prior_state, new_state from moderation_events
+        where audit_id = ${opened.id}
+          and reason = ${"The overlapping audit did not substantiate another pattern."}
+      `).resolves.toEqual([{ prior_state: stateBeforeDismissal, new_state: "ACTIVE" }]);
+    },
+  );
+
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);
