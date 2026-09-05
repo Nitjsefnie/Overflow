@@ -37,7 +37,7 @@ const recorded: SettlementOverrideRequest = {
 };
 
 const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
-  guardedRequests("https://overflow.test/api/overrides");
+  guardedRequests("/api/overrides");
 
 useTrustedOrigin();
 
