@@ -453,7 +453,7 @@ type GitHubGraphqlPullRequestNode = {
   mergedAt: string | null;
   mergeCommit: { oid: string } | null;
   commits: { nodes: Array<{ commit: { committedDate: string } }> };
-  author: { login: string } | null;
+  author: { login: string; databaseId?: number | null } | null;
 };
 
 type GitHubGraphqlIssueTimelineNode =
@@ -554,7 +554,7 @@ const closingPullRequestsQuery = `
             commits(last: 1) {
               nodes { commit { committedDate } }
             }
-            author { login }
+            author { login ... on User { databaseId } }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -678,7 +678,13 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     mergeCommitOid: node.mergeCommit?.oid ?? null,
     finalCommitAt: node.commits.nodes.at(-1)?.commit.committedDate ?? null,
     authorLogin: node.author?.login ?? null,
+    authorGitHubUserId: authorGitHubUserId(node.author),
   };
+}
+
+function authorGitHubUserId(author: GitHubGraphqlPullRequestNode["author"]): number | null {
+  const databaseId = author?.databaseId;
+  return typeof databaseId === "number" && Number.isSafeInteger(databaseId) && databaseId > 0 ? databaseId : null;
 }
 
 function toGitHubIssueTimelineItem(

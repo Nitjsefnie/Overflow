@@ -746,13 +746,71 @@ describe("GitHubGateway GraphQL source adapter", () => {
         mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
         finalCommitAt: "2026-09-04T10:00:00.000Z",
         authorLogin: "contributor",
+        authorGitHubUserId: 7001,
       },
     ]);
     expect(query).toMatch(/closedByPullRequestsReferences\(first:\s*100/);
     expect(query).toContain("includeClosedPrs: true");
+    expect(query).toMatch(/author\s*\{\s*login\s*\.\.\.\s*on\s+User\s*\{\s*databaseId\s*\}\s*\}/);
     expect(query).not.toContain("timelineItems");
     expect(askedForRestTimeline).toBe(false);
   });
+
+  it("carries no author id when the closing pull request author is not a GitHub user", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () =>
+        Response.json({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [
+                    pullRequestNode(202, 5, { login: "dependabot[bot]" }),
+                    pullRequestNode(203, 6, null),
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    });
+
+    await expect(
+      gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 202, authorLogin: "dependabot[bot]", authorGitHubUserId: null }),
+      expect.objectContaining({ id: 203, authorLogin: null, authorGitHubUserId: null }),
+    ]);
+  });
+
+  it.each([null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "carries no author id for an invalid databaseId of %s",
+    async (databaseId) => {
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async () => Response.json({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [pullRequestNode(201, 4, { login: "contributor", databaseId })],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      });
+
+      await expect(
+        gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1),
+      ).resolves.toEqual([
+        expect.objectContaining({ id: 201, authorLogin: "contributor", authorGitHubUserId: null }),
+      ]);
+    },
+  );
 
   it("carries the exact merge commit OID and final PR commit time from GraphQL", async () => {
     let query = "";
@@ -783,6 +841,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(pullRequest).toMatchObject({
       mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
       finalCommitAt: "2026-09-04T10:00:00.000Z",
+      authorGitHubUserId: 7001,
     });
     expect(query).toMatch(/mergeCommit\s*\{\s*oid\s*\}/);
     expect(query).toMatch(/commits\(last:\s*1\)/);
@@ -1084,6 +1143,7 @@ function issueNode(
 function pullRequestNode(
   id: number,
   number: number,
+  author: { login: string; databaseId?: number | null } | null = { login: "contributor", databaseId: 7001 },
 ) {
   return {
     databaseId: id,
@@ -1097,7 +1157,7 @@ function pullRequestNode(
     commits: {
       nodes: [{ commit: { committedDate: "2026-09-04T10:00:00.000Z" } }],
     },
-    author: { login: "contributor" },
+    author,
   };
 }
 

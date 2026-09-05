@@ -2571,6 +2571,7 @@ function authoritativePullRequest(input: {
   id: number;
   number: number;
   authorLogin: string;
+  authorGitHubUserId?: number;
 }): GitHubPullRequest {
   return {
     id: input.id,
@@ -2583,6 +2584,7 @@ function authoritativePullRequest(input: {
     mergeCommitOid: input.id.toString(16).padStart(40, "0"),
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
+    authorGitHubUserId: input.authorGitHubUserId ?? null,
   };
 }
 
@@ -2717,6 +2719,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       mergeCommitOid: pullRequest.mergeCommitOid,
       finalCommitAt: pullRequest.finalCommitAt,
       authorLogin: pullRequest.authorLogin,
+      authorGitHubUserId: null,
     })),
   ]));
   const evidenceByPullRequest = new Map(snapshot.issues.flatMap((issue) => (

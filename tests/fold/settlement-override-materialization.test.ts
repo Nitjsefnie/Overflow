@@ -332,5 +332,6 @@ function mergedPullRequest(input: { id: number; number: number }): GitHubPullReq
     mergeCommitOid: input.id.toString(16).padStart(40, "0"),
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: contributorLogin,
+    authorGitHubUserId: null,
   };
 }
