@@ -204,13 +204,20 @@ function parseUnitFile(source: string): UnitEntry[] {
  * resolved the way the kernel resolves it: repeated separators collapse and
  * `..` segments are removed, and the comparison lands on a segment boundary so
  * `/rootless` is not a match.
+ *
+ * systemd's own prefixes come off first. A `-` in front of a path makes it
+ * optional (`EnvironmentFile=-/root/overflow.env` is a live reference to
+ * `/root`, accepted by `systemd-analyze verify`), and a command line may carry
+ * `-@+!:`. A raw prefix test reads all of those as "not a path at all".
  */
 function isUnderRoot(candidate: string): boolean {
-  if (!candidate.startsWith("/")) {
+  const unprefixed = candidate.replace(/^[-@+!:]+/, "");
+
+  if (!unprefixed.startsWith("/")) {
     return false;
   }
 
-  const normalized = posix.normalize(candidate.replace(/^\/+/, "/"));
+  const normalized = posix.normalize(unprefixed.replace(/^\/+/, "/"));
   const path = normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 
   return path === "/root" || path.startsWith("/root/");
@@ -458,8 +465,12 @@ describe("systemd unit parsing", () => {
     ["//root/overflow", true],
     ["/srv/../root/overflow", true],
     ["/root/../srv/overflow", false],
+    ["-/root/overflow.env", true],
+    ["+/root/evil", true],
     ["/rootless/overflow", false],
     ["/srv/overflow", false],
+    ["-/srv/overflow", false],
+    ["-R", false],
   ])("resolves %s before testing it against /root", (candidate, expected) => {
     expect(isUnderRoot(candidate)).toBe(expected);
   });
