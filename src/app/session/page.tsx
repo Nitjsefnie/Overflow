@@ -6,7 +6,7 @@ type SessionRecoveryProps = {
 };
 
 type SessionPageProps = {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export function SessionRecovery({ reason }: SessionRecoveryProps) {
@@ -44,8 +44,8 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
   );
 }
 
-export default async function SessionPage({ searchParams }: SessionPageProps = {}) {
-  const query = searchParams === undefined ? {} : await searchParams;
+export default async function SessionPage({ searchParams }: SessionPageProps) {
+  const query = await searchParams;
   const reason = query.reason;
   return <SessionRecovery reason={typeof reason === "string" ? reason : undefined} />;
 }
