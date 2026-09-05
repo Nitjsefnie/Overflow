@@ -9,6 +9,7 @@ import { GitHubGateway } from "@/lib/github/client";
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
 import { runReconciliationCli } from "../../scripts/reconcile";
+import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("reconcileRepository", () => {
   it("reconciles closing references with exactly one GraphQL request per issue page", async () => {
@@ -39,6 +40,33 @@ describe("reconcileRepository", () => {
       .toEqual([[101, 201], [102, 202], [103, 203]]);
     // Captured from the pre-batching implementation at commit 136449c.
     expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+  });
+
+  it("settles from the only merged closing reference on the second continuation", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 3, changes: 0, removals: 0 });
+    const { store } = reconciliationDependencies({ materialize });
+    await reconcileRepository({ store, github: pagedReconciliationGateway(requests, true, 121) }, "repository");
+
+    const fold = materialize.mock.calls[0]![0].fold as FoldResult;
+    expect(fold.settlements.map(({ githubIssueId, githubPullRequestId, status, credits }) => (
+      [githubIssueId, githubPullRequestId, status, credits]
+    ))).toEqual([[101, 201, "SETTLED", 6], [102, 202, "SETTLED", 6], [103, 203, "SETTLED", 6]]);
+    expect(fold.ledgerEntries.map(({ accountId, amount }) => [accountId, amount])).toEqual([
+      ["contributor", 6], ["sponsor", -6],
+      ["contributor", 6], ["sponsor", -6],
+      ["contributor", 6], ["sponsor", -6],
+    ]);
+    // The 120 unmerged references per issue must not alter any part of the baseline fold.
+    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+    expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-last" } },
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 1, cursor: "closing-1-next" } },
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 1, cursor: "closing-1-last" } },
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 2, cursor: "closing-2-next" } },
+      { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 2, cursor: "closing-2-last" } },
+    ]);
   });
 
   it("builds a complete authoritative snapshot from GraphQL closing PR references and reports deltas", async () => {
@@ -519,6 +547,7 @@ function reconciliationPullRequest(input: { id: number; number: number }) {
 function pagedReconciliationGateway(
   requests: Array<{ operation: string; variables: Record<string, unknown> }>,
   merged: boolean,
+  closingReferenceCount: 1 | 121 = 1,
 ): GitHubGateway {
   const pageInfo = { hasNextPage: false, endCursor: null };
   const pullRequestNode = (number: number) => {
@@ -533,6 +562,18 @@ function pagedReconciliationGateway(
       author: { __typename: "User", login: pullRequest.authorLogin, databaseId: pullRequest.authorGitHubUserId },
     };
   };
+  const closingReferences = (number: number) => [
+    ...Array.from({ length: closingReferenceCount - 1 }, (_, index) => ({
+      ...pullRequestNode(number),
+      databaseId: 10_000 + number * 1000 + index,
+      number: 1000 + number * 1000 + index,
+      url: `https://github.com/octo/example/pull/${1000 + number * 1000 + index}`,
+      state: "CLOSED",
+      mergedAt: null,
+      mergeCommit: null,
+    })),
+    pullRequestNode(number),
+  ];
   return new GitHubGateway({
     accessToken: "test-token",
     fetch: async (input, init) => {
@@ -541,6 +582,10 @@ function pagedReconciliationGateway(
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, variables });
         if (operation === "RepositoryIssues") {
+          assertClosingPullRequestQuery(query, operation);
+          if (variables.cursor !== null && variables.cursor !== "issues-next") {
+            throw new Error(`Unmodeled issue cursor: ${variables.cursor}`);
+          }
           const numbers = variables.cursor === null ? [3, 1] : [2];
           const nodes = numbers.map((number) => {
             const issue = reconciliationIssue({ id: 100 + number, number });
@@ -565,9 +610,12 @@ function pagedReconciliationGateway(
                 ],
                 pageInfo,
               },
-              ...(/closedByPullRequestsReferences\(first: 20, includeClosedPrs: true\)/.test(query)
-                ? { closedByPullRequestsReferences: { nodes: [pullRequestNode(number)], pageInfo } }
-                : {}),
+              closedByPullRequestsReferences: {
+                nodes: closingReferences(number).slice(0, 20),
+                pageInfo: closingReferenceCount === 121
+                  ? { hasNextPage: true, endCursor: `closing-${number}-next` }
+                  : pageInfo,
+              },
             };
           });
           return Response.json({ data: { repository: { issues: {
@@ -576,8 +624,23 @@ function pagedReconciliationGateway(
           } } } });
         }
         if (operation === "ClosingPullRequests") {
+          assertClosingPullRequestQuery(query, operation);
+          const { issueNumber, cursor } = variables;
+          const modeledCursors: Array<string | null> = closingReferenceCount === 1
+            ? [null]
+            : [`closing-${issueNumber}-next`, `closing-${issueNumber}-last`];
+          if (![1, 2, 3].includes(issueNumber) ||
+              !modeledCursors.includes(cursor)) {
+            throw new Error(`Unmodeled closing-reference request: ${JSON.stringify(variables)}`);
+          }
+          const start = cursor === null ? 0 : cursor === `closing-${issueNumber}-next` ? 20 : 120;
           return Response.json({ data: { repository: { issue: {
-            closedByPullRequestsReferences: { nodes: [pullRequestNode(variables.issueNumber)], pageInfo },
+            closedByPullRequestsReferences: {
+              nodes: closingReferences(issueNumber).slice(start, start + 100),
+              pageInfo: start + 100 < closingReferenceCount
+                ? { hasNextPage: true, endCursor: `closing-${issueNumber}-last` }
+                : pageInfo,
+            },
           } } } });
         }
         if (operation === "PullRequestReviews") {
