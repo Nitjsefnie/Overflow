@@ -150,6 +150,7 @@ describe("rating authority", () => {
 
   it("keeps the sponsor's own priced and closed work as calibration evidence", () => {
     const snapshot = evidenceFixture({ pullRequestAuthor: "sponsor" });
+    snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = 1001;
 
     const result = foldRepository(snapshot);
 
@@ -763,7 +764,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
       id: "repository",
       ownerName: "octo/example",
       active: true,
-      sponsor: { id: "sponsor", githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
+      sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
       difficultyScheme: {
         openingName: "Size",
         actualName: "Delivered",
@@ -776,9 +777,9 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
       },
     },
     users: [
-      { id: "sponsor", githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
-      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
-      { id: "maintainer", githubLogin: "maintainer", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "sponsor", githubUserId: 1001, githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "maintainer", githubUserId: 3001, githubLogin: "maintainer", enforcementState: "ACTIVE", moderationEvents: [] },
     ],
     issues: [
       {
@@ -818,6 +819,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
             mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: logins.pullRequestAuthor,
+            authorGitHubUserId: 2001,
             reviews: [],
             rawDiff: "diff",
           },
