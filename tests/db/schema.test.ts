@@ -1986,11 +1986,18 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresApiTokenStore(sql);
 
     const issued = await store.issueToken(userId, apiTokenHash("summary-first"));
-    await expect(store.getTokenSummary(userId)).resolves.toEqual({ createdAt: issued.createdAt });
+    expect(issued.createdAt).toBeInstanceOf(Date);
+    const summary = await store.getTokenSummary(userId);
+    expect(summary?.createdAt).toBeInstanceOf(Date);
+    expect(summary).toEqual({ createdAt: issued.createdAt });
 
+    const [backdated] = await sql<{ created_at: Date }[]>`
+      update api_tokens set created_at = now() - interval '1 hour' where user_id = ${userId}
+      returning created_at
+    `;
     const reissued = await store.issueToken(userId, apiTokenHash("summary-second"));
     await expect(store.getTokenSummary(userId)).resolves.toEqual({ createdAt: reissued.createdAt });
-    expect(reissued.createdAt).not.toEqual(issued.createdAt);
+    expect(reissued.createdAt.getTime()).toBeGreaterThan(backdated.created_at.getTime());
   });
 });
 

@@ -124,9 +124,10 @@ Success is HTTP `201`. Example body (identifiers vary):
 }
 ```
 
-`existingWorkIngested` reports whether the initial reconciliation imported
-existing work. If it is `false`, the repository is still registered; arrange a
-[reconciliation](#reconciliation) to retry the import instead of registering it again.
+`existingWorkIngested` reports whether the initial reconciliation completed
+successfully, including when it finds no existing work. If it is `false`, the
+repository is still registered; arrange a [reconciliation](#reconciliation) to
+retry instead of registering it again.
 
 Errors have `{ "error": { "code": "...", "message": "..." } }`. Match the HTTP
 status and code, then use the message to distinguish causes:

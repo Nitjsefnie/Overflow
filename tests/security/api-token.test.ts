@@ -62,6 +62,7 @@ describe("Overflow API token hashing", () => {
     ["the prefix alone", apiTokenPrefix],
     ["a token with the prefix stripped", "a".repeat(43)],
     ["a token with the wrong prefix", `ovf-${"a".repeat(43)}`],
+    ["a token with an uppercase prefix", `OVF_${"a".repeat(43)}`],
     ["a token with another product's prefix", `tok_${"a".repeat(43)}`],
     ["a token one character short", `${apiTokenPrefix}${"a".repeat(42)}`],
     ["a token one character long", `${apiTokenPrefix}${"a".repeat(44)}`],
