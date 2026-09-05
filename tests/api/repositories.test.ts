@@ -5,7 +5,10 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import type { RepositoryRouteSession } from "@/app/api/repositories/route";
 
-import type { RepositoryRegistrationDependencies } from "@/lib/repositories/register";
+import {
+  RepositoryRegistrationEnforcementError,
+  type RepositoryRegistrationDependencies,
+} from "@/lib/repositories/register";
 import { POST, createRepositoryPostHandler } from "@/app/api/repositories/route";
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
@@ -370,8 +373,11 @@ function authorizedRequest(body: unknown = validInput(), credential = apiToken):
 }
 
 describe("Overflow token registration", () => {
-  it("registers with a valid token using the resolved account and never reads the cookie", async () => {
-    const fixture = tokenFixture();
+  it.each([
+    tokenAccount,
+    { id: "second-token-account-id", role: "MODERATOR", enforcementState: "ACTIVE" } as const,
+  ])("registers with a valid token for $id using the resolved account and never reads the cookie", async (account) => {
+    const fixture = tokenFixture(account);
     const response = await fixture.handler(authorizedRequest());
     expect(response.status).toBe(201);
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
@@ -379,7 +385,7 @@ describe("Overflow token registration", () => {
       Buffer.from("51b3006ae4667cdab12fc9e6cff7af0bc53f857338b2cbbe074efd5e27a83fd1", "hex"),
     );
     expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
-      user: { id: "token-account-id", role: "MEMBER" },
+      user: { id: account.id, role: account.role },
     });
     const body = await response.json();
     expect(body).toEqual({
@@ -387,7 +393,7 @@ describe("Overflow token registration", () => {
         id: "repository-id",
         githubRepositoryId: 42,
         ownerName: "octo/overflow",
-        sponsorId: "token-account-id",
+        sponsorId: account.id,
         visibility: "PUBLIC",
         githubWebhookId: 501,
       },
@@ -459,6 +465,10 @@ describe("Overflow token registration", () => {
     ["payload", 400, "INVALID_REQUEST", "Invalid repository registration request."],
     ["domain input", 400, "INVALID_INPUT", "Submit one GitHub repository as owner/name or a canonical GitHub URL."],
     ["banned", 403, "FORBIDDEN", "The account is not eligible to register repositories."],
+    ["private repository", 403, "FORBIDDEN", "Only public GitHub repositories can be registered."],
+    ["repository lookup", 502, "UPSTREAM_FAILURE", "Unable to save the repository registration."],
+    ["repository creation", 502, "UPSTREAM_FAILURE", "Unable to save the repository registration."],
+    ["write-time enforcement", 403, "FORBIDDEN", "The account is not eligible to register repositories."],
     ["permissions", 403, "FORBIDDEN", "GitHub administrator permission is required for the submitted repository."],
     ["conflict", 409, "CONFLICT", "This GitHub repository is already registered."],
     ["github", 502, "UPSTREAM_FAILURE", "Unable to register the repository with GitHub."],
@@ -473,6 +483,26 @@ describe("Overflow token registration", () => {
         canAdminister: failure !== "permissions",
         existingRepository: failure === "conflict",
       });
+      if (failure === "private repository") {
+        const repository = await dependencies.github.getRepository({ owner: "octo", name: "overflow" });
+        dependencies.github.getRepository = async () => ({
+          ...repository, visibility: "PRIVATE", fullName: apiToken,
+        });
+      }
+      if (failure === "repository lookup") {
+        dependencies.store.findRepositoryByGitHubId = async () => { throw new Error(apiToken); };
+      }
+      if (failure === "repository creation") {
+        dependencies.store.createRepository = async () => { throw new Error(apiToken); };
+      }
+      if (failure === "write-time enforcement") {
+        dependencies.actor.enforcementState = "ACTIVE";
+        dependencies.store.createRepository = async () => {
+          const error = new RepositoryRegistrationEnforcementError();
+          error.message = apiToken;
+          throw error;
+        };
+      }
       if (failure === "banned") {
         dependencies.actor.enforcementState = "BANNED";
       }
@@ -488,8 +518,8 @@ describe("Overflow token registration", () => {
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(response.status).toBe(status);
     const body = await response.json();
+    expect.soft(JSON.stringify(body)).not.toContain(apiToken);
     expect(body).toEqual({ error: { code, message } });
-    expect(JSON.stringify(body)).not.toContain(apiToken);
   });
 
   it.each(["token", "cookie"] as const)(
