@@ -23,8 +23,9 @@ WorkingDirectory=/srv/overflow
 # systemd reads EnvironmentFile= as PID 1, before it drops to User=, so the
 # secrets file stays root:root 0600 inside a root:root 0700 directory: the
 # service account never needs, and never gets, an on-disk read path to any
-# secret. The PATH carries no component under /root, which an unprivileged
-# account cannot traverse anyway.
+# secret. The Environment= PATH below carries no component under /root.
+# EnvironmentFile= values take precedence over Environment=, so the root-owned
+# file must also be reviewed when checking the process's effective environment.
 EnvironmentFile=/etc/overflow/overflow.env
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
