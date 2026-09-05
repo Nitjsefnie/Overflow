@@ -175,6 +175,9 @@ tests/repositories/*
 !tests/security/
 tests/security/*
 !tests/security/*.ts
+!tests/support/
+tests/support/*
+!tests/support/*.ts
 !tests/webhooks/
 tests/webhooks/*
 !tests/webhooks/*.ts
