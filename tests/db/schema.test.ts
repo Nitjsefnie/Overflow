@@ -100,7 +100,62 @@ describe("initial PostgreSQL materialization", () => {
       "010_settled_evidence_ordering_grace.sql",
       "011_api_tokens.sql",
       "012_unwritable_closure_kinds.sql",
+      "014_opening_authority_precondition.sql",
     ].map((name) => ({ name, count: 1 })));
+  });
+
+  it("applies the opening authority precondition to an empty database", async () => {
+    // beforeAll migrates the fresh container database twice, exercising clean install and replay.
+    await expect(sql`
+      select name from schema_migrations where name = '014_opening_authority_precondition.sql'
+    `).resolves.toEqual([{ name: "014_opening_authority_precondition.sql" }]);
+  });
+
+  it.each([
+    { name: "non-sponsor", sponsorAuthored: false },
+    { name: "sponsor with different login case", sponsorAuthored: true },
+  ])("checks opening authority on upgrade with $name evidence", async ({ sponsorAuthored }) => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `opening_authority_upgrade_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "012_unwritable_closure_kinds.sql" });
+      const issue = await insertIssue(upgradeSql);
+      const [sponsor] = await upgradeSql<{ github_login: string }[]>`
+        select github_login from users where id = ${issue.sponsorId}
+      `;
+      await upgradeSql`
+        update issues set owner_github_login = 'contributor',
+          opening_source_event_id = 'opening-before-upgrade',
+          opening_source_actor_login = ${sponsorAuthored ? sponsor.github_login.toUpperCase() : "outsider"},
+          opening_source_at = '2026-09-01T10:00:00.000Z'
+        where id = ${issue.id}
+      `;
+      const readIssue = () => upgradeSql`select * from issues where id = ${issue.id}`;
+      const before = await readIssue();
+
+      if (sponsorAuthored) {
+        await expect(runMigrations()).resolves.toBeUndefined();
+      } else {
+        await expect(runMigrations()).rejects.toThrow(
+          `Opening authority precondition failed: 1 issue(s) have non-sponsor opening evidence. Issue ids: ${issue.id}`,
+        );
+      }
+      await expect(readIssue()).resolves.toEqual(before);
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '014_opening_authority_precondition.sql'
+      `).resolves.toEqual(sponsorAuthored ? [{ name: "014_opening_authority_precondition.sql" }] : []);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
   });
 
   it("backfills legacy unwritable closures before enforcing the kind/pull-request constraint", async () => {
