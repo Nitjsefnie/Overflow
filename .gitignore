@@ -109,6 +109,7 @@ src/lib/fold/*
 !src/lib/github/
 src/lib/github/*
 !src/lib/github/*.ts
+!src/lib/github/errors.ts
 !src/lib/moderation/
 src/lib/moderation/*
 !src/lib/moderation/*.ts

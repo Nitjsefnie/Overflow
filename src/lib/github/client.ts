@@ -1,4 +1,6 @@
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
+import { GitHubApiError } from "@/lib/github/errors";
+export { GitHubApiError } from "@/lib/github/errors";
 import type {
   GitHubIssue,
   GitHubIssueComment,
@@ -31,13 +33,6 @@ type GitHubRestRepository = {
   owner: { login: string; type?: string };
   permissions?: { admin?: boolean };
 };
-
-export class GitHubApiError extends Error {
-  public constructor(public readonly status: number) {
-    super(`GitHub API request failed with status ${status}.`);
-    this.name = "GitHubApiError";
-  }
-}
 
 export class GitHubGateway {
   private readonly accessToken: string;
@@ -365,7 +360,12 @@ export class GitHubGateway {
       }
 
       if (!response.ok) {
-        throw new GitHubApiError(response.status);
+        const retryAfter = response.headers.get("retry-after");
+        const rateLimited = response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null;
+        const retryAfterSeconds = retryAfter !== null && /^\d+$/.test(retryAfter) && Number.isSafeInteger(Number(retryAfter))
+          ? Number(retryAfter)
+          : null;
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds);
       }
 
       return response;

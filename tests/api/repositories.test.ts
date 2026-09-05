@@ -151,6 +151,69 @@ describe("POST /api/repositories", () => {
     ]);
   });
 
+  it.each([
+    [403, "GitHub refused to retrieve the submitted GitHub repository (HTTP 403)."],
+    [404, "GitHub answered 404 for the request to retrieve the submitted GitHub repository. GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization. The repository may also have been renamed, moved or deleted."],
+  ] as const)("returns actionable HTTP 403 for a lookup HTTP %s failure", async (status, observation) => {
+    const dependencies = successfulDependencies();
+    dependencies.github = failingGitHubGateway("lookup", status);
+    const handler = createRepositoryPostHandler({
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: {
+      code: "GITHUB_ACCESS",
+      message: `${observation} This may be caused by missing authorization for the Overflow OAuth application. For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
+    } });
+  });
+
+  describe.each([
+    ["lookup", "retrieve the submitted GitHub repository"],
+    ["labels", "configure difficulty labels"],
+    ["webhook", "create the repository webhook"],
+  ] as const)("%s rate-limit responses", (step, description) => {
+    it.each([
+      [403, { "x-ratelimit-remaining": "0", "retry-after": "60" }, " Retry after 60 seconds."],
+      [500, { "x-ratelimit-remaining": "0" }, ""],
+      [429, {}, ""],
+    ] satisfies Array<[number, Record<string, string>, string]>)("returns HTTP 429 for GitHub HTTP %s", async (status, headers, delay) => {
+      const dependencies = successfulDependencies();
+      dependencies.github = failingGitHubGateway(step, status, headers);
+      const handler = createRepositoryPostHandler({
+        getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+        createRegistrationDependencies: async () => dependencies,
+      });
+
+      const response = await handler(jsonRequest(validInput()));
+      expect(response.status).toBe(429);
+      const body = await response.json();
+      expect(body).toEqual({ error: {
+        code: "GITHUB_RATE_LIMITED",
+        message: `GitHub rate-limited the request to ${description} (HTTP ${status}).${delay} Please retry registration later.`,
+      } });
+      expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header|OAuth|oauth_application_policy/);
+    });
+  });
+
+  it("describes a user-owned webhook 404 as hidden or missing rather than denied", async () => {
+    const dependencies = successfulDependencies();
+    dependencies.github = failingGitHubGateway("webhook", 404, {}, "User");
+    const handler = createRepositoryPostHandler({
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: {
+      code: "GITHUB_ACCESS",
+      message: "GitHub answered 404 for the request to create the repository webhook. GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization. The repository may also have been renamed, moved or deleted since it was looked up. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.",
+    } });
+  });
+
   it("returns the registered repository after a successful explicit registration", async () => {
     const handler = createRepositoryPostHandler({
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
@@ -288,4 +351,37 @@ function successfulDependencies(
       return { adds: 0, changes: 0, removals: 0 };
     },
   };
+}
+
+function failingGitHubGateway(
+  step: "lookup" | "labels" | "webhook",
+  status: number,
+  headers: Record<string, string> = {},
+  ownerType = "Organization",
+): GitHubGateway {
+  return new GitHubGateway({
+    accessToken: "access-token-should-not-leak",
+    fetch: async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      const requestedStep = pathname.endsWith("/hooks") ? "webhook" : pathname.endsWith("/labels") ? "labels" : "lookup";
+      if (requestedStep === step) {
+        return new Response("private-body access-token-should-not-leak", {
+          status,
+          headers: { ...headers, "x-private": "private-header" },
+        });
+      }
+      if (requestedStep === "labels") {
+        return Response.json([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => ({ name: label })));
+      }
+      return Response.json({
+        id: 42,
+        name: "overflow",
+        full_name: "Actual-Owner/overflow",
+        private: false,
+        html_url: "https://github.com/Actual-Owner/overflow",
+        owner: { login: "Actual-Owner", type: ownerType },
+        permissions: { admin: true },
+      });
+    },
+  });
 }

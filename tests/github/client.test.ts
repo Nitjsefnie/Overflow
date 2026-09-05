@@ -72,6 +72,7 @@ describe("GitHubGateway REST transport", () => {
     expect(error).toMatchObject({ status, message: `GitHub API request failed with status ${status}.` });
     expect(error).toBeInstanceOf(GitHubApiError);
     expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("GitHubApiError");
   });
 
   it("sanitizes a transport error even when its text resembles an HTTP error", async () => {
@@ -82,6 +83,42 @@ describe("GitHubGateway REST transport", () => {
 
     await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).rejects.toThrow("GitHub request failed.");
   });
+
+  it.each([
+    ["absent headers", {}, false, null],
+    ["remaining zero", { "x-ratelimit-remaining": "0" }, true, null],
+    ["remaining nonzero", { "x-ratelimit-remaining": "1" }, false, null],
+    ["remaining nonliteral zero", { "x-ratelimit-remaining": "00" }, false, null],
+    ["retry delay", { "retry-after": "60" }, true, 60],
+    ["zero retry delay", { "retry-after": "0" }, true, 0],
+    ["empty retry delay", { "retry-after": "" }, true, null],
+    ["negative retry delay", { "retry-after": "-1" }, true, null],
+    ["fractional retry delay", { "retry-after": "1.5" }, true, null],
+    ["date retry delay", { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" }, true, null],
+    ["invalid retry delay", { "retry-after": "60-private-body" }, true, null],
+    ["unsafe retry delay", { "retry-after": "9007199254740993" }, true, null],
+    ["other header", { "x-ratelimit-reset": "0" }, false, null],
+  ] satisfies Array<[string, Record<string, string>, boolean, number | null]>)(
+    "carries only safe rate-limit metadata for %s", async (_case, headers, rateLimited, retryAfterSeconds) => {
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async () => new Response("private-body test-access-token", {
+          status: 403,
+          headers: { ...headers, "x-private": "private-header" },
+        }),
+      });
+
+      const error = await gateway.getRepository({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+      expect(error).toMatchObject({
+        name: "GitHubApiError",
+        status: 403,
+        message: "GitHub API request failed with status 403.",
+        rateLimited,
+        retryAfterSeconds,
+      });
+      expect(JSON.stringify(error)).not.toMatch(/private-body|private-header|test-access-token|headers|body/);
+    },
+  );
 
   it("aborts a stalled GitHub request and exposes only a sanitized timeout error", async () => {
     const gateway = new GitHubGateway({
