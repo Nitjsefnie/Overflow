@@ -436,6 +436,77 @@ describe("settlement evidence timing grace", () => {
   });
 });
 
+describe("settlement rationale pairing", () => {
+  it("records a reapplied label against the rationale written for it", () => {
+    const snapshot = outsiderFixture();
+    reapplyActualLabel(snapshot, {
+      unlabeledAt: "2026-09-01T11:35:00.000Z",
+      relabeledAt: "2026-09-01T11:40:00.000Z",
+    });
+    snapshot.issues[0]!.comments.push({
+      id: "comment-2",
+      databaseId: 402,
+      authorLogin: "sponsor",
+      body: "Re-settled as delivered/6 after reapplying the label.",
+      createdAt: "2026-09-01T11:41:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
+      settledLabelEventId: "actual-2",
+      settledLabelAppliedAt: "2026-09-01T11:40:00.000Z",
+      settledRationaleCommentId: "comment-2",
+      settledRationaleCommentedAt: "2026-09-01T11:41:00.000Z",
+    });
+  });
+
+  it("prefers a rationale at or after the label over one inside the grace window before it", () => {
+    const snapshot = outsiderFixture();
+    setRationaleCommentAt(snapshot, "2026-09-01T10:50:00.000Z");
+    snapshot.issues[0]!.comments.push({
+      id: "comment-2",
+      databaseId: 402,
+      authorLogin: "sponsor",
+      body: "Settled as delivered/6 after reviewing the final diff.",
+      createdAt: "2026-09-01T11:05:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
+      settledLabelEventId: "actual-1",
+      settledRationaleCommentId: "comment-2",
+    });
+  });
+
+  it("keeps the earliest rationale when several follow the label", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.comments.push({
+      id: "comment-2",
+      databaseId: 402,
+      authorLogin: "sponsor",
+      body: "Still delivered/6 on a second look.",
+      createdAt: "2026-09-01T11:45:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
+      settledRationaleCommentId: "comment-1",
+    });
+  });
+
+  it("falls back to a rationale inside the grace window before a reapplied label when nothing later qualifies", () => {
+    const snapshot = outsiderFixture();
+    reapplyActualLabel(snapshot, {
+      unlabeledAt: "2026-09-01T11:35:00.000Z",
+      relabeledAt: "2026-09-01T11:40:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
+      settledLabelEventId: "actual-2",
+      settledLabelAppliedAt: "2026-09-01T11:40:00.000Z",
+      settledRationaleCommentId: "comment-1",
+      settledRationaleCommentedAt: "2026-09-01T11:30:00.000Z",
+    });
+  });
+});
+
 function setActualLabelAppliedAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
   const event = snapshot.issues[0]!.history.find(
     (candidate) => candidate.kind === "LABELED" && candidate.id === "actual-1",
@@ -448,6 +519,28 @@ function setActualLabelAppliedAt(snapshot: RepositoryFoldSnapshot, createdAt: st
 
 function setRationaleCommentAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
   snapshot.issues[0]!.comments[0] = { ...snapshot.issues[0]!.comments[0]!, createdAt };
+}
+
+function reapplyActualLabel(
+  snapshot: RepositoryFoldSnapshot,
+  times: { unlabeledAt: string; relabeledAt: string },
+): void {
+  snapshot.issues[0]!.history.push(
+    {
+      kind: "UNLABELED",
+      id: "actual-1-removed",
+      actorLogin: "sponsor",
+      label: "delivered/6",
+      createdAt: times.unlabeledAt,
+    },
+    {
+      kind: "LABELED",
+      id: "actual-2",
+      actorLogin: "sponsor",
+      label: "delivered/6",
+      createdAt: times.relabeledAt,
+    },
+  );
 }
 
 describe("opening evidence timing grace", () => {
