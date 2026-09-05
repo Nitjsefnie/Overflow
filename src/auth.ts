@@ -4,6 +4,8 @@ import type { Profile } from "next-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
+export { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
+import { normalizeModeratorGitHubLogins } from "@/lib/moderation/roles";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 export const githubOAuthScope = "public_repo";
@@ -73,14 +75,6 @@ export const { handlers: { GET, POST }, auth, signIn } = NextAuth({
   },
 });
 
-export function normalizeModeratorGitHubLogins(value: string | undefined): Set<string> {
-  return new Set(
-    (value ?? "")
-      .split(",")
-      .map((login) => login.trim().toLowerCase())
-      .filter((login) => login.length > 0),
-  );
-}
 
 async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: string): Promise<PersistedGitHubUser> {
   const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
@@ -113,7 +107,13 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
     set
       github_login = excluded.github_login,
       avatar_url = excluded.avatar_url,
-      role = excluded.role,
+      -- A FLOOR, never an override. Writing excluded.role unconditionally meant
+      -- a moderator granted inside the product was demoted at their next
+      -- sign-in, which is what made the role ungrantable. See resolveSignInRole.
+      role = case
+        when excluded.role = 'MODERATOR' or users.role = 'MODERATOR' then 'MODERATOR'
+        else 'MEMBER'
+      end,
       encrypted_oauth_token = excluded.encrypted_oauth_token,
       updated_at = now()
     returning id, role

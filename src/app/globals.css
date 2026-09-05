@@ -833,3 +833,45 @@ button:disabled {
   font-size: 0.95rem;
   font-weight: 700;
 }
+
+.moderation-card {
+  margin-top: 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+.moderation-card h2 {
+  margin-bottom: 0.9rem;
+}
+
+.moderation-card > p {
+  max-width: 68ch;
+  margin-bottom: 1.4rem;
+}
+
+.moderator-roster {
+  display: grid;
+  gap: 1rem;
+  max-width: 46rem;
+}
+
+.moderator-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.moderator-list li {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.moderator-list .mono-meta {
+  margin-bottom: 0;
+}

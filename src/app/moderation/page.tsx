@@ -14,16 +14,20 @@ export default async function ModerationPage() {
   }
 
   const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
+  const { ModeratorRoster } = await import("@/components/moderator-roster");
 
   let audits: OpenAuditProjection[] | null;
   let history: EnforcementHistoryProjection[] = [];
   let recalibratingAccounts: RecalibratingAccountProjection[] = [];
+  let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] = [];
   try {
     const { listEnforcementHistory, listOpenAudits, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
-    [audits, history, recalibratingAccounts] = await Promise.all([
+    const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
+    [audits, history, recalibratingAccounts, moderators] = await Promise.all([
       listOpenAudits(),
       listEnforcementHistory(),
       listRecalibratingAccounts(),
+      new PostgresModerationStore().listModerators(),
     ]);
   } catch {
     audits = null;
@@ -79,6 +83,16 @@ export default async function ModerationPage() {
             ))}
           </ol>
         )}
+      </section>
+      <section className="surface moderation-card" aria-labelledby="moderators-heading">
+        <p className="eyebrow">Who can moderate</p>
+        <h2 id="moderators-heading">Moderators</h2>
+        <p>
+          Moderator status is granted here and recorded with who changed it. An account named in the deployment
+          configuration is promoted again at its next sign-in, so removing it from that list is part of revoking
+          it for good.
+        </p>
+        <ModeratorRoster moderators={moderators} currentAccountId={session.user.id} />
       </section>
       <section className="surface" aria-labelledby="enforcement-history-heading">
         <h2 id="enforcement-history-heading">Enforcement history</h2>
