@@ -1,4 +1,4 @@
-import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, type GitHubRateLimitDetails } from "@/lib/github/errors";
 
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
@@ -19,7 +19,15 @@ const maxErrorPathSegments = 10;
 // omission marker fit in 495 units, while retaining every previewed position.
 const maxSerializedPathSegmentLength = 48;
 
-class GitHubGraphqlRequestError extends Error {}
+class GitHubGraphqlRequestError extends Error implements GitHubRateLimitDetails {
+  public constructor(
+    message: string,
+    public readonly rateLimited: boolean = false,
+    public readonly retryAfterSeconds: number | null = null,
+  ) {
+    super(message);
+  }
+}
 
 function boundedErrorText(value: string, accessToken: string): string {
   const redacted = accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
@@ -170,7 +178,8 @@ export class GitHubGraphqlClient {
 
       const payload = (await response.json()) as { data?: TData; errors?: unknown };
       if (payload?.data === undefined || payload.errors !== undefined) {
-        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken));
+        const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
+        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken), rateLimited, retryAfterSeconds);
       }
 
       return payload.data;
