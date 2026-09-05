@@ -739,6 +739,9 @@ function pagedReconciliationGateway(
         if (operation === "PullRequestReviews") {
           return Response.json({ data: { repository: { pullRequest: { reviews: { nodes: [], pageInfo } } } } });
         }
+        if (operation === "PullRequestReviewDismissals") {
+          return Response.json({ data: { repository: { pullRequest: { timelineItems: { nodes: [], pageInfo } } } } });
+        }
         throw new Error(`Unexpected operation ${operation}`);
       }
       return new Response("diff");
