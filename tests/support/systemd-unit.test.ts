@@ -52,6 +52,22 @@ describe("systemd unit parsing", () => {
     ]);
   });
 
+  it("refuses a continuation whose backslash carries trailing whitespace", () => {
+    expect(() =>
+      parseUnitFile(
+        "[Service]\nSyslogIdentifier=overflow \\\n    production \\   \nUser=root\n",
+      ),
+    ).toThrow(/trailing whitespace after the backslash/);
+  });
+
+  it("refuses trailing whitespace after the backslash on the first line too", () => {
+    expect(() =>
+      parseUnitFile(
+        "[Service]\nRestrictAddressFamilies=AF_INET \\ \n    AF_INET6 AF_UNIX\n",
+      ),
+    ).toThrow(/trailing whitespace after the backslash/);
+  });
+
   it("refuses a comment line that ends in a backslash", () => {
     expect(() =>
       parseUnitFile("[Service]\n# runtime note \\\nUser=root\n"),
