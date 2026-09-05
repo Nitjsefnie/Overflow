@@ -26,6 +26,8 @@ describe("foldRepository", () => {
     expect(result.unwritableClosures).toHaveLength(1);
     expect(result.unwritableClosures[0]).toMatchObject({
       githubIssueId: 101,
+      kind: "NO_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
       reason: "No merged GitHub GraphQL closing pull request was found.",
     });
   });
@@ -390,6 +392,173 @@ function difficultyScheme() {
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
+
+describe("rejected settlement closure records", () => {
+  it("records that no configured actual label stood inside the window", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.history = snapshot.issues[0]!.history.filter((event) => event.id !== "actual-1");
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+    expect(result.issues[0]).toMatchObject({ settledLabel: null, settledPoints: null });
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("records the earliest later actual label application from unordered history", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T12:40:00.000Z");
+    reapplyActualLabel(snapshot, {
+      unlabeledAt: "2026-09-01T12:18:00.000Z",
+      relabeledAt: "2026-09-01T12:20:00.000Z",
+    });
+    snapshot.issues[0]!.history.push({
+      kind: "LABELED", id: "unconfigured", actorLogin: "sponsor",
+      label: "unconfigured", createdAt: "2026-09-01T12:16:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z. The earliest later application, `delivered/6` at 2026-09-01T12:20:00.000Z, came after that window.",
+    }]);
+  });
+
+  it("records several standing labels in active-map order", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.history.unshift({
+      kind: "LABELED", id: "another-actual", actorLogin: "sponsor",
+      label: "delivered/3", createdAt: "2026-09-01T11:10:00.000Z",
+    });
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: `delivered/6`, `delivered/3`. Exactly one is required.",
+    }]);
+  });
+
+  it.each([
+    ["contributor", "The settled label `delivered/6` was applied by `contributor` rather than the issue owner `sponsor`."],
+    ["  ", "The settled label `delivered/6` was applied by `unknown` rather than the issue owner `sponsor`."],
+    [null, "The settled label `delivered/6` was applied by `unknown` rather than the issue owner `sponsor`."],
+  ])("records a settled label actor of %s who is not the owner", (actorLogin, reason) => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.history[1]!.actorLogin = actorLogin;
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason,
+    }]);
+  });
+
+  it("records a standing label applied outside the final-commit window", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T09:40:00.000Z");
+    setRationaleCommentAt(snapshot, "2026-09-01T09:45:00.000Z");
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "The settled label `delivered/6` was applied at 2026-09-01T09:40:00.000Z, outside the window from fifteen minutes before the final commit at 2026-09-01T10:00:00.000Z to fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+  });
+
+  it("records the lack of a qualifying owner rationale for the standing label", () => {
+    const snapshot = outsiderFixture();
+    setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+  });
+
+  it("emits no unwritable closure when settlement evidence is accepted", () => {
+    const result = foldRepository(outsiderFixture());
+
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", settledPoints: 6 });
+  });
+
+  it("records rejected self-work evidence and retains its calibration with null actual points", () => {
+    const snapshot = selfWorkFixture();
+    setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+    expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({
+      githubIssueId: 101, githubPullRequestId: 201, userId: "sponsor", actualPoints: null,
+    })]);
+    expect(result.settlements).toEqual([]);
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it.each(["author", "sponsor"])("records rejected evidence even for an ineligible %s", (participant) => {
+    const snapshot = outsiderFixture();
+    const user = participant === "sponsor"
+      ? snapshot.repository.sponsor
+      : snapshot.users.find((user) => user.id === "contributor")!;
+    user.enforcementState = "BANNED";
+    setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.settlements).toEqual([]);
+    expect(result.selfWorkCalibrations).toEqual([]);
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("sorts unwritable closures by issue id across both rejection kinds", () => {
+    const snapshot = outsiderFixture();
+    setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
+    const noClosingPullRequest = structuredClone(snapshot.issues[0]!);
+    noClosingPullRequest.id = 100;
+    noClosingPullRequest.closingPullRequests = [];
+    snapshot.issues.push(noClosingPullRequest);
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([
+      {
+        githubIssueId: 100,
+        kind: "NO_CLOSING_PULL_REQUEST",
+        githubPullRequestId: null,
+        reason: "No merged GitHub GraphQL closing pull request was found.",
+      },
+      {
+        githubIssueId: 101,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201,
+        reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      },
+    ]);
+  });
+});
 
 describe("settlement evidence timing grace", () => {
   it("accepts a settled label applied shortly before the final commit", () => {
