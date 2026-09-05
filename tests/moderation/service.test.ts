@@ -209,6 +209,153 @@ describe("account moderation service", () => {
   });
 });
 
+describe("calibration cohort preview", () => {
+  it("refuses a preview for a non-moderator before reading any cohort", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort({ id: "member", role: "MEMBER" }, previewInput()),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
+    expect(store.cohortReadCount).toBe(0);
+  });
+
+  it("returns the compared cohort over the normalized window without opening an audit", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+      targetAccountId: "  target-account  ",
+      repositoryId: "  repository-scope  ",
+      sampleStartedAt: "2026-01-01T00:00:00Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    expect(preview).toEqual({
+      targetAccountId: "target-account",
+      repositoryId: "repository-scope",
+      sampleStartedAt: "2026-01-01T00:00:00.000Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+      comparison: {
+        selfWork: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: 1, medianDelta: 1 },
+        outsider: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE, meanDelta: 1, medianDelta: 1 },
+        differenceBetweenMeans: 0,
+      },
+      meetsMinimumSampleSize: true,
+    });
+    expect(store.lastCohortInput).toEqual({
+      targetAccountId: "target-account",
+      repositoryId: "repository-scope",
+      sampleStartedAt: "2026-01-01T00:00:00.000Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+    });
+    expect(store.lastOpenInput).toBeUndefined();
+  });
+
+  it("reads an account-wide cohort when no repository scope is given", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+      targetAccountId: "target-account",
+      sampleStartedAt: "2026-01-01T00:00:00.000Z",
+      sampleEndedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    expect(preview.repositoryId).toBeNull();
+    expect(store.lastCohortInput?.repositoryId).toBeNull();
+  });
+
+  it.each([
+    ["self-work", MINIMUM_CALIBRATION_SAMPLE_SIZE - 1, MINIMUM_CALIBRATION_SAMPLE_SIZE],
+    ["outsider-settlement", MINIMUM_CALIBRATION_SAMPLE_SIZE, MINIMUM_CALIBRATION_SAMPLE_SIZE - 1],
+  ] as const)(
+    "shows a short %s cohort rather than refusing the window an audit would refuse",
+    async (_side, selfWorkCount, outsiderCount) => {
+      const store = new TestModerationStore({
+        selfWorkPairs: calibrationPairs(selfWorkCount, 10_000),
+        outsiderSettlementPairs: calibrationPairs(outsiderCount, 20_000),
+      });
+      const service = new AccountModerationService(store);
+
+      const preview = await service.previewCalibrationCohort(moderator(), previewInput());
+
+      expect(preview.meetsMinimumSampleSize).toBe(false);
+      expect(preview.comparison.selfWork.count).toBe(selfWorkCount);
+      expect(preview.comparison.outsider.count).toBe(outsiderCount);
+
+      await expect(
+        service.openAccountAudit(moderator(), {
+          ...previewInput(),
+          reason: "A moderator identified a sustained account-level pattern.",
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
+      expect(store.lastOpenInput).toBeUndefined();
+    },
+  );
+
+  it("reports a target account the store cannot find", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+      missingAccount: true,
+    });
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), previewInput()),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+  });
+
+  it("reports a cohort the calibration statistics reject as invalid input", async () => {
+    const corrupted = calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000);
+    corrupted[0] = { ...corrupted[0]!, settledDifficulty: 11 };
+    const store = new TestModerationStore({
+      selfWorkPairs: corrupted,
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), previewInput()),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: "The selected calibration cohort is invalid.",
+    });
+  });
+
+  it.each([
+    ["a window that ends before it starts", { sampleEndedAt: "2025-12-01T00:00:00.000Z" }],
+    ["a window that ends when it starts", { sampleEndedAt: "2026-01-01T00:00:00.000Z" }],
+    ["an unparseable window bound", { sampleStartedAt: "the first of January" }],
+    ["a blank target account identifier", { targetAccountId: "   " }],
+  ] as const)("refuses %s before reading any cohort", async (_label, overrides) => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        ...overrides,
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+    expect(store.cohortReadCount).toBe(0);
+  });
+});
+
+type LoadedCohortRequest = {
+  targetAccountId: string;
+  repositoryId: string | null;
+  sampleStartedAt: string;
+  sampleEndedAt: string;
+};
+
 class TestModerationStore implements ModerationStore {
   public cohortReadCount = 0;
   public settlementMutationCount = 0;
@@ -217,11 +364,13 @@ class TestModerationStore implements ModerationStore {
   public lastDismissInput: { actorId: string; auditId: string; reason: string } | undefined;
   public lastSubstantiateInput: { actorId: string; auditId: string; reason: string } | undefined;
   public lastCloseInput: { actorId: string; targetAccountId: string; plan: string } | undefined;
+  public lastCohortInput: LoadedCohortRequest | undefined;
 
   public constructor(
     private readonly options: {
       selfWorkPairs: CalibrationPair[];
       outsiderSettlementPairs: CalibrationPair[];
+      missingAccount?: boolean;
       openResult?: ModerationStoreResult<AccountAudit>;
       dismissResult?: ModerationStoreResult<AccountAudit>;
       substantiateResult?: ModerationStoreResult<AccountAudit>;
@@ -235,8 +384,12 @@ class TestModerationStore implements ModerationStore {
     },
   ) {}
 
-  public async loadCalibrationCohort(): Promise<LoadedCalibrationCohort | null> {
+  public async loadCalibrationCohort(input: LoadedCohortRequest): Promise<LoadedCalibrationCohort | null> {
     this.cohortReadCount += 1;
+    this.lastCohortInput = input;
+    if (this.options.missingAccount === true) {
+      return null;
+    }
     return {
       selfWorkPairs: this.options.selfWorkPairs,
       outsiderSettlementPairs: this.options.outsiderSettlementPairs,
@@ -295,6 +448,15 @@ class TestModerationStore implements ModerationStore {
 
 function moderator() {
   return { id: "moderator", role: "MODERATOR" as const };
+}
+
+function previewInput() {
+  return {
+    targetAccountId: "target-account",
+    repositoryId: "repository-scope",
+    sampleStartedAt: "2026-01-01T00:00:00.000Z",
+    sampleEndedAt: "2026-02-01T00:00:00.000Z",
+  };
 }
 
 function openAuditInput() {
