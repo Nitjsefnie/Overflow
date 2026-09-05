@@ -57,9 +57,11 @@
     <nav aria-label="Guide contents">
       <p>On this page</p>
       <a href="#overview">Overview</a>
-      <a href="#github">GitHub and proof</a>
+      <a href="#instance">Join the instance</a>
       <a href="#scoring">Scoring and calibration</a>
-      <a href="#local">Local setup</a>
+      <a href="#own-instance">Your own instance</a>
+      <a href="#development">Development setup</a>
+      <a href="#operating">Operating an instance</a>
       <a href="#reconciliation">Reconciliation</a>
       <a href="#ci">Continuous integration</a>
       <a href="#environment">Environment</a>
@@ -72,19 +74,25 @@
         <div class="summary">
           <strong>In brief</strong> — Overflow records explicit offers, linked GitHub completion evidence, and a credit transfer between a repository sponsor and an outside contributor.
         </div>
+        <div class="callout">
+          <strong>Overflow is already running at <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a>.</strong> Pointing you at that instance is what this repository is for. You do not need to deploy anything to use Overflow — sign in there and join the ledger that already exists. The setup instructions further down build a development environment for changing Overflow itself; they are not the way to use it.
+        </div>
       </header>
+
+      <h2 id="instance">Join the running instance</h2>
+      <ol>
+        <li><strong>Sign in.</strong> Open <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a> and choose <em>Sign in with GitHub</em>. That is the whole account setup — there is nothing to install and nothing to configure.</li>
+        <li><strong>Register a repository you administer.</strong> Use <em>Register a repository</em> and submit one <code>owner/name</code> or canonical GitHub URL. Registration is explicit and one at a time, and GitHub must report you as an administrator of that repository.</li>
+        <li><strong>Choose the repository’s catalogs.</strong> The opening catalog is the set of <code>offered:</code> labels the repository prices work with, in its own vocabulary; the actual catalog maps each point from 1 through 10 onto a settlement label. The words are yours, the point scale is shared.</li>
+        <li><strong>Label the work.</strong> Apply an opening label when you file an issue, before anyone is assigned, and settle it between the closing pull request’s final commit and its merge with a label and a comment naming that label. Those labels are the ledger’s input, not decoration.</li>
+        <li><strong>Read the ledger.</strong> A signed-in member gets <em>Ledger</em>, <em>Issues</em>, <em>Settlements</em>, <em>Calibration</em> and <em>Rules</em>, and the in-product rules page states the same rules this guide does.</li>
+      </ol>
+      <p>Closing work needs no repository of your own. Take an issue in a repository that is already registered, and the settlement lands in your ledger when the pull request merges and the issue owner settles it — if you have not signed in yet it waits as an unclaimed settlement until your GitHub identity is claimed.</p>
 
       <h2>Repository catalogs and headroom</h2>
       <p>Repository registration is explicit and one at a time. The signed-in person submits one <code>owner/name</code> or canonical GitHub URL and must hold GitHub administrator permission for that repository.</p>
       <p>Opening catalogs are entirely repository-chosen: S/M/L can work, as can <em>moonlit ridge</em>, <em>risk: high</em>, or another local vocabulary. Every opening label has comparison and reserve points from 1 through 10. Every actual catalog must contain exactly one editable label for each point from 1 through 10.</p>
       <p>The dashboard reads materialized ledger entries. Available headroom is <code>settled balance − reserved points</code> for open issues assigned to outside contributors, and negative headroom remains visible. This release enforces no credit floor and exposes no floor configuration; optional group floors await a later idempotent assignment-enforcement design.</p>
-
-      <h2 id="github">GitHub and proof</h2>
-      <p>Configure the GitHub OAuth callback as <code>https://&lt;public-host&gt;/api/auth/callback/github</code>. The application needs a public HTTPS GitHub webhook URL and a shared secret:</p>
-      <pre>APP_URL=https://&lt;public-host&gt;
-GITHUB_WEBHOOK_URL=https://&lt;public-host&gt;/api/github/webhooks
-GITHUB_WEBHOOK_SECRET=&lt;github-webhook-secret&gt;</pre>
-      <div class="callout">GitHub must be able to reach the webhook over public HTTPS. Keep the secret private and configure the same value in GitHub and the application.</div>
       <p>GitHub GraphQL <code>closedByPullRequestsReferences</code> is the only closing-link authority. Opening difficulty comes from the earliest configured label the issue owner applied before the first assignment. Settlement requires an owner-applied issue label between the closing pull request’s final commit and merge plus a nonblank owner comment in that window naming the label. Pull-request labels never price work. Event and comment IDs, actors and times, the exact merge commit OID, and the diff fingerprint remain available as proof.</p>
 
       <h2 id="scoring">Scoring, self-work, and moderation</h2>
@@ -93,7 +101,12 @@ GITHUB_WEBHOOK_SECRET=&lt;github-webhook-secret&gt;</pre>
       <p class="flow">audit → warn → recalibrate → ban</p>
       <p>Moderation is account-level and evidence-led: open an audit from paired samples, warn when the evidence warrants it, require recalibration before reactivation, and ban only after confirmed patterns persist.</p>
 
-      <h2 id="local">Local setup</h2>
+      <h2 id="own-instance">Running your own instance is not the way to use Overflow</h2>
+      <p>Everything from here on is for people changing Overflow’s code or operating a deployment. The instructions are accurate and contributors need them, but what they build is a development environment, not a route to using Overflow.</p>
+      <p>Each instance keeps its own ledger. Balances, reserves, settlements, proof records and calibration history live in that instance’s own PostgreSQL database, and nothing in this codebase moves them between deployments. A second instance therefore starts empty and stays private to itself: no registered repositories, no counterpart to settle with, and no credit that anyone else can see or honour. Signing in at <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a> is what puts your work in a ledger other people are already reading.</p>
+
+      <h2 id="development">Development setup</h2>
+      <p>These steps stand up a local copy for working on Overflow itself.</p>
       <ol>
         <li>Copy <code>.env.example</code> to <code>.env</code> and replace every placeholder. Generate <code>AUTH_SECRET</code> with <code>npx auth secret</code>; make <code>TOKEN_ENCRYPTION_KEY</code> from 32 random bytes encoded as unpadded base64url.</li>
         <li>Use an already-installed PostgreSQL 17 instance, or start the supplied Compose service.</li>
@@ -103,6 +116,14 @@ pnpm install --frozen-lockfile
 pnpm db:migrate
 pnpm dev</pre>
       <p>Run the project gates with <code>pnpm test --run</code>, <code>pnpm lint</code>, <code>pnpm typecheck</code>, and <code>pnpm build</code>.</p>
+
+      <h2 id="operating">Operating an instance: GitHub OAuth and webhooks</h2>
+      <p>This section is operator configuration for a deployment you run yourself; on the running instance it is already done. <code>https://&lt;public-host&gt;</code> is a placeholder for your own deployment’s origin — replace it with that origin, and do not read it as an address to visit.</p>
+      <p>Configure the GitHub OAuth callback as <code>https://&lt;public-host&gt;/api/auth/callback/github</code>. The application needs a public HTTPS GitHub webhook URL and a shared secret:</p>
+      <pre>APP_URL=https://&lt;public-host&gt;
+GITHUB_WEBHOOK_URL=https://&lt;public-host&gt;/api/github/webhooks
+GITHUB_WEBHOOK_SECRET=&lt;github-webhook-secret&gt;</pre>
+      <div class="callout">GitHub must be able to reach the webhook over public HTTPS. Keep the secret private and configure the same value in GitHub and the application.</div>
 
       <h2 id="reconciliation">One repository or all repositories</h2>
       <p>Webhook processing updates materialized state incrementally. Use reconciliation after webhook downtime or a GitHub configuration change to recover linked issues, pull requests, settlement proof, self-work calibration, and unclaimed contributors.</p>
