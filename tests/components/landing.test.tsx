@@ -72,14 +72,25 @@ describe("landing page", () => {
 //     var(--display), and pinning a font stack would be an equality, not a bound.
 //   - It covers the elements that stack above the button and no others, and the
 //     properties in the table below and no others.
-//   - Two border spellings are invisible, both measured: a border width that
-//     resolves to 16px, because that is also jsdom's `medium`
-//     (border-bottom-width: 1rem takes the button from 49px to 63px tall), and
-//     any border in a shorthand jsdom cannot parse, which includes every
-//     shorthand carrying var() (border: 3rem solid var(--line) takes it to
-//     141px). Reading border-style alongside the width does not help: jsdom
-//     reports `none` for the shipped button, so an effective-width bound would
-//     read zero everywhere and would stop catching the widths it catches today.
+//   - The button's border is invisible in two spellings, both measured. jsdom
+//     reports `medium`, which is 16px, for a width nobody declared, so a width
+//     of 16px or less cannot be told from an absent one
+//     (border-bottom-width: 1rem takes the button from 49px to 63px tall); and
+//     it cannot parse a shorthand carrying var(), which is how this button's
+//     own border is written, so a border set the same way is equally invisible
+//     (border: 3rem solid var(--line) takes it to 141px). Everywhere else the
+//     bound is on the effective border - the width, or zero where the style is
+//     none - which is exact, because a width declared without a style occupies
+//     no space in a browser either (measured: border-top-width: 3rem on the
+//     hero leaves the button where it is).
+//   - Six properties that reach these elements are not bounded at all.
+//     font-weight and word-spacing were measured not to move the button here -
+//     Georgia has no 900 weight and the headline's wrap is measure-bound - so
+//     bounding them would only manufacture a red for a change that renders
+//     identically. white-space and text-wrap have values that could matter and
+//     an ordering this guard cannot establish by measurement. display and
+//     font-family would each have to be pinned as an equality, which is the
+//     thing this table exists not to be.
 //   - It cannot evaluate a media, supports or container condition; those are
 //     pinned as declarations instead. A @layer block is exempt, because an
 //     unlayered declaration always beats a layered one and nothing here is
@@ -96,56 +107,81 @@ type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
 
 const FOLD_BUDGET: BudgetRow[] = [
   // The page's own box, and the type it hands down: the button takes its font
-  // from here through `button, input, textarea { font: inherit }`.
+  // from here through `button, input, textarea { font: inherit }`. Its
+  // padding-bottom and border-bottom sit below the whole stack, so they are
+  // absent here rather than pinned at a value nothing can violate.
   ["page", "margin-top", "atMost", 0, 0],
   ["page", "padding-top", "atMost", 40, 32],
-  ["page", "border-top-width", "atMost", 16, 16],
+  ["page", "border-top", "atMost", 0, 0],
   ["page", "font-size", "atMost", 16, 16],
   ["page", "line-height", "atMost", 24, 24],
   // The hero, whose max-width is the headline's wrap measure above ~102px of type.
   ["hero", "margin-top", "atMost", 0, 0],
   ["hero", "padding-top", "atMost", 0, 0],
-  ["hero", "border-top-width", "atMost", 16, 16],
+  ["hero", "border-top", "atMost", 0, 0],
   ["hero", "line-height", "atMost", 24, 24],
   ["hero", "max-width", "atLeast", 928, 928],
-  // The eyebrow: one line of type, and the space between it and the headline.
+  // The eyebrow: one line of type, the box around it, and the space between it
+  // and the headline.
   ["eyebrow", "margin-top", "atMost", 0, 0],
   ["eyebrow", "margin-bottom", "atMost", 11.2, 11.2],
-  ["eyebrow", "border-top-width", "atMost", 16, 16],
+  ["eyebrow", "padding-top", "atMost", 0, 0],
+  ["eyebrow", "padding-bottom", "atMost", 0, 0],
+  ["eyebrow", "border-top", "atMost", 0, 0],
+  ["eyebrow", "border-bottom", "atMost", 0, 0],
   ["eyebrow", "font-size", "atMost", 11.52, 11.52],
   ["eyebrow", "line-height", "atMost", 17.28, 17.28],
   ["eyebrow", "letter-spacing", "atMost", 0.2304, 0.2304],
+  ["eyebrow", "text-transform", "atMost", 2, 2],
   ["eyebrow", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["eyebrow", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-  // The headline: three lines at every width, and the four terms that decide it.
+  // The headline: three lines at every width, and every term that decides it.
   ["h1", "margin-top", "atMost", 0, 0],
   ["h1", "margin-bottom", "atMost", 16, 16],
-  ["h1", "border-top-width", "atMost", 16, 16],
+  ["h1", "padding-top", "atMost", 0, 0],
+  ["h1", "padding-bottom", "atMost", 0, 0],
+  ["h1", "border-top", "atMost", 0, 0],
+  ["h1", "border-bottom", "atMost", 0, 0],
   ["h1", "font-size", "atMost", 96, 56],
   ["h1", "line-height", "atMost", 100.8, 58.8],
   ["h1", "letter-spacing", "atMost", -4.32, -2.52],
+  ["h1", "text-transform", "atMost", 0, 0],
   ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["h1", "max-width", "atLeast", 624, 364],
   // The lede: two lines at 1440, four at 390.
   ["lede", "margin-top", "atMost", 0, 0],
   ["lede", "margin-bottom", "atMost", 28.8, 28.8],
-  ["lede", "border-top-width", "atMost", 16, 16],
+  ["lede", "padding-top", "atMost", 0, 0],
+  ["lede", "padding-bottom", "atMost", 0, 0],
+  ["lede", "border-top", "atMost", 0, 0],
+  ["lede", "border-bottom", "atMost", 0, 0],
   ["lede", "font-size", "atMost", 28, 20],
   ["lede", "line-height", "atMost", 42, 30],
+  ["lede", "letter-spacing", "atMost", 0, 0],
+  ["lede", "text-transform", "atMost", 0, 0],
   ["lede", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["lede", "max-width", "atLeast", 728, 520],
-  // The form wrapping the button contributes nothing of its own today.
+  // The form wrapping the button contributes nothing of its own today. Its
+  // padding-bottom and border-bottom are below the button, so they are absent.
   ["form", "margin-top", "atMost", 0, 0],
-  ["form", "border-top-width", "atMost", 16, 16],
+  ["form", "padding-top", "atMost", 0, 0],
+  ["form", "border-top", "atMost", 0, 0],
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
-  // The button's own box: 49px tall, 24px below the lede.
+  // The button's own box: 49px tall, 24px below the lede. The raw widths are
+  // bounded here as well as the effective borders, because the shipped
+  // shorthand carries var() - jsdom reads no style through it, so a width-only
+  // change to this element is one the browser uses and the effective bound
+  // cannot see.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
+  ["button", "border-top", "atMost", 0, 0],
+  ["button", "border-bottom", "atMost", 0, 0],
   ["button", "border-top-width", "atMost", 16, 16],
   ["button", "border-bottom-width", "atMost", 16, 16],
   ["button", "min-height", "atMost", 44.8, 44.8],
+  ["button", "box-sizing", "atMost", 0, 0],
   ["button", "font-size", "atMost", 16, 16],
   ["button", "line-height", "atMost", 24, 24],
 ];
@@ -156,6 +192,18 @@ const FOLD_BUDGET: BudgetRow[] = [
 const CONDITIONAL_OVERRIDES = [
   "page | (max-width: 520px) | .app-shell, .landing-page | width: min(100% - 1.2rem, 1180px)",
 ];
+
+// Two terms are keywords rather than lengths, so they are compared as a rank:
+// a higher rank sets the text wider or the box taller, and an unlisted value is
+// refused rather than guessed at.
+const KEYWORD_RANKS: Record<string, Record<string, number>> = {
+  "text-transform": { none: 0, lowercase: 0, capitalize: 1, uppercase: 2, "full-width": 3, "full-size-kana": 3 },
+  "box-sizing": { "border-box": 0, "content-box": 1 },
+};
+
+// The synthetic terms above, and the border styles that occupy no space.
+const EFFECTIVE_BORDERS: Record<string, string> = { "border-top": "border-top", "border-bottom": "border-bottom" };
+const NO_BORDER = new Set(["none", "hidden", ""]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
@@ -209,6 +257,17 @@ function toPixels(
   term: string,
 ): number {
   const trimmed = value.trim();
+  const ranks = KEYWORD_RANKS[property];
+  if (ranks) {
+    const rank = ranks[trimmed];
+    if (rank === undefined) {
+      throw new Error(
+        `${term} resolves to "${value}", a value this guard has no ordering for; measure the fold in ` +
+          "a browser and give it a rank",
+      );
+    }
+    return rank;
+  }
   // An unconstrained term is on the safe side of either bound: it imposes no
   // height of its own, and it wraps the text into no extra line. Reading it as
   // whichever end of the range the bound allows keeps a deleted measure or
@@ -294,7 +353,16 @@ describe("landing hero fold budget", () => {
           const computed = getComputedStyle(element);
           const read: Record<string, string> = { "font-size": computed.fontSize };
           for (const [owner, property] of FOLD_BUDGET) {
-            if (owner === label) read[property] = computed.getPropertyValue(property);
+            if (owner !== label) continue;
+            // A border only occupies space if it has a style, and jsdom reports
+            // `medium` - 16px - for a width nobody declared. Reading the pair
+            // together is what tells a declared 15px border from an absent one.
+            const edge = EFFECTIVE_BORDERS[property];
+            read[property] = edge
+              ? NO_BORDER.has(computed.getPropertyValue(`${edge}-style`))
+                ? "0px"
+                : computed.getPropertyValue(`${edge}-width`)
+              : computed.getPropertyValue(property);
           }
           values.set(label, read);
         }
