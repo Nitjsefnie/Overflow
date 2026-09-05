@@ -196,6 +196,9 @@ export type FoldResult = {
  * nothing about what the reviewer saw, and an opening label applied an hour
  * after the assignment still fails to show the work was priced before it was
  * spoken for.
+ * The same close applies to edits: a rationale comment whose last edit is after
+ * the window closed is rejected, since its current body is not evidence of what
+ * the reviewer wrote before merge.
  */
 const EVIDENCE_ORDERING_GRACE_MS = 15 * 60 * 1000;
 
@@ -533,7 +536,8 @@ function resolveSettledDifficulty(
       reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the issue owner \`${raterLogin}\`.`,
     };
   }
-  const qualifyingRationales = issue.comments
+  const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
+  const candidates = issue.comments
     .filter(validIssueComment)
     .sort(compareHistoryItems)
     .filter((comment) => {
@@ -543,9 +547,12 @@ function resolveSettledDifficulty(
         comment.body.trim().length > 0 &&
         comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
         commentTime >= sourceTime - EVIDENCE_ORDERING_GRACE_MS &&
-        commentTime <= mergeTime + EVIDENCE_ORDERING_GRACE_MS
+        commentTime <= windowCloseTime
       );
     });
+  // A body edited after the window closed is the body of today, not the body
+  // the reviewer settled on; without edit history it proves nothing.
+  const qualifyingRationales = candidates.filter((comment) => !editedAfter(comment, windowCloseTime));
   // Prefer the earliest qualifying rationale at or after the standing label,
   // avoiding an older application's rationale when such a comment exists.
   // An earlier comment inside the grace window is the fallback only when no
@@ -556,6 +563,7 @@ function resolveSettledDifficulty(
   if (rationale === undefined) {
     return {
       kind: "rejected",
+      violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
       reason: `No rationale comment by \`${raterLogin}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
@@ -743,6 +751,10 @@ function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
 
 function validIssueComment(comment: GitHubIssueComment): boolean {
   return typeof comment.id === "string" && comment.id.length > 0 && validTimestamp(comment.createdAt);
+}
+
+function editedAfter(comment: GitHubIssueComment, deadline: number): boolean {
+  return validTimestamp(comment.lastEditedAt) && Date.parse(comment.lastEditedAt) > deadline;
 }
 
 function compareHistoryItems(

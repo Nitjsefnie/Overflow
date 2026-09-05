@@ -103,6 +103,101 @@ describe("rating authority", () => {
   });
 });
 
+describe("rationale comment edits", () => {
+  it("rejects a rationale comment edited after the settlement window closed and records why", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-01T12:20:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED",
+      settledPoints: null,
+      credits: 0,
+      settledRationaleCommentId: null,
+    });
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
+  });
+
+  it("accepts a rationale comment edited inside the settlement window", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-01T12:10:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", settledPoints: 6, credits: 6 });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("falls through to an unedited later rationale when the first one was edited after the window", () => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.comments[0]!.lastEditedAt = "2026-09-02T09:00:00.000Z";
+    issue.comments.push({
+      id: "comment-2",
+      databaseId: 402,
+      authorLogin: "sponsor",
+      body: "Confirming delivered/6.",
+      createdAt: "2026-09-01T11:45:00.000Z",
+      lastEditedAt: null,
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      settledRationaleCommentId: "comment-2",
+      settledRationaleCommentedAt: "2026-09-01T11:45:00.000Z",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("does not report an edit violation when the comment never named the label", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.comments[0]!.body = "Looks fine.";
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-02T09:00:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null });
+    expect(result.policyViolations).toEqual([]);
+  });
+});
+
+describe("settled label authority boundaries", () => {
+  it("ignores an unauthorized settled label before the window without a policy violation", () => {
+    const snapshot = evidenceFixture({ settler: "maintainer" });
+    snapshot.issues[0]!.history[1]!.createdAt = "2026-09-01T09:00:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("accepts a settled label from a differently-cased sponsor login", () => {
+    const snapshot = evidenceFixture({ settler: " Sponsor " });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", settledPoints: 6, credits: 6 });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("rejects a settled label from an actor whose login merely starts with the sponsor login", () => {
+    const snapshot = evidenceFixture({ settler: "sponsor2" });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
+    });
+    expect(result.ledgerEntries).toEqual([]);
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
+  });
+});
+
 export type EvidenceLogins = {
   sponsor: string;
   issueAuthor: string;
