@@ -97,8 +97,8 @@ describe("initial PostgreSQL materialization", () => {
       "007_authoritative_history_and_merge_proof.sql",
       "008_moderator_role_changes.sql",
       "009_settlement_override_requests.sql",
-      "010_api_tokens.sql",
       "010_settled_evidence_ordering_grace.sql",
+      "011_api_tokens.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
