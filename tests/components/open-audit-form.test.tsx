@@ -260,7 +260,8 @@ describe("open audit form", () => {
   });
 
   it("restores a preview that is fetched again for the same selection", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    const fetchMock = vi.fn(async () => cohortResponse(accountWidePreview()));
+    vi.stubGlobal("fetch", fetchMock);
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
 
     await previewAccountWideCohort();
@@ -271,8 +272,40 @@ describe("open audit form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
 
     await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Self-work sample · 12 pairs · mean delta +2")).toBeInTheDocument();
     });
+  });
+
+  it("disables cohort controls while a preview is in flight and restores them afterward", async () => {
+    let resolveResponse: ((response: Response) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
+    })));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    const controls = ["Audit target", "Repository scope", "Sample window start", "Sample window end"]
+      .map((label) => screen.getByLabelText(label));
+    for (const control of controls) {
+      expect(control).toBeEnabled();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the cohort preview…");
+    for (const control of controls) {
+      expect(control).toBeDisabled();
+    }
+
+    resolveResponse?.(cohortResponse(accountWidePreview()));
+
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Cohort preview" })).toBeVisible();
+    });
+    for (const control of controls) {
+      expect(control).toBeEnabled();
+    }
   });
 
   it("keeps the form usable when a 200 response carries a preview it cannot read", async () => {

@@ -69,7 +69,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
   // Both inputs are wall-clock strings with no offset. Reading them here resolves them in
   // the moderator's timezone; sending them raw would let the server's timezone decide which
   // merged pairs the window admits.
-  const sampleWindow = readSampleWindow(sampleStartedAt, sampleEndedAt);
+  const sampleWindow = readSampleWindow(selection.sampleStartedAt, selection.sampleEndedAt);
   const hasCohortSelection = target !== null && sampleWindow !== null;
   // A preview describes the selections it was fetched for, so it stops being an answer about
   // this form the moment any of them changes.
@@ -87,9 +87,9 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       // The cohort query is strict: a misspelled parameter is a 422 rather than a
       // silently account-wide cohort, so an omitted repository is the only way to
       // ask for one.
-      const parameters = new URLSearchParams({ targetAccountId });
-      if (repositoryId.length > 0) {
-        parameters.set("repositoryId", repositoryId);
+      const parameters = new URLSearchParams(selection);
+      if (selection.repositoryId.length === 0) {
+        parameters.delete("repositoryId");
       }
       parameters.set("sampleStartedAt", sampleWindow.startedAt);
       parameters.set("sampleEndedAt", sampleWindow.endedAt);
@@ -184,6 +184,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             id="open-audit-target"
             name="targetAccountId"
             value={targetAccountId}
+            disabled={pending === "preview"}
             onChange={(event) => setTargetAccountId(event.target.value)}
             required
           >
@@ -201,6 +202,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             id="open-audit-repository"
             name="repositoryId"
             value={repositoryId}
+            disabled={pending === "preview"}
             onChange={(event) => setRepositoryId(event.target.value)}
           >
             <option value="">All repositories</option>
@@ -218,6 +220,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             name="sampleStartedAt"
             type="datetime-local"
             value={sampleStartedAt}
+            disabled={pending === "preview"}
             onChange={(event) => setSampleStartedAt(event.target.value)}
             required
           />
@@ -229,6 +232,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             name="sampleEndedAt"
             type="datetime-local"
             value={sampleEndedAt}
+            disabled={pending === "preview"}
             onChange={(event) => setSampleEndedAt(event.target.value)}
             required
           />

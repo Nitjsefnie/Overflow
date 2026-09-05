@@ -53,6 +53,19 @@ describe("account moderation service", () => {
     });
   });
 
+  it("rejects a blank moderation reason before opening an audit", async () => {
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+    });
+    const service = new AccountModerationService(store);
+
+    await expect(
+      service.openAccountAudit(moderator(), { ...openAuditInput(), reason: "   " }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+    expect(store.lastOpenInput).toBeUndefined();
+  });
+
   it("rejects an audit when either account-level cohort has fewer than ten valid pairs", async () => {
     const store = new TestModerationStore({
       selfWorkPairs: calibrationPairs(9, 10_000),

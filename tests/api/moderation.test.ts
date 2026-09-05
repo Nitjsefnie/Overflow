@@ -355,6 +355,30 @@ describe("calibration cohort preview API", () => {
   });
 
   it.each([
+    ["targetAccountId", "00000000-0000-4000-8000-000000000006"],
+    ["repositoryId", "00000000-0000-4000-8000-000000000007"],
+    ["sampleStartedAt", "2026-01-15T00:00:00.000Z"],
+    ["sampleEndedAt", "2026-03-01T00:00:00.000Z"],
+  ])("rejects a repeated %s cohort parameter before calling the service", async (name, value) => {
+    const previewCalibrationCohort = vi.fn();
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
+    });
+    const url = new URL(cohortRequest(cohortQuery()).url);
+    url.searchParams.append(name, value);
+
+    const response = await handler(new Request(url));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(previewCalibrationCohort).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["NOT_FOUND", 404],
     ["INVALID_INPUT", 422],
   ] as const)("maps a %s preview outcome to structured HTTP %s", async (code, status) => {
