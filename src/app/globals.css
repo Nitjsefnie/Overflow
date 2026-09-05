@@ -796,3 +796,40 @@ button:disabled {
     transform: none;
   }
 }
+
+.rules-card {
+  margin-top: 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+.rules-card h2 {
+  margin-bottom: 0.9rem;
+}
+
+.rules-card p {
+  max-width: 68ch;
+  margin-bottom: 0.9rem;
+}
+
+.rules-card p:last-child {
+  margin-bottom: 0;
+}
+
+.rules-list {
+  max-width: 68ch;
+  margin: 0 0 0.9rem;
+  padding-left: 1.3rem;
+}
+
+.rules-list li {
+  margin-bottom: 0.7rem;
+}
+
+.rules-formula {
+  padding: 0.9rem 1rem;
+  border-left: 4px solid var(--credit);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
