@@ -99,7 +99,19 @@ describe("initial PostgreSQL materialization", () => {
       "009_settlement_override_requests.sql",
       "010_settled_evidence_ordering_grace.sql",
       "011_api_tokens.sql",
+      "012_unwritable_closure_kinds.sql",
     ].map((name) => ({ name, count: 1 })));
+  });
+
+  it.each([
+    { kind: "SETTLEMENT_EVIDENCE_REJECTED", hasPullRequest: false },
+    { kind: "NO_CLOSING_PULL_REQUEST", hasPullRequest: true },
+  ])("rejects $kind with hasPullRequest=$hasPullRequest", async ({ kind, hasPullRequest }) => {
+    const pullRequest = await insertPullRequest(sql);
+    await expect(sql`
+      insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+      values (${pullRequest.issueId}, ${hasPullRequest ? pullRequest.id : null}, ${kind}, ${"Rejected evidence"})
+    `).rejects.toThrow(/unwritable_closures_kind_pull_request_check/);
   });
 
   it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
@@ -1526,6 +1538,83 @@ describe("initial PostgreSQL materialization", () => {
     },
   );
 
+  it("stores rejected settlement evidence with its closing pull request and removes it when evidence is accepted", async () => {
+    const sponsorId = await insertUserWithLogin(sql, `rejected-sponsor-${nextExternalId()}`);
+    const contributorId = await insertUserWithLogin(sql, `rejected-contributor-${nextExternalId()}`);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const acceptedSnapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      githubIssueId,
+      githubPullRequestId,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+    });
+    const rejectedSnapshot = structuredClone(acceptedSnapshot);
+    rejectedSnapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T13:00:00.000Z";
+    const rejectedState = {
+      githubIssueId,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId,
+      reason: "No rationale comment by `materialization-sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    };
+    const store = new PostgresFoldStore(sql);
+    const rejectedFold = foldRepository(rejectedSnapshot);
+    const addRun = await store.beginRun(repositoryId);
+    await expect(store.materialize({ repositoryId, runId: addRun, fold: rejectedFold }))
+      .resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
+    const state = await reconciliationMaterializationState(repositoryId);
+    expect(state.unwritableClosures).toEqual([{
+      github_issue_id: String(githubIssueId),
+      kind: rejectedState.kind,
+      github_pull_request_id: String(githubPullRequestId),
+      reason: rejectedState.reason,
+    }]);
+
+    await sql`
+      update unwritable_closures
+      set kind = 'NO_CLOSING_PULL_REQUEST', pull_request_id = null
+      where issue_id = (select id from issues where github_issue_id = ${githubIssueId})
+    `;
+    const repairRun = await store.beginRun(repositoryId);
+    await expect(store.materialize({ repositoryId, runId: repairRun, fold: rejectedFold }))
+      .resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures)
+      .toEqual(state.unwritableClosures);
+
+    const repeatRun = await store.beginRun(repositoryId);
+    await expect(store.materialize({ repositoryId, runId: repeatRun, fold: rejectedFold }))
+      .resolves.toEqual({ adds: 0, changes: 0, removals: 0 });
+
+    const acceptedRun = await store.beginRun(repositoryId);
+    await expect(store.materialize({ repositoryId, runId: acceptedRun, fold: foldRepository(acceptedSnapshot) }))
+      .resolves.toEqual({ adds: 0, changes: 1, removals: 1 });
+    expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toEqual([]);
+    const changes = await sql`
+      select change_kind, before_state, after_state
+      from reconciliation_changes
+      where reconciliation_run_id in (${addRun}, ${repairRun}, ${repeatRun}, ${acceptedRun})
+        and entity_kind = 'UNWRITABLE_CLOSURE'
+      order by created_at, id
+    `;
+    expect(changes).toEqual([
+      { change_kind: "ADD", before_state: null, after_state: rejectedState },
+      {
+        change_kind: "CHANGE",
+        before_state: { ...rejectedState, kind: "NO_CLOSING_PULL_REQUEST", githubPullRequestId: null },
+        after_state: rejectedState,
+      },
+      { change_kind: "REMOVE", before_state: rejectedState, after_state: null },
+    ]);
+  });
+
   it("records deterministic add, change, and removal provenance for self-work and hand closures", async () => {
     const selfWorkSponsorLogin = `self-work-sponsor-${nextExternalId()}`;
     const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
@@ -2473,11 +2562,15 @@ async function reconciliationMaterializationState(repositoryId: string) {
     `,
     sql<{
       github_issue_id: number | string;
+      kind: string;
+      github_pull_request_id: number | string | null;
       reason: string;
     }[]>`
-      select issues.github_issue_id, unwritable_closures.reason
+      select issues.github_issue_id, unwritable_closures.kind::text,
+        pull_requests.github_pull_request_id, unwritable_closures.reason
       from unwritable_closures
       join issues on issues.id = unwritable_closures.issue_id
+      left join pull_requests on pull_requests.id = unwritable_closures.pull_request_id
       where issues.repository_id = ${repositoryId}
       order by issues.github_issue_id
     `,
