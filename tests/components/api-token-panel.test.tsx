@@ -101,6 +101,9 @@ describe("API token panel", () => {
   });
 
   it("replaces the displayed token and generation date only after successful regeneration", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mintedToken())
       .mockResolvedValueOnce(mintedToken(replacementToken, "2026-09-06T12:00:00.000Z"));
@@ -115,6 +118,9 @@ describe("API token panel", () => {
     expect(screen.queryByText(token)).not.toBeInTheDocument();
     expect(screen.getByText("2026-09-06 12:00:00 UTC")).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(consoleLog).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -133,6 +139,9 @@ describe("API token panel", () => {
   });
 
   it("leaves the displayed token and date alone after a failed regenerate, then allows retry", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mintedToken())
       .mockResolvedValueOnce(Response.json({ error: {
@@ -152,6 +161,9 @@ describe("API token panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
     expect(await screen.findByText(replacementToken)).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(consoleLog).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("does not redisplay a hidden token after a failed regenerate from a summary", async () => {
@@ -167,6 +179,9 @@ describe("API token panel", () => {
   });
 
   it("reports network failure without echoing exception details or losing the displayed token", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(mintedToken())
       .mockRejectedValueOnce(new Error(`private network details ${token}`)));
@@ -179,6 +194,9 @@ describe("API token panel", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent(token);
     expect(screen.getByText(token)).toBeVisible();
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
+    expect(consoleLog).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it.each([
