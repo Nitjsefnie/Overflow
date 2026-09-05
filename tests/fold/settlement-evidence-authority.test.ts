@@ -199,6 +199,98 @@ describe("settled label authority boundaries", () => {
 });
 
 describe("review rounds at merge", () => {
+  it("counts distinct reviews sharing a submission timestamp as separate rounds", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      { id: 401, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:30:00.000Z", dismissal: null },
+      { id: 402, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:30:00.000Z", dismissal: null },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 2, credits: 4 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([
+      { githubReviewId: 401, submittedAt: "2026-09-01T10:30:00.000Z" },
+      { githubReviewId: 402, submittedAt: "2026-09-01T10:30:00.000Z" },
+    ]);
+  });
+
+  it("sorts review rounds by id regardless of input order", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      { id: 402, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:30:00.000Z", dismissal: null },
+      { id: 401, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:40:00.000Z", dismissal: null },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 2, credits: 4 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([
+      { githubReviewId: 401, submittedAt: "2026-09-01T10:40:00.000Z" },
+      { githubReviewId: 402, submittedAt: "2026-09-01T10:30:00.000Z" },
+    ]);
+  });
+
+  it("judges each review by its own dismissal timestamp", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 401,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+      {
+        id: 402,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:40:00.000Z",
+        dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 1, credits: 5 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([
+      { githubReviewId: 401, submittedAt: "2026-09-01T10:30:00.000Z" },
+    ]);
+  });
+
+  it("does not count a commented review dismissed after merge", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 401,
+        state: "DISMISSED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "COMMENTED" },
+      },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 0, credits: 6 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([]);
+  });
+
+  it("honors attached dismissals even for current changes requested and excludes missing provenance", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      {
+        id: 401,
+        state: "CHANGES_REQUESTED",
+        submittedAt: "2026-09-01T10:30:00.000Z",
+        dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
+      },
+      { id: 402, state: "DISMISSED", submittedAt: "2026-09-01T10:40:00.000Z", dismissal: null },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ reviewRounds: 0, credits: 6 });
+    expect(result.pullRequests[0]?.reviewRounds).toEqual([]);
+  });
+
   it.each([
     { at: "2026-09-01T11:59:59.999Z", rounds: 0, credits: 6 },
     { at: "2026-09-01T12:00:00.000Z", rounds: 1, credits: 5 },
