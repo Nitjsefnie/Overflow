@@ -2,10 +2,15 @@ const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
 
-// Bound full details to five errors, 512 UTF-16 code units per field and ten
-// path segments. Later entries retain their bounded type (up to 514 units each,
-// including separators), so the total grows with the number of errors.
+// Summarize the first five distinct (type, message) pairs, using each pair's
+// first path. Fields retain up to 512 UTF-16 units and paths up to ten segments.
+// Further entries contribute deduplicated types only while the total fits in
+// 8,000 units, including counts and an explicit budget-overflow marker. Counts
+// distinguish repeats of full pairs from entries without full details. This is
+// a bounded summary, not universal per-entry retention. Truncation preserves
+// well-formed source text; it does not repair malformed source Unicode.
 const maxErrorEntries = 5;
+const maxErrorSummaryLength = 8_000;
 const maxErrorFieldLength = 512;
 const maxErrorPathSegments = 10;
 // Ten serialized segments of at most 48 units, commas, brackets and an optional
@@ -52,27 +57,54 @@ function graphqlFailureMessage(errors: unknown, accessToken: string): string {
     return message;
   }
 
-  const details = errors.map((entry: unknown, index) => {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      return "Unknown error";
+  const fullPairs: Array<{ type: string; message: string }> = [];
+  const renderedTypes = new Set<string>();
+  let summary = message;
+  let collapsed = 0;
+  let withoutDetails = 0;
+  let overflow = false;
+  const overflowMarker = "; … summary budget exceeded";
+  const counts = (duplicates: number, omitted: number) =>
+    (duplicates > 0 ? `; … ${duplicates} duplicate error(s) collapsed` : "")
+    + (omitted > 0 ? `; … ${omitted} more error(s) without full details` : "");
+  // Reserve the largest possible suffix before appending complete entries;
+  // never cut through a path, redaction marker, or surrogate pair at the cap.
+  const detailBudget = maxErrorSummaryLength
+    - counts(errors.length, errors.length).length - overflowMarker.length;
+
+  for (const entry of errors) {
+    const error = entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      ? entry as Record<string, unknown> : {};
+    const type = typeof error.type === "string" && error.type.length > 0 ? error.type : "UNKNOWN";
+    const detail = typeof error.message === "string" && error.message.length > 0
+      ? error.message : "No message supplied";
+    if (fullPairs.some((pair) => pair.type === type && pair.message === detail)) {
+      collapsed++;
+      continue;
     }
 
-    const error = entry as Record<string, unknown>;
-    const type = typeof error.type === "string" && error.type.length > 0
-      ? boundedErrorText(error.type, accessToken) : "UNKNOWN";
-    if (index >= maxErrorEntries) return type;
-    const detail = typeof error.message === "string" && error.message.length > 0
-      ? boundedErrorText(error.message, accessToken) : "No message supplied";
-    let path = "";
-    if (Array.isArray(error.path)) {
-      path = ` path=${boundedErrorPath(error.path, accessToken)}`;
+    // Five full previews use at most 7,673 units, so even the maximum count
+    // suffix fits. Only the type-only tail can exhaust the remaining budget.
+    if (fullPairs.length < maxErrorEntries) {
+      const path = Array.isArray(error.path) ? ` path=${boundedErrorPath(error.path, accessToken)}` : "";
+      summary += `${fullPairs.length === 0 ? " " : "; "}${boundedErrorText(type, accessToken)}: ${boundedErrorText(detail, accessToken)}${path}`;
+      fullPairs.push({ type, message: detail });
+      renderedTypes.add(boundedErrorText(type, accessToken));
+      continue;
     }
-    return `${type}: ${detail}${path}`;
-  });
-  if (errors.length > maxErrorEntries) {
-    details.push(`… ${errors.length - maxErrorEntries} more error(s)`);
+
+    withoutDetails++;
+    if (overflow) continue;
+    const renderedType = boundedErrorText(type, accessToken);
+    if (renderedTypes.has(renderedType)) continue;
+    if (summary.length + 2 + renderedType.length > detailBudget) {
+      overflow = true;
+      continue;
+    }
+    summary += `; ${renderedType}`;
+    renderedTypes.add(renderedType);
   }
-  return `${message} ${details.join("; ")}`;
+  return summary + counts(collapsed, withoutDetails) + (overflow ? overflowMarker : "");
 }
 
 export type GitHubGraphqlClientOptions = {
