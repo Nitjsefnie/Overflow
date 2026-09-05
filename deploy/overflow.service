@@ -22,7 +22,7 @@ WorkingDirectory=/srv/overflow
 
 # systemd reads EnvironmentFile= as PID 1, before it drops to User=, so the
 # secrets file stays root:root 0600 inside a root:root 0700 directory: the
-# service account never needs — and never gets — an on-disk read path to any
+# service account never needs, and never gets, an on-disk read path to any
 # secret. The PATH carries no component under /root, which an unprivileged
 # account cannot traverse anyway.
 EnvironmentFile=/etc/overflow/overflow.env
@@ -32,7 +32,7 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
 # Next's own CLI is started directly. Running pnpm here would drag corepack in,
 # and corepack demands a writable cache under the service account's home for
-# every start — a writable path this unit then would not need to grant.
+# every start: a writable path this unit then would not need to grant.
 ExecStart=/usr/local/bin/node /srv/overflow/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000
 
 # Nothing this process runs can gain privilege it did not start with: no setuid
