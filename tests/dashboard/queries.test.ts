@@ -3,8 +3,10 @@ import {
   getCalibrationComparison,
   getDashboard,
   getSettlementProof,
+  listAuditCandidates,
   listEligibleIssues,
   listEnforcementHistory,
+  listModerationRepositories,
   listOpenAudits,
   listRecalibratingAccounts,
   listSettlementHistory,
@@ -765,5 +767,112 @@ describe("settlement history", () => {
     ]);
 
     await expect(listSettlementHistory("member-1", { sql })).rejects.toThrow("Settlement status was invalid.");
+  });
+});
+
+describe("audit targeting", () => {
+  it("projects every account with its pair counts and any open audit, reading driver strings as numbers", async () => {
+    const { sql } = sqlHarness([
+      [
+        {
+          id: "account-1",
+          github_login: "mira",
+          enforcement_state: "ACTIVE",
+          self_work_pair_count: "12",
+          outsider_pair_count: "11",
+          open_audit_id: "audit-1",
+        },
+        {
+          id: "account-2",
+          github_login: "quinn",
+          enforcement_state: "RECALIBRATING",
+          self_work_pair_count: 0,
+          outsider_pair_count: 3,
+          open_audit_id: null,
+        },
+      ],
+    ]);
+
+    const candidates = await listAuditCandidates({ sql });
+
+    expect(candidates).toEqual([
+      {
+        id: "account-1",
+        githubLogin: "mira",
+        enforcementState: "ACTIVE",
+        selfWorkPairCount: 12,
+        outsiderPairCount: 11,
+        openAuditId: "audit-1",
+      },
+      {
+        id: "account-2",
+        githubLogin: "quinn",
+        enforcementState: "RECALIBRATING",
+        selfWorkPairCount: 0,
+        outsiderPairCount: 3,
+        openAuditId: null,
+      },
+    ]);
+  });
+
+  it("counts the pairs the calibration comparison counts, unwindowed and unscoped, ordered by login", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    const candidates = await listAuditCandidates({ sql });
+
+    expect(candidates).toEqual([]);
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/from users/i);
+    expect(query).toMatch(/self_work_calibrations\.user_id = users\.id/i);
+    expect(query).toMatch(/self_work_calibrations\.actual_points is not null/i);
+    expect(query).toMatch(/pull_requests\.proof_sha256 is not null/i);
+    expect(query).toMatch(/settlements\.debtor_id = users\.id/i);
+    expect(query).toMatch(/settlements\.creditor_id is not null/i);
+    expect(query).toMatch(/settlements\.creditor_id <> users\.id/i);
+    expect(query).toMatch(/settlements\.status = 'SETTLED'/i);
+    expect(query).toMatch(/settlements\.settled_points is not null/i);
+    expect(query).toMatch(/calibration_audits\.state = 'OPEN'/i);
+    expect(query).toMatch(/order by users\.github_login, users\.id/i);
+    expect(query).not.toMatch(/sample_started_at|sample_ended_at|merged_at|repository_id = /i);
+    expect(query).not.toMatch(/encrypted_oauth_token|access_token|auth_secret|webhook_secret|credential/i);
+    expect(captures[0]?.values).toEqual([]);
+  });
+
+  it("rejects an account row whose pair count is not a number", async () => {
+    const { sql } = sqlHarness([
+      [
+        {
+          id: "account-1",
+          github_login: "mira",
+          enforcement_state: "ACTIVE",
+          self_work_pair_count: "many",
+          outsider_pair_count: 11,
+          open_audit_id: null,
+        },
+      ],
+    ]);
+
+    await expect(listAuditCandidates({ sql })).rejects.toThrow("Self-work pair count was not a number.");
+  });
+
+  it("lists only active repositories for the audit scope, ordered by owner name", async () => {
+    const { sql, captures } = sqlHarness([
+      [
+        { id: "repository-1", owner_name: "co-op/harbour" },
+        { id: "repository-2", owner_name: "co-op/lighthouse" },
+      ],
+    ]);
+
+    const repositories = await listModerationRepositories({ sql });
+
+    expect(repositories).toEqual([
+      { id: "repository-1", ownerName: "co-op/harbour" },
+      { id: "repository-2", ownerName: "co-op/lighthouse" },
+    ]);
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/from registered_repositories/i);
+    expect(query).toMatch(/where active = true/i);
+    expect(query).toMatch(/order by owner_name, id/i);
+    expect(query).not.toMatch(/encrypted_oauth_token|github_webhook_id|webhook_secret|credential/i);
   });
 });

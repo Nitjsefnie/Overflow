@@ -190,6 +190,25 @@ export type RecalibratingAccountProjection = {
   confirmedPatternCount: number;
 };
 
+/**
+ * One account a moderator may open an audit against. The pair counts are unwindowed and unscoped, so
+ * they are an upper bound on what any particular sample window yields; the audit preview is what tells
+ * a moderator whether a specific window qualifies.
+ */
+export type AuditCandidateProjection = {
+  id: string;
+  githubLogin: string;
+  enforcementState: string;
+  selfWorkPairCount: number;
+  outsiderPairCount: number;
+  openAuditId: string | null;
+};
+
+export type ModerationRepositoryProjection = {
+  id: string;
+  ownerName: string;
+};
+
 export type DashboardQueryDependencies = {
   sql?: DashboardSql;
 };
@@ -367,6 +386,20 @@ type RecalibratingAccountRow = {
   id: string;
   github_login: string;
   confirmed_miscalibration_count: number | string;
+};
+
+type AuditCandidateRow = {
+  id: string;
+  github_login: string;
+  enforcement_state: string;
+  self_work_pair_count: number | string;
+  outsider_pair_count: number | string;
+  open_audit_id: string | null;
+};
+
+type ModerationRepositoryRow = {
+  id: string;
+  owner_name: string;
 };
 
 /** Loads materialized ledger and reservation values; overcommitment remains visible as negative headroom. */
@@ -951,6 +984,67 @@ export async function listRecalibratingAccounts(
     id: readText(row.id, "Recalibrating account identifier"),
     githubLogin: readText(row.github_login, "Recalibrating account login"),
     confirmedPatternCount: readNumber(row.confirmed_miscalibration_count, "Confirmed pattern count"),
+  }));
+}
+
+export async function listAuditCandidates(
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<AuditCandidateProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<AuditCandidateRow[]>`
+    select
+      users.id,
+      users.github_login,
+      users.enforcement_state::text,
+      self_work.pair_count as self_work_pair_count,
+      outsider.pair_count as outsider_pair_count,
+      calibration_audits.id as open_audit_id
+    from users
+    left join lateral (
+      select count(*) as pair_count
+      from self_work_calibrations
+      join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+      where self_work_calibrations.user_id = users.id
+        and self_work_calibrations.actual_points is not null
+        and pull_requests.proof_sha256 is not null
+    ) as self_work on true
+    left join lateral (
+      select count(*) as pair_count
+      from settlements
+      where settlements.debtor_id = users.id
+        and settlements.creditor_id is not null
+        and settlements.creditor_id <> users.id
+        and settlements.status = 'SETTLED'
+        and settlements.settled_points is not null
+    ) as outsider on true
+    left join calibration_audits
+      on calibration_audits.account_id = users.id
+      and calibration_audits.state = 'OPEN'
+    order by users.github_login, users.id
+  `;
+  return rows.map((row) => ({
+    id: readText(row.id, "Audit candidate identifier"),
+    githubLogin: readText(row.github_login, "Audit candidate login"),
+    enforcementState: readText(row.enforcement_state, "Audit candidate enforcement state"),
+    selfWorkPairCount: readNumber(row.self_work_pair_count, "Self-work pair count"),
+    outsiderPairCount: readNumber(row.outsider_pair_count, "Outsider pair count"),
+    openAuditId: row.open_audit_id === null ? null : readText(row.open_audit_id, "Open audit identifier"),
+  }));
+}
+
+export async function listModerationRepositories(
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<ModerationRepositoryProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<ModerationRepositoryRow[]>`
+    select id, owner_name
+    from registered_repositories
+    where active = true
+    order by owner_name, id
+  `;
+  return rows.map((row) => ({
+    id: readText(row.id, "Repository identifier"),
+    ownerName: readText(row.owner_name, "Repository name"),
   }));
 }
 
