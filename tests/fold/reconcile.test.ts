@@ -62,6 +62,55 @@ describe("reconcileRepository", () => {
     expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledExactlyOnceWith([2001, 3001]);
   });
 
+  it.each([false, true])("preserves every author's identity across reconciliation (reverse order: %s)", async (reverse) => {
+    const issues = [
+      reconciliationIssue({ id: 101, number: 1 }),
+      reconciliationIssue({ id: 102, number: 2 }),
+      reconciliationIssue({ id: 103, number: 3 }),
+    ];
+    const pullRequests = new Map([
+      [1, [{ ...reconciliationPullRequest({ id: 201, number: 11 }), authorLogin: "alice" }]],
+      [2, [{ ...reconciliationPullRequest({ id: 202, number: 12 }), authorLogin: "bob", authorGitHubUserId: 3001 }]],
+      [3, [{ ...reconciliationPullRequest({ id: 203, number: 13 }), authorLogin: "release-bot[bot]", authorGitHubUserId: null }]],
+    ]);
+    const materialize = vi.fn().mockResolvedValue({ adds: 3, changes: 0, removals: 0 });
+    const dependencies = reconciliationDependencies({
+      materialize,
+      github: {
+        listIssues: vi.fn().mockResolvedValue(reverse ? [...issues].reverse() : issues),
+        getIssueClosingPullRequests: vi.fn(async (_repository, issueNumber: number) => pullRequests.get(issueNumber) ?? []),
+      },
+    });
+    dependencies.store.findUsersByGitHubUserIds = vi.fn().mockResolvedValue([
+      { id: "alice-member", githubUserId: 2001, githubLogin: "alice", enforcementState: "ACTIVE" },
+      { id: "bob-member", githubUserId: 3001, githubLogin: "bob", enforcementState: "ACTIVE" },
+    ]);
+
+    await reconcileRepository(dependencies, "repository");
+
+    expect(materialize.mock.calls[0]?.[0].fold.ledgerEntries).toHaveLength(4);
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      fold: expect.objectContaining({
+        settlements: [
+          expect.objectContaining({ githubIssueId: 101, creditorId: "alice-member", creditorGitHubUserId: 2001, status: "SETTLED", credits: 6 }),
+          expect.objectContaining({ githubIssueId: 102, creditorId: "bob-member", creditorGitHubUserId: 3001, status: "SETTLED", credits: 6 }),
+          expect.objectContaining({ githubIssueId: 103, creditorId: null, creditorGitHubUserId: null, status: "UNCLAIMED", credits: 6 }),
+        ],
+        pullRequests: [
+          expect.objectContaining({ githubPullRequestId: 201, authorId: "alice-member", authorGitHubUserId: 2001 }),
+          expect.objectContaining({ githubPullRequestId: 202, authorId: "bob-member", authorGitHubUserId: 3001 }),
+          expect.objectContaining({ githubPullRequestId: 203, authorId: null, authorGitHubUserId: null }),
+        ],
+        ledgerEntries: expect.arrayContaining([
+          { accountId: "alice-member", counterpartyId: "sponsor", amount: 6 },
+          { accountId: "sponsor", counterpartyId: "alice-member", amount: -6 },
+          { accountId: "bob-member", counterpartyId: "sponsor", amount: 6 },
+          { accountId: "sponsor", counterpartyId: "bob-member", amount: -6 },
+        ]),
+      }),
+    }));
+  });
+
   it("converges when a full reconciliation is repeated after missed or reordered webhook deliveries", async () => {
     const materializer = new StatefulSettlementMaterializer(new Map([
       [101, "stale settlement for the first authoritative issue"],

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -104,6 +104,73 @@ describe("initial PostgreSQL materialization", () => {
     ]);
     expect(await store.findUsersByGitHubUserIds([])).toEqual([]);
     expect(await store.findUsersByGitHubUserIds([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])).toEqual([]);
+
+    const secondRepositoryId = await insertRepository(sql, secondId, nextExternalId());
+    expect((await store.getRepository(secondRepositoryId))?.sponsor).toMatchObject({
+      id: secondId, githubUserId: secondGitHubId, githubLogin: "id-lookup-second",
+    });
+    const snapshot = materializationSnapshot({
+      repositoryId, ownerName: "example/id-lookup", sponsorId: firstId, contributorId: secondId,
+      sponsorGitHubUserId: firstGitHubId, contributorGitHubUserId: secondGitHubId,
+      sponsorLogin: "id-lookup-renamed", contributorLogin: "id-lookup-second",
+      issueLabels: ["M"], actualLabel: "delivered/6",
+    });
+    snapshot.users = users;
+
+    const fold = foldRepository(snapshot);
+
+    expect(fold.settlements[0]).toMatchObject({
+      creditorId: secondId, creditorGitHubUserId: secondGitHubId, status: "SETTLED", credits: 6,
+    });
+    expect(fold.pullRequests[0]).toMatchObject({ authorId: secondId, authorGitHubUserId: secondGitHubId });
+    expect(fold.ledgerEntries).toEqual([
+      { accountId: secondId, counterpartyId: firstId, amount: 6 },
+      { accountId: firstId, counterpartyId: secondId, amount: -6 },
+    ]);
+  });
+
+  it("never looks up a user by numeric login text instead of their GitHub id", async () => {
+    const accountId = await insertUserWithLogin(sql, "numeric-login-account");
+    const githubUserId = await githubUserIdOf(sql, accountId);
+    const otherAccountId = await insertUserWithLogin(sql, String(githubUserId));
+    const otherGitHubUserId = await githubUserIdOf(sql, otherAccountId);
+    expect(otherGitHubUserId).not.toBe(githubUserId);
+    const store = new PostgresFoldStore(sql);
+
+    expect(await store.findUsersByGitHubUserIds([githubUserId])).toEqual([
+      expect.objectContaining({ id: accountId, githubUserId, githubLogin: "numeric-login-account" }),
+    ]);
+    expect(await store.findUsersByGitHubUserIds([otherGitHubUserId])).toEqual([
+      expect.objectContaining({ id: otherAccountId, githubUserId: otherGitHubUserId, githubLogin: String(githubUserId) }),
+    ]);
+  });
+
+  it("rejects zero before querying fold users and removes it from mixed id lookups", async () => {
+    const accountId = await insertUserWithLogin(sql, "zero-boundary-account");
+    const githubUserId = await githubUserIdOf(sql, accountId);
+    const queries: unknown[][] = [];
+    // Record the store's SQL boundary while executing every query against the real database.
+    const recordingSql = new Proxy(sql, {
+      apply(target, thisArg, args) {
+        queries.push(args);
+        return Reflect.apply(target, thisArg, args);
+      },
+    });
+    const array = vi.spyOn(sql, "array");
+    try {
+      const store = new PostgresFoldStore(recordingSql);
+      expect(await store.findUsersByGitHubUserIds([0])).toEqual([]);
+      expect(queries).toEqual([]);
+      expect(array).not.toHaveBeenCalled();
+
+      expect(await store.findUsersByGitHubUserIds([githubUserId, 0])).toEqual([
+        expect.objectContaining({ id: accountId, githubUserId }),
+      ]);
+      expect(queries).toHaveLength(1);
+      expect(array).toHaveBeenCalledExactlyOnceWith([String(githubUserId)]);
+    } finally {
+      array.mockRestore();
+    }
   });
 
   it("records each numbered migration only once", async () => {

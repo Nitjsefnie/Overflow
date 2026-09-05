@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   foldRepository,
   type RepositoryFoldSnapshot,
+  type FoldUser,
 } from "@/lib/fold/repository-fold";
 
 describe("foldRepository", () => {
@@ -190,19 +191,89 @@ describe("foldRepository", () => {
     expect(result.pullRequests[0]).toMatchObject({ authorId: "sponsor", authorGitHubUserId: 1001 });
   });
 
-  it("leaves a closing pull request without an author id unclaimed and unclaimable", () => {
+  it.each(["release-bot[bot]", "contributor"])(
+    "leaves a closing pull request by %s without an author id unclaimed and unclaimable",
+    (authorLogin) => {
+      const snapshot = outsiderFixture();
+      snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = authorLogin;
+      snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements[0]).toMatchObject({
+        status: "UNCLAIMED",
+        creditorId: null,
+        creditorGitHubUserId: null,
+        creditorGitHubLogin: authorLogin,
+      });
+      expect(result.pullRequests[0]).toMatchObject({ authorId: null, authorGitHubUserId: null });
+      expect(result.ledgerEntries).toEqual([]);
+    },
+  );
+
+  it.each([0, null])("never resolves a null author id to a sentinel user id %s", (githubUserId) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "release-bot[bot]";
     snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
+    // Exercise malformed runtime input too; null is deliberately outside FoldUser's type.
+    snapshot.users.push({
+      id: "sentinel", githubUserId, githubLogin: "sentinel", enforcementState: "ACTIVE",
+    } as unknown as FoldUser);
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "UNCLAIMED",
-      creditorId: null,
-      creditorGitHubUserId: null,
-      creditorGitHubLogin: "release-bot[bot]",
+      status: "UNCLAIMED", creditorId: null, creditorGitHubUserId: null,
     });
+    expect(result.pullRequests[0]).toMatchObject({ authorId: null, authorGitHubUserId: null });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("distinguishes an outsider from a sponsor sharing the same display login", () => {
+    const snapshot = outsiderFixture();
+    snapshot.users.find((user) => user.id === "contributor")!.githubLogin = "sponsor";
+    snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "sponsor";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.selfWorkCalibrations).toEqual([]);
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", creditorId: "contributor", creditorGitHubUserId: 2001, credits: 6,
+    });
+    expect(result.pullRequests[0]).toMatchObject({ authorId: "contributor", authorGitHubUserId: 2001 });
+    expect(result.ledgerEntries).toEqual([
+      { accountId: "contributor", counterpartyId: "sponsor", amount: 6 },
+      { accountId: "sponsor", counterpartyId: "contributor", amount: -6 },
+    ]);
+  });
+
+  it("keeps self-work when repository and member reads have different sponsor logins", () => {
+    const snapshot = selfWorkFixture();
+    snapshot.users.find((user) => user.id === "sponsor")!.githubLogin = "sponsor-renamed";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([]);
+    expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({ userId: "sponsor" })]);
+    expect(result.pullRequests[0]).toMatchObject({ authorId: "sponsor", authorGitHubUserId: 1001 });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("resolves a known author id even when the display login is null", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = null;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", creditorId: "contributor", creditorGitHubUserId: 2001,
+      creditorGitHubLogin: null, credits: 6,
+    });
+    expect(result.pullRequests[0]).toMatchObject({ authorId: "contributor", authorGitHubUserId: 2001 });
+    expect(result.ledgerEntries).toEqual([
+      { accountId: "contributor", counterpartyId: "sponsor", amount: 6 },
+      { accountId: "sponsor", counterpartyId: "contributor", amount: -6 },
+    ]);
   });
 
   it("materializes one deterministic settlement for every issue closed by one merged PR", () => {
