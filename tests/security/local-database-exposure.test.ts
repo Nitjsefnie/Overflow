@@ -74,7 +74,7 @@ describe("local development database exposure", () => {
   it("keeps the nonproduction credentials on the database service", async () => {
     const document = await readComposeDocument();
 
-    expect(serviceEnvironment(databaseService(document))).toMatchObject({
+    expect(serviceEnvironment(databaseService(document), SHIPPED_ENVIRONMENT)).toMatchObject({
       POSTGRES_DB: "overflow",
       POSTGRES_USER: "overflow",
       POSTGRES_PASSWORD: "overflow_local_only",
@@ -86,11 +86,17 @@ describe("local development database exposure", () => {
 
     expect(Object.keys(services)).toContain(DATABASE_SERVICE);
     expect(Object.entries(services)
-      .filter(([, service]) => service.network_mode === "host")
+      .filter(([name, service]) => serviceNetworkMode(name, service, SHIPPED_ENVIRONMENT) === "host")
       .map(([name]) => name)).toEqual([]);
   });
 
   it("binds every mapping touching the database port to loopback, on every service", async () => {
+    // Every service the file declares is read, including one `docker compose
+    // up` would leave out because a `profiles:` key excludes it from the
+    // default profile. That is deliberate rather than an oversight: a profile
+    // is selected per invocation, so an excluded service is one flag away from
+    // publishing the port, and this suite pins the file rather than one way of
+    // running it.
     const services = composeServices(await readComposeDocument());
 
     expect(Object.keys(services)).toContain(DATABASE_SERVICE);
@@ -106,9 +112,12 @@ describe("local development database exposure", () => {
     const contents = await readFile(resolve(ENVIRONMENT_FILE), "utf8");
     const declaration = new RegExp(String.raw`^[ \t]*(?:export[ \t]+)?${BIND_VARIABLE}[ \t]*=.*$`, "m");
 
-    // The shipped file identifies itself, so an emptied or renamed one cannot
-    // satisfy the assertion below by carrying nothing at all.
-    expect(contents).toMatch(/^DATABASE_URL=/m);
+    expect(
+      contents,
+      `${ENVIRONMENT_FILE} no longer looks like the shipped file. It is read here for its own sake: ` +
+      `without a line identifying it, an emptied, renamed or moved file would satisfy the absence ` +
+      `checked below by carrying nothing at all.`,
+    ).toMatch(/^DATABASE_URL=/m);
     expect(declaration.exec(contents)?.[0] ?? null).toBeNull();
   });
 });
@@ -156,6 +165,61 @@ describe("compose document parsing", () => {
     ].join("\n"));
 
     expect(databasePortMappings(document, {})).toMatchObject([{ bindAddress: "0.0.0.0" }]);
+  });
+
+  it("refuses a top-level include, whose services this suite never reads", () => {
+    const document = parseComposeDocument([
+      "include:",
+      "  - compose-extra.yml",
+      "services:",
+      "  postgres:",
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+    ].join("\n"));
+
+    expect(() => composeServices(document)).toThrow(/declares a top-level "include"/);
+    expect(() => composeServices(document)).toThrow(/Model "include" in this test/);
+  });
+
+  it("refuses extends on a service, whose inherited keys this suite never reads", () => {
+    const document = parseComposeDocument([
+      "services:",
+      "  postgres:",
+      "    extends:",
+      "      file: compose-extra.yml",
+      "      service: wide",
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+    ].join("\n"));
+
+    expect(() => composeServices(document)).toThrow(/declares "extends" on the service "postgres"/);
+    expect(() => composeServices(document)).toThrow(/write the inherited keys out on "postgres"/);
+  });
+
+  it("resolves an interpolated network_mode, which Compose substitutes before honouring it", () => {
+    const services = composeServices(parseComposeDocument([
+      "services:",
+      "  postgres:",
+      '    network_mode: "${NETMODE:-host}"',
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+    ].join("\n")));
+
+    expect(serviceNetworkMode("postgres", services.postgres, {})).toBe("host");
+  });
+
+  it("resolves an interpolated credential value, which Compose substitutes before the container reads it", () => {
+    const document = parseComposeDocument([
+      "services:",
+      "  postgres:",
+      "    environment:",
+      '      POSTGRES_PASSWORD: "${PGPW:-overflow_local_only}"',
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+    ].join("\n"));
+
+    expect(serviceEnvironment(composeServices(document).postgres, {}))
+      .toMatchObject({ POSTGRES_PASSWORD: "overflow_local_only" });
   });
 });
 
@@ -273,6 +337,15 @@ describe("compose variable interpolation", () => {
       expect(() => interpolate(template, { VAR: "set" })).toThrow(/unsupported/i);
     });
   }
+
+  it("refuses a nested interpolation instead of substituting only its outer half", () => {
+    // The diagnosis has to quote the expression as written: one naming only the
+    // fragment the supported-form pattern consumed would blame a value
+    // docker-compose.yml never wrote.
+    expect(() => interpolate("${A:-${B:-z}}", {})).toThrow(/unsupported/i);
+    expect(() => interpolate("${A:-${B:-z}}", {})).toThrow(/\$\{A:-\$\{B:-z\}\}/);
+    expect(() => interpolate("${A-$B}", {})).toThrow(/unsupported/i);
+  });
 });
 
 async function readComposeDocument(): Promise<unknown> {
@@ -288,7 +361,21 @@ function parseComposeDocument(text: string): unknown {
   return parse(text, { merge: true });
 }
 
+// `include` and `extends` each let Compose resolve a service definition that is
+// not written here: `include` merges another Compose file's services into the
+// project, and `extends` merges one service into another, from a second file
+// when it names one. Neither is modelled, and this suite's contract is that an
+// unmodelled construct is a named diagnosis rather than a key walked past, so
+// both are refused where the services are collected.
 function composeServices(document: unknown): Record<string, ComposeService> {
+  if (isRecord(document) && document.include !== undefined) {
+    throw new Error(
+      `${COMPOSE_FILE} declares a top-level "include", which merges another Compose file's services into ` +
+      `this project. This suite reads only ${COMPOSE_FILE}, so an included service could publish the ` +
+      `database on every interface with every assertion here green. Model "include" in this test, or write ` +
+      `the included services out here.`,
+    );
+  }
   if (!isRecord(document) || !isRecord(document.services)) {
     throw new Error(`${COMPOSE_FILE} declares no "services" mapping to inspect.`);
   }
@@ -296,6 +383,15 @@ function composeServices(document: unknown): Record<string, ComposeService> {
   for (const [name, service] of Object.entries(document.services)) {
     if (!isRecord(service)) {
       throw new Error(`${COMPOSE_FILE} declares the service "${name}" as something other than a mapping.`);
+    }
+    if (service.extends !== undefined) {
+      throw new Error(
+        `${COMPOSE_FILE} declares "extends" on the service "${name}", which merges another service ` +
+        `definition into it, from another file when it names one. This suite reads only the keys written on ` +
+        `the service itself, so the inherited definition could publish the database on every interface with ` +
+        `every assertion here green. Model "extends" in this test, or write the inherited keys out on ` +
+        `"${name}".`,
+      );
     }
     services[name] = service;
   }
@@ -315,11 +411,39 @@ function databaseService(document: unknown): ComposeService {
   return service;
 }
 
-function serviceEnvironment(service: ComposeService): Record<string, unknown> {
+// Compose interpolates an environment value as it does a port entry, so a
+// credential written as "${PGPW:-overflow_local_only}" is the shipped password.
+// Comparing the raw scalar would report a difference Compose does not make.
+function serviceEnvironment(
+  service: ComposeService,
+  environment: Record<string, string>,
+): Record<string, unknown> {
   if (!isRecord(service.environment)) {
     throw new Error(`${COMPOSE_FILE} declares no "environment" mapping on the "${DATABASE_SERVICE}" service.`);
   }
-  return service.environment;
+  const resolved: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(service.environment)) {
+    resolved[key] = typeof value === "string" ? interpolate(value, environment) : value;
+  }
+  return resolved;
+}
+
+// `network_mode` is interpolated too, and a service in host network mode reaches
+// the host's interfaces with no port mapping at all, so reading the raw scalar
+// would let "${NETMODE:-host}" through the assertion that refuses "host".
+function serviceNetworkMode(
+  name: string,
+  service: ComposeService,
+  environment: Record<string, string>,
+): string {
+  const mode = service.network_mode;
+  if (mode === undefined) return "";
+  if (typeof mode !== "string" && typeof mode !== "number") {
+    throw new Error(
+      `${COMPOSE_FILE} declares "network_mode" on the service "${name}" as something other than a scalar.`,
+    );
+  }
+  return interpolate(String(mode), environment);
 }
 
 function servicePorts(name: string, service: ComposeService): unknown[] {
@@ -457,12 +581,24 @@ function touchesDatabasePort(mapping: PortMapping): boolean {
 
 const SUPPORTED_INTERPOLATION = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?)-([^}]*))?\}/g;
 
+// A default holding a further "$" is a nested expression such as
+// "${A:-${B:-z}}". The supported form above would consume "${A:-${B:-z}" — its
+// default stops at the first "}" — and leave a bare "}" that carries no "$" for
+// the guard below to refuse, so the nested form is named here first.
+const NESTED_INTERPOLATION = /\$\{[A-Za-z_][A-Za-z0-9_]*:?-[^}]*\$/;
+
 // Mirrors Compose variable interpolation for the `${VAR}`, `${VAR-default}` and
 // `${VAR:-default}` forms, so the file's own default can be read without a
 // container runtime. Every other use of `$` is refused by name: leaving it
 // unsubstituted would make this test's verdict depend on an expression it never
 // evaluated.
 function interpolate(value: string, environment: Record<string, string>): string {
+  if (NESTED_INTERPOLATION.test(value)) {
+    throw new Error(
+      `unsupported nested Compose interpolation in ${JSON.stringify(value)}: ` +
+      'this test models only ${VAR}, ${VAR-default} and ${VAR:-default}, whose defaults hold no further "$".',
+    );
+  }
   const unsupported = /\$(?:\{[^}]*\}?|[^\s:/]*)/.exec(value.replace(SUPPORTED_INTERPOLATION, ""));
   if (unsupported !== null) {
     throw new Error(

@@ -232,7 +232,7 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    docker compose ps
    ```
 
-   That service publishes PostgreSQL on `127.0.0.1:5432` only, and its password is a committed, well-known string; `POSTGRES_HOST_BIND` widens the binding, so set it only when you mean to expose a known-credential database beyond this machine.
+   That service publishes PostgreSQL on loopback only, and its password is a committed, well-known string; `POSTGRES_HOST_BIND` widens that binding, so any address other than a loopback one publishes a database with known credentials to everything that can route to this machine. To reach it from another host, forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` — instead of widening the bind address.
 
 3. Point `DATABASE_URL` at that database, then install and migrate:
 
