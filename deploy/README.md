@@ -4,9 +4,10 @@
 deployment runs. It starts Next as the dedicated `overflow` system account, with
 the filesystem read-only apart from one cache directory, no capabilities, and no
 path under `/root`. `tests/deploy/unit-file.test.ts` fails if any of that is
-removed from the unit — and also if a `[Service]` directive is *added* to it,
-because the reviewed key set there is closed, and if the file uses a shape of
-systemd's grammar the guard does not model rather than guessing at it.
+removed from the unit — and also if a `[Service]` directive is *added* to it or
+given a value other than the reviewed one, because the reviewed set there is
+closed on both, and if the file uses a shape of systemd's grammar the guard does
+not model rather than guessing at it.
 
 This file is the procedure that makes a host match what the unit expects. The
 commands are run as root. Everything except the running service is root-owned:
@@ -148,23 +149,38 @@ chown -R overflow:overflow /srv/overflow/.next/cache
 chmod -R u=rwX,g=rX,o= /srv/overflow/.next/cache
 ```
 
-## 6. Install the unit
+## 6. Install the unit and switch onto it
 
 ```bash
+systemctl show overflow.service -p MainPID --value > /run/overflow-preswitch-mainpid
 install -o root -g root -m 0644 \
   /srv/overflow/deploy/overflow.service /etc/systemd/system/overflow.service
 systemd-analyze verify /etc/systemd/system/overflow.service
 systemctl daemon-reload
-systemctl enable --now overflow.service
+systemctl enable overflow.service
+systemctl restart overflow.service
 ```
 
 `systemd-analyze verify` prints nothing and exits 0 for a well-formed unit; it
 names any directive systemd does not recognise.
 
+The `restart` is the switchover, and it is separate from `enable` on purpose.
+`--now` on `enable` means *start* — `man systemctl`: "also start/stop/try-restart
+the units after the specified unit file operations succeed" — and `start` on a
+unit that is already active is a no-op with no job and no message. On the host
+section 1 is written for, the old root process would keep serving while systemd
+held the new unit file loaded and unapplied, and section 7 would report the new
+unit's `User=` beside a `ps` line owned by `root`. The recorded `MainPID` is
+what section 7 compares against; on a host that has never run Overflow it is
+`0`, which is the same evidence read the same way.
+
 ## 7. Verify
 
 ```bash
 systemctl is-active overflow.service
+printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
+  "$(cat /run/overflow-preswitch-mainpid)" \
+  "$(systemctl show overflow.service -p MainPID --value)"
 systemctl show overflow.service \
   -p MainPID -p User -p Group -p NoNewPrivileges -p ProtectSystem
 ps -o user=,pid=,args= -p "$(systemctl show overflow.service -p MainPID --value)"
@@ -172,9 +188,17 @@ curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-Expected: `active`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
+Expected: `active`; the two `MainPID` values differ and the current one is not
+`0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
 `ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`;
 `200` from curl.
+
+The two `MainPID` values are the check that distinguishes a switch from a
+reload. `systemctl show` reports the *loaded fragment*, so it answers
+`User=overflow` from the moment `daemon-reload` runs, whether or not anything
+restarted; only a new PID says the process serving requests is the one the
+hardened unit started. A pair that has not moved means the old process is still
+serving and section 6's `restart` did not run.
 
 Two details in those commands are the point of them. Ask `systemctl` for the
 PID instead of asking `ps` for Node processes: `ps -C node` matches on `comm`,
@@ -218,23 +242,45 @@ first, here and in section 9; if any fails, there is no rollback and a broken
 hardened unit has to be fixed forward instead.
 
 ```bash
-test -f /root/overflow.service.pre-hardening
-test -d /root/overflow
-test -x /root/.nvm/versions/node/v24.17.0/bin/pnpm
+missing=0
+for path in /root/overflow.service.pre-hardening /root/overflow \
+            /root/.nvm/versions/node/v24.17.0/bin/pnpm; do
+  if [ -e "$path" ]; then
+    echo "present: $path"
+  else
+    echo "MISSING: $path" >&2
+    missing=1
+  fi
+done
+[ "$missing" = 0 ] \
+  || echo "No rollback is available. Fix the hardened unit forward instead." >&2
 ```
 
+Every path prints, present or missing, because `test` prints nothing either way:
+three blank results is what an operator sees whether the rollback is intact or
+gone, and a check that cannot be read has replaced the silent expiry it was
+added to catch.
+
 ```bash
+systemctl show overflow.service -p MainPID --value > /run/overflow-preswitch-mainpid
 systemctl stop overflow.service
 cp -a /root/overflow.service.pre-hardening /etc/systemd/system/overflow.service
 systemctl daemon-reload
 systemctl start overflow.service
 systemctl is-active overflow.service
+printf 'MainPID before the rollback: %s\nMainPID now:                 %s\n' \
+  "$(cat /run/overflow-preswitch-mainpid)" \
+  "$(systemctl show overflow.service -p MainPID --value)"
+ps -o user=,pid=,args= -p "$(systemctl show overflow.service -p MainPID --value)"
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-`active` and `200` mean the rollback path works. Then repeat section 6 and
-section 7 to get back to the hardened unit. A rollback that has never been run
+`active`, a `MainPID` that moved, a `ps` line owned by `root` again and `200`
+mean the rollback path works — the `root` is the point of it, since that is the
+state the saved unit runs in. Then repeat section 6 and section 7 to get back to
+the hardened unit; section 6's `restart` is what makes that return leg real, and
+its `MainPID` pair is what proves it happened. A rollback that has never been run
 is an assumption.
 
 ## 9. Rolling back
