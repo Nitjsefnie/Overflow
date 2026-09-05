@@ -3,6 +3,8 @@ import { GitHubGateway } from "@/lib/github/client";
 import type { RepositoryRegistrationDependencies } from "@/lib/repositories/register";
 import { createRepositoryPostHandler } from "@/app/api/repositories/route";
 
+const temporaryLimitingAdvice = "GitHub also answers 403 when it is temporarily limiting requests, so if those settings look right, wait a minute and retry before changing anything.";
+
 describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
     const handler = createRepositoryPostHandler({
@@ -141,7 +143,7 @@ describe("POST /api/repositories", () => {
     const body = await response.json();
     expect(body).toEqual({ error: {
       code: "GITHUB_ACCESS",
-      message: "GitHub refused to create the repository webhook (HTTP 403). This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/Actual-Org/settings/oauth_application_policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.",
+      message: `GitHub refused to create the repository webhook (HTTP 403). This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/Actual-Org/settings/oauth_application_policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration. ${temporaryLimitingAdvice}`,
     } });
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
     expect(requests).toEqual([
@@ -166,7 +168,7 @@ describe("POST /api/repositories", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: {
       code: "GITHUB_ACCESS",
-      message: `${observation} This may be caused by missing authorization for the Overflow OAuth application. For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
+      message: `${observation} This may be caused by missing authorization for the Overflow OAuth application. For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.${status === 403 ? ` ${temporaryLimitingAdvice}` : ""}`,
     } });
   });
 
@@ -207,6 +209,36 @@ describe("POST /api/repositories", () => {
       if (code !== "GITHUB_ACCESS") {
         expect(JSON.stringify(body)).not.toMatch(/OAuth|oauth_application_policy/);
       }
+    });
+  });
+
+  describe.each(["lookup", "labels", "webhook"] as const)("%s temporary-limiting advice", (step) => {
+    it.each([
+      ["Organization", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
+      ["User", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
+      ["Organization", 404, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
+      ["User", 404, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
+      ["Organization", 403, { "retry-after": "60" }, "GITHUB_RATE_LIMITED", 429],
+      ["User", 403, { "retry-after": "60" }, "GITHUB_RATE_LIMITED", 429],
+    ] satisfies Array<[string, number, Record<string, string>, string, number]>)("handles %s HTTP %s with %j as %s", async (ownerType, status, headers, code, responseStatus) => {
+      const dependencies = successfulDependencies();
+      dependencies.github = failingGitHubGateway(step, status, headers, ownerType);
+      const handler = createRepositoryPostHandler({
+        getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+        createRegistrationDependencies: async () => dependencies,
+      });
+
+      const response = await handler(jsonRequest(validInput()));
+      expect(response.status).toBe(responseStatus);
+      const body = await response.json();
+      expect(body.error.code).toBe(code);
+      if (status === 403 && code === "GITHUB_ACCESS") {
+        expect(body.error.message).toContain(`then retry registration. ${temporaryLimitingAdvice}`);
+        expect(body.error.message.endsWith(temporaryLimitingAdvice)).toBe(true);
+      } else {
+        expect(body.error.message).not.toContain(temporaryLimitingAdvice);
+      }
+      expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
     });
   });
 
