@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
-import { GenericContainer, Wait } from "testcontainers";
+import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
@@ -12,7 +13,7 @@ import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { processWebhook } from "@/lib/webhooks/processor";
 
-let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
+let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 1_000_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -20,16 +21,13 @@ type QueryableSql = Sql | TransactionSql;
 
 describe("initial PostgreSQL materialization", () => {
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:17-alpine")
-      .withEnvironment({
-        POSTGRES_DB: "overflow_test",
-        POSTGRES_PASSWORD: "overflow_test",
-        POSTGRES_USER: "overflow_test",
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(Wait.forSuccessfulCommand("psql -U overflow_test -d overflow_test -c 'select 1' >/dev/null 2>&1"))
-      .start();
-    process.env.DATABASE_URL = `postgresql://overflow_test:overflow_test@${container.getHost()}:${container.getMappedPort(5432)}/overflow_test`;
+    const started = await startPostgresContainer({
+      database: "overflow_test",
+      user: "overflow_test",
+      password: "overflow_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
     await runMigrations();

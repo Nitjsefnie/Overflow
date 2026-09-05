@@ -1,31 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
-import { GenericContainer, Wait } from "testcontainers";
+import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 
-let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
+let container: StartedTestContainer | undefined;
 let sql: Sql;
 let externalId = 70_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 describe("PostgreSQL settlement override requests", () => {
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:17-alpine")
-      .withEnvironment({
-        POSTGRES_DB: "overflow_override_test",
-        POSTGRES_PASSWORD: "overflow_override_test",
-        POSTGRES_USER: "overflow_override_test",
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(
-        Wait.forSuccessfulCommand(
-          "psql -U overflow_override_test -d overflow_override_test -c 'select 1' >/dev/null 2>&1",
-        ),
-      )
-      .start();
-    process.env.DATABASE_URL = `postgresql://overflow_override_test:overflow_override_test@${container.getHost()}:${container.getMappedPort(5432)}/overflow_override_test`;
+    const started = await startPostgresContainer({
+      database: "overflow_override_test",
+      user: "overflow_override_test",
+      password: "overflow_override_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });

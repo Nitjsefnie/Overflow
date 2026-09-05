@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
-import { GenericContainer, Wait } from "testcontainers";
+import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -9,7 +10,7 @@ import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview } from "@/
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import { encryptToken } from "@/lib/security/token-cipher";
 
-let container: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
+let container: StartedTestContainer | undefined;
 let sql: Sql;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 21).toString("base64url");
@@ -23,20 +24,13 @@ const declinedPullRequestId = 8_100_004;
 
 describe("a granted settlement override survives reconciliation", () => {
   beforeAll(async () => {
-    container = await new GenericContainer("postgres:17-alpine")
-      .withEnvironment({
-        POSTGRES_DB: "overflow_override_fold_test",
-        POSTGRES_PASSWORD: "overflow_override_fold_test",
-        POSTGRES_USER: "overflow_override_fold_test",
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(
-        Wait.forSuccessfulCommand(
-          "psql -U overflow_override_fold_test -d overflow_override_fold_test -c 'select 1' >/dev/null 2>&1",
-        ),
-      )
-      .start();
-    process.env.DATABASE_URL = `postgresql://overflow_override_fold_test:overflow_override_fold_test@${container.getHost()}:${container.getMappedPort(5432)}/overflow_override_fold_test`;
+    const started = await startPostgresContainer({
+      database: "overflow_override_fold_test",
+      user: "overflow_override_fold_test",
+      password: "overflow_override_fold_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
   });
