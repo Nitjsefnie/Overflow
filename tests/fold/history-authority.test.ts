@@ -55,14 +55,17 @@ describe("repository fold history authority", () => {
   });
 
   it.each([
-    ["before the final PR commit", "2026-09-01T09:59:59.000Z", "Owner rationale for delivered/6"],
+    // The timing cases sit outside the settlement-evidence grace. Offsets inside
+    // it are deliberately accepted; that boundary is covered in
+    // tests/fold/repository-fold.test.ts.
+    ["well before the final PR commit", "2026-09-01T09:44:00.000Z", "Owner rationale for delivered/6"],
     ["without a nonblank rationale", "2026-09-01T11:30:00.000Z", "   "],
     ["without naming the configured label", "2026-09-01T11:30:00.000Z", "Reviewed the landed change."],
-    ["after merge", "2026-09-01T12:00:00.001Z", "Owner rationale for delivered/6"],
+    ["well after merge", "2026-09-01T12:16:00.000Z", "Owner rationale for delivered/6"],
   ])("does not settle when owner proof is %s", (_case, commentTime, commentBody) => {
     const snapshot = historySnapshot();
     const issue = historyIssue(snapshot);
-    if (_case === "before the final PR commit") {
+    if (_case === "well before the final PR commit") {
       const event = issue.history.find((item: { id: string }) => item.id === "actual-1") as { createdAt: string };
       event.createdAt = commentTime;
     } else {
