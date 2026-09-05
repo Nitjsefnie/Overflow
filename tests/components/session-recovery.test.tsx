@@ -36,10 +36,11 @@ describe("session recovery route", () => {
     expect(screen.getByRole("link", { name: "Try the ledger again" })).toHaveAttribute("href", "/dashboard");
   });
 
-  it("tells a stale-session visitor the account is unrecognised and offers no retry", () => {
+  it("tells a stale-session visitor to clear the sign-in and offers no retry", () => {
     render(<SessionRecovery reason="stale" />);
 
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/no longer recognises this account/i);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
+    expect(screen.getByText(/if you were signed in/i)).toBeVisible();
     expect(screen.getByText(/sign in again/i)).toBeVisible();
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
   });
@@ -51,7 +52,7 @@ describe("session recovery route", () => {
   ])("treats $name as a stale session", ({ reason }) => {
     render(<SessionRecovery reason={reason} />);
 
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/no longer recognises this account/i);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
   });
 
@@ -77,7 +78,7 @@ describe("session recovery route", () => {
   it("falls back to the stale copy when the route is opened with no search params at all", async () => {
     render(await SessionPage({}));
 
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/no longer recognises this account/i);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
     expect(mocks.redirect).not.toHaveBeenCalled();
     expect(mocks.getSql).not.toHaveBeenCalled();
     expect(mocks.getCurrentUserRole).not.toHaveBeenCalled();
