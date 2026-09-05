@@ -1,5 +1,5 @@
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { GitHubApiError } from "@/lib/github/errors";
+import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
 
@@ -148,7 +148,7 @@ async function reconcileRepositoryWhileCoordinated(
     // a caller that reports the failure reports what actually went wrong.
     console.error(`Reconciliation of repository ${repositoryId} failed.`, error);
     await dependencies.store.failRun(runId, "Reconciliation failed.");
-    if (error instanceof GitHubApiError && error.rateLimited) {
+    if (isGitHubRateLimitError(error)) {
       const seconds = error.retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS;
       await dependencies.store.setReconciliationCooldown(repositoryId, new Date(now().getTime() + seconds * 1000));
     }
