@@ -36,13 +36,19 @@ the token or it leaks, and replace the credential in your scripts. Keep the toke
 private; do not commit it.
 
 The panel calls `POST /api/tokens` with the signed-in browser session cookie and
-no request body. An API token alone cannot mint or regenerate a token. Success
-is HTTP `201` with `{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>" }`.
+no request body. An API token alone cannot mint or regenerate a token. Because
+the session cookie is the only credential, the endpoint is same-origin only: the
+request must carry an `Origin` header equal to `APP_URL`, and it must either send
+no body or declare `Content-Type: application/json`. Success is HTTP `201` with
+`{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>" }`.
 Failures use `{ "error": { "code": "...", "message": "..." } }`:
 
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | Sign in through GitHub in the browser. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | The request carried no `Origin` header or one that is not `APP_URL`. Mint the token from the Overflow page in the browser. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. Send no `Content-Type` at all, or send `application/json`. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed, so it cannot recognize its own origin. Fix the server configuration; nothing about the request will help. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to issue an API token.` | Session lookup or token storage failed; retry when the service recovers. |
 
 ### Submit a repository
@@ -52,6 +58,12 @@ Send `POST /api/repositories` with `Authorization: Bearer <token>` and
 uses the account's stored GitHub OAuth credential for its GitHub operations.
 The repository must be public, and that account must have GitHub administrator
 permission for it. Registration creates the catalog labels and installs a webhook.
+
+A bearer-token request is exempt from the origin check — a script is not a
+browser and sends no `Origin` header — but it is not exempt from the content
+type: `Content-Type: application/json` is required either way. The same endpoint
+reached with a browser session cookie instead of a bearer token is
+same-origin only, so its `Origin` must equal `APP_URL`.
 
 The JSON body contains exactly these required fields. Extra fields, including
 extra fields inside label objects, are rejected.
@@ -139,10 +151,13 @@ status and code, then use the message to distinguish causes:
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
 | 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
 | 403 | `FORBIDDEN` | `The account is not eligible to register repositories.` | The account is banned or recalibrating. Resolve the account restriction; regenerating the token does not remove it. |
 | 403 | `FORBIDDEN` | `Only public GitHub repositories can be registered.` | Choose a public repository. |
 | 403 | `FORBIDDEN` | `GitHub administrator permission is required for the submitted repository.` | Use an account with administrator permission for that repository. |
 | 409 | `CONFLICT` | `This GitHub repository is already registered.` | Use the existing registration. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. This applies to bearer-token requests too, and is answered before the token is looked up. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed. Only a browser request reaches this; a bearer-token request does not read `APP_URL`. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Credential/session lookup or registration setup failed; check service configuration and account GitHub access before retrying. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to retrieve the submitted GitHub repository.` | GitHub repository lookup failed; check the reference, access, and GitHub availability. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to register the repository with GitHub.` | Creating catalog labels or the webhook failed; check GitHub access and availability. |
@@ -280,7 +295,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `AUTH_SECRET` | Auth.js session signing secret |
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
-| `APP_URL` | Public application URL |
+| `APP_URL` | Public application URL, and the exact origin browser mutations must come from; a missing or malformed value refuses every one of them |
 | `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub webhook URL and shared secret |
 | `MODERATOR_GITHUB_LOGINS` | Comma-separated moderator GitHub logins |
 
