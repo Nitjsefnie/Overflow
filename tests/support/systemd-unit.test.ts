@@ -26,16 +26,18 @@ const CANONICAL = [
 describe("the canonical subset a unit must be written in", () => {
   it("parses the reviewed shapes: headers, assignments, comments and blank lines", () => {
     expect(parseUnitFile(CANONICAL)).toEqual([
-      { section: "Unit", key: "Description", value: "example", words: ["example"] },
-      { section: "Service", key: "Type", value: "simple", words: ["simple"] },
-      { section: "Service", key: "User", value: "overflow", words: ["overflow"] },
+      { line: 4, section: "Unit", key: "Description", value: "example", words: ["example"] },
+      { line: 7, section: "Service", key: "Type", value: "simple", words: ["simple"] },
+      { line: 8, section: "Service", key: "User", value: "overflow", words: ["overflow"] },
       {
+        line: 9,
         section: "Service",
         key: "Environment",
         value: "PATH=/usr/bin",
         words: ["PATH=/usr/bin"],
       },
       {
+        line: 12,
         section: "Install",
         key: "WantedBy",
         value: "multi-user.target",
@@ -145,6 +147,20 @@ describe("the canonical subset a unit must be written in", () => {
 
   describe("rule 4: assignments written exactly", () => {
     it.each([
+      ["NoNewPrivileges", "yes"],
+      ["ProtectHome", "yes"],
+      ["UMask", "0077"],
+      ["Environment", "NODE_ENV=production"],
+      ["ExecStart", "/usr/local/bin/node start"],
+      ["MemoryDenyWriteExecute", "off"],
+    ])("refuses leading value whitespace in %s with the spelling to use", (key, value) => {
+      expect(() => parseUnitFile(`[Service]\n${key}= ${value}\n`)).toThrow(
+        `rule 4 (assignment spacing): line 2 value may not begin with whitespace; ` +
+          `write "${key}=${value}" instead of "${key}= ${value}"`,
+      );
+    });
+
+    it.each([
       ["a space before the equals sign", "[Service]\nUser =overflow\n"],
       ["a key that does not start with a letter", "[Service]\n1User=overflow\n"],
       ["a key carrying a hyphen", "[Service]\nUser-Name=overflow\n"],
@@ -180,6 +196,7 @@ describe("the canonical subset a unit must be written in", () => {
 
       expect(parsed).toEqual([
         {
+          line: 2,
           section: "Service",
           key: "SyslogIdentifier",
           value: "100% overflow",
@@ -199,7 +216,7 @@ describe("the canonical subset a unit must be written in", () => {
       const parsed = parseUnitFile("[Service]\nCapabilityBoundingSet=\n");
 
       expect(parsed).toEqual([
-        { section: "Service", key: "CapabilityBoundingSet", value: "", words: [] },
+        { line: 2, section: "Service", key: "CapabilityBoundingSet", value: "", words: [] },
       ]);
     });
   });
