@@ -46,6 +46,11 @@ const repositories: ModerationRepositoryProjection[] = [{ id: repositoryId, owne
 
 const startedAt = "2026-01-01T00:00";
 const endedAt = "2026-02-01T00:00";
+// The inputs are wall-clock strings with no offset, so the instant they mean depends on
+// the reader's timezone. These derive the expected instant in the machine running the
+// test, exactly as the browser would in the moderator's zone.
+const startedAtInstant = new Date(startedAt).toISOString();
+const endedAtInstant = new Date(endedAt).toISOString();
 
 function comparison() {
   return {
@@ -53,6 +58,30 @@ function comparison() {
     outsider: { count: 3, meanDelta: -1, medianDelta: -1 },
     differenceBetweenMeans: 3,
   };
+}
+
+function accountWidePreview() {
+  return {
+    targetAccountId: miraId,
+    repositoryId: null,
+    sampleStartedAt: startedAtInstant,
+    sampleEndedAt: endedAtInstant,
+    comparison: comparison(),
+    meetsMinimumSampleSize: false,
+  };
+}
+
+function cohortResponse(preview: unknown) {
+  return new Response(JSON.stringify({ preview }), { status: 200 });
+}
+
+async function previewAccountWideCohort() {
+  chooseTarget(miraId);
+  chooseWindow();
+  fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+  await waitFor(() => {
+    expect(screen.getByRole("region", { name: "Cohort preview" })).toBeInTheDocument();
+  });
 }
 
 function chooseWindow() {
@@ -106,6 +135,12 @@ describe("open audit form", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Choose an audit target and both sample window bounds.");
     expect(fetchMock).not.toHaveBeenCalled();
+
+    // An empty bound is not a timestamp, so it has to be refused before any conversion.
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose an audit target and both sample window bounds.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("refuses a blank reason before any request is sent", () => {
@@ -123,21 +158,7 @@ describe("open audit form", () => {
   });
 
   it("previews the account-wide cohort and states the sample floor it misses", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          preview: {
-            targetAccountId: miraId,
-            repositoryId: null,
-            sampleStartedAt: "2026-01-01T00:00:00.000Z",
-            sampleEndedAt: "2026-02-01T00:00:00.000Z",
-            comparison: comparison(),
-            meetsMinimumSampleSize: false,
-          },
-        }),
-        { status: 200 },
-      ),
-    );
+    const fetchMock = vi.fn(async () => cohortResponse(accountWidePreview()));
     vi.stubGlobal("fetch", fetchMock);
     render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
 
@@ -149,9 +170,10 @@ describe("open audit form", () => {
       expect(screen.getByText("Self-work sample · 12 pairs · mean delta +2")).toBeInTheDocument();
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/moderation/cohort?targetAccountId=${miraId}&sampleStartedAt=2026-01-01T00%3A00&sampleEndedAt=2026-02-01T00%3A00`,
+      `/api/moderation/cohort?targetAccountId=${miraId}&sampleStartedAt=${encodeURIComponent(startedAtInstant)}&sampleEndedAt=${encodeURIComponent(endedAtInstant)}`,
       { credentials: "same-origin" },
     );
+    expect(screen.getByText(`Previewed mira · all repositories · ${startedAt} to ${endedAt}`)).toBeInTheDocument();
     expect(screen.getByText("Outsider settlement sample · 3 pairs · mean delta −1")).toBeInTheDocument();
     expect(screen.getByText("Difference between means +3")).toBeInTheDocument();
     expect(screen.getByText(`This cohort is below the ${MINIMUM_CALIBRATION_SAMPLE_SIZE}-pair minimum, so opening the audit will be refused.`)).toBeInTheDocument();
@@ -164,8 +186,8 @@ describe("open audit form", () => {
           preview: {
             targetAccountId: miraId,
             repositoryId,
-            sampleStartedAt: "2026-01-01T00:00:00.000Z",
-            sampleEndedAt: "2026-02-01T00:00:00.000Z",
+            sampleStartedAt: startedAtInstant,
+            sampleEndedAt: endedAtInstant,
             comparison: { ...comparison(), outsider: { count: 11, meanDelta: -1, medianDelta: -1 } },
             meetsMinimumSampleSize: true,
           },
@@ -187,9 +209,90 @@ describe("open audit form", () => {
       ).toBeInTheDocument();
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/moderation/cohort?targetAccountId=${miraId}&repositoryId=${repositoryId}&sampleStartedAt=2026-01-01T00%3A00&sampleEndedAt=2026-02-01T00%3A00`,
+      `/api/moderation/cohort?targetAccountId=${miraId}&repositoryId=${repositoryId}&sampleStartedAt=${encodeURIComponent(startedAtInstant)}&sampleEndedAt=${encodeURIComponent(endedAtInstant)}`,
       { credentials: "same-origin" },
     );
+    expect(screen.getByText(`Previewed mira · overflow/ledger · ${startedAt} to ${endedAt}`)).toBeInTheDocument();
+  });
+
+  it("drops a stale cohort preview when the audit target changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    await previewAccountWideCohort();
+    chooseTarget(nilsId);
+
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+    expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
+  });
+
+  it("drops a stale cohort preview when the repository scope changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    await previewAccountWideCohort();
+    fireEvent.change(screen.getByLabelText("Repository scope"), { target: { value: repositoryId } });
+
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+    expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
+  });
+
+  it("drops a stale cohort preview when the sample window start changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    await previewAccountWideCohort();
+    fireEvent.change(screen.getByLabelText("Sample window start"), { target: { value: "2026-01-15T00:00" } });
+
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+    expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
+  });
+
+  it("drops a stale cohort preview when the sample window end changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    await previewAccountWideCohort();
+    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: "2026-03-01T00:00" } });
+
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+    expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +2")).toBeNull();
+  });
+
+  it("restores a preview that is fetched again for the same selection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => cohortResponse(accountWidePreview())));
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    await previewAccountWideCohort();
+    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: "2026-03-01T00:00" } });
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Sample window end"), { target: { value: endedAt } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Self-work sample · 12 pairs · mean delta +2")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps the form usable when a 200 response carries a preview it cannot read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => cohortResponse({ targetAccountId: miraId, repositoryId: null, meetsMinimumSampleSize: true })),
+    );
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The cohort preview could not be read. Check the sample window and try again.",
+      );
+    });
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open audit" })).toBeEnabled();
   });
 
   it("disables opening a second audit for a target that already has one and says why", () => {
@@ -285,8 +388,8 @@ describe("open audit form", () => {
       credentials: "same-origin",
       body: JSON.stringify({
         targetAccountId: miraId,
-        sampleStartedAt: startedAt,
-        sampleEndedAt: endedAt,
+        sampleStartedAt: startedAtInstant,
+        sampleEndedAt: endedAtInstant,
         reason: "The self-work sample settles well above the outsider sample.",
       }),
     });
@@ -317,8 +420,8 @@ describe("open audit form", () => {
       body: JSON.stringify({
         targetAccountId: miraId,
         repositoryId,
-        sampleStartedAt: startedAt,
-        sampleEndedAt: endedAt,
+        sampleStartedAt: startedAtInstant,
+        sampleEndedAt: endedAtInstant,
         reason: "The self-work sample settles well above the outsider sample.",
       }),
     }));

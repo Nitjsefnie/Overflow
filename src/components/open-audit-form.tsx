@@ -2,15 +2,41 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationComparison } from "@/lib/calibration/statistics";
+import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 type PendingRequest = "preview" | "open";
 
+/** The selections a preview was fetched for, as the moderator entered them. */
+type CohortSelection = {
+  targetAccountId: string;
+  repositoryId: string;
+  sampleStartedAt: string;
+  sampleEndedAt: string;
+};
+
+/** The sample window as unambiguous instants, resolved in the moderator's timezone. */
+type SampleWindow = {
+  startedAt: string;
+  endedAt: string;
+};
+
+type CohortSummary = Pick<CalibrationSummary, "count" | "meanDelta">;
+
+type CohortComparison = {
+  selfWork: CohortSummary;
+  outsider: CohortSummary;
+  differenceBetweenMeans: number;
+};
+
 type CohortPreview = {
-  comparison: CalibrationComparison;
+  comparison: CohortComparison;
   meetsMinimumSampleSize: boolean;
+};
+
+type LoadedCohortPreview = CohortPreview & {
+  selection: CohortSelection;
 };
 
 type OpenAuditFormProps = {
@@ -19,7 +45,7 @@ type OpenAuditFormProps = {
 };
 
 type CohortPreviewResponse = {
-  preview?: CohortPreview;
+  preview?: unknown;
   error?: { message?: string };
 };
 
@@ -34,12 +60,20 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
   const [sampleStartedAt, setSampleStartedAt] = useState("");
   const [sampleEndedAt, setSampleEndedAt] = useState("");
   const [reason, setReason] = useState("");
-  const [preview, setPreview] = useState<CohortPreview | null>(null);
+  const [preview, setPreview] = useState<LoadedCohortPreview | null>(null);
   const [pending, setPending] = useState<PendingRequest | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
 
   const target = candidates.find((candidate) => candidate.id === targetAccountId) ?? null;
-  const hasCohortSelection = target !== null && sampleStartedAt.length > 0 && sampleEndedAt.length > 0;
+  const selection: CohortSelection = { targetAccountId, repositoryId, sampleStartedAt, sampleEndedAt };
+  // Both inputs are wall-clock strings with no offset. Reading them here resolves them in
+  // the moderator's timezone; sending them raw would let the server's timezone decide which
+  // merged pairs the window admits.
+  const sampleWindow = readSampleWindow(sampleStartedAt, sampleEndedAt);
+  const hasCohortSelection = target !== null && sampleWindow !== null;
+  // A preview describes the selections it was fetched for, so it stops being an answer about
+  // this form the moment any of them changes.
+  const currentPreview = preview !== null && isSameSelection(preview.selection, selection) ? preview : null;
 
   async function previewCohort() {
     setFeedback(null);
@@ -57,14 +91,14 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       if (repositoryId.length > 0) {
         parameters.set("repositoryId", repositoryId);
       }
-      parameters.set("sampleStartedAt", sampleStartedAt);
-      parameters.set("sampleEndedAt", sampleEndedAt);
+      parameters.set("sampleStartedAt", sampleWindow.startedAt);
+      parameters.set("sampleEndedAt", sampleWindow.endedAt);
 
       const response = await fetch(`/api/moderation/cohort?${parameters.toString()}`, {
         credentials: "same-origin",
       });
       const body = (await response.json().catch(() => null)) as CohortPreviewResponse | null;
-      if (!response.ok || body?.preview === undefined) {
+      if (!response.ok) {
         setPreview(null);
         setFeedback({
           kind: "error",
@@ -72,7 +106,16 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
         });
         return;
       }
-      setPreview(body.preview);
+      const loaded = readCohortPreview(body?.preview);
+      if (loaded === null) {
+        setPreview(null);
+        setFeedback({
+          kind: "error",
+          message: "The cohort preview could not be read. Check the sample window and try again.",
+        });
+        return;
+      }
+      setPreview({ ...loaded, selection });
     } catch {
       setPreview(null);
       setFeedback({
@@ -107,8 +150,8 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
         body: JSON.stringify({
           targetAccountId: target.id,
           ...(repositoryId.length > 0 ? { repositoryId } : {}),
-          sampleStartedAt,
-          sampleEndedAt,
+          sampleStartedAt: sampleWindow.startedAt,
+          sampleEndedAt: sampleWindow.endedAt,
           reason: trimmedReason,
         }),
       });
@@ -198,20 +241,21 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       <button className="quiet-button" type="button" disabled={pending !== null} onClick={() => void previewCohort()}>
         Preview cohort
       </button>
-      {preview === null ? null : (
+      {currentPreview === null ? null : (
         <section className="cohort-preview" aria-labelledby="cohort-preview-heading">
           <h3 id="cohort-preview-heading">Cohort preview</h3>
+          <p>Previewed {describeSelection(currentPreview.selection, candidates, repositories)}</p>
           <p>
-            Self-work sample · {preview.comparison.selfWork.count} pairs · mean delta{" "}
-            {formatSigned(preview.comparison.selfWork.meanDelta)}
+            Self-work sample · {currentPreview.comparison.selfWork.count} pairs · mean delta{" "}
+            {formatSigned(currentPreview.comparison.selfWork.meanDelta)}
           </p>
           <p>
-            Outsider settlement sample · {preview.comparison.outsider.count} pairs · mean delta{" "}
-            {formatSigned(preview.comparison.outsider.meanDelta)}
+            Outsider settlement sample · {currentPreview.comparison.outsider.count} pairs · mean delta{" "}
+            {formatSigned(currentPreview.comparison.outsider.meanDelta)}
           </p>
-          <p>Difference between means {formatSigned(preview.comparison.differenceBetweenMeans)}</p>
+          <p>Difference between means {formatSigned(currentPreview.comparison.differenceBetweenMeans)}</p>
           <p>
-            {preview.meetsMinimumSampleSize
+            {currentPreview.meetsMinimumSampleSize
               ? `Both samples meet the ${MINIMUM_CALIBRATION_SAMPLE_SIZE}-pair minimum.`
               : `This cohort is below the ${MINIMUM_CALIBRATION_SAMPLE_SIZE}-pair minimum, so opening the audit will be refused.`}
           </p>
@@ -247,6 +291,70 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
       {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
     </div>
   );
+}
+
+function readSampleWindow(sampleStartedAt: string, sampleEndedAt: string): SampleWindow | null {
+  const startedAt = new Date(sampleStartedAt);
+  const endedAt = new Date(sampleEndedAt);
+  if (Number.isNaN(startedAt.getTime()) || Number.isNaN(endedAt.getTime())) {
+    return null;
+  }
+  return { startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString() };
+}
+
+function isSameSelection(left: CohortSelection, right: CohortSelection): boolean {
+  return (
+    left.targetAccountId === right.targetAccountId &&
+    left.repositoryId === right.repositoryId &&
+    left.sampleStartedAt === right.sampleStartedAt &&
+    left.sampleEndedAt === right.sampleEndedAt
+  );
+}
+
+/** Reads exactly the fields the preview block renders, so a partial 200 is a message and not a crash. */
+function readCohortPreview(value: unknown): CohortPreview | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { comparison, meetsMinimumSampleSize } = value as Record<string, unknown>;
+  if (typeof meetsMinimumSampleSize !== "boolean" || typeof comparison !== "object" || comparison === null) {
+    return null;
+  }
+  const { selfWork, outsider, differenceBetweenMeans } = comparison as Record<string, unknown>;
+  const selfWorkSummary = readCohortSummary(selfWork);
+  const outsiderSummary = readCohortSummary(outsider);
+  if (selfWorkSummary === null || outsiderSummary === null || typeof differenceBetweenMeans !== "number") {
+    return null;
+  }
+  return {
+    comparison: { selfWork: selfWorkSummary, outsider: outsiderSummary, differenceBetweenMeans },
+    meetsMinimumSampleSize,
+  };
+}
+
+function readCohortSummary(value: unknown): CohortSummary | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { count, meanDelta } = value as Record<string, unknown>;
+  if (typeof count !== "number" || typeof meanDelta !== "number") {
+    return null;
+  }
+  return { count, meanDelta };
+}
+
+function describeSelection(
+  selection: CohortSelection,
+  candidates: AuditCandidateProjection[],
+  repositories: ModerationRepositoryProjection[],
+): string {
+  const login =
+    candidates.find((candidate) => candidate.id === selection.targetAccountId)?.githubLogin ?? "the chosen account";
+  const scope =
+    selection.repositoryId.length === 0
+      ? "all repositories"
+      : repositories.find((repository) => repository.id === selection.repositoryId)?.ownerName ?? "the chosen repository";
+  return `${login} · ${scope} · ${selection.sampleStartedAt} to ${selection.sampleEndedAt}`;
 }
 
 function describeCandidate(candidate: AuditCandidateProjection): string {
