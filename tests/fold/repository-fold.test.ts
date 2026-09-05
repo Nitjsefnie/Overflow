@@ -448,10 +448,10 @@ describe("rejected settlement closure records", () => {
   });
 
   it.each([
-    ["contributor", "The settled label `delivered/6` was applied by `contributor` rather than the issue owner `sponsor`."],
-    ["  ", "The settled label `delivered/6` was applied by `unknown` rather than the issue owner `sponsor`."],
-    [null, "The settled label `delivered/6` was applied by `unknown` rather than the issue owner `sponsor`."],
-  ])("records a settled label actor of %s who is not the owner", (actorLogin, reason) => {
+    ["contributor", "The settled label `delivered/6` was applied by `contributor` rather than the repository sponsor `sponsor`."],
+    ["  ", "The settled label `delivered/6` was applied by `unknown` rather than the repository sponsor `sponsor`."],
+    [null, "The settled label `delivered/6` was applied by `unknown` rather than the repository sponsor `sponsor`."],
+  ])("records a settled label actor of %s who is not the sponsor", (actorLogin, reason) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.history[1]!.actorLogin = actorLogin;
 
@@ -476,7 +476,7 @@ describe("rejected settlement closure records", () => {
     }]);
   });
 
-  it("records the lack of a qualifying owner rationale for the standing label", () => {
+  it("records the lack of a qualifying sponsor rationale for the standing label", () => {
     const snapshot = outsiderFixture();
     setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
 

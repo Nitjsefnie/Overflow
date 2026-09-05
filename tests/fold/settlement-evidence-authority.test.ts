@@ -1,6 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 
+describe("integrated rejected settlement closure reasons", () => {
+  it("records a non-sponsor label rejection with the sponsor-authority reason", () => {
+    const snapshot = evidenceFixture({ issueAuthor: "contributor", settler: "contributor" });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "The settled label `delivered/6` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+    }]);
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+
+  it("records edited-only rationale rejection with the after-close edit reason", () => {
+    const snapshot = evidenceFixture({ issueAuthor: "contributor" });
+    snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-01T12:20:00.000Z";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "Every qualifying rationale comment by `sponsor` naming `delivered/6` was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
+    }]);
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
+    expect(result.ledgerEntries).toEqual([]);
+  });
+});
+
 describe("rating authority", () => {
   it("does not let an outsider who filed, priced and closed an issue earn credit against the sponsor", () => {
     const snapshot = evidenceFixture({
