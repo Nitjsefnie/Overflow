@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GitHubGateway } from "@/lib/github/client";
 import type { RepositoryRegistrationDependencies } from "@/lib/repositories/register";
 import { createRepositoryPostHandler } from "@/app/api/repositories/route";
 
@@ -95,10 +96,59 @@ describe("POST /api/repositories", () => {
     expect(body).toEqual({
       error: {
         code: "UPSTREAM_FAILURE",
-        message: "Unable to register the repository with GitHub.",
+        message: "Unable to create the repository webhook on GitHub.",
       },
     });
     expect(JSON.stringify(body)).not.toContain("access-token-should-not-leak");
+  });
+
+  it("returns actionable JSON with HTTP 403 when GitHub denies organization webhook access", async () => {
+    const dependencies = successfulDependencies();
+    const requests: string[] = [];
+    dependencies.github = new GitHubGateway({
+      accessToken: "access-token-should-not-leak",
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        requests.push(`${init?.method ?? "GET"} ${url.pathname}`);
+        if (url.pathname.endsWith("/hooks")) {
+          return new Response("private-body access-token-should-not-leak", {
+            status: 403,
+            headers: { "x-private": "private-header" },
+          });
+        }
+        if (url.pathname.endsWith("/labels")) {
+          return Response.json([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => ({ name: label })));
+        }
+        return Response.json({
+          id: 42,
+          name: "overflow",
+          full_name: "Actual-Org/overflow",
+          private: false,
+          html_url: "https://github.com/Actual-Org/overflow",
+          owner: { login: "Actual-Org", type: "Organization" },
+          permissions: { admin: true },
+        });
+      },
+    });
+    const handler = createRepositoryPostHandler({
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json();
+    expect(body).toEqual({ error: {
+      code: "GITHUB_ACCESS",
+      message: "GitHub refused to create the repository webhook (HTTP 403). This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/Actual-Org/settings/oauth_application_policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.",
+    } });
+    expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+    expect(requests).toEqual([
+      "GET /repos/octo/overflow",
+      "GET /repos/octo/overflow/labels",
+      "POST /repos/octo/overflow/hooks",
+    ]);
   });
 
   it("returns the registered repository after a successful explicit registration", async () => {
@@ -189,6 +239,7 @@ function successfulDependencies(
         return {
           id: 42,
           owner: "octo",
+          ownerType: "USER",
           name: "overflow",
           fullName: "octo/overflow",
           visibility: "PUBLIC",

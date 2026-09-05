@@ -1,4 +1,5 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
+import { GitHubApiError } from "@/lib/github/client";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -62,7 +63,7 @@ export type RepositoryRegistrationResult = RegisteredRepository & {
 
 export class RepositoryRegistrationError extends Error {
   public constructor(
-    public readonly code: "CONFLICT" | "FORBIDDEN" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
+    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
     message: string,
   ) {
     super(message);
@@ -128,12 +129,17 @@ export async function registerRepository(
   }
 
   const labels = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels].map((label) => label.label);
-  let webhook: GitHubWebhook;
   try {
     await dependencies.github.ensureDifficultyLabels(submittedRepository, labels);
+  } catch (error) {
+    throw githubSetupError(error, repository, "configure difficulty labels");
+  }
+
+  let webhook: GitHubWebhook;
+  try {
     webhook = await dependencies.github.createWebhook(submittedRepository, dependencies.webhook);
-  } catch {
-    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to register the repository with GitHub.");
+  } catch (error) {
+    throw githubSetupError(error, repository, "create the repository webhook");
   }
 
   let created: RegisteredRepository | null;
@@ -172,6 +178,24 @@ export async function registerRepository(
   // never deliver it because it was created after that work. So ingest it here, and
   // report a failure to the sponsor rather than undoing a registration that stands.
   return { ...created, existingWorkIngested: await ingestExistingWork(dependencies, created.id) };
+}
+
+function githubSetupError(
+  error: unknown,
+  repository: GitHubRepository,
+  step: "configure difficulty labels" | "create the repository webhook",
+): RepositoryRegistrationError {
+  if (error instanceof GitHubApiError && (error.status === 403 || error.status === 404)) {
+    const cause = repository.ownerType === "ORGANIZATION"
+      ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`
+      : "GitHub denied Overflow access to this repository.";
+    return new RepositoryRegistrationError(
+      "GITHUB_ACCESS",
+      `GitHub refused to ${step} (HTTP ${error.status}). ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
+    );
+  }
+
+  return new RepositoryRegistrationError("UPSTREAM_FAILURE", `Unable to ${step} on GitHub.`);
 }
 
 async function ingestExistingWork(

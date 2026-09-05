@@ -6,6 +6,7 @@ export type GitHubRepositoryReference = {
 };
 
 export type GitHubRepository = GitHubRepositoryReference & {
+  ownerType: "USER" | "ORGANIZATION";
   id: number;
   fullName: string;
   visibility: RepositoryVisibility;
