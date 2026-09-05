@@ -656,7 +656,7 @@ button:disabled {
   min-height: 100vh;
   align-content: center;
   gap: 2rem;
-  padding: clamp(2rem, 6vw, 5rem) 0;
+  padding: clamp(2rem, 7vw, 2.5rem) 0;
 }
 
 .landing-hero {
@@ -666,7 +666,7 @@ button:disabled {
 
 .landing-hero h1 {
   max-width: 13ch;
-  font-size: clamp(3.5rem, 10vw, 7rem);
+  font-size: clamp(3.5rem, 12vw, 6rem);
 }
 
 .landing-lede {
