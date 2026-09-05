@@ -30,9 +30,21 @@ export class UnmodelledUnitShape extends Error {
  *
  * systemd.syntax(7): comment lines are ignored, and "lines ending in a
  * backslash are concatenated with the following line while reading and the
- * backslash is replaced by a space character". Comments are removed *before*
- * joining, so a comment that ends in a backslash does not swallow the directive
- * under it — that shape is refused rather than joined.
+ * backslash is replaced by a space character". systemd reads that "ending in a
+ * backslash" off the raw physical line, and it reads it the same way for the
+ * first line of a continuation and for every line after it, so the decision
+ * here is taken from `physicalLine` and never from a trimmed copy of it.
+ *
+ * A backslash followed by trailing whitespace therefore does *not* continue the
+ * line, which cuts both ways and is refused rather than modelled: joining one
+ * line too many hides the directive underneath from the guard while systemd
+ * applies it, and joining one too few reports a restriction as pinned that
+ * systemd discarded. Both are an ordinary editing accident away.
+ *
+ * Comment lines are dropped here as well, and both of their interactions with a
+ * continuation are refused: a comment that ends in a backslash (systemd joins
+ * the directive under it into the comment), and a comment inside a continuation
+ * (systemd ignores it and carries the join on past it).
  */
 function toLogicalLines(source: string): string[] {
   const logicalLines: string[] = [];
@@ -61,10 +73,18 @@ function toLogicalLines(source: string): string[] {
       }
     }
 
-    const line: string = carried === null ? physicalLine : `${carried} ${trimmed}`;
+    if (/\\[^\S\n]+$/.test(physicalLine)) {
+      throw new UnmodelledUnitShape(
+        "a line continuation with trailing whitespace after the backslash",
+      );
+    }
 
-    if (line.endsWith("\\")) {
-      carried = line.slice(0, -1).trimEnd();
+    const continued = physicalLine.endsWith("\\");
+    const body = continued ? physicalLine.slice(0, -1) : physicalLine;
+    const line: string = carried === null ? body : `${carried} ${body.trim()}`;
+
+    if (continued) {
+      carried = line.trimEnd();
       continue;
     }
 
