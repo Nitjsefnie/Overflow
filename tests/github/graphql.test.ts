@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
+import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("GitHubGraphqlClient failures", () => {
   it("surfaces GitHub RATE_LIMIT type and message through the gateway", async () => {
@@ -462,9 +463,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(queries[0]).toMatch(new RegExp(`${connection}\\(\\s*first: ${first}\\b`));
   });
 
-  it("appends closing references after the nested twenty using one overflow request", async () => {
+  it.each([21, 121])("appends %i closing references after the nested twenty in order", async (total) => {
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
-    const nodes = Array.from({ length: 21 }, (_, index) => pullRequestNode(201 + index, 11 + index));
+    const nodes = Array.from({ length: total }, (_, index) => pullRequestNode(201 + index, 11 + index));
     const gateway = new GitHubGateway({
       accessToken: "test-token",
       fetch: async (_input, init) => {
@@ -472,6 +473,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, variables });
         if (operation === "RepositoryIssues") {
+          assertClosingPullRequestQuery(query, operation);
           return Response.json({ data: { repository: { issues: {
             nodes: [{ ...issueNode(101, 1, "Many references"), closedByPullRequestsReferences: {
               nodes: nodes.slice(0, 20), pageInfo: { hasNextPage: true, endCursor: "closing-next" },
@@ -479,8 +481,17 @@ describe("GitHubGateway GraphQL source adapter", () => {
             pageInfo: { hasNextPage: false, endCursor: null },
           } } } });
         }
+        if (operation !== "ClosingPullRequests" || variables.issueNumber !== 1 ||
+            (variables.cursor !== "closing-next" && !(total === 121 && variables.cursor === "closing-last"))) {
+          throw new Error(`Unmodeled closing-reference request: ${JSON.stringify({ operation, variables })}`);
+        }
+        assertClosingPullRequestQuery(query, operation);
+        const start = variables.cursor === "closing-next" ? 20 : 120;
         return Response.json({ data: { repository: { issue: { closedByPullRequestsReferences: {
-          nodes: nodes.slice(20), pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: nodes.slice(start, start + 100),
+          pageInfo: start + 100 < total
+            ? { hasNextPage: true, endCursor: "closing-last" }
+            : { hasNextPage: false, endCursor: null },
         } } } } });
       },
     });
@@ -496,6 +507,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
       { operation: "ClosingPullRequests", variables: {
         owner: "octo", name: "overflow", issueNumber: 1, cursor: "closing-next",
       } },
+      ...(total === 121 ? [{ operation: "ClosingPullRequests", variables: {
+        owner: "octo", name: "overflow", issueNumber: 1, cursor: "closing-last",
+      } }] : []),
     ]);
   });
 
