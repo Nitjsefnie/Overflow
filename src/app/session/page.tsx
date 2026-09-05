@@ -27,10 +27,10 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
           </>
         ) : (
           <>
-            <h1 id="session-recovery-title">Overflow no longer recognises this account.</h1>
+            <h1 id="session-recovery-title">Clear this sign-in and start again.</h1>
             <p>
-              This browser still holds a sign-in that matches no member record. Clear the session, then sign in
-              again.
+              If you were signed in, that sign-in no longer matches a member record. Sign out to clear it, then
+              sign in again.
             </p>
           </>
         )}
