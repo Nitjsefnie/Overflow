@@ -83,7 +83,7 @@ describe("GitHubGraphqlClient failures", () => {
     expect(message).toContain("ERROR_4");
     expect(message).toContain("message_4");
     expect(message).toContain("OMITTED");
-    expect(message).not.toContain("must not appear");
+    expect(message).toContain("1 more error(s) without full details");
     expect(message).not.toContain("m".repeat(513));
     expect(message).toContain("…");
     expect(message).toContain("1 more error");
@@ -156,6 +156,63 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
 
     expect(error.message).toContain("RATE_LIMIT");
     expect(error.message).toContain("undefinedField: Field removed");
+    expect(error.message).toContain("RATE_LIMIT: Rate limit exceeded");
+    expect(error.message).toContain("4 duplicate error(s) collapsed");
+  });
+
+  it.each([
+    { label: "identical errors", entry: { type: "RATE_LIMIT", message: "Denied" } },
+    { label: "malformed entries", entry: null },
+    { label: "long identical types", entry: { type: "t".repeat(512), message: "Denied" } },
+  ])("bounds 100,000 $label to the aggregate summary budget", async ({ entry }) => {
+    const error = await failureFor(Array.from({ length: 100_000 }, () => entry));
+
+    expect(error.message.length).toBeLessThanOrEqual(8_000);
+    expect(error.message).toContain("99999 duplicate error(s) collapsed");
+  });
+
+  it("collapses identical pairs while keeping the first occurrence's path", async () => {
+    const error = await failureFor([
+      { type: "RATE_LIMIT", message: "Denied", path: ["first"] },
+      { type: "RATE_LIMIT", message: "Denied", path: ["second"] },
+      { type: "RATE_LIMIT", message: "Denied", path: ["third"] },
+    ]);
+
+    expect(error.message).toBe('GitHub GraphQL request failed. RATE_LIMIT: Denied path=["first"]; … 2 duplicate error(s) collapsed');
+  });
+
+  it("keeps distinct pairs with a shared type or message separate", async () => {
+    const error = await failureFor([
+      { type: "FORBIDDEN", message: "First reason" },
+      { type: "FORBIDDEN", message: "Second reason" },
+      { type: "RATE_LIMIT", message: "Second reason" },
+      { type: "FORBIDDEN", message: "First reason" },
+    ]);
+
+    expect(error.message).toBe("GitHub GraphQL request failed. FORBIDDEN: First reason; FORBIDDEN: Second reason; RATE_LIMIT: Second reason; … 1 duplicate error(s) collapsed");
+  });
+
+  it("deduplicates types after five distinct full pairs and counts entries lacking full details", async () => {
+    const error = await failureFor([
+      ...Array.from({ length: 5 }, (_, index) => ({ type: "SCHEMA", message: `Field ${index}` })),
+      { type: "RATE_LIMIT", message: "First limit" },
+      { type: "RATE_LIMIT", message: "Second limit" },
+      { type: "RATE_LIMIT", message: "First limit" },
+    ]);
+
+    expect(error.message).toBe("GitHub GraphQL request failed. SCHEMA: Field 0; SCHEMA: Field 1; SCHEMA: Field 2; SCHEMA: Field 3; SCHEMA: Field 4; RATE_LIMIT; … 3 more error(s) without full details");
+  });
+
+  it("marks aggregate overflow and counts every entry without full details", async () => {
+    const error = await failureFor(Array.from({ length: 100_000 }, (_, index) => ({
+      type: `TYPE_${index}_${"t".repeat(500)}`,
+      message: "Denied",
+    })));
+
+    expect(error.message.length).toBeLessThanOrEqual(8_000);
+    expect(error.message).toContain("99995 more error(s) without full details");
+    expect(error.message).toContain("summary budget exceeded");
+    expect(() => encodeURIComponent(error.message)).not.toThrow();
   });
 
   it.each(["type", "message", "path", "later type"])("redacts repeated reflected tokens in %s", async (field) => {
