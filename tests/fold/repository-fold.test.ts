@@ -217,6 +217,25 @@ describe("foldRepository", () => {
     expect(result.ledgerEntries).toEqual([]);
   });
 
+  it.each(["BANNED", "RECALIBRATING"] as const)(
+    "keeps historical settlements ineligible after an audit preserves %s",
+    (state) => {
+      const snapshot = outsiderFixture();
+      const contributor = snapshot.users.find((user) => user.id === "contributor")!;
+      contributor.enforcementState = "ACTIVE";
+      contributor.moderationEvents = [
+        { id: "restriction", priorState: "WARNED", newState: state, occurredAt: "2026-09-01T08:00:00.000Z" },
+        { id: "audit-opened", priorState: state, newState: state, occurredAt: "2026-09-01T09:00:00.000Z" },
+        { id: "later-reactivation", priorState: state, newState: "ACTIVE", occurredAt: "2026-09-02T09:00:00.000Z" },
+      ];
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements).toEqual([]);
+      expect(result.ledgerEntries).toEqual([]);
+    },
+  );
+
   it("rebuilds eligible historical facts even when the repository is inactive later", () => {
     const snapshot = outsiderFixture();
     snapshot.repository.active = false;
