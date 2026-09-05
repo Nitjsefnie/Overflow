@@ -2,6 +2,53 @@ const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
 
+// Bound log output to five errors, 512 characters per field and ten path
+// segments (under 8,000 characters total). Mark omitted text and entries.
+const maxErrorEntries = 5;
+const maxErrorFieldLength = 512;
+const maxErrorPathSegments = 10;
+
+class GitHubGraphqlRequestError extends Error {}
+
+function boundedErrorText(value: string): string {
+  const text = value.slice(0, maxErrorFieldLength).replace(/\s/g, " ");
+  return value.length > maxErrorFieldLength ? `${text.slice(0, -1)}…` : text;
+}
+
+function graphqlFailureMessage(errors: unknown): string {
+  const message = "GitHub GraphQL request failed.";
+  if (!Array.isArray(errors) || errors.length === 0) {
+    return message;
+  }
+
+  const details = errors.slice(0, maxErrorEntries).map((entry: unknown) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      return "Unknown error";
+    }
+
+    const error = entry as Record<string, unknown>;
+    const type = typeof error.type === "string" && error.type.length > 0
+      ? boundedErrorText(error.type) : "UNKNOWN";
+    const detail = typeof error.message === "string" && error.message.length > 0
+      ? boundedErrorText(error.message) : "No message supplied";
+    let path = "";
+    if (Array.isArray(error.path)) {
+      const segments = error.path.slice(0, maxErrorPathSegments).map((segment: unknown) => {
+        if (typeof segment === "string") return boundedErrorText(segment);
+        if (typeof segment === "number") return segment;
+        return "?";
+      });
+      if (error.path.length > maxErrorPathSegments) segments.push("…");
+      path = ` path=${boundedErrorText(JSON.stringify(segments))}`;
+    }
+    return `${type}: ${detail}${path}`;
+  });
+  if (errors.length > maxErrorEntries) {
+    details.push(`… ${errors.length - maxErrorEntries} more error(s)`);
+  }
+  return `${message} ${details.join("; ")}`;
+}
+
 export type GitHubGraphqlClientOptions = {
   accessToken: string;
   endpoint?: string;
@@ -52,34 +99,29 @@ export class GitHubGraphqlClient {
       });
 
       if (timedOut) {
-        throw new Error("GitHub request timed out.");
+        throw new GitHubGraphqlRequestError("GitHub request timed out.");
       }
 
       if (!response.ok) {
-        throw new Error(`GitHub API request failed with status ${response.status}.`);
+        throw new GitHubGraphqlRequestError(`GitHub API request failed with status ${response.status}.`);
       }
 
       const payload = (await response.json()) as { data?: TData; errors?: unknown };
-      if (payload.data === undefined || payload.errors !== undefined) {
-        throw new Error("GitHub GraphQL request failed.");
+      if (payload?.data === undefined || payload.errors !== undefined) {
+        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors));
       }
 
       return payload.data;
     } catch (error) {
-      if (
-        error instanceof Error &&
-        (error.message === "GitHub request timed out." ||
-          error.message === "GitHub GraphQL request failed." ||
-          /^GitHub API request failed with status \d+\.$/.test(error.message))
-      ) {
+      if (error instanceof GitHubGraphqlRequestError) {
         throw error;
       }
 
       if (timedOut) {
-        throw new Error("GitHub request timed out.");
+        throw new GitHubGraphqlRequestError("GitHub request timed out.");
       }
 
-      throw new Error("GitHub GraphQL request failed.");
+      throw new GitHubGraphqlRequestError("GitHub GraphQL request failed.");
     } finally {
       clearTimeout(timeout);
     }
