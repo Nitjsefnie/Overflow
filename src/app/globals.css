@@ -437,7 +437,8 @@ dd {
   font-weight: 800;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   min-height: 2.8rem;
   padding: 0.6rem 0.7rem;
@@ -461,6 +462,7 @@ dd {
 }
 
 .field input:focus,
+.field select:focus,
 .field textarea:focus {
   border-color: var(--focus);
 }
