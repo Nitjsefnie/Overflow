@@ -82,8 +82,8 @@ describe("upgrading an already-deployed database", () => {
         await runMigrations();
 
         await expect(appliedMigrationNames(sql)).resolves.toEqual(migrationNames);
-        await expect(seededAccounts(sql, applied)).resolves.toEqual(seeded.accounts);
-        await expect(seededSettlements(sql, applied)).resolves.toEqual(seeded.settlements);
+        await expect(seededAccounts(sql)).resolves.toEqual(seeded.accounts);
+        await expect(seededSettlements(sql)).resolves.toEqual(seeded.settlements);
         await expect(settlementStatusCheck(sql)).resolves.toBe(freshInstallStatusCheck);
       } finally {
         await closeSql();
@@ -144,30 +144,32 @@ async function seedDeployedRows(sql: Sql, applied: number): Promise<SeededRows> 
   const accounts: SeededAccount[] = [];
   const settlements: SeededSettlement[] = [];
 
-  const memberId = await insertAccount(sql, applied, "member", "RECALIBRATING", accounts);
+  const member = await insertAccount(sql, "member", "RECALIBRATING");
+  accounts.push(member.row);
   if (applied >= 6) {
     // 006 extends enforcement_state; a deployment past it can already hold the new labels.
-    await insertAccount(sql, applied, "warned", "WARNED", accounts);
+    accounts.push((await insertAccount(sql, "warned", "WARNED")).row);
   }
 
   if (applied < 2) {
     return { accounts, settlements };
   }
 
-  const sponsorId = await insertAccount(sql, applied, "sponsor", "ACTIVE", accounts);
-  const repositoryId = await insertRepository(sql, applied, sponsorId);
+  const sponsor = await insertAccount(sql, "sponsor", "ACTIVE");
+  accounts.push(sponsor.row);
+  const repositoryId = await insertRepository(sql, sponsor.id);
 
   settlements.push(await insertSettlement(sql, {
-    applied, repositoryId, sponsorId, ordinal: 1,
-    status: "SETTLED", creditorId: memberId, creditorGitHubLogin: null,
+    applied, repositoryId, sponsorId: sponsor.id, ordinal: 1,
+    status: "SETTLED", creditorId: member.id, creditorGitHubLogin: null,
     settledPoints: 6, reviewRounds: 2, credits: 4,
   }));
 
   if (applied >= 3) {
     // 003 extends settlement_status; a deployment past it can already hold unclaimed credit.
     settlements.push(await insertSettlement(sql, {
-      applied, repositoryId, sponsorId, ordinal: 2,
-      status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: `unclaimed-holder-${applied}`,
+      applied, repositoryId, sponsorId: sponsor.id, ordinal: 2,
+      status: "UNCLAIMED", creditorId: null, creditorGitHubLogin: "unclaimed-holder",
       settledPoints: 7, reviewRounds: 1, credits: 6,
     }));
   }
@@ -179,29 +181,29 @@ async function seedDeployedRows(sql: Sql, applied: number): Promise<SeededRows> 
 
 async function insertAccount(
   sql: Sql,
-  applied: number,
   role: string,
   enforcementState: string,
-  accounts: SeededAccount[],
-): Promise<string> {
-  const githubLogin = `legacy-${role}-${applied}`;
+): Promise<{ id: string; row: SeededAccount }> {
+  const githubLogin = `legacy-${role}`;
   const [account] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login, enforcement_state)
     values (${nextExternalId()}, ${githubLogin}, ${enforcementState}::enforcement_state)
     returning id
   `;
-  accounts.push({ github_login: githubLogin, enforcement_state: enforcementState });
-  return account.id;
+  return {
+    id: account.id,
+    row: { github_login: githubLogin, enforcement_state: enforcementState },
+  };
 }
 
-async function insertRepository(sql: Sql, applied: number, sponsorId: string): Promise<string> {
+async function insertRepository(sql: Sql, sponsorId: string): Promise<string> {
   const githubRepositoryId = nextExternalId();
   const [repository] = await sql<{ id: string }[]>`
     insert into registered_repositories (
       github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme
     )
     values (
-      ${githubRepositoryId}, ${`legacy-owner-${applied}/legacy-repository-${applied}`}, ${sponsorId},
+      ${githubRepositoryId}, ${"legacy-owner/legacy-repository"}, ${sponsorId},
       ${"PUBLIC"}, ${nextExternalId()}, ${sql.json(difficultyScheme())}::jsonb
     )
     returning id
@@ -266,7 +268,7 @@ async function insertSettlement(
     `;
   }
 
-  const proofSha256 = proofFingerprint(input.applied, input.ordinal);
+  const proofSha256 = proofFingerprint(input.ordinal);
   if (input.applied >= 3) {
     await sql`
       insert into settlements (
@@ -299,30 +301,24 @@ async function insertSettlement(
     settled_points: input.settledPoints,
     review_rounds: input.reviewRounds,
     credits: input.credits,
-    creditor_github_login: input.applied >= 3 ? input.creditorGitHubLogin : null,
+    creditor_github_login: input.creditorGitHubLogin,
   };
 }
 
-async function seededAccounts(sql: Sql, applied: number): Promise<SeededAccount[]> {
+/** Every account in the upgraded database: no migration writes one, so these are the seeded rows. */
+async function seededAccounts(sql: Sql): Promise<SeededAccount[]> {
   const rows = await sql<SeededAccount[]>`
-    select github_login, enforcement_state::text as enforcement_state
-    from users
-    where github_login like ${`legacy-%-${applied}`}
+    select github_login, enforcement_state::text as enforcement_state from users
   `;
   return [...rows].sort(byLogin);
 }
 
-async function seededSettlements(sql: Sql, applied: number): Promise<SeededSettlement[]> {
+/** Every settlement in the upgraded database, for the same reason. */
+async function seededSettlements(sql: Sql): Promise<SeededSettlement[]> {
   const rows = await sql<SeededSettlement[]>`
-    select
-      proof_sha256,
-      status::text as status,
-      settled_points::integer as settled_points,
-      review_rounds::integer as review_rounds,
-      credits::integer as credits,
+    select proof_sha256, status::text as status, settled_points, review_rounds, credits,
       creditor_github_login
     from settlements
-    where proof_sha256 like ${`${fingerprintPrefix(applied)}%`}
   `;
   return [...rows].sort(byProof);
 }
@@ -335,12 +331,8 @@ function byProof(left: SeededSettlement, right: SeededSettlement): number {
   return left.proof_sha256.localeCompare(right.proof_sha256, "en");
 }
 
-function fingerprintPrefix(applied: number): string {
-  return applied.toString(16).padStart(8, "0");
-}
-
-function proofFingerprint(applied: number, ordinal: number): string {
-  return `${fingerprintPrefix(applied)}${ordinal.toString(16).padStart(56, "0")}`;
+function proofFingerprint(ordinal: number): string {
+  return ordinal.toString(16).padStart(64, "0");
 }
 
 let externalId = 5_000_000;
