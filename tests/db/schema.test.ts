@@ -12,6 +12,7 @@ import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reco
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { processWebhook } from "@/lib/webhooks/processor";
 
 let container: StartedTestContainer | undefined;
@@ -1796,7 +1797,7 @@ describe("initial PostgreSQL materialization", () => {
 
     await expect(
       insertApiToken(sql, userId, "one-token-per-account-second"),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "23505" });
 
     const [record] = await sql<{ count: number }[]>`
       select count(*)::integer as count from api_tokens where user_id = ${userId}
@@ -1809,7 +1810,9 @@ describe("initial PostgreSQL materialization", () => {
     const secondUserId = await insertUser(sql);
     await insertApiToken(sql, firstUserId, "shared-token-hash");
 
-    await expect(insertApiToken(sql, secondUserId, "shared-token-hash")).rejects.toThrow();
+    await expect(insertApiToken(sql, secondUserId, "shared-token-hash")).rejects.toMatchObject({
+      code: "23505",
+    });
 
     const [record] = await sql<{ count: number }[]>`
       select count(*)::integer as count from api_tokens where user_id = ${secondUserId}
@@ -1821,7 +1824,9 @@ describe("initial PostgreSQL materialization", () => {
     const userId = await insertUser(sql);
     await insertApiToken(sql, userId, "outlives-its-account");
 
-    await expect(sql`delete from users where id = ${userId}`).rejects.toThrow();
+    await expect(sql`delete from users where id = ${userId}`).rejects.toMatchObject({
+      code: "23503",
+    });
 
     const [record] = await sql<{ count: number }[]>`
       select count(*)::integer as count from api_tokens where user_id = ${userId}
@@ -1842,16 +1847,150 @@ describe("initial PostgreSQL materialization", () => {
     expect(Buffer.from(record.token_hash)).toEqual(apiTokenHash("column-shape"));
     expect(record.created_at).toBeInstanceOf(Date);
 
-    const columns = await sql<{ column_name: string }[]>`
-      select column_name from information_schema.columns
+    const columns = await sql<{ column_name: string; is_nullable: string }[]>`
+      select column_name, is_nullable from information_schema.columns
       where table_schema = 'public' and table_name = 'api_tokens'
+      order by column_name
     `;
-    expect(columns.map((column) => column.column_name).sort()).toEqual([
-      "created_at",
-      "id",
-      "token_hash",
-      "user_id",
+    expect(columns).toEqual([
+      { column_name: "created_at", is_nullable: "NO" },
+      { column_name: "id", is_nullable: "NO" },
+      { column_name: "token_hash", is_nullable: "NO" },
+      { column_name: "user_id", is_nullable: "NO" },
     ]);
+  });
+
+  it("refuses an API token hash that is not a whole SHA-256 digest", async () => {
+    const userId = await insertUser(sql);
+
+    await expect(sql`
+      insert into api_tokens (user_id, token_hash)
+      values (${userId}, ${Buffer.alloc(16)})
+    `).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`
+      insert into api_tokens (user_id, token_hash)
+      values (${userId}, ${Buffer.alloc(0)})
+    `).rejects.toMatchObject({ code: "23514" });
+
+    const [record] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from api_tokens where user_id = ${userId}
+    `;
+    expect(record).toEqual({ count: 0 });
+  });
+
+  it("resolves the account behind an issued API token", async () => {
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+    const tokenHash = apiTokenHash("store-resolves-account");
+
+    await store.issueToken(userId, tokenHash);
+
+    await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
+      id: userId,
+      role: "MEMBER",
+      enforcementState: "ACTIVE",
+    });
+  });
+
+  it("revokes the previous API token when an account issues a second one", async () => {
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+    const revokedHash = apiTokenHash("regeneration-revokes-first");
+    const currentHash = apiTokenHash("regeneration-issues-second");
+
+    await store.issueToken(userId, revokedHash);
+    await store.issueToken(userId, currentHash);
+
+    await expect(store.findAccountByTokenHash(revokedHash)).resolves.toBeNull();
+    await expect(store.findAccountByTokenHash(currentHash)).resolves.toEqual({
+      id: userId,
+      role: "MEMBER",
+      enforcementState: "ACTIVE",
+    });
+
+    const [record] = await sql<{ count: number }[]>`
+      select count(*)::integer as count from api_tokens where user_id = ${userId}
+    `;
+    expect(record).toEqual({ count: 1 });
+  });
+
+  it("replaces an account's API token in a single statement", async () => {
+    const userId = await insertUser(sql);
+    const statements: string[] = [];
+    const recordingSql = ((strings: TemplateStringsArray, ...values: never[]) => {
+      statements.push(strings.join("?"));
+      return sql(strings, ...values);
+    }) as unknown as Sql;
+    const store = new PostgresApiTokenStore(recordingSql);
+    const revokedHash = apiTokenHash("single-statement-first");
+    const currentHash = apiTokenHash("single-statement-second");
+
+    await store.issueToken(userId, revokedHash);
+    statements.length = 0;
+    await store.issueToken(userId, currentHash);
+
+    expect(statements).toHaveLength(1);
+    await expect(store.findAccountByTokenHash(revokedHash)).resolves.toBeNull();
+    await expect(store.findAccountByTokenHash(currentHash)).resolves.not.toBeNull();
+  });
+
+  it("resolves no account for an API token hash that was never issued", async () => {
+    const store = new PostgresApiTokenStore(sql);
+
+    await expect(
+      store.findAccountByTokenHash(apiTokenHash("never-issued")),
+    ).resolves.toBeNull();
+  });
+
+  it("resolves the stored role and enforcement state rather than the defaults", async () => {
+    const userId = await insertUser(sql);
+    await sql`
+      update users set role = 'MODERATOR', enforcement_state = 'UNDER_AUDIT'
+      where id = ${userId}
+    `;
+    const store = new PostgresApiTokenStore(sql);
+    const tokenHash = apiTokenHash("store-resolves-moderator");
+
+    await store.issueToken(userId, tokenHash);
+
+    await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
+      id: userId,
+      role: "MODERATOR",
+      enforcementState: "UNDER_AUDIT",
+    });
+  });
+
+  it("resolves an account without carrying any token material back", async () => {
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+    const tokenHash = apiTokenHash("store-returns-no-token-material");
+
+    await store.issueToken(userId, tokenHash);
+    const account = await store.findAccountByTokenHash(tokenHash);
+
+    expect(Object.keys(account ?? {}).sort()).toEqual(["enforcementState", "id", "role"]);
+    const resolvedValues: unknown[] = Object.values(account ?? {});
+    expect(resolvedValues.some((value) => value instanceof Uint8Array)).toBe(false);
+    expect(JSON.stringify(account)).not.toContain(tokenHash.toString("hex"));
+  });
+
+  it("reports no API token summary before an account has issued one", async () => {
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+
+    await expect(store.getTokenSummary(userId)).resolves.toBeNull();
+  });
+
+  it("summarizes the current API token and moves the summary on regeneration", async () => {
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+
+    const issued = await store.issueToken(userId, apiTokenHash("summary-first"));
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ createdAt: issued.createdAt });
+
+    const reissued = await store.issueToken(userId, apiTokenHash("summary-second"));
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ createdAt: reissued.createdAt });
+    expect(reissued.createdAt).not.toEqual(issued.createdAt);
   });
 });
 

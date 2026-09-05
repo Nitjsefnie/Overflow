@@ -13,6 +13,10 @@
 -- `token_hash` is unique, so a duplicated insert or a hash collision cannot
 -- leave two accounts sharing one credential.
 --
+-- `token_hash` is also checked for length: it holds a whole SHA-256 digest, and
+-- a bare `bytea` would otherwise accept an empty or truncated value, which is a
+-- weaker credential than the one that was issued.
+--
 -- The foreign key carries no `on delete` clause, matching every other
 -- reference to `users` in the initial migration: an account that still holds a
 -- token cannot be deleted out from under it.
@@ -20,6 +24,6 @@
 create table if not exists api_tokens (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references users (id),
-  token_hash bytea not null unique,
+  token_hash bytea not null unique check (octet_length(token_hash) = 32),
   created_at timestamp with time zone not null default now()
 );
