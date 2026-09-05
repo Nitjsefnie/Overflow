@@ -121,8 +121,14 @@ describe("reconcileRepository", () => {
     expect(fold.pullRequests.map((pullRequest) => pullRequest.githubPullRequestId)).toEqual([201, 202, 203]);
     expect(fold.settlements.map((settlement) => [settlement.githubIssueId, settlement.githubPullRequestId]))
       .toEqual([[101, 201], [102, 202], [103, 203]]);
-    // Captured from the pre-batching implementation at commit 136449c.
-    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+    expect(fold.pullRequests.map(({ authorGitHubUserId }) => authorGitHubUserId)).toEqual([2001, 2001, 2001]);
+    expect(fold.settlements.map(({ creditorGitHubUserId }) => creditorGitHubUserId)).toEqual([2001, 2001, 2001]);
+    // Preserve the pre-batching digest from 136449c apart from upstream's new identity fields.
+    const legacyFold = JSON.stringify(fold, (key, value) => (
+      key === "authorGitHubUserId" || key === "creditorGitHubUserId" ? undefined : value
+    ));
+    expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("dd3a91cdb71b773778ec969e264fbe26f6c32fe2f260c3e7aaadd0cf5092bcef");
   });
 
   it("settles from the only merged closing reference on the second continuation", async () => {
@@ -141,7 +147,7 @@ describe("reconcileRepository", () => {
       ["contributor", 6], ["sponsor", -6],
     ]);
     // The 120 unmerged references per issue must not alter any part of the baseline fold.
-    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+    expect(createHash("sha256").update(JSON.stringify(fold)).digest("hex")).toBe("dd3a91cdb71b773778ec969e264fbe26f6c32fe2f260c3e7aaadd0cf5092bcef");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-last" } },
