@@ -1,0 +1,120 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Sql } from "postgres";
+import type { StartedTestContainer } from "testcontainers";
+import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
+import { closeSql, getSql } from "@/lib/db/client";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { sweepReconciliations } from "@/lib/fold/sweep";
+import { encryptToken } from "@/lib/security/token-cipher";
+import { processWebhook } from "@/lib/webhooks/processor";
+
+let container: StartedTestContainer | undefined;
+let sql: Sql;
+let externalId = 9_500_000;
+const originalDatabaseUrl = process.env.DATABASE_URL;
+const tokenEncryptionKey = Buffer.alloc(32, 25).toString("base64url");
+const notBefore = new Date("2030-01-02T04:04:05.678Z");
+
+describe("persisted reconciliation cooldown", () => {
+  beforeAll(async () => {
+    const started = await startPostgresContainer({ database: "cooldown", user: "cooldown", password: "cooldown" });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = getSql();
+    await runMigrations();
+  });
+
+  afterAll(async () => {
+    await closeSql();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
+  });
+
+  it("skips a cooled-down repository in a sweep without gateway calls or run rows", async () => {
+    const fixture = await cooledRepository();
+    const { store, repositoryId, github, calls } = fixture;
+    const callbacks: string[] = [];
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    const summary = await sweepReconciliations({
+      listActiveRepositoryIds: async () => [repositoryId],
+      getReconciliationCooldown: (id) => store.getReconciliationCooldown(id),
+      now,
+      reconcile: async (id) => {
+        callbacks.push(id);
+        return reconcileRepository({ store, github, now }, id);
+      },
+    });
+    expect(callbacks).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(await runs(repositoryId)).toEqual([]);
+    expect(summary).toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+    expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
+  });
+
+  it.each([0, 1])("creates no run for a cooled-down webhook, then reconciles at expiry plus %s ms and clears it", async (offset) => {
+    const { store, repositoryId, githubRepositoryId, ownerName, github, calls } = await cooledRepository();
+    let instant = new Date("2030-01-02T03:04:05.678Z");
+    const now = () => instant;
+    const dependencies = { store, reconcileRepository: (id: string) => reconcileRepository({ store, github, now }, id) };
+    const delivery = {
+      deliveryId: `cooldown-${githubRepositoryId}`,
+      event: "pull_request" as const,
+      action: "closed",
+      repositoryGitHubId: githubRepositoryId,
+      repositoryFullName: ownerName,
+    };
+    await expect(processWebhook(dependencies, delivery)).resolves.toEqual({ status: "PROCESSED" });
+    expect(await runs(repositoryId)).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
+
+    instant = new Date(notBefore.getTime() + offset);
+    await expect(processWebhook(dependencies, { ...delivery, deliveryId: `${delivery.deliveryId}-expired` }))
+      .resolves.toEqual({ status: "PROCESSED" });
+    expect(await runs(repositoryId)).toEqual([{ status: "COMPLETED" }]);
+    expect(calls).toEqual(["issues"]);
+    await expect(sql`
+      select reconciliation_not_before from registered_repositories where id = ${repositoryId}
+    `).resolves.toEqual([{ reconciliation_not_before: null }]);
+  });
+});
+
+async function runs(repositoryId: string) {
+  return sql`select status from reconciliation_runs where repository_id = ${repositoryId}`;
+}
+
+async function cooledRepository() {
+  const githubRepositoryId = externalId++;
+  const ownerName = `cooldown/repo-${githubRepositoryId}`;
+  const [{ id: sponsorId }] = await sql<{ id: string }[]>`
+    insert into users (github_user_id, github_login, encrypted_oauth_token)
+    values (${externalId++}, ${`sponsor-${githubRepositoryId}`},
+      ${Buffer.from(encryptToken("cooldown-token", tokenEncryptionKey), "utf8")}) returning id
+  `;
+  const difficultyScheme = {
+    openingName: "Size", actualName: "Delivered",
+    openingLabels: [{ label: "M", comparisonPoints: 5, reservePoints: 5 }],
+    actualLabels: Array.from({ length: 10 }, (_, index) => ({ label: `delivered/${index + 1}`, points: index + 1 })),
+  };
+  const [{ id: repositoryId }] = await sql<{ id: string }[]>`
+    insert into registered_repositories
+      (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+    values (${githubRepositoryId}, ${ownerName}, ${sponsorId}, 'PUBLIC', ${externalId++}, ${sql.json(difficultyScheme)})
+    returning id
+  `;
+  const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+  await store.setReconciliationCooldown(repositoryId, notBefore);
+  const calls: string[] = [];
+  const github: ReconciliationGateway = {
+    listIssues: async () => { calls.push("issues"); return []; },
+    getPullRequestReviews: async () => { calls.push("reviews"); return []; },
+    getPullRequestDiff: async () => { calls.push("diff"); return ""; },
+  };
+  return { store, repositoryId, githubRepositoryId, ownerName, github, calls };
+}

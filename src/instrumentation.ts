@@ -21,6 +21,7 @@ export async function register(): Promise<void> {
           const store = new PostgresFoldStore();
           return store.listActiveRepositoryIds();
         },
+        getReconciliationCooldown: (repositoryId) => new PostgresFoldStore().getReconciliationCooldown(repositoryId),
         // Each repository is read with its own sponsor's token, the same way the
         // webhook route reads it — a sweep has no actor of its own.
         reconcile: async (repositoryId) => {

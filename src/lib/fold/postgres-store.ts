@@ -284,6 +284,20 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.map((row) => row.id);
   }
 
+  public async getReconciliationCooldown(repositoryId: string): Promise<Date | null> {
+    const [row] = await this.sql<{ reconciliation_not_before: Date | null }[]>`
+      select reconciliation_not_before from registered_repositories where id = ${repositoryId}
+    `;
+    return row?.reconciliation_not_before ?? null;
+  }
+
+  public async setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void> {
+    await this.sql`
+      update registered_repositories set reconciliation_not_before = ${notBefore}
+      where id = ${repositoryId}
+    `;
+  }
+
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
     const [row] = await this.sql<{ encrypted_oauth_token: Buffer | null }[]>`
       select encrypted_oauth_token from users where id = ${userId} limit 1
