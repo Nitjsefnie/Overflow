@@ -28,6 +28,7 @@ function closure(overrides: Partial<UnwritableClosureProjection> = {}): Unwritab
     issueUrl: "https://github.com/co-op/harbour/issues/17",
     pullRequest: { number: 18, title: "Repair the gate", url: "https://github.com/co-op/harbour/pull/18" },
     settlementId: "settlement-1",
+    settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
     latestCorrection: null,
     ...overrides,
   };
@@ -68,15 +69,33 @@ describe("unwritable closure queue", () => {
     expect(screen.queryByText(/Correction .* · reported/)).toBeNull();
   });
 
+  it.each([
+    { creditorLogin: "mira", sentence: "Only a party can request a correction: mira or quinn.", logins: ["mira", "quinn"] },
+    { creditorLogin: null, sentence: "Only a party can request a correction: quinn.", logins: ["quinn"] },
+  ])("names the correction parties when the creditor is $creditorLogin", ({ creditorLogin, sentence, logins }) => {
+    render(<UnwritableClosureQueue closures={[closure({
+      settlementParties: { creditorLogin, debtorLogin: "quinn" },
+    })]} />);
+
+    const explanation = screen.getByText(/Only a party can request a correction:/);
+    expect(explanation).toHaveTextContent(sentence);
+    expect(explanation).toHaveClass("mono-meta");
+    expect(explanation.tagName).toBe("P");
+    expect(Array.from(explanation.querySelectorAll("code"), (code) => code.textContent)).toEqual(logins);
+    const link = screen.getByRole("link", { name: "Open the settlement to request a correction" });
+    expect(link.parentElement?.nextElementSibling).toBe(explanation);
+  });
+
   it("keeps both kinds visible without a settlement and explains why no correction is offered", () => {
     render(<UnwritableClosureQueue closures={[
-      closure({ settlementId: null }),
+      closure({ settlementId: null, settlementParties: null }),
       closure({
         id: "closure-2",
         kind: "NO_CLOSING_PULL_REQUEST",
         reason: "No merged GitHub GraphQL closing pull request was found.",
         pullRequest: null,
         settlementId: null,
+        settlementParties: null,
       }),
     ]} />);
 
@@ -85,6 +104,7 @@ describe("unwritable closure queue", () => {
     for (const entry of entries) {
       expect(within(entry).getByText("No settlement is materialized for this closure, so there is nothing to correct.")).toHaveClass("mono-meta");
       expect(within(entry).queryByRole("link", { name: "Open the settlement to request a correction" })).toBeNull();
+      expect(within(entry).queryByText(/Only a party can request a correction:/)).toBeNull();
     }
     expect(within(entries[0]).getByRole("link", { name: /Repair the gate/ })).toBeVisible();
     expect(within(entries[1]).getAllByRole("link")).toHaveLength(1);
@@ -109,6 +129,8 @@ describe("moderation closure section", () => {
         pull_request_title: "Repair the gate",
         pull_request_url: "https://github.com/co-op/harbour/pull/18",
         settlement_id: "settlement-1",
+        creditor_login: "mira",
+        debtor_login: "quinn",
         correction_state: null,
         correction_requested_at: null,
       }];
@@ -137,6 +159,7 @@ describe("moderation closure section", () => {
     render(await ModerationPage());
 
     expect(screen.getByText("The closure queue could not be loaded.")).toBeVisible();
+    expect(screen.getByText(/A moderator who is not a party cannot open the settlement; the parties named on each entry can\./)).toBeVisible();
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
     expect(screen.getByText("No accounts are recalibrating.")).toBeVisible();
