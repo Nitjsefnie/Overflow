@@ -3,9 +3,11 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
+  CANONICAL_SECTIONS,
   FALSE_SPELLINGS,
   TRUE_SPELLINGS,
   type UnitEntry,
+  type UnitSection,
   isUnderRoot,
   parseUnitFile,
   pathCandidates,
@@ -133,8 +135,37 @@ const requiredServiceSwitches: ReadonlyArray<string> = [
   "ProtectHostname",
 ];
 
-/** The ordering and dependency decisions deploy/README.md's procedure relies on. */
+/**
+ * Every `[Unit]` directive the unit is reviewed to carry, closed the same way
+ * `[Service]` is.
+ *
+ * `[Service]` is not the only section that can weaken the sandbox, and leaving
+ * this one open was a hole: `JoinsNamespaceOf=postgresql.service` in `[Unit]`
+ * puts the service inside another unit's namespaces, so `PrivateTmp=yes` stays
+ * set and stops being private. Measured on systemd 257.13 with three transient
+ * units: one wrote a file into its own private `/tmp`, a second carrying
+ * `PrivateTmp=yes` *and* `JoinsNamespaceOf=` read that file back, and the
+ * control carrying `PrivateTmp=yes` alone saw an empty `/tmp`. The same
+ * directive shares the network and IPC namespaces where the joined unit has
+ * `PrivateNetwork=` or `PrivateIPC=`.
+ */
+const REVIEWED_UNIT_KEYS: ReadonlySet<string> = new Set([
+  "After",
+  "Description",
+  "Requires",
+  "Wants",
+]);
+
+/** Every `[Install]` directive the unit is reviewed to carry, closed likewise. */
+const REVIEWED_INSTALL_KEYS: ReadonlySet<string> = new Set(["WantedBy"]);
+
+/**
+ * The ordering and dependency decisions deploy/README.md's procedure relies on,
+ * plus the description, which is pinned because the closed set above admits no
+ * key with its value left open.
+ */
 const requiredUnitValues: ReadonlyArray<readonly [string, string]> = [
+  ["Description", "Overflow production web application"],
   ["After", "network-online.target postgresql.service"],
   ["Wants", "network-online.target"],
   ["Requires", "postgresql.service"],
@@ -144,6 +175,28 @@ const requiredUnitValues: ReadonlyArray<readonly [string, string]> = [
 const requiredInstallValues: ReadonlyArray<readonly [string, string]> = [
   ["WantedBy", "multi-user.target"],
 ];
+
+/** The closed key set each section is held to. */
+const REVIEWED_KEYS: ReadonlyMap<UnitSection, ReadonlySet<string>> = new Map([
+  ["Unit", REVIEWED_UNIT_KEYS],
+  ["Service", REVIEWED_SERVICE_KEYS],
+  ["Install", REVIEWED_INSTALL_KEYS],
+]);
+
+/** The keys a test of this file pins a value for, per section. */
+function pinnedKeys(section: UnitSection): ReadonlySet<string> {
+  if (section === "Service") {
+    return new Set([
+      ...requiredServiceValues.map(([key]) => key),
+      ...requiredServiceSwitches,
+      ...separatelyPinnedServiceKeys.keys(),
+    ]);
+  }
+
+  const values = section === "Unit" ? requiredUnitValues : requiredInstallValues;
+
+  return new Set(values.map(([key]) => key));
+}
 
 /**
  * The start command, token by token: the interpreter, the script and the whole
@@ -222,10 +275,10 @@ describe("Overflow production unit", () => {
 
   const entries = (): UnitEntry[] => parseUnitFile(source);
 
-  const sectionEntries = (section: string, key: string): UnitEntry[] =>
+  const sectionEntries = (section: UnitSection, key: string): UnitEntry[] =>
     entries().filter((entry) => entry.section === section && entry.key === key);
 
-  const only = (section: string, key: string): UnitEntry => {
+  const only = (section: UnitSection, key: string): UnitEntry => {
     const assignments = sectionEntries(section, key);
 
     expect(assignments).toHaveLength(1);
@@ -255,28 +308,32 @@ describe("Overflow production unit", () => {
     expect(() => parseUnitFile(source)).not.toThrow();
   });
 
-  it("pins a value for every directive on the reviewed set", () => {
-    const pinned = new Set([
-      ...requiredServiceValues.map(([key]) => key),
-      ...requiredServiceSwitches,
-      ...separatelyPinnedServiceKeys.keys(),
-    ]);
+  it.each(CANONICAL_SECTIONS)(
+    "pins a value for every directive on the [%s] reviewed set",
+    (section) => {
+      const reviewed = REVIEWED_KEYS.get(section)!;
+      const pinned = pinnedKeys(section);
 
-    expect([...REVIEWED_SERVICE_KEYS].filter((key) => !pinned.has(key))).toEqual([]);
-    expect([...pinned].filter((key) => !REVIEWED_SERVICE_KEYS.has(key))).toEqual([]);
-  });
+      expect([...reviewed].filter((key) => !pinned.has(key))).toEqual([]);
+      expect([...pinned].filter((key) => !reviewed.has(key))).toEqual([]);
+    },
+  );
 
-  it("declares no [Service] directive outside the reviewed set", () => {
-    const declared = [
-      ...new Set(
-        entries()
-          .filter((entry) => entry.section === "Service")
-          .map((entry) => entry.key),
-      ),
-    ];
+  it.each(CANONICAL_SECTIONS)(
+    "declares no [%s] directive outside the reviewed set",
+    (section) => {
+      const reviewed = REVIEWED_KEYS.get(section)!;
+      const declared = [
+        ...new Set(
+          entries()
+            .filter((entry) => entry.section === section)
+            .map((entry) => entry.key),
+        ),
+      ];
 
-    expect(declared.filter((key) => !REVIEWED_SERVICE_KEYS.has(key))).toEqual([]);
-  });
+      expect(declared.filter((key) => !reviewed.has(key))).toEqual([]);
+    },
+  );
 
   it("keeps every path-valued directive out of /root", () => {
     only("Service", "WorkingDirectory");
