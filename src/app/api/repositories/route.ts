@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { GitHubGateway } from "@/lib/github/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
+import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import {
   RepositoryRegistrationError,
   registerRepository,
@@ -40,6 +42,7 @@ export type RepositoryRouteSession = {
 
 export type RepositoryRouteDependencies = {
   getSession: () => Promise<RepositoryRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<ApiTokenAccount | null>;
   createRegistrationDependencies: (
     session: RepositoryRouteSession,
   ) => Promise<RepositoryRegistrationDependencies>;
@@ -47,9 +50,22 @@ export type RepositoryRouteDependencies = {
 
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
+    const credential = readApiTokenCredential(request);
     let session: RepositoryRouteSession | null;
     try {
-      session = await dependencies.getSession();
+      if (credential !== null) {
+        const hash = hashApiToken(credential);
+        if (hash === null) {
+          return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+        }
+        const account = await dependencies.findAccountByTokenHash(hash);
+        if (account === null) {
+          return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+        }
+        session = { user: { id: account.id, role: account.role } };
+      } else {
+        session = await dependencies.getSession();
+      }
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
     }
@@ -80,6 +96,9 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
 }
 
 export const POST = createRepositoryPostHandler({
+  async findAccountByTokenHash(hash) {
+    return new PostgresApiTokenStore().findAccountByTokenHash(hash);
+  },
   async getSession() {
     const { auth } = await import("@/auth");
     const session = await auth();
