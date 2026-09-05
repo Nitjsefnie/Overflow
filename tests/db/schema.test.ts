@@ -308,6 +308,127 @@ describe("initial PostgreSQL materialization", () => {
     }
   });
 
+  it("refuses the difficulty scheme upgrade while a legacy repository has no scheme", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_refusal_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      const ownerName = "legacy/awaiting-a-scheme";
+      await insertSchemelessRepository(upgradeSql, ownerName);
+      const readRepository = () => upgradeSql`
+        select * from registered_repositories where owner_name = ${ownerName}
+      `;
+      const before = await readRepository();
+
+      await expect(runMigrations()).rejects.toThrow(difficultySchemePreconditionMessage(1, ownerName));
+      await expect(readRepository()).resolves.toEqual(before);
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
+  it("upgrades a refused database once its difficulty scheme is backfilled by hand", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_recovery_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      const ownerName = "legacy/backfilled-by-hand";
+      await insertSchemelessRepository(upgradeSql, ownerName);
+      await expect(runMigrations()).rejects.toThrow(difficultySchemePreconditionMessage(1, ownerName));
+
+      // The recovery the refusal message prescribes: add the column and backfill it by hand.
+      await upgradeSql`alter table registered_repositories add column difficulty_scheme jsonb`;
+      await upgradeSql`
+        update registered_repositories
+        set difficulty_scheme = ${upgradeSql.json(validDifficultyScheme())}::jsonb
+        where owner_name = ${ownerName}
+      `;
+
+      // Stops at 002: 003 adds an enum value and uses it in the same transaction, which
+      // PostgreSQL rejects (55P04) whenever 001 was committed by an earlier run.
+      await expect(runMigrations({ upTo: "002_repository_difficulty_scheme.sql" }))
+        .resolves.toBeUndefined();
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([{ name: "002_repository_difficulty_scheme.sql" }]);
+      await expect(upgradeSql`
+        select is_nullable from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'registered_repositories'
+          and column_name = 'difficulty_scheme'
+      `).resolves.toEqual([{ is_nullable: "NO" }]);
+      await expect(upgradeSql`
+        select conname from pg_constraint
+        where conrelid = 'registered_repositories'::regclass
+          and conname = 'registered_repositories_difficulty_scheme_check'
+      `).resolves.toEqual([{ conname: "registered_repositories_difficulty_scheme_check" }]);
+
+      // A constraint that exists but does not bite is the false green the split risks.
+      const invalidScheme = validDifficultyScheme();
+      invalidScheme.actualLabels = invalidScheme.actualLabels.slice(0, 3);
+      await expect(upgradeSql`
+        update registered_repositories
+        set difficulty_scheme = ${upgradeSql.json(invalidScheme)}::jsonb
+        where owner_name = ${ownerName}
+      `).rejects.toThrow(/registered_repositories_difficulty_scheme_check/);
+      await expect(upgradeSql<{ difficulty_scheme: unknown }[]>`
+        select difficulty_scheme from registered_repositories where owner_name = ${ownerName}
+      `).resolves.toEqual([{ difficulty_scheme: validDifficultyScheme() }]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
+  it("upgrades a database holding no repository through the difficulty scheme migration", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_empty_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      await expect(upgradeSql`select count(*)::integer as count from registered_repositories`)
+        .resolves.toEqual([{ count: 0 }]);
+
+      // Stops at 002: 003 adds an enum value and uses it in the same transaction, which
+      // PostgreSQL rejects (55P04) whenever 001 was committed by an earlier run.
+      await expect(runMigrations({ upTo: "002_repository_difficulty_scheme.sql" }))
+        .resolves.toBeUndefined();
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([{ name: "002_repository_difficulty_scheme.sql" }]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it.each([
     { kind: "SETTLEMENT_EVIDENCE_REJECTED", hasPullRequest: false },
     { kind: "NO_CLOSING_PULL_REQUEST", hasPullRequest: true },
@@ -2780,6 +2901,35 @@ async function insertRepositoryWithDifficultyScheme(
     returning id
   `;
   return repository.id;
+}
+
+async function insertSchemelessRepository(client: QueryableSql, ownerName: string): Promise<void> {
+  const sponsorId = await insertUser(client);
+  await client`
+    insert into registered_repositories (
+      github_repository_id,
+      owner_name,
+      sponsor_id,
+      visibility,
+      github_webhook_id
+    )
+    values (
+      ${nextExternalId()},
+      ${ownerName},
+      ${sponsorId},
+      ${"PUBLIC"},
+      ${nextExternalId()}
+    )
+  `;
+}
+
+function difficultySchemePreconditionMessage(count: number, ...ownerNames: string[]): string {
+  return (
+    `Repository difficulty scheme precondition failed: ${count} repository(ies) predate the ` +
+    `difficulty scheme. Repositories: ${ownerNames.join(", ")}. Give each repository a difficulty ` +
+    `scheme by adding the difficulty_scheme column and backfilling it by hand, or remove the legacy ` +
+    `repositories, before upgrading.`
+  );
 }
 
 function validDifficultyScheme(): DifficultyScheme {
