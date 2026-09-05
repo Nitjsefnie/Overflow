@@ -66,6 +66,13 @@ describe("reading the trusted origin from APP_URL", () => {
     );
   });
 
+  // The scheme is read from APP_URL like everything else in the origin. A guard
+  // that assumed https would refuse every mutation on a deployment served over
+  // plain HTTP, which is the ordinary local one.
+  it("keeps a non-https scheme", () => {
+    expect(readTrustedOrigin(environment("http://localhost:3000"))).toBe("http://localhost:3000");
+  });
+
   it("returns null when APP_URL is undefined", () => {
     expect(readTrustedOrigin(environment())).toBeNull();
   });
@@ -160,6 +167,17 @@ describe("accepting a request from the trusted origin", () => {
     ).toBeNull();
   });
 
+  // An http deployment must be able to trust its own origin, and the scheme
+  // still has to match in both directions.
+  it("accepts an http origin when APP_URL is http", () => {
+    const request = mutationRequest({
+      origin: "http://localhost:3000",
+      "content-type": "application/json",
+    });
+
+    expect(rejectUntrustedRequest(request, environment("http://localhost:3000"))).toBeNull();
+  });
+
   it("reads process.env when no environment is passed", () => {
     vi.stubEnv("APP_URL", trustedOrigin);
     const request = mutationRequest({
@@ -202,6 +220,19 @@ describe("rejecting a request from an untrusted origin", () => {
 
     await expectErrorResponse(
       rejectUntrustedRequest(request, trustedEnv),
+      403,
+      "FORBIDDEN",
+      "The request origin is not allowed.",
+    );
+  });
+
+  // The inverse of the case above: an https origin is not privileged, it is
+  // simply a different origin from the http one APP_URL names.
+  it("rejects an https origin when APP_URL is http", async () => {
+    const request = mutationRequest({ origin: "https://localhost:3000" });
+
+    await expectErrorResponse(
+      rejectUntrustedRequest(request, environment("http://localhost:3000")),
       403,
       "FORBIDDEN",
       "The request origin is not allowed.",
