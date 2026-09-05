@@ -53,7 +53,7 @@ describe("settlement correction request form", () => {
   it("shows the server's refusal rather than claiming success", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({ error: { code: "CONFLICT", message: "This settlement already has a correction request awaiting a moderator." } }),
+        JSON.stringify({ error: { code: "CONFLICT", message: "This issue already has a correction request awaiting a moderator." } }),
         { status: 409, headers: { "content-type": "application/json" } },
       ),
     );
@@ -66,7 +66,7 @@ describe("settlement correction request form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Report this settlement as incorrect" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "This settlement already has a correction request awaiting a moderator.",
+      "This issue already has a correction request awaiting a moderator.",
     );
     expect(screen.queryByRole("status")).toBeNull();
   });

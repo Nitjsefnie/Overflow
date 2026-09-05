@@ -133,7 +133,7 @@ describe("settlement override service", () => {
     expect(calls).toEqual([]);
   });
 
-  it("reports the store's refusal of a member who is neither creditor nor debtor", async () => {
+  it("reports the store's refusal in wording that fits both targets", async () => {
     const { store } = fakeStore({
       async createRequest(): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
         return { kind: "forbidden" };
@@ -168,7 +168,52 @@ describe("settlement override service", () => {
         { id: "member-id" },
         { target: { kind: "settlement", settlementId: "settlement-id" }, reason: "Wrong." },
       ),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This issue already has a correction request awaiting a moderator.",
+    });
+  });
+
+  // A self-worked issue has no settlement row at all, so the conflict a second
+  // request against a calibration hits cannot be reported as a settlement's.
+  it("reports a second open request on the same calibration in the same wording", async () => {
+    const { store } = fakeStore({
+      async createRequest(): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
+        return { kind: "conflict" };
+      },
+    });
+    const service = new SettlementOverrideService(store);
+
+    await expect(
+      service.requestOverride(
+        { id: "sponsor-id" },
+        { target: { kind: "calibration", calibrationId: "calibration-id" }, reason: "Wrong." },
+      ),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This issue already has a correction request awaiting a moderator.",
+    });
+  });
+
+  // The same store result answers an absent settlement, an absent calibration
+  // and an absent request, so the wording cannot name any one of them.
+  it("reports an absent target without naming a settlement", async () => {
+    const { store } = fakeStore({
+      async createRequest(): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
+        return { kind: "not_found" };
+      },
+    });
+    const service = new SettlementOverrideService(store);
+
+    await expect(
+      service.requestOverride(
+        { id: "sponsor-id" },
+        { target: { kind: "calibration", calibrationId: "calibration-id" }, reason: "Wrong." },
+      ),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "No settlement, calibration or correction request was found under that identifier.",
+    });
   });
 
   it("lists open requests only for a moderator", async () => {

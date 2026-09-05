@@ -236,7 +236,10 @@ function unwrap<T>(result: SettlementOverrideStoreResult<T>): T {
     case "ok":
       return result.value;
     case "not_found":
-      throw new SettlementOverrideError("NOT_FOUND", "The settlement correction request was not found.");
+      throw new SettlementOverrideError(
+        "NOT_FOUND",
+        "No settlement, calibration or correction request was found under that identifier.",
+      );
     case "forbidden":
       throw new SettlementOverrideError(
         "FORBIDDEN",
@@ -245,7 +248,7 @@ function unwrap<T>(result: SettlementOverrideStoreResult<T>): T {
     case "conflict":
       throw new SettlementOverrideError(
         "CONFLICT",
-        "This settlement already has a correction request awaiting a moderator.",
+        "This issue already has a correction request awaiting a moderator.",
       );
   }
 }
