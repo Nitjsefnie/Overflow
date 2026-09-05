@@ -21,6 +21,7 @@ const migrationNames = readdirSync(migrationsDirectory)
 let container: StartedTestContainer | undefined;
 let adminSql: Sql | undefined;
 let adminDatabaseUrl = "";
+let freshInstallStatusCheck = "";
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 describe("upgrading an already-deployed database", () => {
@@ -33,6 +34,16 @@ describe("upgrading an already-deployed database", () => {
     container = started.container;
     adminDatabaseUrl = started.databaseUrl;
     adminSql = postgres(adminDatabaseUrl, { max: 1 });
+
+    await adminSql`create database upgrade_from_empty`;
+    process.env.DATABASE_URL = databaseUrlFor("upgrade_from_empty");
+    try {
+      await runMigrations();
+      freshInstallStatusCheck = await settlementStatusCheck(getSql());
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = adminDatabaseUrl;
+    }
   });
 
   afterAll(async () => {
@@ -45,6 +56,13 @@ describe("upgrading an already-deployed database", () => {
     } else {
       process.env.DATABASE_URL = originalDatabaseUrl;
     }
+  });
+
+  // Without this the convergence assertion below is satisfied by every path producing the
+  // transitional text comparison 003 writes, which is not the definition the schema should end on.
+  it("ends a fresh install with an enum-typed settled status check", () => {
+    expect(freshInstallStatusCheck).toContain("'UNCLAIMED'::settlement_status");
+    expect(freshInstallStatusCheck).not.toContain("(status)::text");
   });
 
   it.each(migrationNames.map((name, index) => ({ boundary: name, applied: index + 1 })))(
@@ -66,6 +84,7 @@ describe("upgrading an already-deployed database", () => {
         await expect(appliedMigrationNames(sql)).resolves.toEqual(migrationNames);
         await expect(seededAccounts(sql, applied)).resolves.toEqual(seeded.accounts);
         await expect(seededSettlements(sql, applied)).resolves.toEqual(seeded.settlements);
+        await expect(settlementStatusCheck(sql)).resolves.toBe(freshInstallStatusCheck);
       } finally {
         await closeSql();
         process.env.DATABASE_URL = adminDatabaseUrl;
@@ -83,6 +102,17 @@ function databaseUrlFor(databaseName: string): string {
 async function appliedMigrationNames(sql: Sql): Promise<string[]> {
   const rows = await sql<{ name: string }[]>`select name from schema_migrations order by name`;
   return rows.map((row) => row.name);
+}
+
+/** How PostgreSQL renders the settled status check, which every upgrade path must agree on. */
+async function settlementStatusCheck(sql: Sql): Promise<string> {
+  const [constraint] = await sql<{ definition: string }[]>`
+    select pg_get_constraintdef(oid) as definition
+    from pg_constraint
+    where conrelid = 'settlements'::regclass
+      and conname = 'settlements_materialized_status_check'
+  `;
+  return constraint.definition;
 }
 
 interface SeededAccount {
