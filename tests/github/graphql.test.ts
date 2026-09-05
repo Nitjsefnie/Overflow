@@ -756,6 +756,34 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(askedForRestTimeline).toBe(false);
   });
 
+  it("preserves distinct author ids for closing pull requests in one response", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: {
+          repository: {
+            issue: {
+              closedByPullRequestsReferences: {
+                nodes: [
+                  pullRequestNode(202, 5, { login: "first-contributor", databaseId: 7002 }),
+                  pullRequestNode(203, 6, { login: "second-contributor", databaseId: 31337 }),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(
+      gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 202, authorGitHubUserId: 7002 }),
+      expect.objectContaining({ id: 203, authorGitHubUserId: 31337 }),
+    ]);
+  });
+
   it("carries no author id when the closing pull request author is not a GitHub user", async () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
