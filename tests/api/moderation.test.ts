@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
+import {
+  expectNoDependencyCall,
+  guardedRequests,
+  unusedDependencies,
+  useTrustedOrigin,
+} from "../support/trusted-origin";
 
 const { productionAuth, productionRole } = vi.hoisted(() => ({
   productionAuth: vi.fn(),
@@ -355,36 +360,8 @@ const roleChange: ModeratorRoleChange = {
   changedAt: "2026-09-05T10:00:00.000Z",
 };
 
-function jsonRequest(body: unknown, method = "POST", headers: Record<string, string> = {}): Request {
-  return new Request("https://overflow.example/api/moderation", {
-    method,
-    headers: { origin: trustedOrigin, "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-  });
-}
-
-function foreignTextRequest(body: unknown, method = "POST"): Request {
-  return jsonRequest(body, method, { origin: foreignOrigin, "content-type": "text/plain" });
-}
-
-function trustedTextRequest(body: unknown, method = "POST"): Request {
-  return jsonRequest(body, method, { "content-type": "text/plain" });
-}
-
-/**
- * Dependencies a refused request must never reach. Asserting zero calls is the
- * point of every rejection test here: a forged request costs no session read,
- * no role lookup and no database work.
- */
-function unusedDependencies() {
-  return { getSession: vi.fn(), getCurrentRole: vi.fn(), createService: vi.fn() };
-}
-
-function expectNoDependencyCall(dependencies: ReturnType<typeof unusedDependencies>): void {
-  expect(dependencies.getSession).not.toHaveBeenCalled();
-  expect(dependencies.getCurrentRole).not.toHaveBeenCalled();
-  expect(dependencies.createService).not.toHaveBeenCalled();
-}
+const { json: jsonRequest, foreignText: foreignTextRequest, trustedText: trustedTextRequest } =
+  guardedRequests("https://overflow.example/api/moderation");
 
 async function expectRejection(
   response: Response,
