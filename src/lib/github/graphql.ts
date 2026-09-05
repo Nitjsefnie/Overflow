@@ -2,44 +2,47 @@ const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
 
-// Bound log output to five errors, 512 characters per field and ten path
-// segments (under 8,000 characters total). Mark omitted text and entries.
+// Bound full details to five errors, 512 UTF-16 code units per field and ten
+// path segments. Later entries retain their bounded type (up to 514 units each,
+// including separators), so the total grows with the number of errors.
 const maxErrorEntries = 5;
 const maxErrorFieldLength = 512;
 const maxErrorPathSegments = 10;
 
 class GitHubGraphqlRequestError extends Error {}
 
-function boundedErrorText(value: string): string {
-  const text = value.slice(0, maxErrorFieldLength).replace(/\s/g, " ");
-  return value.length > maxErrorFieldLength ? `${text.slice(0, -1)}…` : text;
+function boundedErrorText(value: string, accessToken: string): string {
+  const redacted = accessToken.length > 0 ? value.replaceAll(accessToken, "[REDACTED]") : value;
+  const text = redacted.slice(0, maxErrorFieldLength).replace(/\s/g, " ");
+  return redacted.length > maxErrorFieldLength ? `${text.slice(0, -1)}…` : text;
 }
 
-function graphqlFailureMessage(errors: unknown): string {
+function graphqlFailureMessage(errors: unknown, accessToken: string): string {
   const message = "GitHub GraphQL request failed.";
   if (!Array.isArray(errors) || errors.length === 0) {
     return message;
   }
 
-  const details = errors.slice(0, maxErrorEntries).map((entry: unknown) => {
+  const details = errors.map((entry: unknown, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       return "Unknown error";
     }
 
     const error = entry as Record<string, unknown>;
     const type = typeof error.type === "string" && error.type.length > 0
-      ? boundedErrorText(error.type) : "UNKNOWN";
+      ? boundedErrorText(error.type, accessToken) : "UNKNOWN";
+    if (index >= maxErrorEntries) return type;
     const detail = typeof error.message === "string" && error.message.length > 0
-      ? boundedErrorText(error.message) : "No message supplied";
+      ? boundedErrorText(error.message, accessToken) : "No message supplied";
     let path = "";
     if (Array.isArray(error.path)) {
       const segments = error.path.slice(0, maxErrorPathSegments).map((segment: unknown) => {
-        if (typeof segment === "string") return boundedErrorText(segment);
+        if (typeof segment === "string") return boundedErrorText(segment, accessToken);
         if (typeof segment === "number") return segment;
         return "?";
       });
       if (error.path.length > maxErrorPathSegments) segments.push("…");
-      path = ` path=${boundedErrorText(JSON.stringify(segments))}`;
+      path = ` path=${boundedErrorText(JSON.stringify(segments), accessToken)}`;
     }
     return `${type}: ${detail}${path}`;
   });
@@ -108,7 +111,7 @@ export class GitHubGraphqlClient {
 
       const payload = (await response.json()) as { data?: TData; errors?: unknown };
       if (payload?.data === undefined || payload.errors !== undefined) {
-        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors));
+        throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken));
       }
 
       return payload.data;

@@ -82,7 +82,8 @@ describe("GitHubGraphqlClient failures", () => {
     const message = (error as Error).message;
     expect(message).toContain("ERROR_4");
     expect(message).toContain("message_4");
-    expect(message).not.toContain("OMITTED");
+    expect(message).toContain("OMITTED");
+    expect(message).not.toContain("must not appear");
     expect(message).not.toContain("m".repeat(513));
     expect(message).toContain("…");
     expect(message).toContain("1 more error");
@@ -130,6 +131,112 @@ describe("GitHubGraphqlClient failures", () => {
     const client = new GitHubGraphqlClient({
       accessToken: "test-access-token",
       fetch: async () => new Response("private invalid JSON"),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
+  });
+});
+
+describe("GitHubGraphqlClient diagnostic retention", () => {
+  async function failureFor(errors: unknown): Promise<Error> {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({ errors }),
+    });
+    const failure = await client.query("query {}", {}).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    return failure as Error;
+  }
+
+  it("retains a sixth RATE_LIMIT category after five schema errors", async () => {
+    const error = await failureFor([
+      ...Array.from({ length: 5 }, () => ({ type: "undefinedField", message: "Field removed" })),
+      { type: "RATE_LIMIT", message: "Rate limit exceeded" },
+    ]);
+
+    expect(error.message).toContain("RATE_LIMIT");
+    expect(error.message).toContain("undefinedField: Field removed");
+  });
+
+  it.each(["type", "message", "path", "later type"])("redacts repeated reflected tokens in %s", async (field) => {
+    const reflected = "before test-access-token middle test-access-token after";
+    const entry = {
+      type: field === "type" || field === "later type" ? reflected : "FORBIDDEN",
+      message: field === "message" ? reflected : "Denied",
+      path: field === "path" ? [reflected] : ["repository"],
+    };
+    const entries = field === "later type"
+      ? [...Array.from({ length: 5 }, () => ({ type: "undefinedField" })), entry]
+      : [entry];
+    const error = await failureFor(entries);
+
+    expect(error.message).not.toContain("test-access-token");
+    expect(error.message).toContain("[REDACTED]");
+  });
+
+  it.each([511, 512, 513])("retains type text deliberately at length %i", async (length) => {
+    const error = await failureFor([{ type: "t".repeat(length), message: "Denied" }]);
+    const expectedType = length === 513 ? `${"t".repeat(511)}…` : "t".repeat(length);
+
+    expect(error.message).toBe(`GitHub GraphQL request failed. ${expectedType}: Denied`);
+  });
+
+  it.each([511, 512, 513])("retains message text deliberately at length %i", async (length) => {
+    const error = await failureFor([{ type: "FORBIDDEN", message: "m".repeat(length) }]);
+    const expectedMessage = length === 513 ? `${"m".repeat(511)}…` : "m".repeat(length);
+
+    expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: ${expectedMessage}`);
+  });
+
+  it.each([
+    [10, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9"]'],
+    [11, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9","…"]'],
+  ])("retains the first ten short path segments and marks omission at length %i", async (length, preview) => {
+    const error = await failureFor([{
+      type: "FORBIDDEN",
+      message: "Denied",
+      path: Array.from({ length: Number(length) }, (_, index) => `s${index}`),
+    }]);
+
+    expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: Denied path=${preview}`);
+  });
+
+  it("keeps surfaced whitespace on one log line in every field", async () => {
+    const error = await failureFor([{
+      type: "FOR\nBIDDEN\tTYPE",
+      message: "Access\ndenied\there",
+      path: ["repo\nsitory", "is\tsues"],
+    }]);
+
+    expect(error.message).toBe('GitHub GraphQL request failed. FOR BIDDEN TYPE: Access denied here path=["repo sitory","is sues"]');
+  });
+
+  it("preserves the exact timeout when fetch resolves after abort", async () => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      timeoutMs: 1,
+      fetch: async (_input, init) => new Promise<Response>((resolve) => {
+        init?.signal?.addEventListener("abort", () => resolve(Response.json({ data: { ok: true } })), { once: true });
+      }),
+    });
+
+    await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub request timed out\.$/);
+  });
+
+  it("rethrows an existing GitHub request error with its object identity intact", async () => {
+    const original = await failureFor([{ type: "RATE_LIMIT", message: "Limit exceeded" }]);
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => { throw original; },
+    });
+
+    await expect(client.query("query {}", {})).rejects.toBe(original);
+  });
+
+  it.each([{ errors: [] }, { errors: null }])("intentionally rejects usable data with any defined errors member: %j", async ({ errors }) => {
+    const client = new GitHubGraphqlClient({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({ data: { repository: { name: "overflow" } }, errors }),
     });
 
     await expect(client.query("query {}", {})).rejects.toThrow(/^GitHub GraphQL request failed\.$/);
