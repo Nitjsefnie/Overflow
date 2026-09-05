@@ -31,11 +31,22 @@ export function useTrustedOrigin(appUrl: string = trustedOrigin): void {
 }
 
 /**
- * The request shapes a guarded route must accept and refuse, bound to one
- * route's URL. Building them here keeps the header spellings the guard reads in
- * one place instead of once per route test file.
+ * Every test request is addressed to this host, which is deliberately not the
+ * trusted origin's host. The trusted origin comes from `APP_URL` and never from
+ * the request's own URL, so a route that compared the `Origin` header against
+ * `new URL(request.url).origin` would refuse every request built here. That
+ * makes each file's ordinary happy-path tests pin the distinction for free —
+ * without it, a route reading the request URL passes everything.
  */
-export function guardedRequests(url: string) {
+export const requestHost = "https://overflow.internal";
+
+/**
+ * The request shapes a guarded route must accept and refuse, bound to one
+ * route's path. Building them here keeps the header spellings the guard reads
+ * in one place instead of once per route test file.
+ */
+export function guardedRequests(path: string) {
+  const url = new URL(path, requestHost).toString();
   const json = (body: unknown, method = "POST", headers: Record<string, string> = {}): Request =>
     new Request(url, {
       method,
@@ -44,6 +55,7 @@ export function guardedRequests(url: string) {
     });
 
   return {
+    url,
     json,
     // A foreign origin the guard must refuse on the origin alone. Prefer this
     // over foreignText when asserting the 403: a request that is also the wrong

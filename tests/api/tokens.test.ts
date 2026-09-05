@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
-import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
+import {
+  foreignOrigin,
+  requestHost,
+  trustedOrigin,
+  useTrustedOrigin,
+} from "../support/trusted-origin";
 import { apiTokenPrefix, hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import {
   createApiTokenPostHandler,
@@ -224,7 +229,7 @@ function signedInAs(userId: string, store: ApiTokenIssuer): ApiTokenRouteDepende
 }
 
 function mintRequest(headers: Record<string, string> = {}): Request {
-  return new Request("https://overflow.example/api/tokens", {
+  return new Request(`${requestHost}/api/tokens`, {
     method: "POST",
     headers: { origin: trustedOrigin, ...headers },
   });
