@@ -72,25 +72,39 @@ describe("landing page", () => {
 //     var(--display), and pinning a font stack would be an equality, not a bound.
 //   - It covers the elements that stack above the button and no others, and the
 //     properties in the table below and no others.
-//   - The button's border is invisible in two spellings, both measured. jsdom
-//     reports `medium`, which is 16px, for a width nobody declared, so a width
-//     of 16px or less cannot be told from an absent one
-//     (border-bottom-width: 1rem takes the button from 49px to 63px tall); and
-//     it cannot parse a shorthand carrying var(), which is how this button's
-//     own border is written, so a border set the same way is equally invisible
-//     (border: 3rem solid var(--line) takes it to 141px). Everywhere else the
-//     bound is on the effective border - the width, or zero where the style is
-//     none - which is exact, because a width declared without a style occupies
-//     no space in a browser either (measured: border-top-width: 3rem on the
-//     hero leaves the button where it is).
-//   - Six properties that reach these elements are not bounded at all.
-//     font-weight and word-spacing were measured not to move the button here -
+//   - A border shorthand carrying var() is invisible on any element. This is
+//     the house idiom for every border in globals.css: jsdom collapses it to
+//     style `none` and width 16px, exactly like no border. It can therefore add
+//     up to the declared width per edge to the stack without failing a bound;
+//     a raw-width ceiling of 16px cannot distinguish that collapse either.
+//     On a budgeted edge, a border without var() is caught: both
+//     `border-top: 3rem solid #8a8479` and the currentColor spelling resolve to
+//     solid and 48px. A width without a style occupies no browser space
+//     (border-top-width: 3rem alone on the hero leaves the clearing height at
+//     572px). The button already has a browser-visible style through var(), so
+//     its raw width-only edits at or below 16px remain invisible too
+//     (border-bottom-width: 1rem takes it from 49px to 63px tall).
+//   - font-weight and word-spacing are not bounded and were measured not to
+//     move the button here -
 //     Georgia has no 900 weight and the headline's wrap is measure-bound - so
 //     bounding them would only manufacture a red for a change that renders
 //     identically. white-space and text-wrap have values that could matter and
 //     an ordering this guard cannot establish by measurement. display and
 //     font-family would each have to be pinned as an equality, which is the
 //     thing this table exists not to be.
+//   - Dimensions remain unbounded outside their listed element/property pairs:
+//     height and min-height on page, hero and form, and height on button;
+//     border-left and border-right on page, hero, form and button; width on
+//     page, hero, form and button, and max-width on page, form and button.
+//     min-width, max-height, margin-left/right and padding-left/right are not
+//     bounded anywhere, nor is box-sizing outside the button. Logical sizing
+//     and spacing aliases are only covered where jsdom resolves them into a
+//     listed physical property. Positioning (position, inset/top/right/bottom/
+//     left, transform, translate), grid/flex sizing and placement, gap,
+//     align-content/items/self, justify-content/items/self, overflow,
+//     writing-mode and generated content are also unbounded. These can change
+//     placement or wrapping without violating the table; re-measure in a
+//     browser when changing them.
 //   - It cannot evaluate a media, supports or container condition; those are
 //     pinned as declarations instead. A @layer block is exempt, because an
 //     unlayered declaration always beats a layered one and nothing here is
@@ -129,19 +143,27 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["eyebrow", "padding-bottom", "atMost", 0, 0],
   ["eyebrow", "border-top", "atMost", 0, 0],
   ["eyebrow", "border-bottom", "atMost", 0, 0],
+  ["eyebrow", "border-left", "atMost", 0, 0],
+  ["eyebrow", "border-right", "atMost", 0, 0],
+  ["eyebrow", "height", "atMost", 17.28, 17.28],
+  ["eyebrow", "min-height", "atMost", 17.28, 17.28],
   ["eyebrow", "font-size", "atMost", 11.52, 11.52],
   ["eyebrow", "line-height", "atMost", 17.28, 17.28],
   ["eyebrow", "letter-spacing", "atMost", 0.2304, 0.2304],
   ["eyebrow", "text-transform", "atMost", 2, 2],
   ["eyebrow", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["eyebrow", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-  // The headline: three lines at every width, and every term that decides it.
+  // The headline: the measured line box and the terms bounded for wrapping.
   ["h1", "margin-top", "atMost", 0, 0],
   ["h1", "margin-bottom", "atMost", 16, 16],
   ["h1", "padding-top", "atMost", 0, 0],
   ["h1", "padding-bottom", "atMost", 0, 0],
   ["h1", "border-top", "atMost", 0, 0],
   ["h1", "border-bottom", "atMost", 0, 0],
+  ["h1", "border-left", "atMost", 0, 0],
+  ["h1", "border-right", "atMost", 0, 0],
+  ["h1", "height", "atMost", 302.4, 176.4],
+  ["h1", "min-height", "atMost", 302.4, 176.4],
   ["h1", "font-size", "atMost", 96, 56],
   ["h1", "line-height", "atMost", 100.8, 58.8],
   ["h1", "letter-spacing", "atMost", -4.32, -2.52],
@@ -155,6 +177,10 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["lede", "padding-bottom", "atMost", 0, 0],
   ["lede", "border-top", "atMost", 0, 0],
   ["lede", "border-bottom", "atMost", 0, 0],
+  ["lede", "border-left", "atMost", 0, 0],
+  ["lede", "border-right", "atMost", 0, 0],
+  ["lede", "height", "atMost", 84, 120],
+  ["lede", "min-height", "atMost", 84, 120],
   ["lede", "font-size", "atMost", 28, 20],
   ["lede", "line-height", "atMost", 42, 30],
   ["lede", "letter-spacing", "atMost", 0, 0],
@@ -202,7 +228,12 @@ const KEYWORD_RANKS: Record<string, Record<string, number>> = {
 };
 
 // The synthetic terms above, and the border styles that occupy no space.
-const EFFECTIVE_BORDERS: Record<string, string> = { "border-top": "border-top", "border-bottom": "border-bottom" };
+const EFFECTIVE_BORDERS: Record<string, string> = {
+  "border-top": "border-top",
+  "border-bottom": "border-bottom",
+  "border-left": "border-left",
+  "border-right": "border-right",
+};
 const NO_BORDER = new Set(["none", "hidden", ""]);
 
 const BASE_WIDTH = 1440;
