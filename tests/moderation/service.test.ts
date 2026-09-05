@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CalibrationPair } from "@/lib/calibration/statistics";
+import {
+  MINIMUM_CALIBRATION_SAMPLE_SIZE,
+  type CalibrationPair,
+} from "@/lib/calibration/statistics";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -61,6 +64,31 @@ describe("account moderation service", () => {
       service.openAccountAudit(moderator(), openAuditInput()),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
     expect(store.lastOpenInput).toBeUndefined();
+  });
+
+  it("holds both cohorts to the shared calibration sample-size floor", async () => {
+    const belowFloor = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE - 1, 20_000),
+    });
+
+    await expect(
+      new AccountModerationService(belowFloor).openAccountAudit(moderator(), openAuditInput()),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
+    expect(belowFloor.lastOpenInput).toBeUndefined();
+
+    const atFloor = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+      outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+    });
+
+    const audit = await new AccountModerationService(atFloor).openAccountAudit(moderator(), openAuditInput());
+
+    expect(audit.state).toBe("OPEN");
+    expect(atFloor.lastOpenInput?.cohort.comparison).toMatchObject({
+      selfWork: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE },
+      outsider: { count: MINIMUM_CALIBRATION_SAMPLE_SIZE },
+    });
   });
 
   it("requires a moderator before reading or changing account-moderation state", async () => {

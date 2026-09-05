@@ -1,3 +1,6 @@
+/** The per-cohort pair count an account audit needs before its comparison can be trusted. */
+export const MINIMUM_CALIBRATION_SAMPLE_SIZE = 10;
+
 export type CalibrationPair = {
   githubRepositoryId: number;
   githubIssueId: number;
