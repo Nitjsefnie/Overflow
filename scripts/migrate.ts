@@ -8,9 +8,10 @@ const migrationsDirectory = path.resolve(
   "../db/migrations",
 );
 
-export async function runMigrations(): Promise<void> {
+export async function runMigrations(options: { upTo?: string } = {}): Promise<void> {
   const migrationNames = (await readdir(migrationsDirectory))
     .filter((name) => /^\d+_.+\.sql$/.test(name))
+    .filter((name) => options.upTo === undefined || name <= options.upTo)
     .sort();
 
   await withTransaction(async (sql) => {

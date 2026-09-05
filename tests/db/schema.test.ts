@@ -103,6 +103,60 @@ describe("initial PostgreSQL materialization", () => {
     ].map((name) => ({ name, count: 1 })));
   });
 
+  it("backfills legacy unwritable closures before enforcing the kind/pull-request constraint", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    upgradeDatabaseUrl.pathname = "/overflow_upgrade_test";
+    await sql`create database overflow_upgrade_test`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      // Apply every predecessor, including API tokens, before testing the closure migration upgrade.
+      await runMigrations({ upTo: "011_api_tokens.sql" });
+      const [applied] = await upgradeSql`
+        select count(*)::integer as count, max(name) as latest from schema_migrations
+      `;
+      expect(applied).toEqual({ count: 11, latest: "011_api_tokens.sql" });
+
+      const pullRequest = await insertPullRequest(upgradeSql);
+      const reason = "Legacy closure with a pull request reference.";
+      const [legacy] = await upgradeSql<{ id: string; pull_request_id: string }[]>`
+        insert into unwritable_closures (issue_id, pull_request_id, reason)
+        values (${pullRequest.issueId}, ${pullRequest.id}, ${reason})
+        returning id, pull_request_id
+      `;
+      expect(legacy.pull_request_id).toBe(pullRequest.id);
+
+      await expect(runMigrations()).resolves.toBeUndefined();
+      const readClosure = () => upgradeSql`
+        select id, issue_id, reason, kind::text, pull_request_id
+        from unwritable_closures where id = ${legacy.id}
+      `;
+      const expected = [{
+        id: legacy.id,
+        issue_id: pullRequest.issueId,
+        reason,
+        kind: "NO_CLOSING_PULL_REQUEST",
+        pull_request_id: null,
+      }];
+      await expect(readClosure()).resolves.toEqual(expected);
+      await expect(upgradeSql`
+        select conname from pg_constraint
+        where conrelid = 'unwritable_closures'::regclass
+          and conname = 'unwritable_closures_kind_pull_request_check'
+      `).resolves.toEqual([{ conname: "unwritable_closures_kind_pull_request_check" }]);
+
+      await runMigrations();
+      await expect(readClosure()).resolves.toEqual(expected);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it.each([
     { kind: "SETTLEMENT_EVIDENCE_REJECTED", hasPullRequest: false },
     { kind: "NO_CLOSING_PULL_REQUEST", hasPullRequest: true },
