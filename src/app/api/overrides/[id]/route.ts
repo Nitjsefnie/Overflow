@@ -13,6 +13,7 @@ import {
   type SettlementOverrideDecisionInput,
   type SettlementOverrideRequest,
 } from "@/lib/overrides/service";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 const decisionSchema = z.discriminatedUnion("action", [
   z
@@ -50,6 +51,11 @@ export function createSettlementOverridePatchHandler(
     request: Request,
     context: SettlementOverrideDecisionContext,
   ): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;

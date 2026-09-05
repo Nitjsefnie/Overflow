@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 const { productionAuth, productionRole } = vi.hoisted(() => ({
   productionAuth: vi.fn(),
@@ -16,12 +17,20 @@ import {
   PATCH as productionAuditPatch,
   createModerationAuditPatchHandler,
 } from "@/app/api/moderation/[id]/route";
-import { ModerationServiceError, type AccountAudit, type RecalibrationClosure } from "@/lib/moderation/service";
+import { createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
+import {
+  ModerationServiceError,
+  type AccountAudit,
+  type ModeratorRoleChange,
+  type RecalibrationClosure,
+} from "@/lib/moderation/service";
 
 const moderatorSession = { user: { id: "00000000-0000-4000-8000-000000000001", role: "MODERATOR" as const } };
 const memberSession = { user: { id: "00000000-0000-4000-8000-000000000002", role: "MEMBER" as const } };
 const targetAccountId = "00000000-0000-4000-8000-000000000003";
 const auditId = "00000000-0000-4000-8000-000000000004";
+
+useTrustedOrigin();
 
 describe("account moderation API", () => {
   it("revokes an already-issued moderator session immediately after the database role is demoted", async () => {
@@ -206,13 +215,193 @@ describe("account moderation API", () => {
   });
 });
 
-function jsonRequest(body: unknown, method = "POST"): Request {
+describe("moderation mutations reachable only from the deployment's own origin", () => {
+  const auditContext = () => ({ params: Promise.resolve({ id: auditId }) });
+
+  it("refuses a foreign-origin audit opening before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationPostHandler(dependencies)(
+      foreignTextRequest(openPayload()),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin audit opening that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationPostHandler(dependencies)(
+      trustedTextRequest(openPayload()),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a foreign-origin recalibration closure before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationClosePatchHandler(dependencies)(
+      foreignTextRequest({ targetAccountId, plan: "Forged." }, "PATCH"),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin recalibration closure that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationClosePatchHandler(dependencies)(
+      trustedTextRequest({ targetAccountId, plan: "Wrong type." }, "PATCH"),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a foreign-origin audit decision before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationAuditPatchHandler(dependencies)(
+      foreignTextRequest({ action: "dismiss", reason: "Forged." }, "PATCH"),
+      auditContext(),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin audit decision that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationAuditPatchHandler(dependencies)(
+      trustedTextRequest({ action: "dismiss", reason: "Wrong type." }, "PATCH"),
+      auditContext(),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a foreign-origin moderator role change before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModeratorPostHandler(dependencies)(
+      foreignTextRequest({ targetAccountId, moderator: true }),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin moderator role change that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModeratorPostHandler(dependencies)(
+      trustedTextRequest({ targetAccountId, moderator: true }),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  // A server that cannot name its own origin cannot tell a forged request from
+  // a real one, so it refuses both rather than trusting whatever arrives.
+  it("refuses a moderator role change when APP_URL is unset, without any database work", async () => {
+    vi.stubEnv("APP_URL", undefined);
+    const dependencies = unusedDependencies();
+
+    const response = await createModeratorPostHandler(dependencies)(
+      jsonRequest({ targetAccountId, moderator: true }),
+    );
+
+    await expectRejection(
+      response,
+      500,
+      "MISCONFIGURED",
+      "The server is not configured to accept this request.",
+    );
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("still grants a moderator role change carrying the trusted origin", async () => {
+    const setModeratorRole = vi.fn().mockResolvedValue(roleChange);
+    const handler = createModeratorPostHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => ({ listModerators: async () => [], setModeratorRole }),
+    });
+
+    const response = await handler(jsonRequest({ targetAccountId, moderator: true }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ change: roleChange });
+    expect(setModeratorRole).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+      true,
+    );
+  });
+});
+
+const roleChange: ModeratorRoleChange = {
+  targetAccountId,
+  targetGitHubLogin: "promoted-account",
+  role: "MODERATOR",
+  actorId: moderatorSession.user.id,
+  changedAt: "2026-09-05T10:00:00.000Z",
+};
+
+function jsonRequest(body: unknown, method = "POST", headers: Record<string, string> = {}): Request {
   return new Request("https://overflow.example/api/moderation", {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { origin: trustedOrigin, "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
+
+function foreignTextRequest(body: unknown, method = "POST"): Request {
+  return jsonRequest(body, method, { origin: foreignOrigin, "content-type": "text/plain" });
+}
+
+function trustedTextRequest(body: unknown, method = "POST"): Request {
+  return jsonRequest(body, method, { "content-type": "text/plain" });
+}
+
+/**
+ * Dependencies a refused request must never reach. Asserting zero calls is the
+ * point of every rejection test here: a forged request costs no session read,
+ * no role lookup and no database work.
+ */
+function unusedDependencies() {
+  return { getSession: vi.fn(), getCurrentRole: vi.fn(), createService: vi.fn() };
+}
+
+function expectNoDependencyCall(dependencies: ReturnType<typeof unusedDependencies>): void {
+  expect(dependencies.getSession).not.toHaveBeenCalled();
+  expect(dependencies.getCurrentRole).not.toHaveBeenCalled();
+  expect(dependencies.createService).not.toHaveBeenCalled();
+}
+
+async function expectRejection(
+  response: Response,
+  status: number,
+  code: string,
+  message: string,
+): Promise<void> {
+  expect(response.status).toBe(status);
+  await expect(response.json()).resolves.toEqual({ error: { code, message } });
+}
+
+const foreignOriginRejection = [403, "FORBIDDEN", "The request origin is not allowed."] as const;
+const unsupportedMediaTypeRejection = [
+  415,
+  "UNSUPPORTED_MEDIA_TYPE",
+  "The request must use the application/json content type.",
+] as const;
 
 function openPayload() {
   return {

@@ -1,5 +1,6 @@
 import type { UserRole } from "@/lib/db/types";
 import { mintApiToken } from "@/lib/security/api-token";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 /**
@@ -33,9 +34,15 @@ export type ApiTokenPostHandler = (request: Request) => Promise<Response>;
 export function createApiTokenPostHandler(
   dependencies: ApiTokenRouteDependencies,
 ): ApiTokenPostHandler {
-  // The request is deliberately not a parameter of the implementation: a
-  // handler that cannot read a header cannot authenticate a bearer credential.
-  return async function postApiToken(): Promise<Response> {
+  // The request reaches the origin guard and nothing else: no other line of
+  // this handler reads a header, so the route still cannot authenticate a
+  // bearer credential and an API token still cannot mint its successor.
+  return async function postApiToken(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     let session: ApiTokenRouteSession | null;
     try {
       session = await dependencies.getSession();
