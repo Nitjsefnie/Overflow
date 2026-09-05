@@ -283,7 +283,7 @@ function gateway(): ReconciliationGateway {
     [2, [mergedPullRequest({ id: declinedPullRequestId, number: 12 })]],
   ]);
   const reviews: GitHubPullRequestReview[] = [
-    { id: 8_400_001, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
+    { id: 8_400_001, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
   ];
   return {
     listIssues: async () => issues,

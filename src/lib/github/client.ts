@@ -7,6 +7,7 @@ import type {
   GitHubIssueHistoryEvent,
   GitHubPullRequest,
   GitHubPullRequestReview,
+  GitHubPullRequestReviewDismissal,
   GitHubRepository,
   GitHubRepositoryReference,
   GitHubWebhook,
@@ -99,10 +100,21 @@ export class GitHubGateway {
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
   ): Promise<GitHubPullRequestReview[]> {
-    const nodes = await collectCursorPages((cursor) =>
-      this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor),
-    );
-    return nodes.map(toGitHubPullRequestReview);
+    const [reviewNodes, dismissalNodes] = await Promise.all([
+      collectCursorPages((cursor) => this.getPullRequestReviewsPage(repository, pullRequestNumber, cursor)),
+      collectCursorPages((cursor) => this.getPullRequestReviewDismissalsPage(repository, pullRequestNumber, cursor)),
+    ]);
+    const dismissals = new Map<number, GitHubPullRequestReviewDismissal>();
+    for (const node of dismissalNodes) {
+      if (node.__typename !== "ReviewDismissedEvent" || node.review?.databaseId == null) {
+        continue;
+      }
+      dismissals.set(node.review.databaseId, {
+        at: node.createdAt,
+        previousState: node.previousReviewState ?? null,
+      });
+    }
+    return reviewNodes.map((node) => toGitHubPullRequestReview(node, dismissals.get(node.databaseId ?? -1) ?? null));
   }
 
   public async createWebhook(
@@ -318,6 +330,28 @@ export class GitHubGateway {
     return page;
   }
 
+  private async getPullRequestReviewDismissalsPage(
+    repository: GitHubRepositoryReference,
+    pullRequestNumber: number,
+    cursor: string | null,
+  ): Promise<GitHubGraphqlPage<GitHubGraphqlReviewDismissedEventNode>> {
+    const data = await this.graphql.query<{
+      repository: {
+        pullRequest: { timelineItems: GitHubGraphqlPage<GitHubGraphqlReviewDismissedEventNode> } | null;
+      } | null;
+    }>(pullRequestReviewDismissalsQuery, {
+      owner: repository.owner,
+      name: repository.name,
+      pullRequestNumber,
+      cursor,
+    });
+    const page = data.repository?.pullRequest?.timelineItems;
+    if (page === undefined) {
+      throw new Error("GitHub GraphQL response was invalid.");
+    }
+    return page;
+  }
+
   private async listLabelNames(repository: GitHubRepositoryReference): Promise<Set<string>> {
     const labels = new Set<string>();
     let page = 1;
@@ -455,6 +489,13 @@ type GitHubGraphqlPullRequestReviewNode = {
   submittedAt: string | null;
 };
 
+type GitHubGraphqlReviewDismissedEventNode = {
+  __typename: "ReviewDismissedEvent" | string;
+  createdAt: string;
+  previousReviewState: GitHubPullRequestReview["state"] | null;
+  review: { databaseId: number | null } | null;
+};
+
 const issuesQuery = `
   query RepositoryIssues($owner: String!, $name: String!, $cursor: String) {
     repository(owner: $owner, name: $name) {
@@ -572,6 +613,22 @@ const pullRequestReviewsQuery = `
   }
 `;
 
+const pullRequestReviewDismissalsQuery = `
+  query PullRequestReviewDismissals($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pullRequestNumber) {
+        timelineItems(first: 100, after: $cursor, itemTypes: [REVIEW_DISMISSED_EVENT]) {
+          nodes {
+            __typename
+            ... on ReviewDismissedEvent { createdAt previousReviewState review { databaseId } }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
 function toGitHubIssue(
   node: GitHubGraphqlIssueNode,
   labels: string[],
@@ -681,6 +738,7 @@ function compareIssueHistoryItems(
 
 function toGitHubPullRequestReview(
   node: GitHubGraphqlPullRequestReviewNode,
+  dismissal: GitHubPullRequestReviewDismissal | null,
 ): GitHubPullRequestReview {
   if (node.databaseId === null) {
     throw new Error("GitHub GraphQL response was invalid.");
@@ -690,6 +748,7 @@ function toGitHubPullRequestReview(
     id: node.databaseId,
     state: node.state,
     submittedAt: node.submittedAt,
+    dismissal,
   };
 }
 
