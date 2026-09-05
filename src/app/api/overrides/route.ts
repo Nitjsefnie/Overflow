@@ -6,15 +6,26 @@ import {
   SettlementOverrideError,
   SettlementOverrideService,
   type SettlementOverrideRequest,
+  type SettlementOverrideTarget,
 } from "@/lib/overrides/service";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
-const overrideRequestSchema = z
-  .object({
-    settlementId: z.string().uuid(),
-    reason: z.string().trim().min(1),
-  })
-  .strict();
+// Strict on both sides of the union, so a body naming a settlement and a
+// calibration at once matches neither: one request corrects one priced outcome.
+const overrideRequestSchema = z.union([
+  z
+    .object({
+      settlementId: z.string().uuid(),
+      reason: z.string().trim().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      calibrationId: z.string().uuid(),
+      reason: z.string().trim().min(1),
+    })
+    .strict(),
+]);
 
 export type SettlementOverrideRouteSession = {
   user: { id: string; role?: UserRole };
@@ -23,7 +34,7 @@ export type SettlementOverrideRouteSession = {
 export type SettlementOverrideRequestService = {
   requestOverride(
     requester: { id: string },
-    input: { settlementId: string; reason: string },
+    input: { target: SettlementOverrideTarget; reason: string },
   ): Promise<SettlementOverrideRequest>;
 };
 
@@ -113,10 +124,18 @@ export function errorResponse(status: number, code: string, message: string): Re
 
 async function parseOverrideRequest(
   request: Request,
-): Promise<{ settlementId: string; reason: string } | null> {
+): Promise<{ target: SettlementOverrideTarget; reason: string } | null> {
   try {
     const parsed = overrideRequestSchema.safeParse(await request.json());
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      return null;
+    }
+    const body = parsed.data;
+    const target: SettlementOverrideTarget =
+      "settlementId" in body
+        ? { kind: "settlement", settlementId: body.settlementId }
+        : { kind: "calibration", calibrationId: body.calibrationId };
+    return { target, reason: body.reason };
   } catch {
     return null;
   }

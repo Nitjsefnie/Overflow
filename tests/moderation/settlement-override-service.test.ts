@@ -40,6 +40,10 @@ function fakeStore(
       calls.push({ method: "listRequestsForSettlement", input: { settlementId, viewerId } });
       return [openRequest];
     },
+    async listRequestsForCalibration(calibrationId, viewerId) {
+      calls.push({ method: "listRequestsForCalibration", input: { calibrationId, viewerId } });
+      return [openRequest];
+    },
     async decideRequest(input) {
       calls.push({ method: "decideRequest", input });
       return { kind: "ok", value: { ...openRequest, state: "GRANTED" } };
@@ -56,7 +60,10 @@ describe("settlement override service", () => {
 
     const created = await service.requestOverride(
       { id: "member-id" },
-      { settlementId: "settlement-id", reason: "  The rationale landed late.  " },
+      {
+        target: { kind: "settlement", settlementId: "  settlement-id  " },
+        reason: "  The rationale landed late.  ",
+      },
     );
 
     expect(created).toEqual(openRequest);
@@ -65,11 +72,52 @@ describe("settlement override service", () => {
         method: "createRequest",
         input: {
           requesterId: "member-id",
-          settlementId: "settlement-id",
+          target: { kind: "settlement", settlementId: "settlement-id" },
           reason: "The rationale landed late.",
         },
       },
     ]);
+  });
+
+  it("records a member's request against their own self-work calibration", async () => {
+    const { store, calls } = fakeStore();
+    const service = new SettlementOverrideService(store);
+
+    const created = await service.requestOverride(
+      { id: "sponsor-id" },
+      {
+        target: { kind: "calibration", calibrationId: "  calibration-id  " },
+        reason: "  The delivered label undercounts my own work.  ",
+      },
+    );
+
+    expect(created).toEqual(openRequest);
+    expect(calls).toEqual([
+      {
+        method: "createRequest",
+        input: {
+          requesterId: "sponsor-id",
+          target: { kind: "calibration", calibrationId: "calibration-id" },
+          reason: "The delivered label undercounts my own work.",
+        },
+      },
+    ]);
+  });
+
+  it("refuses a calibration request that names no calibration", async () => {
+    const { store, calls } = fakeStore();
+    const service = new SettlementOverrideService(store);
+
+    await expect(
+      service.requestOverride(
+        { id: "sponsor-id" },
+        { target: { kind: "calibration", calibrationId: "   " }, reason: "Wrong." },
+      ),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "Calibration identifier is required.",
+    });
+    expect(calls).toEqual([]);
   });
 
   it("refuses a request without a reason", async () => {
@@ -77,7 +125,10 @@ describe("settlement override service", () => {
     const service = new SettlementOverrideService(store);
 
     await expect(
-      service.requestOverride({ id: "member-id" }, { settlementId: "settlement-id", reason: "   " }),
+      service.requestOverride(
+        { id: "member-id" },
+        { target: { kind: "settlement", settlementId: "settlement-id" }, reason: "   " },
+      ),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(calls).toEqual([]);
   });
@@ -91,8 +142,17 @@ describe("settlement override service", () => {
     const service = new SettlementOverrideService(store);
 
     await expect(
-      service.requestOverride({ id: "stranger-id" }, { settlementId: "settlement-id", reason: "Wrong." }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      service.requestOverride(
+        { id: "stranger-id" },
+        { target: { kind: "settlement", settlementId: "settlement-id" }, reason: "Wrong." },
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("settlement") });
+    await expect(
+      service.requestOverride(
+        { id: "stranger-id" },
+        { target: { kind: "calibration", calibrationId: "calibration-id" }, reason: "Wrong." },
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("calibration") });
   });
 
   it("reports a second open request on the same settlement as a conflict", async () => {
@@ -104,7 +164,10 @@ describe("settlement override service", () => {
     const service = new SettlementOverrideService(store);
 
     await expect(
-      service.requestOverride({ id: "member-id" }, { settlementId: "settlement-id", reason: "Wrong." }),
+      service.requestOverride(
+        { id: "member-id" },
+        { target: { kind: "settlement", settlementId: "settlement-id" }, reason: "Wrong." },
+      ),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
@@ -146,6 +209,21 @@ describe("settlement override service", () => {
       {
         method: "listRequestsForSettlement",
         input: { settlementId: "settlement-id", viewerId: "member-id" },
+      },
+    ]);
+  });
+
+  it("lists a calibration's requests for the account it belongs to", async () => {
+    const { store, calls } = fakeStore();
+    const service = new SettlementOverrideService(store);
+
+    await expect(
+      service.listRequestsForCalibration({ id: "sponsor-id" }, "  calibration-id  "),
+    ).resolves.toEqual([openRequest]);
+    expect(calls).toEqual([
+      {
+        method: "listRequestsForCalibration",
+        input: { calibrationId: "calibration-id", viewerId: "sponsor-id" },
       },
     ]);
   });
@@ -259,7 +337,10 @@ describe("settlement override service", () => {
     const service = new SettlementOverrideService(fakeStore().store);
 
     await expect(
-      service.requestOverride({ id: "member-id" }, { settlementId: "settlement-id", reason: "" }),
+      service.requestOverride(
+        { id: "member-id" },
+        { target: { kind: "settlement", settlementId: "settlement-id" }, reason: "" },
+      ),
     ).rejects.toBeInstanceOf(SettlementOverrideError);
   });
 });

@@ -21,6 +21,7 @@ import { SettlementOverrideError, type SettlementOverrideRequest } from "@/lib/o
 const memberId = "00000000-0000-4000-8000-000000000001";
 const moderatorId = "00000000-0000-4000-8000-000000000002";
 const settlementId = "00000000-0000-4000-8000-000000000003";
+const calibrationId = "00000000-0000-4000-8000-000000000006";
 const requestId = "00000000-0000-4000-8000-000000000004";
 
 const recorded: SettlementOverrideRequest = {
@@ -58,8 +59,57 @@ describe("settlement override request API", () => {
     await expect(response.json()).resolves.toEqual({ request: recorded });
     expect(requestOverride).toHaveBeenCalledWith(
       { id: memberId },
-      { settlementId, reason: "The rationale comment was late." },
+      {
+        target: { kind: "settlement", settlementId },
+        reason: "The rationale comment was late.",
+      },
     );
+  });
+
+  it("records a member's request against a self-work calibration", async () => {
+    const requestOverride = vi.fn().mockResolvedValue(recorded);
+    const handler = createSettlementOverridePostHandler({
+      getSession: async () => ({ user: { id: memberId } }),
+      getCurrentRole: async () => "MEMBER",
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(
+      jsonRequest({ calibrationId, reason: "The delivered label undercounts my own work." }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ request: recorded });
+    expect(requestOverride).toHaveBeenCalledWith(
+      { id: memberId },
+      {
+        target: { kind: "calibration", calibrationId },
+        reason: "The delivered label undercounts my own work.",
+      },
+    );
+  });
+
+  // A request corrects exactly one priced outcome, so a body that names both
+  // rows or neither has no target to carry and never reaches the service.
+  it("rejects a body naming both a settlement and a calibration, or neither", async () => {
+    const requestOverride = vi.fn();
+    const handler = createSettlementOverridePostHandler({
+      getSession: async () => ({ user: { id: memberId } }),
+      getCurrentRole: async () => "MEMBER",
+      createService: async () => ({ requestOverride }),
+    });
+
+    for (const payload of [
+      { settlementId, calibrationId, reason: "Both at once." },
+      { reason: "Neither one." },
+    ]) {
+      const response = await handler(jsonRequest(payload));
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "INVALID_REQUEST", message: "Invalid settlement correction request." },
+      });
+    }
+    expect(requestOverride).not.toHaveBeenCalled();
   });
 
   it("refuses an unauthenticated request before parsing it", async () => {
