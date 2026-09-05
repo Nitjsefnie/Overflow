@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_RECONCILIATION_COOLDOWN_SECONDS,
   reconcileRepository,
   type ReconciliationDeltas,
   type ReconciliationDependencies,
@@ -12,6 +13,40 @@ import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("reconcileRepository", () => {
+  it.each([120, 0, null])("records only rate-limit cooldowns with retryAfterSeconds=%s from the injected clock", async (retryAfterSeconds) => {
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const upstream of [new Error("schema failure"), new GitHubApiError(403, false, retryAfterSeconds), new GitHubApiError(403, true, retryAfterSeconds)]) {
+        const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
+        await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+        const writes = vi.mocked(dependencies.store.setReconciliationCooldown).mock.calls;
+        if (upstream instanceof GitHubApiError && upstream.rateLimited) {
+          expect(writes).toHaveLength(1);
+          expect(writes).toEqual([["repository", new Date(now().getTime() +
+            (retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS) * 1000)]]);
+        } else {
+          expect(writes).toEqual([]);
+        }
+      }
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it.each([true, false])("clears an expired cooldown after success with active=%s", async (active) => {
+    const dependencies = reconciliationDependencies();
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    vi.mocked(dependencies.store.getReconciliationCooldown).mockResolvedValue(now());
+    const repository = await dependencies.store.getRepository("repository");
+    repository!.active = active;
+    await reconcileRepository({ ...dependencies, now }, "repository");
+    expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
+    expect(dependencies.store.beginRun).toHaveBeenCalledOnce();
+    expect(dependencies.github.listIssues).toHaveBeenCalledTimes(active ? 1 : 0);
+  });
+
   it("bounds in-flight gateway calls for many merged closing pull requests", async () => {
     const pullRequestCount = 24;
     const issues = Array.from({ length: pullRequestCount }, (_, index) => ({
@@ -490,6 +525,8 @@ function reconciliationDependencies(
   };
   const failRun = vi.fn().mockResolvedValue(undefined);
   const store = {
+    getReconciliationCooldown: vi.fn().mockResolvedValue(null),
+    setReconciliationCooldown: vi.fn().mockResolvedValue(undefined),
     withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),
     getRepository: vi.fn().mockResolvedValue({
       id: "repository",

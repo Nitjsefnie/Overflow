@@ -7,17 +7,26 @@ import {
 } from "@/lib/fold/sweep";
 
 describe("scheduled reconciliation sweep", () => {
+  it("counts a cooldown discovered under the repository lock as skipped", async () => {
+    await expect(sweepReconciliations({
+      listActiveRepositoryIds: async () => ["repo-a"],
+      getReconciliationCooldown: async () => null,
+      reconcile: async () => ({ skipped: true }),
+    })).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+  });
+
   it("reconciles every active repository", async () => {
     const reconciled: string[] = [];
 
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+        getReconciliationCooldown: async () => null,
         reconcile: async (repositoryId) => {
           reconciled.push(repositoryId);
         },
       }),
-    ).resolves.toEqual({ attempted: 3, reconciled: 3, failed: 0 });
+    ).resolves.toEqual({ attempted: 3, reconciled: 3, failed: 0, skipped: 0 });
 
     expect(reconciled).toEqual(["repo-a", "repo-b", "repo-c"]);
   });
@@ -29,6 +38,7 @@ describe("scheduled reconciliation sweep", () => {
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+        getReconciliationCooldown: async () => null,
         reconcile: async (repositoryId) => {
           if (repositoryId === "repo-b") {
             throw new Error("GitHub reconciliation failed");
@@ -39,7 +49,7 @@ describe("scheduled reconciliation sweep", () => {
           failures.push(repositoryId);
         },
       }),
-    ).resolves.toEqual({ attempted: 3, reconciled: 2, failed: 1 });
+    ).resolves.toEqual({ attempted: 3, reconciled: 2, failed: 1, skipped: 0 });
 
     expect(reconciled).toEqual(["repo-a", "repo-c"]);
     expect(failures).toEqual(["repo-b"]);
@@ -51,6 +61,7 @@ describe("scheduled reconciliation sweep", () => {
 
     await sweepReconciliations({
       listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
+      getReconciliationCooldown: async () => null,
       reconcile: async () => {
         inFlight += 1;
         peak = Math.max(peak, inFlight);
@@ -66,11 +77,12 @@ describe("scheduled reconciliation sweep", () => {
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => [],
+        getReconciliationCooldown: async () => null,
         reconcile: async () => {
           throw new Error("should not be reconciled");
         },
       }),
-    ).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0 });
+    ).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 0 });
   });
 
   it("sweeps once on start and again on every interval", async () => {

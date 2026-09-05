@@ -1,9 +1,14 @@
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
+import { GitHubApiError } from "@/lib/github/errors";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
 
 // Protect GitHub's secondary concurrency limit; each worker makes one request at a time.
 const reconciliationConcurrency = 4;
+
+// A large repository can exhaust an hourly GitHub budget; without retry guidance,
+// allow a full hour for it to recover before spending points on another full fold.
+export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
 
 export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
 
@@ -25,6 +30,8 @@ export type ReconciliationDeltas = {
 export type ReconciliationStore = {
   withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
+  getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
+  setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
   findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]>;
   beginRun(repositoryId: string): Promise<string>;
@@ -36,15 +43,15 @@ export type ReconciliationStore = {
 export type ReconciliationDependencies = {
   store: ReconciliationStore;
   github: ReconciliationGateway;
+  now?: () => Date;
 };
 
 export type ReconciliationSummary = ReconciliationDeltas & {
   repositoryId: string;
-  runId: string;
   added: number;
   changed: number;
   removed: number;
-};
+} & ({ skipped: false; runId: string } | { skipped: true; runId: null });
 
 export async function reconcileRepository(
   dependencies: ReconciliationDependencies,
@@ -65,13 +72,22 @@ async function reconcileRepositoryWhileCoordinated(
     throw new Error("Repository was not found.");
   }
 
+  const now = dependencies.now ?? (() => new Date());
+  const notBefore = await dependencies.store.getReconciliationCooldown(repositoryId);
+  // Read under the repository lock so a queued webhook sees the previous run's cooldown.
+  if (notBefore !== null && notBefore.getTime() > now().getTime()) {
+    return { repositoryId, runId: null, skipped: true, adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
+  }
+
   const runId = await dependencies.store.beginRun(repositoryId);
   try {
     if (!repository.active) {
       await dependencies.store.completeRun(runId);
+      await dependencies.store.setReconciliationCooldown(repositoryId, null);
       return {
         repositoryId,
         runId,
+        skipped: false,
         adds: 0,
         changes: 0,
         removals: 0,
@@ -114,10 +130,12 @@ async function reconcileRepositoryWhileCoordinated(
     };
     const fold = foldRepository(snapshot);
     const deltas = await dependencies.store.materialize({ repositoryId, runId, fold });
+    await dependencies.store.setReconciliationCooldown(repositoryId, null);
 
     return {
       repositoryId,
       runId,
+      skipped: false,
       ...deltas,
       added: deltas.adds,
       changed: deltas.changes,
@@ -130,6 +148,10 @@ async function reconcileRepositoryWhileCoordinated(
     // a caller that reports the failure reports what actually went wrong.
     console.error(`Reconciliation of repository ${repositoryId} failed.`, error);
     await dependencies.store.failRun(runId, "Reconciliation failed.");
+    if (error instanceof GitHubApiError && error.rateLimited) {
+      const seconds = error.retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS;
+      await dependencies.store.setReconciliationCooldown(repositoryId, new Date(now().getTime() + seconds * 1000));
+    }
     throw new Error("Unable to reconcile repository.", { cause: error });
   }
 }

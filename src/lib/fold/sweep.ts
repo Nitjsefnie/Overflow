@@ -1,6 +1,8 @@
 export type ReconciliationSweepDependencies = {
   listActiveRepositoryIds(): Promise<string[]>;
-  reconcile(repositoryId: string): Promise<unknown>;
+  getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
+  reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
+  now?: () => Date;
   onFailure?(repositoryId: string, error: unknown): void;
 };
 
@@ -8,6 +10,7 @@ export type ReconciliationSweepSummary = {
   attempted: number;
   reconciled: number;
   failed: number;
+  skipped: number;
 };
 
 export type ReconciliationSweepSchedule = {
@@ -54,10 +57,22 @@ export async function sweepReconciliations(
   const repositoryIds = await dependencies.listActiveRepositoryIds();
   let reconciled = 0;
   let failed = 0;
+  let skipped = 0;
+  const now = dependencies.now ?? (() => new Date());
 
   for (const repositoryId of repositoryIds) {
     try {
-      await dependencies.reconcile(repositoryId);
+      const notBefore = await dependencies.getReconciliationCooldown(repositoryId);
+      if (notBefore !== null && notBefore.getTime() > now().getTime()) {
+        skipped += 1;
+        continue;
+      }
+      const result = await dependencies.reconcile(repositoryId);
+      // Another delivery can set a cooldown between the precheck and acquiring the lock.
+      if (result?.skipped) {
+        skipped += 1;
+        continue;
+      }
       reconciled += 1;
     } catch (error) {
       failed += 1;
@@ -65,7 +80,7 @@ export async function sweepReconciliations(
     }
   }
 
-  return { attempted: repositoryIds.length, reconciled, failed };
+  return { attempted: reconciled + failed, reconciled, failed, skipped };
 }
 
 /**
