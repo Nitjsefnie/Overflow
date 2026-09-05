@@ -823,12 +823,14 @@ describe("audit targeting", () => {
     expect(candidates).toEqual([]);
     const query = captures[0]?.text ?? "";
     expect(query).toMatch(/from users/i);
-    expect(query).toMatch(/self_work_calibrations\.user_id = users\.id/i);
+    expect(query).toMatch(/group by self_work_calibrations\.user_id/i);
+    expect(query).toMatch(/as self_work on self_work\.user_id = users\.id/i);
     expect(query).toMatch(/self_work_calibrations\.actual_points is not null/i);
     expect(query).toMatch(/pull_requests\.proof_sha256 is not null/i);
-    expect(query).toMatch(/settlements\.debtor_id = users\.id/i);
+    expect(query).toMatch(/group by settlements\.debtor_id/i);
+    expect(query).toMatch(/as outsider on outsider\.debtor_id = users\.id/i);
     expect(query).toMatch(/settlements\.creditor_id is not null/i);
-    expect(query).toMatch(/settlements\.creditor_id <> users\.id/i);
+    expect(query).toMatch(/settlements\.creditor_id <> settlements\.debtor_id/i);
     expect(query).toMatch(/settlements\.status = 'SETTLED'/i);
     expect(query).toMatch(/settlements\.settled_points is not null/i);
     expect(query).toMatch(/calibration_audits\.state = 'OPEN'/i);
