@@ -51,6 +51,6 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
 
   return {
     container: started,
-    databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}`,
+    databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}?client_min_messages=warning`,
   };
 }
