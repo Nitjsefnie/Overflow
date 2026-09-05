@@ -31,13 +31,17 @@ export type ModerationRouteSession = {
   user: { id: string; role?: UserRole };
 };
 
-type AuthorizedModerationRouteSession = {
+export type AuthorizedModerationRouteSession = {
   user: { id: string; role: "MODERATOR" };
 };
 
 export type ModerationRouteService = Pick<
   AccountModerationService,
-  "openAccountAudit" | "dismissAccountAudit" | "substantiateAccountAudit" | "closeRecalibration"
+  | "previewCalibrationCohort"
+  | "openAccountAudit"
+  | "dismissAccountAudit"
+  | "substantiateAccountAudit"
+  | "closeRecalibration"
 >;
 
 export type ModerationRouteDependencies = {
@@ -118,7 +122,7 @@ export const PATCH = createModerationClosePatchHandler({
   },
 });
 
-async function getProductionSession(): Promise<ModerationRouteSession | null> {
+export async function getProductionSession(): Promise<ModerationRouteSession | null> {
   const { auth } = await import("@/auth");
   const session = await auth();
   const user = session?.user as { id?: unknown } | undefined;
@@ -128,7 +132,9 @@ async function getProductionSession(): Promise<ModerationRouteSession | null> {
   return { user: { id: user.id } };
 }
 
-async function requiredModeratorSession(
+// The role is re-read from the database rather than trusted from the session,
+// because a session issued before a revocation still carries MODERATOR.
+export async function requiredModeratorSession(
   dependencies: ModerationRouteDependencies,
 ): Promise<AuthorizedModerationRouteSession | Response> {
   let session: ModerationRouteSession | null;
