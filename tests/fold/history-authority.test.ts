@@ -231,6 +231,7 @@ function historySnapshot(): RepositoryFoldSnapshot {
             authorLogin: "owner",
             body: "Owner rationale for delivered/6 after reviewing the landed diff.",
             createdAt: "2026-09-01T11:30:00.000Z",
+            lastEditedAt: null,
           },
         ],
         closingPullRequests: [

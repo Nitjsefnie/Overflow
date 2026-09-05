@@ -65,6 +65,8 @@ export type GitHubIssueComment = {
   authorLogin: string | null;
   body: string;
   createdAt: string;
+  /** GraphQL `IssueComment.lastEditedAt`; null when the body was never edited. */
+  lastEditedAt: string | null;
 };
 
 export type GitHubPullRequest = {

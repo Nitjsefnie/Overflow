@@ -388,6 +388,7 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
 describe("GitHubGateway GraphQL source adapter", () => {
   it("collects paginated immutable issue label, assignment, and owner-comment history", async () => {
     const historyCursors: Array<string | null> = [];
+    const queries: string[] = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
@@ -395,6 +396,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
           query: string;
           variables: { cursor: string | null; issueNumber?: number };
         };
+        queries.push(request.query);
         if (request.query.includes("query RepositoryIssues")) {
           return Response.json({
             data: {
@@ -445,6 +447,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
                       id: "comment-node-1",
                       databaseId: 501,
                       createdAt: "2026-09-01T11:30:00.000Z",
+                      lastEditedAt: "2026-09-01T11:35:00.000Z",
                       author: { login: "owner" },
                       body: "Owner rationale for delivered/6.",
                     },
@@ -486,10 +489,51 @@ describe("GitHubGateway GraphQL source adapter", () => {
           authorLogin: "owner",
           body: "Owner rationale for delivered/6.",
           createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: "2026-09-01T11:35:00.000Z",
         },
       ],
     });
     expect(historyCursors).toEqual(["history-cursor-2"]);
+    for (const query of queries) {
+      expect(query).toMatch(/\.\.\. on IssueComment \{[^}]*lastEditedAt/);
+    }
+  });
+
+  it("preserves null lastEditedAt for an unedited issue comment", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: {
+          repository: {
+            issues: {
+              nodes: [{
+                ...issueNode(101, 1, "Unedited comment"),
+                timelineItems: {
+                  nodes: [{
+                    __typename: "IssueComment",
+                    id: "unedited-comment",
+                    databaseId: 502,
+                    createdAt: "2026-09-01T11:30:00.000Z",
+                    lastEditedAt: null,
+                    author: { login: "owner" },
+                    body: "Owner rationale for delivered/6.",
+                  }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      }),
+    });
+
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issues[0]?.comments[0]).toMatchObject({
+      id: "unedited-comment",
+      lastEditedAt: null,
+    });
   });
 
   it("collects every cursor-paginated issue page from GitHub GraphQL", async () => {

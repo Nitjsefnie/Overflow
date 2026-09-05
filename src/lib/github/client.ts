@@ -442,6 +442,7 @@ type GitHubGraphqlIssueTimelineNode =
       id: string;
       databaseId: number | null;
       createdAt: string;
+      lastEditedAt: string | null;
       author: { login: string } | null;
       body: string;
     };
@@ -484,7 +485,7 @@ const issuesQuery = `
               ... on UnlabeledEvent { id createdAt actor { login } label { name } }
               ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
               ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-              ... on IssueComment { id databaseId createdAt author { login } body }
+              ... on IssueComment { id databaseId createdAt lastEditedAt author { login } body }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -549,7 +550,7 @@ const issueTimelineQuery = `
             ... on UnlabeledEvent { id createdAt actor { login } label { name } }
             ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
             ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-            ... on IssueComment { id databaseId createdAt author { login } body }
+            ... on IssueComment { id databaseId createdAt lastEditedAt author { login } body }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -663,6 +664,7 @@ function toGitHubIssueTimelineItem(
           authorLogin: node.author?.login ?? null,
           body: node.body,
           createdAt: node.createdAt,
+          lastEditedAt: node.lastEditedAt ?? null,
         },
       };
     default:

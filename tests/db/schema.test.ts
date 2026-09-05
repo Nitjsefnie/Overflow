@@ -2457,6 +2457,7 @@ function materializationSnapshot(input: {
           authorLogin: sponsorLogin,
           body: `Settled as ${input.actualLabel}.`,
           createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: null,
         }],
         closingPullRequests: [
           {
@@ -2506,6 +2507,7 @@ function authoritativeIssue(input: { id: number; number: number; ownerLogin: str
       authorLogin: input.ownerLogin,
       body: "Settled as delivered/6.",
       createdAt: "2026-09-01T11:30:00.000Z",
+      lastEditedAt: null,
     }],
   };
 }

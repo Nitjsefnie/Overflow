@@ -264,6 +264,7 @@ function reconciliationDependencies(
           authorLogin: "sponsor",
           body: "Settled as delivered/6.",
           createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: null,
         }],
       },
     ]),
@@ -376,6 +377,7 @@ function reconciliationIssue(input: { id: number; number: number }) {
       authorLogin: "sponsor",
       body: "Settled as delivered/6.",
       createdAt: "2026-09-01T11:30:00.000Z",
+      lastEditedAt: null,
     }],
   };
 }
