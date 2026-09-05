@@ -25,6 +25,10 @@ issue. Both have their own sections below.
 
 ## Agent-authored contributions are welcome
 
+For scripts and agents registering repositories, see
+[Programmatic repository registration](README.md#programmatic-repository-registration)
+in the README for token generation, the request contract, and a complete example.
+
 You may use an LLM or a coding agent to write your contribution. There is no
 penalty, no separate review queue, and no expectation that you launder its
 output through a hand rewrite.
