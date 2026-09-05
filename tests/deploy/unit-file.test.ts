@@ -267,10 +267,16 @@ describe("start command tokens", () => {
 });
 
 describe("Overflow production unit", () => {
-  let source = "";
+  /**
+   * The unit as bytes, not as a decoded string: the canonical subset is a rule
+   * about what is on disk, and a decoder standing between the file and the
+   * guard is one more thing that can turn a byte systemd rejects into one the
+   * guard accepts.
+   */
+  let source: Buffer = Buffer.alloc(0);
 
   beforeAll(async () => {
-    source = await readFile(resolve("deploy/overflow.service"), "utf8");
+    source = await readFile(resolve("deploy/overflow.service"));
   });
 
   const entries = (): UnitEntry[] => parseUnitFile(source);
