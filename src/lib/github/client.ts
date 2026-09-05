@@ -1,5 +1,5 @@
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
-import { GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 export { GitHubApiError } from "@/lib/github/errors";
 import type {
   GitHubIssue,
@@ -394,13 +394,9 @@ export class GitHubGateway {
       }
 
       if (!response.ok) {
-        const retryAfter = response.headers.get("retry-after");
-        const rateLimited = (response.status === 403 || response.status === 429)
-          && (response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null);
-        const retryAfterSeconds = retryAfter !== null && /^\d+$/.test(retryAfter) && Number.isSafeInteger(Number(retryAfter))
-          ? Number(retryAfter)
-          : null;
-        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds);
+        const body = await response.text().catch(() => null);
+        const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
       }
 
       return response;
@@ -409,12 +405,12 @@ export class GitHubGateway {
         throw error;
       }
 
-      if (timedOut) {
-        throw new Error("GitHub request timed out.");
-      }
-
       if (error instanceof GitHubApiError) {
         throw error;
+      }
+
+      if (timedOut) {
+        throw new Error("GitHub request timed out.");
       }
 
       throw new Error("GitHub request failed.");

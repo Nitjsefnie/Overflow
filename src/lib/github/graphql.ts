@@ -1,3 +1,5 @@
+import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
@@ -161,7 +163,9 @@ export class GitHubGraphqlClient {
       }
 
       if (!response.ok) {
-        throw new GitHubGraphqlRequestError(`GitHub API request failed with status ${response.status}.`);
+        const body = await response.text().catch(() => null);
+        const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
       }
 
       const payload = (await response.json()) as { data?: TData; errors?: unknown };
@@ -171,7 +175,7 @@ export class GitHubGraphqlClient {
 
       return payload.data;
     } catch (error) {
-      if (error instanceof GitHubGraphqlRequestError) {
+      if (error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) {
         throw error;
       }
 

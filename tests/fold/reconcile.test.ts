@@ -6,6 +6,7 @@ import {
 } from "@/lib/fold/reconcile";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
+import { GitHubApiError } from "@/lib/github/errors";
 import { runReconciliationCli } from "../../scripts/reconcile";
 
 describe("reconcileRepository", () => {
@@ -196,6 +197,27 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
       expect(errorLog).toHaveBeenCalledTimes(1);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("keeps a GitHub response body in the logged cause and out of the stored failure", async () => {
+    const body = "secondary rate limit at https://github.com/?token=sponsor-secret";
+    const upstream = new GitHubApiError(403, true, null, body);
+    const dependencies = reconciliationDependencies({
+      github: { listIssues: vi.fn().mockRejectedValue(upstream) },
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        message: "Unable to reconcile repository.",
+        cause: upstream,
+      });
+      expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed."]]);
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
+      expect(upstream.body).toBe(body);
     } finally {
       errorLog.mockRestore();
     }
