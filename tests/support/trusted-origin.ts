@@ -45,6 +45,12 @@ export function guardedRequests(url: string) {
 
   return {
     json,
+    // A foreign origin the guard must refuse on the origin alone. Prefer this
+    // over foreignText when asserting the 403: a request that is also the wrong
+    // media type would be refused by either half, so a test built on that one
+    // cannot tell which half did the work.
+    foreignJson: (body: unknown, method = "POST"): Request =>
+      json(body, method, { origin: foreignOrigin }),
     foreignText: (body: unknown, method = "POST"): Request =>
       json(body, method, { origin: foreignOrigin, "content-type": "text/plain" }),
     trustedText: (body: unknown, method = "POST"): Request =>
@@ -65,7 +71,12 @@ export function unusedDependencies() {
  * costs no session read, no role lookup and no database work.
  */
 export function expectNoDependencyCall(dependencies: Record<string, Mock>): void {
-  for (const [name, dependency] of Object.entries(dependencies)) {
+  const entries = Object.entries(dependencies);
+  // Without this the helper passes on an empty object, so a caller that hands it
+  // the wrong value asserts nothing and reads as a green rejection test.
+  expect(entries.length, "expectNoDependencyCall was given no dependencies").toBeGreaterThan(0);
+
+  for (const [name, dependency] of entries) {
     expect(dependency, `${name} was called`).not.toHaveBeenCalled();
   }
 }
