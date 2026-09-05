@@ -80,6 +80,7 @@ type SettlementRow = {
   github_pull_request_id: number | string;
   creditor_id: string | null;
   creditor_github_login: string | null;
+  creditor_github_user_id: number | string | null;
   debtor_id: string;
   opening_comparison_points: number;
   settled_points: number | null;
@@ -476,30 +477,26 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 export async function claimGitHubIdentity(
   sql: SqlClient,
   userId: string,
-  githubLogin: string,
+  githubUserId: number,
 ): Promise<void> {
+  if (!Number.isSafeInteger(githubUserId) || githubUserId <= 0) {
+    throw new Error("GitHub user id must be a positive integer.");
+  }
   await sql.begin(async (transaction) => {
     const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
       select
         settlements.id,
         settlements.issue_id,
         settlements.pull_request_id,
-        issues.github_issue_id,
-        pull_requests.github_pull_request_id,
         settlements.creditor_id,
         settlements.creditor_github_login,
         settlements.debtor_id,
         settlements.opening_comparison_points,
-        settlements.settled_points,
-        settlements.review_rounds,
-        settlements.credits,
-        settlements.proof_sha256,
-        settlements.status
+        settlements.settled_points
       from settlements
-      join issues on issues.id = settlements.issue_id
       join pull_requests on pull_requests.id = settlements.pull_request_id
       where settlements.status = ${"UNCLAIMED"}
-        and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
+        and settlements.creditor_github_user_id = ${githubUserId}
         and settlements.debtor_id = ${userId}
         and pull_requests.merged_at is not null
         and participation_eligible_at(${userId}, pull_requests.merged_at)
@@ -524,14 +521,14 @@ export async function claimGitHubIdentity(
     await transaction`
       update pull_requests
       set author_id = ${userId}
-      where lower(author_github_login) = ${normalizeLogin(githubLogin)}
+      where author_github_user_id = ${githubUserId}
     `;
     await transaction`
       update settlements
       set creditor_id = ${userId}, status = ${"SETTLED"}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
-        and lower(settlements.creditor_github_login) = ${normalizeLogin(githubLogin)}
+        and settlements.creditor_github_user_id = ${githubUserId}
         and settlements.debtor_id <> ${userId}
         and creditor.id = ${userId}
         and debtor.id = settlements.debtor_id
@@ -640,12 +637,12 @@ async function upsertPullRequests(
     const [row] = await sql<PullRequestRow[]>`
       insert into pull_requests (
         github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
-        author_id, author_github_login, state, merged_at, merge_commit_oid, final_commit_at, proof_sha256
+        author_id, author_github_login, author_github_user_id, state, merged_at, merge_commit_oid, final_commit_at, proof_sha256
       )
       values (
         ${pullRequest.githubPullRequestId}, ${repositoryId}, ${firstIssueId}, ${pullRequest.number},
         ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.body}, ${pullRequest.authorId},
-        ${pullRequest.authorGitHubLogin}, ${pullRequest.state}, ${pullRequest.mergedAt},
+        ${pullRequest.authorGitHubLogin}, ${pullRequest.authorGitHubUserId}, ${pullRequest.state}, ${pullRequest.mergedAt},
         ${pullRequest.mergeCommitOid}, ${pullRequest.finalCommitAt}, ${pullRequest.proofSha256}
       )
       on conflict (github_pull_request_id) do update
@@ -656,6 +653,7 @@ async function upsertPullRequests(
           body = excluded.body,
           author_id = excluded.author_id,
           author_github_login = excluded.author_github_login,
+          author_github_user_id = excluded.author_github_user_id,
           state = excluded.state,
           merged_at = excluded.merged_at,
           merge_commit_oid = excluded.merge_commit_oid,
@@ -770,7 +768,7 @@ async function loadExistingSettlements(
     select
       settlements.id, settlements.issue_id, settlements.pull_request_id,
       issues.github_issue_id, pull_requests.github_pull_request_id,
-      settlements.creditor_id, settlements.creditor_github_login, settlements.debtor_id,
+      settlements.creditor_id, settlements.creditor_github_login, settlements.creditor_github_user_id, settlements.debtor_id,
       settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
       settlements.credits, settlements.proof_sha256, settlements.status,
       issues.settled_label, issues.settled_label_event_id, issues.settled_label_actor_login,
@@ -792,11 +790,11 @@ async function insertSettlement(
 ): Promise<void> {
   await sql`
     insert into settlements (
-      pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
+      pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
       opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
     )
     values (
-      ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.debtorId},
+      ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.creditorGitHubUserId}, ${settlement.debtorId},
       ${settlement.openingComparisonPoints}, ${settlement.settledPoints}, ${settlement.reviewRounds},
       ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}
     )
@@ -812,7 +810,8 @@ async function updateSettlement(
   await sql`
     update settlements
     set pull_request_id = ${pullRequestId}, issue_id = ${issueId}, creditor_id = ${settlement.creditorId},
-        creditor_github_login = ${settlement.creditorGitHubLogin}, debtor_id = ${settlement.debtorId},
+        creditor_github_login = ${settlement.creditorGitHubLogin},
+        creditor_github_user_id = ${settlement.creditorGitHubUserId}, debtor_id = ${settlement.debtorId},
         opening_comparison_points = ${settlement.openingComparisonPoints}, settled_points = ${settlement.settledPoints},
         review_rounds = ${settlement.reviewRounds}, credits = ${settlement.credits}, proof_sha256 = ${settlement.proofSha256},
         status = ${settlement.status}
@@ -1140,6 +1139,7 @@ function settlementState(settlement: FoldSettlement): JSONValue {
     githubPullRequestId: settlement.githubPullRequestId,
     creditorId: settlement.creditorId,
     creditorGitHubLogin: settlement.creditorGitHubLogin,
+    creditorGitHubUserId: settlement.creditorGitHubUserId,
     debtorId: settlement.debtorId,
     openingComparisonPoints: settlement.openingComparisonPoints,
     settledLabel: settlement.settledLabel,
@@ -1165,6 +1165,7 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     githubPullRequestId: toSafeInteger(row.github_pull_request_id),
     creditorId: row.creditor_id,
     creditorGitHubLogin: row.creditor_github_login,
+    creditorGitHubUserId: row.creditor_github_user_id === null ? null : toSafeInteger(row.creditor_github_user_id),
     debtorId: row.debtor_id,
     openingComparisonPoints: row.opening_comparison_points,
     settledLabel: row.settled_label,
@@ -1302,10 +1303,6 @@ function toSafeInteger(value: number | string): number {
     throw new Error("Database record was invalid.");
   }
   return parsed;
-}
-
-function normalizeLogin(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function timestampToIso(value: string | Date | null): string {
