@@ -94,6 +94,18 @@ const FOLD_BUDGET: BudgetTerm[] = [
 
 const UNCONDITIONAL = "unconditional";
 
+// The same term can be declared under a logical-property name; cssstyle expands
+// the physical shorthands into longhands for us but does not map these.
+const LOGICAL_ALIASES: Record<string, string[]> = {
+  "padding-top": ["padding-block", "padding-block-start"],
+  "margin-top": ["margin-block", "margin-block-start"],
+  "margin-bottom": ["margin-block", "margin-block-end"],
+  "max-width": ["max-inline-size"],
+  "min-height": ["min-block-size"],
+};
+
+const namesFor = (property: string): string[] => [property, ...(LOGICAL_ALIASES[property] ?? [])];
+
 type Declaration = { selectorText: string; condition: string; property: string; value: string };
 
 function mountLandingPage() {
@@ -225,10 +237,11 @@ describe("landing hero fold budget", () => {
         if (term.ceilingAtMost === undefined && term.atLeastCh === undefined) continue;
         const element = elements[term.element];
         const fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
-        const declarations = collectDeclarations(sheet, (property) => property === term.property).filter(
+        const names = namesFor(term.property);
+        const declarations = collectDeclarations(sheet, (property) => names.includes(property)).filter(
           (declaration) => appliesTo(element, declaration),
         );
-        expect(declarations.length, `${term.term}: declarations of ${term.property}`).toBeGreaterThan(0);
+        expect(declarations.length, `${term.term}: declarations of ${names.join(" / ")}`).toBeGreaterThan(0);
         for (const declaration of declarations) {
           const label = `${term.term} declared by "${declaration.selectorText}" as "${declaration.value}"`;
           if (term.ceilingAtMost !== undefined) {
@@ -252,14 +265,16 @@ describe("landing hero fold budget", () => {
   it("declares no term of the budget behind a media condition", () => {
     const { sheet, elements, unmount } = mountLandingPage();
     try {
-      const budgeted = new Set(FOLD_BUDGET.map((term) => term.property));
+      const budgeted = new Set(FOLD_BUDGET.flatMap((term) => namesFor(term.property)));
       const conditional = collectDeclarations(sheet, (property) => budgeted.has(property)).filter(
         (declaration) => declaration.condition !== UNCONDITIONAL,
       );
       const offenders = conditional
         .filter((declaration) =>
           FOLD_BUDGET.some(
-            (term) => term.property === declaration.property && appliesTo(elements[term.element], declaration),
+            (term) =>
+              namesFor(term.property).includes(declaration.property) &&
+              appliesTo(elements[term.element], declaration),
           ),
         )
         .map((declaration) => `@media ${declaration.condition} { ${declaration.selectorText} { ${declaration.property}: ${declaration.value} } }`);
