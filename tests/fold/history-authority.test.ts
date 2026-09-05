@@ -174,6 +174,7 @@ function historySnapshot(): RepositoryFoldSnapshot {
       active: true,
       sponsor: {
         id: "sponsor",
+        githubUserId: 1001,
         githubLogin: "owner",
         enforcementState: "ACTIVE",
         moderationEvents: [],
@@ -193,8 +194,8 @@ function historySnapshot(): RepositoryFoldSnapshot {
       },
     },
     users: [
-      { id: "sponsor", githubLogin: "owner", enforcementState: "ACTIVE", moderationEvents: [] },
-      { id: "contributor", githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "sponsor", githubUserId: 1001, githubLogin: "owner", enforcementState: "ACTIVE", moderationEvents: [] },
+      { id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE", moderationEvents: [] },
     ],
     issues: [
       {
@@ -246,6 +247,7 @@ function historySnapshot(): RepositoryFoldSnapshot {
             mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: "contributor",
+            authorGitHubUserId: 2001,
             labels: ["delivered/6"],
             reviews: [],
             rawDiff: "diff",

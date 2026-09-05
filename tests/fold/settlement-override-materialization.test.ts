@@ -46,9 +46,9 @@ describe("a granted settlement override survives reconciliation", () => {
   });
 
   it("rebuilds the corrected settlement on every reconciliation, with credits recomputed from the rule", async () => {
-    const sponsorId = await insertUser(sponsorLogin);
-    const contributorId = await insertUser(contributorLogin);
-    const moderatorId = await insertUser("override-moderator");
+    const sponsorId = await insertUser(sponsorLogin, 1001);
+    const contributorId = await insertUser(contributorLogin, 2001);
+    const moderatorId = await insertUser("override-moderator", 3001);
     await sql`
       update users
       set encrypted_oauth_token = ${Buffer.from(encryptToken("override-token", tokenEncryptionKey), "utf8")}
@@ -230,10 +230,10 @@ async function balanceOf(accountId: string): Promise<number> {
   return row?.balance ?? 0;
 }
 
-async function insertUser(githubLogin: string): Promise<string> {
+async function insertUser(githubLogin: string, githubUserId: number): Promise<string> {
   const [user] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login)
-    values (${8_200_000 + githubLogin.length * 17 + githubLogin.charCodeAt(0)}, ${githubLogin})
+    values (${githubUserId}, ${githubLogin})
     returning id
   `;
   return user.id;
@@ -332,6 +332,6 @@ function mergedPullRequest(input: { id: number; number: number }): GitHubPullReq
     mergeCommitOid: input.id.toString(16).padStart(40, "0"),
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: contributorLogin,
-    authorGitHubUserId: null,
+    authorGitHubUserId: 2001,
   };
 }

@@ -18,6 +18,8 @@ export type FoldModerationEvent = {
 
 export type FoldUser = {
   id: string;
+  /** users.github_user_id — the immutable GitHub account id this row is bound to. */
+  githubUserId: number;
   githubLogin: string;
   enforcementState: EnforcementState;
   moderationEvents?: FoldModerationEvent[];
@@ -64,6 +66,7 @@ export type RepositoryFoldPullRequest = {
   mergeCommitOid: string | null;
   finalCommitAt: string | null;
   authorLogin: string | null;
+  authorGitHubUserId: number | null;
   reviews: GitHubPullRequestReview[];
   rawDiff: string;
 };
@@ -105,6 +108,7 @@ export type FoldPullRequest = {
   finalCommitAt: string;
   authorId: string | null;
   authorGitHubLogin: string | null;
+  authorGitHubUserId: number | null;
   proofSha256: string;
   githubIssueIds: number[];
   reviewRounds: Array<{ githubReviewId: number; submittedAt: string }>;
@@ -115,6 +119,7 @@ export type FoldSettlement = {
   githubPullRequestId: number;
   creditorId: string | null;
   creditorGitHubLogin: string | null;
+  creditorGitHubUserId: number | null;
   debtorId: string;
   openingComparisonPoints: number;
   settledLabel: string | null;
@@ -236,7 +241,7 @@ type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
 };
 
 export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
-  const usersByLogin = new Map(snapshot.users.map((user) => [normalizeLogin(user.githubLogin), user]));
+  const usersByGitHubUserId = new Map(snapshot.users.map((user) => [user.githubUserId, user]));
   // The sponsor pays for the work, so only the sponsor's labels and rationale
   // price it. Work closed by the sponsor remains self-work calibration.
   const raterLogin = normalizedNonblankLogin(snapshot.repository.sponsor.githubLogin);
@@ -311,7 +316,9 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       continue;
     }
 
-    const author = pullRequest.authorLogin === null ? undefined : usersByLogin.get(normalizeLogin(pullRequest.authorLogin));
+    const author = pullRequest.authorGitHubUserId === null
+      ? undefined
+      : usersByGitHubUserId.get(pullRequest.authorGitHubUserId);
     const reviewRounds = countReviewRounds(pullRequest.reviews, pullRequest.mergedAt);
     const proofSha256 = hashRawDiff(pullRequest.rawDiff);
     const foldedPullRequest = rememberPullRequest(
@@ -366,6 +373,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         pullRequest: foldedPullRequest,
         author,
         authorLogin: pullRequest.authorLogin,
+        authorGitHubUserId: pullRequest.authorGitHubUserId,
         debtorId: snapshot.repository.sponsor.id,
         openingComparisonPoints: opening.openingComparisonPoints,
         settledDifficulty,
@@ -614,6 +622,7 @@ function rememberPullRequest(
     finalCommitAt: pullRequest.finalCommitAt,
     authorId,
     authorGitHubLogin: pullRequest.authorLogin,
+    authorGitHubUserId: pullRequest.authorGitHubUserId,
     proofSha256,
     githubIssueIds: [issueId],
     reviewRounds,
@@ -659,6 +668,7 @@ function toSettlement(input: {
   pullRequest: FoldPullRequest;
   author: FoldUser | undefined;
   authorLogin: string | null;
+  authorGitHubUserId: number | null;
   debtorId: string;
   openingComparisonPoints: number;
   settledDifficulty: SettledDifficultyEvidence | null;
@@ -670,6 +680,7 @@ function toSettlement(input: {
     githubPullRequestId: input.pullRequest.githubPullRequestId,
     creditorId: input.author?.id ?? null,
     creditorGitHubLogin: input.authorLogin,
+    creditorGitHubUserId: input.authorGitHubUserId,
     debtorId: input.debtorId,
     openingComparisonPoints: input.openingComparisonPoints,
     settledLabel: input.settledDifficulty?.label ?? null,
