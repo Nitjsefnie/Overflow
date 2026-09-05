@@ -20,9 +20,11 @@ User=overflow
 Group=overflow
 WorkingDirectory=/srv/overflow
 
-# Secrets are read from a file the service can read and cannot write
-# (root:overflow 0640). The PATH carries no component under /root, which an
-# unprivileged account cannot traverse anyway.
+# systemd reads EnvironmentFile= as PID 1, before it drops to User=, so the
+# secrets file stays root:root 0600 inside a root:root 0700 directory: the
+# service account never needs — and never gets — an on-disk read path to any
+# secret. The PATH carries no component under /root, which an unprivileged
+# account cannot traverse anyway.
 EnvironmentFile=/etc/overflow/overflow.env
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
@@ -68,8 +70,10 @@ ProcSubset=pid
 
 # The process may speak IP and local sockets and nothing else, on this
 # architecture only, and any syscall outside the ordinary service set fails with
-# EPERM rather than killing the process, so a blocked call is visible in the
-# journal instead of looking like a crash.
+# EPERM rather than killing the process. That buys resilience, not visibility: a
+# seccomp errno action is logged by nobody, and it is the default kill action
+# that reaches the journal, as status=31/SYS. The trade is a request the
+# application can fail and report over a restart loop under Restart=on-failure.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
