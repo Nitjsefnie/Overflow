@@ -157,8 +157,14 @@ export type UnwritableClosure = {
   reason: string;
 };
 
+export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SETTLED_RATIONALE_EDITED";
+
 export type FoldPolicyViolation = {
-  code: "OPENING_LABEL_MISSING" | "OPENING_LABEL_AMBIGUOUS" | "OPENING_LABEL_MUTATED";
+  code:
+    | "OPENING_LABEL_MISSING"
+    | "OPENING_LABEL_AMBIGUOUS"
+    | "OPENING_LABEL_MUTATED"
+    | SettlementEvidenceViolationCode;
   githubIssueId: number;
 };
 
@@ -216,6 +222,10 @@ type SettledDifficultyEvidence = {
   rationaleCommentedAt: string;
 };
 
+type SettledDifficultyResolution =
+  | { kind: "accepted"; evidence: SettledDifficultyEvidence }
+  | { kind: "rejected"; reason: string; violation?: SettlementEvidenceViolationCode };
+
 type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   mergedAt: string;
   mergeCommitOid: string;
@@ -224,6 +234,9 @@ type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
 
 export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const usersByLogin = new Map(snapshot.users.map((user) => [normalizeLogin(user.githubLogin), user]));
+  // The sponsor pays for the work, so only the sponsor's labels and rationale
+  // price it. Work closed by the sponsor remains self-work calibration.
+  const raterLogin = normalizedNonblankLogin(snapshot.repository.sponsor.githubLogin);
   const issues: FoldIssue[] = [];
   const pullRequestsByGitHubId = new Map<number, FoldPullRequest>();
   const settlements: FoldSettlement[] = [];
@@ -232,7 +245,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const policyViolations: FoldPolicyViolation[] = [];
 
   for (const issue of snapshot.issues) {
-    const opening = resolveOpening(issue, snapshot.repository.difficultyScheme);
+    const opening = resolveOpening(issue, snapshot.repository.difficultyScheme, raterLogin);
     if (opening === null) {
       policyViolations.push({
         code: "OPENING_LABEL_MISSING",
@@ -250,8 +263,11 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       : null;
     const settledResolution = pullRequest === null
       ? null
-      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme);
+      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, raterLogin);
     const settledDifficulty = settledResolution?.kind === "accepted" ? settledResolution.evidence : null;
+    if (settledResolution?.kind === "rejected" && settledResolution.violation !== undefined) {
+      policyViolations.push({ code: settledResolution.violation, githubIssueId: issue.id });
+    }
 
     issues.push({
       githubIssueId: issue.id,
@@ -374,9 +390,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
 function resolveOpening(
   issue: RepositoryFoldIssue,
   scheme: DifficultyScheme,
+  raterLogin: string | null,
 ): OpeningResolution | null {
   const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
-  if (ownerLogin === null || !validTimestamp(issue.createdAt)) {
+  if (ownerLogin === null || raterLogin === null || !validTimestamp(issue.createdAt)) {
     return null;
   }
   const openingByLabel = new Map(scheme.openingLabels.map((entry) => [entry.label, entry]));
@@ -394,7 +411,7 @@ function resolveOpening(
     (event) =>
       event.kind === "LABELED" &&
       openingByLabel.has(event.label) &&
-      normalizedNonblankLogin(event.actorLogin) === ownerLogin &&
+      normalizedNonblankLogin(event.actorLogin) === raterLogin &&
       Date.parse(event.createdAt) >= issueCreatedTime &&
       Date.parse(event.createdAt) <= openingDeadline,
   );
@@ -451,12 +468,12 @@ function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,
   pullRequest: AuthoritativeClosingPullRequest,
   scheme: DifficultyScheme,
-): { kind: "accepted"; evidence: SettledDifficultyEvidence } | { kind: "rejected"; reason: string } {
-  const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
-  if (ownerLogin === null) {
+  raterLogin: string | null,
+): SettledDifficultyResolution {
+  if (raterLogin === null) {
     return {
       kind: "rejected",
-      reason: "The issue has no author login, so no settled label can be attributed to the issue owner.",
+      reason: "The repository sponsor has no login, so no settled label can be attributed to the sponsor.",
     };
   }
   const actualByLabel = new Map(scheme.actualLabels.map((entry) => [entry.label, entry]));
@@ -500,12 +517,6 @@ function resolveSettledDifficulty(
   }
   const [[label, source]] = [...activeLabels.entries()];
   const sourceTime = Date.parse(source.createdAt);
-  if (normalizedNonblankLogin(source.actorLogin) !== ownerLogin) {
-    return {
-      kind: "rejected",
-      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the issue owner \`${issue.authorLogin!.trim()}\`.`,
-    };
-  }
   if (
     sourceTime < finalCommitTime - EVIDENCE_ORDERING_GRACE_MS ||
     sourceTime > mergeTime + EVIDENCE_ORDERING_GRACE_MS
@@ -515,13 +526,20 @@ function resolveSettledDifficulty(
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
+  if (normalizedNonblankLogin(source.actorLogin) !== raterLogin) {
+    return {
+      kind: "rejected",
+      violation: "SETTLED_LABEL_UNAUTHORIZED",
+      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the issue owner \`${raterLogin}\`.`,
+    };
+  }
   const qualifyingRationales = issue.comments
     .filter(validIssueComment)
     .sort(compareHistoryItems)
     .filter((comment) => {
       const commentTime = Date.parse(comment.createdAt);
       return (
-        normalizedNonblankLogin(comment.authorLogin) === ownerLogin &&
+        normalizedNonblankLogin(comment.authorLogin) === raterLogin &&
         comment.body.trim().length > 0 &&
         comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
         commentTime >= sourceTime - EVIDENCE_ORDERING_GRACE_MS &&
@@ -538,7 +556,7 @@ function resolveSettledDifficulty(
   if (rationale === undefined) {
     return {
       kind: "rejected",
-      reason: `No rationale comment by \`${issue.authorLogin!.trim()}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+      reason: `No rationale comment by \`${raterLogin}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   const configured = actualByLabel.get(label)!;
