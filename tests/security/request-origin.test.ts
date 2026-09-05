@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readTrustedOrigin,
+  rejectUnsupportedMediaType,
   rejectUntrustedRequest,
 } from "@/lib/security/request-origin";
 
@@ -348,6 +349,58 @@ describe("rejecting an unsupported media type", () => {
       "UNSUPPORTED_MEDIA_TYPE",
       "The request must use the application/json content type.",
     );
+  });
+});
+
+/**
+ * The content-type half on its own is what a token-authenticated route applies:
+ * a programmatic client sends no `Origin`, so the origin check cannot run for
+ * it, but the media type still must be JSON.
+ */
+describe("rejecting an unsupported media type without an origin check", () => {
+  it.each([
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data; boundary=overflow",
+    "application/json-patch+json",
+    "",
+  ])("rejects the %j content type whatever the origin says", async (contentType) => {
+    await expectErrorResponse(
+      rejectUnsupportedMediaType(mutationRequest({ "content-type": contentType })),
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "The request must use the application/json content type.",
+    );
+  });
+
+  it.each<{ label: string; headers: Record<string, string> }>([
+    { label: "no origin at all", headers: {} },
+    { label: "a foreign origin", headers: { origin: "https://attacker.example" } },
+    { label: "the trusted origin", headers: { origin: trustedOrigin } },
+  ])("accepts application/json sent with $label", ({ headers }) => {
+    const request = mutationRequest({ "content-type": "application/json", ...headers });
+
+    expect(rejectUnsupportedMediaType(request)).toBeNull();
+  });
+
+  it("accepts a request that names no content type", () => {
+    expect(rejectUnsupportedMediaType(mutationRequest({}))).toBeNull();
+  });
+
+  it("accepts a charset parameter on the JSON media type", () => {
+    const request = mutationRequest({ "content-type": "application/json; charset=utf-8" });
+
+    expect(rejectUnsupportedMediaType(request)).toBeNull();
+  });
+
+  // The origin half is the only half that reads APP_URL, so an unconfigured
+  // deployment cannot turn a token client's valid request into a refusal.
+  it("does not consult APP_URL", () => {
+    vi.stubEnv("APP_URL", "");
+
+    expect(
+      rejectUnsupportedMediaType(mutationRequest({ "content-type": "application/json" })),
+    ).toBeNull();
   });
 });
 
