@@ -80,6 +80,8 @@ export type GitHubPullRequest = {
   mergeCommitOid: string | null;
   finalCommitAt: string | null;
   authorLogin: string | null;
+  /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin). */
+  authorGitHubUserId: number | null;
 };
 
 export type GitHubWebhook = {
