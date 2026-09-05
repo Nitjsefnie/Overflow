@@ -118,7 +118,7 @@ describe("foldRepository", () => {
     const snapshot = outsiderFixture();
     setActualLabel(snapshot, "delivered/1");
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
-      { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
+      { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
     ];
 
     const result = foldRepository(snapshot);
@@ -268,11 +268,11 @@ function restTimelineTrapFixture(): RepositoryFoldSnapshot {
 function twoReviewRoundsFixture(): RepositoryFoldSnapshot {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
-    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z" },
-    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:01:00.000Z" },
-    { id: 302, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z" },
-    { id: 303, state: "COMMENTED", submittedAt: "2026-09-01T11:30:00.000Z" },
-    { id: 304, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T13:00:00.000Z" },
+    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null },
+    { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:01:00.000Z", dismissal: null },
+    { id: 302, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
+    { id: 303, state: "COMMENTED", submittedAt: "2026-09-01T11:30:00.000Z", dismissal: null },
+    { id: 304, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T13:00:00.000Z", dismissal: null },
   ];
   return snapshot;
 }

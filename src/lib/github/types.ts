@@ -98,8 +98,16 @@ export type GitHubPullRequestReviewState =
   | "DISMISSED"
   | "PENDING";
 
+export type GitHubPullRequestReviewDismissal = {
+  /** `ReviewDismissedEvent.createdAt`. */
+  at: string;
+  /** `ReviewDismissedEvent.previousReviewState`; null when GitHub omitted it. */
+  previousState: GitHubPullRequestReviewState | null;
+};
+
 export type GitHubPullRequestReview = {
   id: number;
   state: GitHubPullRequestReviewState;
   submittedAt: string | null;
+  dismissal: GitHubPullRequestReviewDismissal | null;
 };
