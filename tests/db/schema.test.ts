@@ -65,6 +65,7 @@ describe("initial PostgreSQL materialization", () => {
       "reconciliation_changes",
       "calibration_audits",
       "moderation_events",
+      "settlement_override_requests",
     ]) {
       expect(rows.some((row) => row.table_name === table)).toBe(true);
     }
@@ -94,6 +95,7 @@ describe("initial PostgreSQL materialization", () => {
       "006_account_moderation_snapshots.sql",
       "007_authoritative_history_and_merge_proof.sql",
       "008_moderator_role_changes.sql",
+      "009_settlement_override_requests.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 

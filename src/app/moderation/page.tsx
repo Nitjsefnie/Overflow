@@ -5,7 +5,12 @@ import type {
   OpenAuditProjection,
   RecalibratingAccountProjection,
 } from "@/lib/dashboard/queries";
-import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import {
+  isModeratorSession,
+  requireMemberPageSession,
+  type MemberPageSession,
+} from "@/lib/dashboard/session";
+import type { OpenSettlementOverrideRequest } from "@/lib/overrides/service";
 
 export default async function ModerationPage() {
   const session = await requireMemberPageSession();
@@ -15,11 +20,13 @@ export default async function ModerationPage() {
 
   const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
+  const { SettlementOverrideQueue } = await import("@/components/settlement-override-queue");
 
   let audits: OpenAuditProjection[] | null;
   let history: EnforcementHistoryProjection[] = [];
   let recalibratingAccounts: RecalibratingAccountProjection[] = [];
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] = [];
+  const settlementCorrections = await listSettlementCorrections(session.user);
   try {
     const { listEnforcementHistory, listOpenAudits, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
@@ -71,6 +78,21 @@ export default async function ModerationPage() {
           </ol>
         </section>
       )}
+      <section className="surface override-card" aria-labelledby="settlement-corrections-heading">
+        <p className="eyebrow">Reported settlements</p>
+        <h2 id="settlement-corrections-heading">Settlement corrections</h2>
+        <p>
+          A settlement is derived from GitHub history, so reconciliation cannot repair one whose evidence never
+          existed. Granting a correction records the settled points to apply instead; credits are recomputed
+          from those points and the review rounds the fold counted, and the correction is reapplied on every
+          later reconciliation.
+        </p>
+        {settlementCorrections === null ? (
+          <p>The settlement correction queue could not be loaded.</p>
+        ) : (
+          <SettlementOverrideQueue requests={settlementCorrections} />
+        )}
+      </section>
       <section className="surface" aria-labelledby="recalibrating-heading">
         <h2 id="recalibrating-heading">Recalibration plans and reactivation</h2>
         {recalibratingAccounts.length === 0 ? <p>No accounts are recalibrating.</p> : (
@@ -109,4 +131,24 @@ export default async function ModerationPage() {
       </section>
     </AppShell>
   );
+}
+
+/**
+ * The open correction queue, or null when it could not be read.
+ *
+ * The actor carries the role `requireMemberPageSession` re-read from the
+ * database, so the queue is authorized by the same check the decision route
+ * makes rather than by having reached this page.
+ */
+async function listSettlementCorrections(
+  moderator: MemberPageSession["user"],
+): Promise<OpenSettlementOverrideRequest[] | null> {
+  try {
+    const { PostgresSettlementOverrideStore } = await import("@/lib/overrides/postgres-store");
+    const { SettlementOverrideService } = await import("@/lib/overrides/service");
+    const service = new SettlementOverrideService(new PostgresSettlementOverrideStore());
+    return await service.listOpenRequests({ id: moderator.id, role: moderator.role });
+  } catch {
+    return null;
+  }
 }
