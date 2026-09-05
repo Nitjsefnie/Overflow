@@ -79,12 +79,12 @@ describe("a granted settlement override survives reconciliation", () => {
     const declined = await settlementIdFor(declinedIssueId);
     const disputedRequest = await overrides.createRequest({
       requesterId: contributorId,
-      settlementId: disputed,
+      target: { kind: "settlement", settlementId: disputed },
       reason: "The delivered label was applied, but the rationale comment came later.",
     });
     const declinedRequest = await overrides.createRequest({
       requesterId: contributorId,
-      settlementId: declined,
+      target: { kind: "settlement", settlementId: declined },
       reason: "This one should not be corrected.",
     });
     if (disputedRequest.kind !== "ok" || declinedRequest.kind !== "ok") {
@@ -159,7 +159,7 @@ describe("a granted settlement override survives reconciliation", () => {
 
     const reopened = await overrides.createRequest({
       requesterId: contributorId,
-      settlementId: await settlementIdFor(disputedIssueId),
+      target: { kind: "settlement", settlementId: await settlementIdFor(disputedIssueId) },
       reason: "Six was still too generous.",
     });
     if (reopened.kind !== "ok") {

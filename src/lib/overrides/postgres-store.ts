@@ -8,6 +8,7 @@ import type {
   SettlementOverrideState,
   SettlementOverrideStore,
   SettlementOverrideStoreResult,
+  SettlementOverrideTarget,
 } from "@/lib/overrides/service";
 
 type RequestRow = {
@@ -46,38 +47,30 @@ type OpenRequestRow = RequestRow & {
  *
  * Every authorization here is a database read rather than a claim carried in
  * from the caller: a request may only be raised by the account the settlement
- * names as creditor or debtor, and a settlement's requests are only listed for
- * those same two accounts.
+ * names as creditor or debtor, or by the account a self-work calibration
+ * belongs to, and a row's requests are only listed for those same accounts.
  */
 export class PostgresSettlementOverrideStore implements SettlementOverrideStore {
   public constructor(private readonly sql: SqlClient = getSql()) {}
 
   public async createRequest(input: {
     requesterId: string;
-    settlementId: string;
+    target: SettlementOverrideTarget;
     reason: string;
   }): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
-    const [settlement] = await this.sql<{ issue_id: string; creditor_id: string | null; debtor_id: string }[]>`
-      select issue_id, creditor_id, debtor_id
-      from settlements
-      where id = ${input.settlementId}
-      limit 1
-    `;
-    if (settlement === undefined) {
-      return { kind: "not_found" };
-    }
-    if (settlement.creditor_id !== input.requesterId && settlement.debtor_id !== input.requesterId) {
-      return { kind: "forbidden" };
+    const issue = await this.authorizedIssue(input.target, input.requesterId);
+    if (issue.kind !== "ok") {
+      return issue;
     }
 
     try {
       const rows = await this.sql<RequestRow[]>`
         insert into settlement_override_requests (issue_id, requester_id, reason)
-        select ${settlement.issue_id}, ${input.requesterId}, ${input.reason}
+        select ${issue.value}, ${input.requesterId}, ${input.reason}
         where not exists (
           select 1
           from settlement_override_requests
-          where issue_id = ${settlement.issue_id} and state = 'OPEN'
+          where issue_id = ${issue.value} and state = 'OPEN'
         )
         returning
           id, issue_id, requester_id, reason, state::text as state, settled_points,
@@ -155,6 +148,24 @@ export class PostgresSettlementOverrideStore implements SettlementOverrideStore 
     return rows.map(toRequest);
   }
 
+  public async listRequestsForCalibration(
+    calibrationId: string,
+    viewerId: string,
+  ): Promise<SettlementOverrideRequest[]> {
+    const rows = await this.sql<RequestRow[]>`
+      select
+        requests.id, requests.issue_id, requests.requester_id, requests.reason,
+        requests.state::text as state, requests.settled_points, requests.decided_by_id,
+        requests.decision_reason, requests.created_at, requests.decided_at
+      from settlement_override_requests as requests
+      join self_work_calibrations as calibrations on calibrations.issue_id = requests.issue_id
+      where calibrations.id = ${calibrationId}
+        and calibrations.user_id = ${viewerId}
+      order by requests.created_at desc, requests.id desc
+    `;
+    return rows.map(toRequest);
+  }
+
   public async decideRequest(
     input: { actorId: string; requestId: string } & SettlementOverrideDecisionInput,
   ): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
@@ -181,6 +192,47 @@ export class PostgresSettlementOverrideStore implements SettlementOverrideStore 
       select id from settlement_override_requests where id = ${input.requestId} limit 1
     `;
     return existing === undefined ? { kind: "not_found" } : { kind: "conflict" };
+  }
+
+  /**
+   * Resolves the issue behind the named row, refusing a requester the row does
+   * not belong to. Both branches end at an issue identifier because the request
+   * is keyed on the issue: the settlement and the calibration are the two ways
+   * one issue's priced outcome is materialized, and either can be rebuilt away.
+   */
+  private async authorizedIssue(
+    target: SettlementOverrideTarget,
+    requesterId: string,
+  ): Promise<SettlementOverrideStoreResult<string>> {
+    if (target.kind === "settlement") {
+      const [settlement] = await this.sql<{ issue_id: string; creditor_id: string | null; debtor_id: string }[]>`
+        select issue_id, creditor_id, debtor_id
+        from settlements
+        where id = ${target.settlementId}
+        limit 1
+      `;
+      if (settlement === undefined) {
+        return { kind: "not_found" };
+      }
+      if (settlement.creditor_id !== requesterId && settlement.debtor_id !== requesterId) {
+        return { kind: "forbidden" };
+      }
+      return { kind: "ok", value: settlement.issue_id };
+    }
+
+    const [calibration] = await this.sql<{ issue_id: string; user_id: string }[]>`
+      select issue_id, user_id
+      from self_work_calibrations
+      where id = ${target.calibrationId}
+      limit 1
+    `;
+    if (calibration === undefined) {
+      return { kind: "not_found" };
+    }
+    if (calibration.user_id !== requesterId) {
+      return { kind: "forbidden" };
+    }
+    return { kind: "ok", value: calibration.issue_id };
   }
 }
 
