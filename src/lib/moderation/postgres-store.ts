@@ -128,9 +128,7 @@ export class PostgresModerationStore implements ModerationStore {
         throw new Error("Calibration audit insert returned no row.");
       }
 
-      const newState = isParticipationEligible(target.enforcement_state)
-        ? "UNDER_AUDIT"
-        : target.enforcement_state;
+      const newState = enforcementStateForOpenAudit(target.enforcement_state);
       await transaction`
         update users
         set enforcement_state = ${newState}, updated_at = now()
@@ -168,6 +166,9 @@ export class PostgresModerationStore implements ModerationStore {
         return { kind: "conflict" };
       }
 
+      const newState = target.enforcement_state === enforcementStateForOpenAudit(audit.prior_enforcement_state)
+        ? audit.prior_enforcement_state
+        : target.enforcement_state;
       await transaction`
         update calibration_audits
         set state = ${"DISMISSED"}, decision = ${input.reason}, moderator_id = ${input.actorId}, decided_at = now()
@@ -175,7 +176,7 @@ export class PostgresModerationStore implements ModerationStore {
       `;
       await transaction`
         update users
-        set enforcement_state = ${audit.prior_enforcement_state}, updated_at = now()
+        set enforcement_state = ${newState}, updated_at = now()
         where id = ${target.id}
       `;
       const cohort = toCohortSnapshot(audit);
@@ -184,7 +185,7 @@ export class PostgresModerationStore implements ModerationStore {
         actorId: input.actorId,
         auditId: audit.id,
         priorState: target.enforcement_state,
-        newState: audit.prior_enforcement_state,
+        newState,
         reason: input.reason,
         cohort,
         recalibrationPlan: null,
@@ -193,7 +194,7 @@ export class PostgresModerationStore implements ModerationStore {
         kind: "ok",
         value: toAccountAudit(
           { ...audit, state: "DISMISSED" },
-          audit.prior_enforcement_state,
+          newState,
           toSafeInteger(target.confirmed_miscalibration_count),
         ),
       };
@@ -451,6 +452,10 @@ export class PostgresModerationStore implements ModerationStore {
   private repositoryPredicate(repositoryId: string | null) {
     return repositoryId === null ? this.sql`` : this.sql`and repositories.id = ${repositoryId}`;
   }
+}
+
+function enforcementStateForOpenAudit(priorState: EnforcementState): EnforcementState {
+  return isParticipationEligible(priorState) ? "UNDER_AUDIT" : priorState;
 }
 
 async function insertModerationEvent(
