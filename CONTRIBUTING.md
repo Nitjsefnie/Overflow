@@ -96,9 +96,15 @@ docker compose ps
 That service is `postgres:17-alpine` with database, user and password
 `overflow` / `overflow` / `overflow_local_only`, published on loopback only as
 `127.0.0.1:5432`, and a `pg_isready` healthcheck, so `docker compose ps`
-telling you it is healthy is the signal to continue. Set `POSTGRES_HOST_BIND`
-to another address to publish it more widely on purpose. Then install, migrate
-and run:
+telling you it is healthy is the signal to continue. `POSTGRES_HOST_BIND`
+widens that binding on purpose; Compose reads it from your shell or from the
+same root `.env` the application uses, so a value left in that file widens the
+binding for every later `docker compose up`. That password is committed and
+well known, so any address other than a loopback one publishes a database with
+known credentials to everything that can route to this machine. To reach it
+from elsewhere, forward the loopback port over SSH — `ssh -L
+5432:127.0.0.1:5432 <host>` — instead of widening the bind address. Then
+install, migrate and run:
 
 ```bash
 pnpm install --frozen-lockfile
