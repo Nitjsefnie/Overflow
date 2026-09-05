@@ -52,6 +52,12 @@ src/app/api/moderation/[[]id[]]/*
 !src/app/api/moderation/moderators/
 src/app/api/moderation/moderators/*
 !src/app/api/moderation/moderators/*.ts
+!src/app/api/overrides/
+src/app/api/overrides/*
+!src/app/api/overrides/*.ts
+!src/app/api/overrides/[[]id[]]/
+src/app/api/overrides/[[]id[]]/*
+!src/app/api/overrides/[[]id[]]/*.ts
 !src/app/api/repositories/
 src/app/api/repositories/*
 !src/app/api/repositories/*.ts
@@ -107,6 +113,9 @@ src/lib/github/*
 !src/lib/moderation/
 src/lib/moderation/*
 !src/lib/moderation/*.ts
+!src/lib/overrides/
+src/lib/overrides/*
+!src/lib/overrides/*.ts
 !src/lib/repositories/
 src/lib/repositories/*
 !src/lib/repositories/*.ts

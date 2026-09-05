@@ -20,6 +20,7 @@ import type {
   ReconciliationStore,
 } from "@/lib/fold/reconcile";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import { applyGrantedSettlementOverride } from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { decryptToken } from "@/lib/security/token-cipher";
 
@@ -672,11 +673,13 @@ async function materializeSettlements(
   existingRows: readonly SettlementRow[],
 ): Promise<ReconciliationDeltas> {
   const existingByIssue = new Map(existingRows.map((row) => [toSafeInteger(row.github_issue_id), row]));
+  const grantedOverrides = await loadGrantedSettlementOverrides(sql, input.repositoryId);
   let adds = 0;
   let changes = 0;
   let removals = 0;
 
-  for (const settlement of input.fold.settlements) {
+  for (const folded of input.fold.settlements) {
+    const settlement = applyGrantedOverride(folded, grantedOverrides);
     const issueId = requiredId(issueIds, settlement.githubIssueId, "Issue");
     const pullRequestId = requiredId(pullRequestIds, settlement.githubPullRequestId, "Pull request");
     const current = existingByIssue.get(settlement.githubIssueId);
@@ -711,6 +714,45 @@ async function materializeSettlements(
   }
 
   return { adds, changes, removals };
+}
+
+/**
+ * The settled points a moderator granted for each of this repository's issues.
+ *
+ * A correction cannot live in `settlements`, which materialization deletes and
+ * rewrites from immutable GitHub history on every run, so it is read back here
+ * and applied to the fold's result before the row is written. Where an issue has
+ * been corrected more than once the most recent grant wins, so the map is filled
+ * in decision order and later grants overwrite earlier ones.
+ */
+async function loadGrantedSettlementOverrides(
+  sql: TransactionClient,
+  repositoryId: string,
+): Promise<Map<number, number>> {
+  const rows = await sql<{ github_issue_id: number | string; settled_points: number | string }[]>`
+    select issues.github_issue_id, overrides.settled_points
+    from settlement_override_requests as overrides
+    join issues on issues.id = overrides.issue_id
+    where issues.repository_id = ${repositoryId}
+      and overrides.state = 'GRANTED'
+      and overrides.settled_points is not null
+    order by overrides.decided_at asc, overrides.id asc
+  `;
+  const grantedPoints = new Map<number, number>();
+  for (const row of rows) {
+    grantedPoints.set(toSafeInteger(row.github_issue_id), toSafeInteger(row.settled_points));
+  }
+  return grantedPoints;
+}
+
+function applyGrantedOverride(
+  settlement: FoldSettlement,
+  grantedOverrides: ReadonlyMap<number, number>,
+): FoldSettlement {
+  const settledPoints = grantedOverrides.get(settlement.githubIssueId);
+  return settledPoints === undefined
+    ? settlement
+    : applyGrantedSettlementOverride(settlement, settledPoints);
 }
 
 async function loadExistingSettlements(
