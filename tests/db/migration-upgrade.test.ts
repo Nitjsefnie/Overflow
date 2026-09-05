@@ -376,9 +376,10 @@ interface DatabaseContents {
  * Rows a deployment could really hold at this boundary, written with only the columns the
  * boundary's schema has, and the whole contents the database should hold once it is upgraded.
  *
- * At boundary 001 that is accounts alone: 002 adds `registered_repositories.difficulty_scheme` as
- * `not null` with no default and no backfill, so a database that already holds repositories at
- * 001 cannot reach 002 at all (issue 114).
+ * At boundary 001 that is accounts alone: 002's named difficulty scheme precondition refuses
+ * repositories without a scheme and lists the affected repositories. Those repositories need
+ * a manually added and backfilled `difficulty_scheme` column, or removal, before upgrading;
+ * seeding accounts alone lets this boundary upgrade without that manual remediation.
  */
 async function seedDeployedRows(sql: Sql, applied: number): Promise<DatabaseContents> {
   const contents: DatabaseContents = {
