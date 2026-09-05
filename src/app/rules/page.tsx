@@ -42,8 +42,8 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <h2 id="rules-credits-heading">Credits</h2>
         <p className="rules-formula">Credits = final difficulty points − distinct review rounds, with a minimum of 0.</p>
         <p>
-          Work in a repository you sponsor earns no credits; it is calibration evidence that helps check that
-          difficulty ratings are consistent.
+          Work you complete in a repository you sponsor does not change balances; it helps check that difficulty
+          ratings are consistent.
         </p>
         <p>
           Credits earned before signing in remain unclaimed until the contributor claims their GitHub identity.
