@@ -205,7 +205,7 @@ describe("explicit repository registration", () => {
       expect(message).toContain(`GitHub refused to ${description} (HTTP 403).`);
     } else {
       expect(message).toContain(`GitHub answered 404 for the request to ${description}.`);
-      expect(message).toContain("GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization.");
+      expect(message).toContain("GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization.");
       expect(message).toContain("The repository may also have been renamed, moved or deleted since it was looked up.");
       expect(message).not.toMatch(/denied|refused/);
     }
@@ -264,6 +264,18 @@ describe("explicit repository registration", () => {
     ["ensureDifficultyLabels", "configure difficulty labels", "Unable to configure difficulty labels on GitHub."],
     ["createWebhook", "create the repository webhook", "Unable to create the repository webhook on GitHub."],
   ] as const)("%s error classification", (step, description, upstreamMessage) => {
+    it("treats a plain object with GitHub error fields as an upstream failure", async () => {
+      const harness = createHarness();
+      harness.dependencies.github[step] = async () => {
+        throw { status: 403, rateLimited: false, retryAfterSeconds: null };
+      };
+
+      await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+        code: "UPSTREAM_FAILURE",
+        message: upstreamMessage,
+      });
+    });
+
     it.each([
       [401, "UPSTREAM_FAILURE"],
       [422, "UPSTREAM_FAILURE"],

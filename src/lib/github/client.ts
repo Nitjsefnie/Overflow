@@ -361,7 +361,8 @@ export class GitHubGateway {
 
       if (!response.ok) {
         const retryAfter = response.headers.get("retry-after");
-        const rateLimited = response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null;
+        const rateLimited = (response.status === 403 || response.status === 429)
+          && (response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null);
         const retryAfterSeconds = retryAfter !== null && /^\d+$/.test(retryAfter) && Number.isSafeInteger(Number(retryAfter))
           ? Number(retryAfter)
           : null;

@@ -91,6 +91,10 @@ describe("GitHubGateway REST transport", () => {
     ["remaining nonliteral zero", { "x-ratelimit-remaining": "00" }, false, null],
     ["retry delay", { "retry-after": "60" }, true, 60],
     ["zero retry delay", { "retry-after": "0" }, true, 0],
+    ["leading-zero retry delay", { "retry-after": "00060" }, true, 60],
+    ["all-zero retry delay", { "retry-after": "000" }, true, 0],
+    ["four-digit retry delay", { "retry-after": "3600" }, true, 3600],
+    ["maximum safe retry delay", { "retry-after": "9007199254740991" }, true, 9007199254740991],
     ["empty retry delay", { "retry-after": "" }, true, null],
     ["negative retry delay", { "retry-after": "-1" }, true, null],
     ["fractional retry delay", { "retry-after": "1.5" }, true, null],
@@ -119,6 +123,22 @@ describe("GitHubGateway REST transport", () => {
       expect(JSON.stringify(error)).not.toMatch(/private-body|private-header|test-access-token|headers|body/);
     },
   );
+
+  it.each([401, 404, 422, 500, 503])("keeps retry timing without inferring throttling for HTTP %s", async (status) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private-body", {
+        status,
+        headers: { "retry-after": "60", "x-ratelimit-remaining": "0" },
+      }),
+    });
+
+    await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).rejects.toMatchObject({
+      status,
+      rateLimited: false,
+      retryAfterSeconds: 60,
+    });
+  });
 
   it("aborts a stalled GitHub request and exposes only a sanitized timeout error", async () => {
     const gateway = new GitHubGateway({
