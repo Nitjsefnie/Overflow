@@ -74,7 +74,10 @@ describe("account moderation service", () => {
 
     await expect(
       new AccountModerationService(belowFloor).openAccountAudit(moderator(), openAuditInput()),
-    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INSUFFICIENT_SAMPLES",
+      message: `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required.`,
+    });
     expect(belowFloor.lastOpenInput).toBeUndefined();
 
     const atFloor = new TestModerationStore({
