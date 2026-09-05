@@ -8,9 +8,9 @@ import {
   type ApiTokenRouteDependencies,
 } from "@/app/api/tokens/route";
 
-describe("POST /api/tokens", () => {
-  useTrustedOrigin();
+useTrustedOrigin();
 
+describe("POST /api/tokens", () => {
   beforeEach(() => {
     spyOnConsoleOutput();
   });
