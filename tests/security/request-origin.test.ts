@@ -320,6 +320,22 @@ describe("rejecting an unsupported media type", () => {
     );
   });
 
+  // Absent and empty are deliberately different: no header at all is allowed,
+  // a header that claims an empty media type is not.
+  it("rejects a present but empty content type", async () => {
+    const request = mutationRequest({
+      origin: trustedOrigin,
+      "content-type": "",
+    });
+
+    await expectErrorResponse(
+      rejectUntrustedRequest(request, trustedEnv),
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "The request must use the application/json content type.",
+    );
+  });
+
   it("rejects a media type that merely ends in json", async () => {
     const request = mutationRequest({
       origin: trustedOrigin,
@@ -386,6 +402,22 @@ describe("rejecting a request the server is not configured to accept", () => {
 
     await expectErrorResponse(
       rejectUntrustedRequest(request, environment("not-a-url")),
+      500,
+      "MISCONFIGURED",
+      "The server is not configured to accept this request.",
+    );
+  });
+
+  it("rejects every request when APP_URL parses to the opaque origin", async () => {
+    // The opaque origin serializes to "null", which is exactly what a sandboxed
+    // browsing context sends, so it must never become a matchable trusted value.
+    const request = mutationRequest({
+      origin: "null",
+      "content-type": "application/json",
+    });
+
+    await expectErrorResponse(
+      rejectUntrustedRequest(request, environment("data:text/plain,overflow")),
       500,
       "MISCONFIGURED",
       "The server is not configured to accept this request.",
