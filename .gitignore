@@ -89,6 +89,9 @@ src/app/moderation/*
 !src/app/rules/
 src/app/rules/*
 !src/app/rules/*.tsx
+!src/app/session/
+src/app/session/*
+!src/app/session/*.tsx
 !src/components/
 src/components/*
 !src/components/*.tsx
