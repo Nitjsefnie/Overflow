@@ -9,6 +9,13 @@ const DATABASE_SERVICE = "postgres";
 const DATABASE_CONTAINER_PORT = "5432";
 const BIND_VARIABLE = "POSTGRES_HOST_BIND";
 
+// Compose interpolates from an `.env` file in the project directory as well as
+// from the process environment, and both CONTRIBUTING.md and README.md tell a
+// developer to copy `.env.example` to `.env`. Resolving with nothing set is
+// therefore what the documented setup does — but only while that shipped file
+// declares nothing, which the "declares no POSTGRES_HOST_BIND" case pins.
+const SHIPPED_ENVIRONMENT: Record<string, string> = {};
+
 // A Compose service is read as an untyped mapping and narrowed field by field,
 // so a shape this test does not model is reported as a diagnosis instead of
 // surfacing as a TypeError from inside a helper.
@@ -27,8 +34,7 @@ type PortMapping = {
 
 describe("local development database exposure", () => {
   it("declares an explicit host bind address on every published database port", async () => {
-    const [document, shipped] = await readRepositoryConfiguration();
-    const mappings = databasePortMappings(document, shipped);
+    const mappings = databasePortMappings(await readComposeDocument(), SHIPPED_ENVIRONMENT);
 
     expect(mappings).not.toHaveLength(0);
     expect(mappings.filter((mapping) => mapping.bindAddress === "").map((mapping) => mapping.source))
@@ -36,8 +42,7 @@ describe("local development database exposure", () => {
   });
 
   it("resolves every published database port to loopback under the environment the repository ships", async () => {
-    const [document, shipped] = await readRepositoryConfiguration();
-    const mappings = databasePortMappings(document, shipped);
+    const mappings = databasePortMappings(await readComposeDocument(), SHIPPED_ENVIRONMENT);
 
     expect(mappings).not.toHaveLength(0);
     expect(mappings.filter((mapping) => !isLoopbackAddress(mapping.bindAddress))
@@ -59,11 +64,10 @@ describe("local development database exposure", () => {
   });
 
   it("publishes the database on the standard container port", async () => {
-    const [document, shipped] = await readRepositoryConfiguration();
-    const mappings = databasePortMappings(document, shipped);
+    const mappings = databasePortMappings(await readComposeDocument(), SHIPPED_ENVIRONMENT);
 
     expect(mappings).not.toHaveLength(0);
-    expect(mappings.filter((mapping) => mapping.containerPort !== DATABASE_CONTAINER_PORT)
+    expect(mappings.filter((mapping) => !coversDatabasePort(mapping.containerPort))
       .map((mapping) => `${mapping.source} -> ${mapping.containerPort}`)).toEqual([]);
   });
 
@@ -86,26 +90,72 @@ describe("local development database exposure", () => {
       .map(([name]) => name)).toEqual([]);
   });
 
-  it("publishes the database port from no service other than the database service", async () => {
-    const [document, shipped] = await readRepositoryConfiguration();
-    const services = composeServices(document);
+  it("binds every mapping touching the database port to loopback, on every service", async () => {
+    const services = composeServices(await readComposeDocument());
 
     expect(Object.keys(services)).toContain(DATABASE_SERVICE);
     expect(Object.entries(services)
-      .filter(([name]) => name !== DATABASE_SERVICE)
       .flatMap(([name, service]) => servicePorts(name, service)
-        .map((port) => resolvePortMapping(port, shipped))
-        .filter((mapping) => coversDatabasePort(mapping.containerPort))
-        .map((mapping) => `${name}: ${mapping.source}`))).toEqual([]);
+        .map((port) => resolvePortMapping(port, SHIPPED_ENVIRONMENT))
+        .filter((mapping) => touchesDatabasePort(mapping) && !isLoopbackAddress(mapping.bindAddress))
+        .map((mapping) => `${name}: ${mapping.source} -> ${mapping.bindAddress || "every interface"}`)))
+      .toEqual([]);
   });
 
-  it(`ships no widened ${BIND_VARIABLE} in ${ENVIRONMENT_FILE}, which developers are told to copy to .env`, async () => {
-    const shipped = await readShippedEnvironment();
+  it(`declares no ${BIND_VARIABLE} in ${ENVIRONMENT_FILE}, which developers are told to copy to .env`, async () => {
+    const contents = await readFile(resolve(ENVIRONMENT_FILE), "utf8");
+    const declaration = new RegExp(String.raw`^[ \t]*(?:export[ \t]+)?${BIND_VARIABLE}[ \t]*=.*$`, "m");
 
-    expect(shipped).toHaveProperty("DATABASE_URL");
-    // Absent is the shipped state: Compose then applies the loopback default
-    // that the cases above pin.
-    expect(isLoopbackAddress(shipped[BIND_VARIABLE] ?? "127.0.0.1")).toBe(true);
+    // The shipped file identifies itself, so an emptied or renamed one cannot
+    // satisfy the assertion below by carrying nothing at all.
+    expect(contents).toMatch(/^DATABASE_URL=/m);
+    expect(declaration.exec(contents)?.[0] ?? null).toBeNull();
+  });
+});
+
+describe("compose document parsing", () => {
+  it("resolves a merge key that puts the database service in host network mode", () => {
+    const services = composeServices(parseComposeDocument([
+      "x-net: &net",
+      "  network_mode: host",
+      "services:",
+      "  postgres:",
+      "    <<: *net",
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+    ].join("\n")));
+
+    expect(services[DATABASE_SERVICE].network_mode).toBe("host");
+  });
+
+  it("resolves a merge key that publishes the database port from a second service", () => {
+    const services = composeServices(parseComposeDocument([
+      "x-wide: &wide",
+      "  ports:",
+      '    - "0.0.0.0:5432:5432"',
+      "services:",
+      "  postgres:",
+      "    ports:",
+      '      - "127.0.0.1:5432:5432"',
+      "  pgbouncer:",
+      "    <<: *wide",
+    ].join("\n")));
+
+    expect(servicePorts("pgbouncer", services.pgbouncer).map((port) => resolvePortMapping(port, {})))
+      .toMatchObject([{ bindAddress: "0.0.0.0", hostPort: "5432", containerPort: "5432" }]);
+  });
+
+  it("resolves a merge key that supplies the database service's own published ports", () => {
+    const document = parseComposeDocument([
+      "x-wide: &wide",
+      "  ports:",
+      '    - "0.0.0.0:5432:5432"',
+      "services:",
+      "  postgres:",
+      "    <<: *wide",
+    ].join("\n"));
+
+    expect(databasePortMappings(document, {})).toMatchObject([{ bindAddress: "0.0.0.0" }]);
   });
 });
 
@@ -147,15 +197,33 @@ describe("compose port resolution", () => {
   });
 
   it("treats only loopback addresses as loopback", () => {
+    // Every accepted spelling below was taken by `docker create -p
+    // <ip>:15499:80`; `localhost` and `0177.0.0.1` were refused by it with
+    // "Invalid ip address", so treating them as loopback would be a fiction.
     expect(["127.0.0.1", "127.0.0.2", "::1"].map(isLoopbackAddress)).toEqual([true, true, true]);
+    expect(["::ffff:127.0.0.1", "0:0:0:0:0:0:0:1", "[::ffff:127.0.0.1]", "[0:0:0:0:0:0:0:1]"]
+      .map(isLoopbackAddress)).toEqual([true, true, true, true]);
     expect(["0.0.0.0", "::", "192.168.1.10", ""].map(isLoopbackAddress))
+      .toEqual([false, false, false, false]);
+    expect(["localhost", "0177.0.0.1", "::ffff:0.0.0.0", "0:0:0:0:0:0:0:0"].map(isLoopbackAddress))
       .toEqual([false, false, false, false]);
   });
 
-  it("counts a container-side port range as publishing the database port", () => {
+  it("counts a port range as covering the database port", () => {
     expect(["5432", "5430-5440"].map(coversDatabasePort)).toEqual([true, true]);
     expect(["5433", "15432", "5433-5440", ""].map(coversDatabasePort))
       .toEqual([false, false, false, false]);
+  });
+
+  it("counts a mapping as touching the database port on either side of the mapping", () => {
+    const mapping = (hostPort: string, containerPort: string): PortMapping =>
+      ({ source: `${hostPort}:${containerPort}`, bindAddress: "", hostPort, containerPort });
+
+    expect(touchesDatabasePort(mapping("5432", "6432"))).toBe(true);
+    expect(touchesDatabasePort(mapping("6432", "5432"))).toBe(true);
+    expect(touchesDatabasePort(mapping("5430-5440", "6432"))).toBe(true);
+    expect(touchesDatabasePort(mapping("6432", "6432"))).toBe(false);
+    expect(touchesDatabasePort(mapping("", "6432"))).toBe(false);
   });
 
   it("names the service when docker-compose.yml does not declare the database service", () => {
@@ -164,31 +232,14 @@ describe("compose port resolution", () => {
     expect(() => databaseService({ version: "3.9" })).toThrow(/services/);
   });
 
-  it("reports a database service that publishes nothing", () => {
-    expect(() => databasePortMappings({ services: { postgres: {} } }, {}))
-      .toThrow(/publishes no port/);
-  });
-});
+  it("reports a database service that publishes nothing as read, without diagnosing why", () => {
+    const unpublished = () => databasePortMappings({ services: { postgres: {} } }, {});
 
-describe("dotenv parsing", () => {
-  it("reads the assignments Compose would read from an env file", () => {
-    expect(parseEnvironmentFile([
-      "# a comment",
-      "",
-      "PLAIN=value",
-      "export EXPORTED=value",
-      'QUOTED="quoted value"',
-      "WITH_EQUALS=postgresql://user:pass@host/db?a=b",
-    ].join("\n"))).toEqual({
-      PLAIN: "value",
-      EXPORTED: "value",
-      QUOTED: "quoted value",
-      WITH_EQUALS: "postgresql://user:pass@host/db?a=b",
-    });
-  });
-
-  it("refuses a line it cannot model rather than silently dropping it", () => {
-    expect(() => parseEnvironmentFile("POSTGRES_HOST_BIND 0.0.0.0")).toThrow(/POSTGRES_HOST_BIND 0\.0\.0\.0/);
+    expect(unpublished).toThrow(/declares no published port/);
+    // Whether the database is reachable is not something a port list answers —
+    // a service in host network mode reaches it with no mapping at all — so the
+    // message states what was read rather than what it would imply.
+    expect(unpublished).not.toThrow(/cannot reach the database/);
   });
 });
 
@@ -224,20 +275,17 @@ describe("compose variable interpolation", () => {
   }
 });
 
-async function readRepositoryConfiguration(): Promise<[unknown, Record<string, string>]> {
-  return Promise.all([readComposeDocument(), readShippedEnvironment()]);
-}
-
 async function readComposeDocument(): Promise<unknown> {
-  return parse(await readFile(resolve(COMPOSE_FILE), "utf8"));
+  return parseComposeDocument(await readFile(resolve(COMPOSE_FILE), "utf8"));
 }
 
-// Compose interpolates from an `.env` file in the project directory as well as
-// from the process environment, and both CONTRIBUTING.md and README.md tell a
-// developer to copy `.env.example` to `.env`, so this is what "unset" means to
-// somebody following the documented setup.
-async function readShippedEnvironment(): Promise<Record<string, string>> {
-  return parseEnvironmentFile(await readFile(resolve(ENVIRONMENT_FILE), "utf8"));
+// Compose resolves YAML merge keys, so a service can receive `ports:`,
+// `network_mode:` or anything else this file reads from an anchor instead of
+// writing it out. The `yaml` package does not resolve them unless asked, and
+// without this option such a service is invisible to every assertion above
+// while Compose still publishes it.
+function parseComposeDocument(text: string): unknown {
+  return parse(text, { merge: true });
 }
 
 function composeServices(document: unknown): Record<string, ComposeService> {
@@ -288,8 +336,8 @@ function databasePortMappings(document: unknown, environment: Record<string, str
     .map((port) => resolvePortMapping(port, environment));
   if (mappings.length === 0) {
     throw new Error(
-      `${COMPOSE_FILE} publishes no port from the "${DATABASE_SERVICE}" service, ` +
-      `so the documented local setup cannot reach the database at all.`,
+      `${COMPOSE_FILE} declares no published port on the "${DATABASE_SERVICE}" service, ` +
+      `so there is no bind address for this suite to pin. Publish the port under "ports:".`,
     );
   }
   return mappings;
@@ -377,38 +425,34 @@ function stripBrackets(address: string): string {
   return address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
 }
 
+// Docker accepts a bind address in any of these spellings; `localhost` and
+// octal forms such as `0177.0.0.1` it rejects outright, so this classifier has
+// no reason to understand them.
+const LOOPBACK_ADDRESSES = [
+  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/i,
+  /^::1$/,
+  /^(?:0{1,4}:){7}0{0,3}1$/,
+];
+
 function isLoopbackAddress(address: string): boolean {
   const bare = stripBrackets(address);
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare) || bare === "::1";
+  return LOOPBACK_ADDRESSES.some((spelling) => spelling.test(bare));
 }
 
-function coversDatabasePort(containerPort: string): boolean {
-  const range = /^(\d+)-(\d+)$/.exec(containerPort);
-  if (range === null) return containerPort === DATABASE_CONTAINER_PORT;
+// A port entry is either a single port or a range, on either side of a mapping.
+function coversDatabasePort(port: string): boolean {
+  const range = /^(\d+)-(\d+)$/.exec(port);
+  if (range === null) return port === DATABASE_CONTAINER_PORT;
   return Number(range[1]) <= Number(DATABASE_CONTAINER_PORT)
     && Number(DATABASE_CONTAINER_PORT) <= Number(range[2]);
 }
 
-function parseEnvironmentFile(contents: string): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const line of contents.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const assignment = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
-    if (assignment === null) {
-      throw new Error(
-        `${ENVIRONMENT_FILE} carries the line ${JSON.stringify(trimmed)}, ` +
-        `which is neither a comment nor a NAME=value assignment.`,
-      );
-    }
-    environment[assignment[1]] = unquote(assignment[2]);
-  }
-  return environment;
-}
-
-function unquote(value: string): string {
-  const quoted = /^(["'])(.*)\1$/.exec(value);
-  return quoted === null ? value : quoted[2];
+// Which side of a mapping the database port sits on says nothing about who can
+// reach it: a sibling published as "0.0.0.0:5432:6432" puts the database port on
+// every interface just as surely as one published as "0.0.0.0:6432:5432".
+function touchesDatabasePort(mapping: PortMapping): boolean {
+  return coversDatabasePort(mapping.hostPort) || coversDatabasePort(mapping.containerPort);
 }
 
 const SUPPORTED_INTERPOLATION = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?)-([^}]*))?\}/g;
