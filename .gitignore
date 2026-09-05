@@ -60,6 +60,9 @@ src/app/api/overrides/[[]id[]]/*
 !src/app/api/repositories/
 src/app/api/repositories/*
 !src/app/api/repositories/*.ts
+!src/app/api/tokens/
+src/app/api/tokens/*
+!src/app/api/tokens/*.ts
 !src/app/dashboard/
 src/app/dashboard/*
 !src/app/dashboard/*.tsx
