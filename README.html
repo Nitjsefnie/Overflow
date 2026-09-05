@@ -58,6 +58,7 @@
       <p>On this page</p>
       <a href="#overview">Overview</a>
       <a href="#instance">Join the instance</a>
+      <a href="#catalogs">Catalogs and headroom</a>
       <a href="#scoring">Scoring and calibration</a>
       <a href="#own-instance">Your own instance</a>
       <a href="#development">Development setup</a>
@@ -77,20 +78,20 @@
         <div class="callout">
           <strong>Overflow is already running at <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a>.</strong> Pointing you at that instance is what this repository is for. You do not need to deploy anything to use Overflow — sign in there and join the ledger that already exists. The setup instructions further down build a development environment for changing Overflow itself; they are not the way to use it.
         </div>
+        <p>This repository is registered in that instance. <code>Nitjsefnie/Overflow</code> is a row in its ledger and the issues in this tracker are rows joined to it, so the mechanism described below can be watched working on this repository itself.</p>
       </header>
 
       <h2 id="instance">Join the running instance</h2>
       <ol>
         <li><strong>Sign in.</strong> Open <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a> and choose <em>Sign in with GitHub</em>. That is the whole account setup — there is nothing to install and nothing to configure.</li>
-        <li><strong>Register a repository you administer.</strong> Use <em>Register a repository</em> and submit one <code>owner/name</code> or canonical GitHub URL. Registration is explicit and one at a time, and GitHub must report you as an administrator of that repository.</li>
-        <li><strong>Choose the repository’s catalogs.</strong> The opening catalog is the set of <code>offered:</code> labels the repository prices work with, in its own vocabulary; the actual catalog maps each point from 1 through 10 onto a settlement label. The words are yours, the point scale is shared.</li>
-        <li><strong>Label the work.</strong> Apply an opening label when you file an issue, before anyone is assigned, and settle it between the closing pull request’s final commit and its merge with a label and a comment naming that label. Those labels are the ledger’s input, not decoration.</li>
-        <li><strong>Read the ledger.</strong> A signed-in member gets <em>Ledger</em>, <em>Issues</em>, <em>Settlements</em>, <em>Calibration</em> and <em>Rules</em>, and the in-product rules page states the same rules this guide does.</li>
+        <li><strong>Register a repository, catalogs and all, on one form.</strong> <em>Register a repository</em> takes the repository and both of its catalogs and submits them together; there is no separate catalog-editing page afterwards, so decide the labels and their points before you start. Bring a public repository you administer. Registration writes to it: Overflow creates the catalog labels there and installs its webhook. <a href="#catalogs">Repository catalogs and headroom</a> is the reference for what a catalog has to contain.</li>
+        <li><strong>Offer work, then settle it.</strong> Apply an opening label when you file an issue, and a result label with a comment naming it before you merge the closing pull request. Those are the labels Overflow created for you in step 2. <a href="#catalogs">Repository catalogs and headroom</a> states the evidence each label has to satisfy, and <a href="#scoring">scoring</a> what it is worth.</li>
+        <li><strong>Read the ledger.</strong> A signed-in member gets <em>Ledger</em>, <em>Issues</em>, <em>Settlements</em>, <em>Register a repository</em>, <em>Calibration</em> and <em>Rules</em>.</li>
       </ol>
-      <p>Closing work needs no repository of your own. Take an issue in a repository that is already registered, and the settlement lands in your ledger when the pull request merges and the issue owner settles it — if you have not signed in yet it waits as an unclaimed settlement until your GitHub identity is claimed.</p>
+      <p>Closing work needs no repository of your own. Take an issue in a repository that is already registered; <a href="#catalogs">Repository catalogs and headroom</a> and <a href="#scoring">scoring</a> are the terms the credit settles on, including what happens when you have not signed in yet.</p>
 
-      <h2>Repository catalogs and headroom</h2>
-      <p>Repository registration is explicit and one at a time. The signed-in person submits one <code>owner/name</code> or canonical GitHub URL and must hold GitHub administrator permission for that repository.</p>
+      <h2 id="catalogs">Repository catalogs and headroom</h2>
+      <p>Repository registration is explicit and one at a time. The signed-in person submits one <code>owner/name</code> or canonical GitHub URL, which must be a public repository they hold GitHub administrator permission for.</p>
       <p>Opening catalogs are entirely repository-chosen: S/M/L can work, as can <em>moonlit ridge</em>, <em>risk: high</em>, or another local vocabulary. Every opening label has comparison and reserve points from 1 through 10. Every actual catalog must contain exactly one editable label for each point from 1 through 10.</p>
       <p>The dashboard reads materialized ledger entries. Available headroom is <code>settled balance − reserved points</code> for open issues assigned to outside contributors, and negative headroom remains visible. This release enforces no credit floor and exposes no floor configuration; optional group floors await a later idempotent assignment-enforcement design.</p>
       <p>GitHub GraphQL <code>closedByPullRequestsReferences</code> is the only closing-link authority. Opening difficulty comes from the earliest configured label the issue owner applied before the first assignment. Settlement requires an owner-applied issue label between the closing pull request’s final commit and merge plus a nonblank owner comment in that window naming the label. Pull-request labels never price work. Event and comment IDs, actors and times, the exact merge commit OID, and the diff fingerprint remain available as proof.</p>
@@ -102,11 +103,9 @@
       <p>Moderation is account-level and evidence-led: open an audit from paired samples, warn when the evidence warrants it, require recalibration before reactivation, and ban only after confirmed patterns persist.</p>
 
       <h2 id="own-instance">Running your own instance is not the way to use Overflow</h2>
-      <p>Everything from here on is for people changing Overflow’s code or operating a deployment. The instructions are accurate and contributors need them, but what they build is a development environment, not a route to using Overflow.</p>
       <p>Each instance keeps its own ledger. Balances, reserves, settlements, proof records and calibration history live in that instance’s own PostgreSQL database, and nothing in this codebase moves them between deployments. A second instance therefore starts empty and stays private to itself: no registered repositories, no counterpart to settle with, and no credit that anyone else can see or honour. Signing in at <a href="https://overflow.nitjsefni.eu">overflow.nitjsefni.eu</a> is what puts your work in a ledger other people are already reading.</p>
 
       <h2 id="development">Development setup</h2>
-      <p>These steps stand up a local copy for working on Overflow itself.</p>
       <ol>
         <li>Copy <code>.env.example</code> to <code>.env</code> and replace every placeholder. Generate <code>AUTH_SECRET</code> with <code>npx auth secret</code>; make <code>TOKEN_ENCRYPTION_KEY</code> from 32 random bytes encoded as unpadded base64url.</li>
         <li>Use an already-installed PostgreSQL 17 instance, or start the supplied Compose service.</li>
@@ -116,6 +115,7 @@ pnpm install --frozen-lockfile
 pnpm db:migrate
 pnpm dev</pre>
       <p>Run the project gates with <code>pnpm test --run</code>, <code>pnpm lint</code>, <code>pnpm typecheck</code>, and <code>pnpm build</code>.</p>
+      <p><code>CONTRIBUTING.md</code> covers the rest of the development surface, including the conventions that reject work silently.</p>
 
       <h2 id="operating">Operating an instance: GitHub OAuth and webhooks</h2>
       <p>This section is operator configuration for a deployment you run yourself; on the running instance it is already done. <code>https://&lt;public-host&gt;</code> is a placeholder for your own deployment’s origin — replace it with that origin, and do not read it as an address to visit.</p>

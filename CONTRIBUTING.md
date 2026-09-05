@@ -55,7 +55,7 @@ code**. It is not how you use Overflow — that is
 <https://overflow.nitjsefni.eu>. A copy you run yourself keeps its own ledger in
 its own PostgreSQL database, and nothing in this codebase moves balances,
 settlements or calibration between deployments, so a local instance starts empty
-and stays private to itself. Run it to change Overflow, not to participate in it.
+and stays private to itself.
 
 Node and pnpm are pinned in `package.json`. `engines` names Node `24.17.0` and
 pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
