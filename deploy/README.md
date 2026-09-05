@@ -65,14 +65,18 @@ ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/node /usr/local/bin/node
 The last command must print `v24.17.0`.
 
 pnpm is needed for installs, migrations and builds, all of which run as root.
-The service itself never runs pnpm, so pnpm does not have to be reachable from
-the unit's `PATH`.
+The service never runs pnpm, so the corepack shims go in `/usr/local/sbin`,
+which the unit's `PATH` of `/usr/local/bin:/usr/bin:/bin` does not reach and
+root's default `PATH` does.
 
 ```bash
-ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/corepack /usr/local/bin/corepack
-corepack enable --install-directory /usr/local/bin
+ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/corepack /usr/local/sbin/corepack
+corepack enable --install-directory /usr/local/sbin
 corepack prepare pnpm@10.33.0 --activate
+pnpm --version
 ```
+
+The last command must print `10.33.0`, the version `package.json` pins.
 
 ## 4. Build the deployment tree
 
@@ -148,9 +152,11 @@ Expected: `active`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
 is worth reading after any change to the unit.
 
 Restrictions only bite on the code paths that use them, so exercise the
-application beyond the landing page before calling the switch done: sign in, and
-run `pnpm reconcile -- --repository <owner>/<name>` so an outbound GitHub call
-and a database write both happen under the new identity. The unit sets
+application through the browser before calling the switch done: sign in with
+GitHub, open the dashboard, and register a repository. That is what makes DNS
+resolution, an outbound HTTPS call to GitHub and a database write happen inside
+the sandboxed process; `pnpm reconcile` does not, because it runs as root
+outside the unit and so is subject to none of these restrictions. The unit sets
 `SystemCallErrorNumber=EPERM`, so a syscall the filter blocks surfaces as an
 error in the journal rather than as a killed process:
 
