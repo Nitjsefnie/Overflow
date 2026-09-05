@@ -188,6 +188,52 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
     expect(error.message).toBe(`GitHub GraphQL request failed. FORBIDDEN: ${expectedMessage}`);
   });
 
+  it.each(["type", "message"])("does not split a surrogate pair when truncating %s", async (field) => {
+    const text = `${"a".repeat(510)}😀b`;
+    const error = await failureFor([{
+      type: field === "type" ? text : "FORBIDDEN",
+      message: field === "message" ? text : "Denied",
+    }]);
+    const retained = `${"a".repeat(510)}…`;
+
+    expect(error.message).toBe(field === "type"
+      ? `GitHub GraphQL request failed. ${retained}: Denied`
+      : `GitHub GraphQL request failed. FORBIDDEN: ${retained}`);
+    expect(() => encodeURIComponent(error.message)).not.toThrow();
+  });
+
+  it("keeps a complete path preview and later segments after a long first segment", async () => {
+    const error = await failureFor([{
+      type: "FORBIDDEN",
+      message: "Denied",
+      path: ["p".repeat(512), "issues", 0, "title"],
+    }]);
+    const preview = error.message.split(" path=")[1];
+
+    expect(preview.length).toBeLessThanOrEqual(512);
+    expect(JSON.parse(preview)).toEqual([`${"p".repeat(45)}…`, "issues", 0, "title"]);
+  });
+
+  it("bounds escaped path strings without breaking JSON or Unicode", async () => {
+    const error = await failureFor([{
+      type: "FORBIDDEN",
+      message: "Denied",
+      path: Array.from({ length: 11 }, () => `${"\u0000".repeat(7)}😀\\\"more`),
+    }]);
+    const preview = error.message.split(" path=")[1];
+
+    expect(preview.length).toBeLessThanOrEqual(512);
+    expect(JSON.parse(preview)).toEqual([
+      ...Array.from({ length: 10 }, () => `${"\u0000".repeat(7)}😀…`), "…",
+    ]);
+  });
+
+  it("distinguishes a malformed path segment from a genuine question mark", async () => {
+    const error = await failureFor([{ type: "FORBIDDEN", message: "Denied", path: ["?", {}] }]);
+
+    expect(error.message).toContain('path=["?",null]');
+  });
+
   it.each([
     [10, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9"]'],
     [11, '["s0","s1","s2","s3","s4","s5","s6","s7","s8","s9","…"]'],
