@@ -5,13 +5,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   CANONICAL_SECTIONS,
   FALSE_SPELLINGS,
+  NonCanonicalUnit,
   TRUE_SPELLINGS,
   type UnitEntry,
   type UnitSection,
   isUnderRoot,
   parseUnitFile,
   pathCandidates,
-  toWords,
 } from "../support/systemd-unit";
 
 /**
@@ -250,6 +250,32 @@ function startCommandTokens(command: ReadonlyArray<string>): string[] {
   });
 }
 
+function expectPinnedValue(entry: UnitEntry, required: string): void {
+  if (entry.value !== required) {
+    throw new NonCanonicalUnit(
+      `rule 6 (exact pinned spelling): line ${entry.line} [${entry.section}] ${entry.key} is pinned to ` +
+        `"${required}"; write "${entry.key}=${required}" instead of "${entry.key}=${entry.value}"`,
+    );
+  }
+}
+
+describe("canonical pinned values", () => {
+  it.each([
+    ["Service", "ProtectHome", "true", "yes"],
+    ["Service", "UMask", "077", "0077"],
+    ["Service", "RestrictAddressFamilies", "AF_UNIX AF_INET6 AF_INET", "AF_INET AF_INET6 AF_UNIX"],
+    ["Unit", "Description", "Overflow  production web application", "Overflow production web application"],
+    ["Install", "WantedBy", "multi-user.target multi-user.target", "multi-user.target"],
+  ])("refuses [%s] %s=%s with the exact spelling to use", (section, key, value, required) => {
+    const entry = parseUnitFile(`[${section}]\n${key}=${value}\n`)[0]!;
+
+    expect(() => expectPinnedValue(entry, required)).toThrow(
+      `rule 6 (exact pinned spelling): line 2 [${section}] ${key} is pinned to ` +
+        `"${required}"; write "${key}=${required}" instead of "${key}=${value}"`,
+    );
+  });
+});
+
 describe("start command tokens", () => {
   it.each([
     [["--hostname=127.0.0.1"], ["--hostname", "127.0.0.1"]],
@@ -365,9 +391,7 @@ describe("Overflow production unit", () => {
   });
 
   it.each(requiredServiceValues)("pins [Service] %s to %s", (key, required) => {
-    expect([...only("Service", key).words].sort()).toEqual(
-      [...toWords(key, required)].sort(),
-    );
+    expectPinnedValue(only("Service", key), required);
   });
 
   it.each(requiredServiceSwitches)("turns [Service] %s on", (key) => {
@@ -375,13 +399,11 @@ describe("Overflow production unit", () => {
   });
 
   it.each(requiredUnitValues)("pins [Unit] %s to %s", (key, required) => {
-    expect([...only("Unit", key).words].sort()).toEqual([...toWords(key, required)].sort());
+    expectPinnedValue(only("Unit", key), required);
   });
 
   it.each(requiredInstallValues)("pins [Install] %s to %s", (key, required) => {
-    expect([...only("Install", key).words].sort()).toEqual(
-      [...toWords(key, required)].sort(),
-    );
+    expectPinnedValue(only("Install", key), required);
   });
 
   it("leaves MemoryDenyWriteExecute off so V8 can map its JIT pages", () => {

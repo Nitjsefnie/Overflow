@@ -6,6 +6,8 @@ export const CANONICAL_SECTIONS = ["Unit", "Service", "Install"] as const;
 export type UnitSection = (typeof CANONICAL_SECTIONS)[number];
 
 export type UnitEntry = {
+  /** One-based source line for actionable policy refusals. */
+  line: number;
   section: UnitSection;
   key: string;
   /** Everything after the `=`, verbatim, with `%%` resolved to a literal `%`. */
@@ -230,9 +232,16 @@ export function parseUnitFile(source: string | Uint8Array): UnitEntry[] {
       throw new NonCanonicalUnit(`line ${number} assigns ${key}= before any section header`);
     }
 
-    const value = withoutSpecifiers(key, assignment[2]!);
+    const written = assignment[2]!;
+    if (written.startsWith(" ")) {
+      throw new NonCanonicalUnit(
+        `rule 4 (assignment spacing): line ${number} value may not begin with whitespace; ` +
+          `write "${key}=${written.replace(/^ +/, "")}" instead of "${line}"`,
+      );
+    }
+    const value = withoutSpecifiers(key, written);
 
-    entries.push({ section, key, value, words: toWords(key, value) });
+    entries.push({ line: number, section, key, value, words: toWords(key, value) });
   }
 
   return entries;
