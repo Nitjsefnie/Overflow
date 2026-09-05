@@ -405,6 +405,22 @@ describe("settlement evidence timing grace", () => {
     expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: null });
   });
 
+  it("accepts a settled label applied exactly fifteen minutes after the merge", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T12:15:00.000Z");
+    setRationaleCommentAt(snapshot, "2026-09-01T12:05:00.000Z");
+
+    expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: 6 });
+  });
+
+  it("rejects a settled label applied fifteen minutes and one millisecond after the merge", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T12:15:00.001Z");
+    setRationaleCommentAt(snapshot, "2026-09-01T12:05:00.000Z");
+
+    expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: null });
+  });
+
   it("accepts a rationale comment posted shortly after the merge", () => {
     const snapshot = outsiderFixture();
     setRationaleCommentAt(snapshot, "2026-09-01T12:10:00.000Z");
@@ -431,6 +447,22 @@ describe("settlement evidence timing grace", () => {
     const snapshot = outsiderFixture();
     setActualLabelAppliedAt(snapshot, "2026-09-01T11:00:00.000Z");
     setRationaleCommentAt(snapshot, "2026-09-01T10:40:00.000Z");
+
+    expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: null });
+  });
+
+  it("accepts a rationale comment posted exactly fifteen minutes before its label", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T11:00:00.000Z");
+    setRationaleCommentAt(snapshot, "2026-09-01T10:45:00.000Z");
+
+    expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: 6 });
+  });
+
+  it("rejects a rationale comment posted fifteen minutes and one millisecond before its label", () => {
+    const snapshot = outsiderFixture();
+    setActualLabelAppliedAt(snapshot, "2026-09-01T11:00:00.000Z");
+    setRationaleCommentAt(snapshot, "2026-09-01T10:44:59.999Z");
 
     expect(foldRepository(snapshot).settlements[0]).toMatchObject({ settledPoints: null });
   });
@@ -472,6 +504,31 @@ describe("settlement rationale pairing", () => {
 
     expect(foldRepository(snapshot).issues[0]).toMatchObject({
       settledLabelEventId: "actual-1",
+      settledRationaleCommentId: "comment-2",
+    });
+  });
+
+  it("prefers a rationale exactly at the label over earlier and later rationales", () => {
+    const snapshot = outsiderFixture();
+    setRationaleCommentAt(snapshot, "2026-09-01T10:50:00.000Z");
+    snapshot.issues[0]!.comments.push(
+      {
+        id: "comment-2",
+        databaseId: 402,
+        authorLogin: "sponsor",
+        body: "Settled as delivered/6 while applying the label.",
+        createdAt: "2026-09-01T11:00:00.000Z",
+      },
+      {
+        id: "comment-3",
+        databaseId: 403,
+        authorLogin: "sponsor",
+        body: "Still delivered/6 after reviewing the final diff.",
+        createdAt: "2026-09-01T11:05:00.000Z",
+      },
+    );
+
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({
       settledRationaleCommentId: "comment-2",
     });
   });
