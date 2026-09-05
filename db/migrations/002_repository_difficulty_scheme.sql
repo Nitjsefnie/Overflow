@@ -97,6 +97,47 @@ begin
 end;
 $$;
 
+-- Overflow prices work from a repository's difficulty scheme and registration in
+-- src/lib/repositories/register.ts requires the sponsor to supply one, so there is no
+-- defensible default to backfill: a fabricated scheme would misprice legacy work.
+-- Repositories registered before this migration must be given a scheme by hand, or be
+-- removed, before upgrading.
+do $$
+declare
+  affected_count bigint;
+  affected_owner_names text;
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'registered_repositories'
+      and column_name = 'difficulty_scheme'
+  ) then
+    select count(*), (
+      select string_agg(sample.owner_name, ', ' order by sample.owner_name)
+      from (select owner_name from registered_repositories order by owner_name limit 5) as sample
+    )
+    into affected_count, affected_owner_names
+    from registered_repositories;
+
+    if affected_count > 0 then
+      raise exception 'Repository difficulty scheme precondition failed: % repository(ies) predate the difficulty scheme. Repositories: %. Give each repository a difficulty scheme by adding the difficulty_scheme column and backfilling it by hand, or remove the legacy repositories, before upgrading.',
+        affected_count, affected_owner_names;
+    end if;
+  end if;
+end;
+$$;
+
+-- Split so the by-hand recovery above reaches a schema identical to a fresh install:
+-- a single `add column if not exists ... not null check (...)` is skipped whole when the
+-- column is already present, silently dropping the validity check.
 alter table registered_repositories
-add column difficulty_scheme jsonb not null
+add column if not exists difficulty_scheme jsonb;
+
+alter table registered_repositories
+alter column difficulty_scheme set not null;
+
+alter table registered_repositories
+add constraint registered_repositories_difficulty_scheme_check
 check (is_valid_repository_difficulty_scheme(difficulty_scheme));
