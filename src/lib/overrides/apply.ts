@@ -1,5 +1,5 @@
 import { creditsForSettledPoints, isPointsValue } from "@/lib/domain/settlement";
-import type { FoldSettlement } from "@/lib/fold/repository-fold";
+import type { FoldSettlement, SelfWorkCalibration } from "@/lib/fold/repository-fold";
 
 /**
  * Rewrites a folded settlement with the settled points a moderator granted.
@@ -36,4 +36,32 @@ export function applyGrantedSettlementOverride(
   }
 
   return { ...settlement, settledPoints, credits, status: "SETTLED" };
+}
+
+/**
+ * Rewrites a folded self-work calibration with the actual points a moderator
+ * granted.
+ *
+ * Self-work earns no credits, so a correction here only restates how difficult
+ * the delivered work turned out to be — the figure the calibration compares
+ * against the opening estimate. It is applied beside the fold for the same
+ * reason a settlement correction is: materialization rewrites calibration rows
+ * from immutable GitHub history on every run, so a correction written into the
+ * row would not survive the next reconciliation.
+ *
+ * The evidence fields stay exactly as the fold left them. The fold looked for an
+ * actual-difficulty label and the rationale comment that authorizes it and found
+ * neither, and a moderator's grant is a points decision, not a claim about what
+ * GitHub recorded — so no label, label event, actor or timestamp is invented
+ * here.
+ */
+export function applyGrantedSelfWorkCalibrationOverride(
+  calibration: SelfWorkCalibration,
+  actualPoints: number,
+): SelfWorkCalibration {
+  if (!isPointsValue(actualPoints)) {
+    return calibration;
+  }
+
+  return { ...calibration, actualPoints };
 }

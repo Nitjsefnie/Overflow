@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { FoldSettlement } from "@/lib/fold/repository-fold";
-import { applyGrantedSettlementOverride } from "@/lib/overrides/apply";
+import type { FoldSettlement, SelfWorkCalibration } from "@/lib/fold/repository-fold";
+import {
+  applyGrantedSelfWorkCalibrationOverride,
+  applyGrantedSettlementOverride,
+} from "@/lib/overrides/apply";
 
 function unsettled(overrides: Partial<FoldSettlement> = {}): FoldSettlement {
   return {
@@ -89,5 +92,61 @@ describe("granted settlement override applied to a folded settlement", () => {
     expect(applyGrantedSettlementOverride(settlement, 0)).toEqual(settlement);
     expect(applyGrantedSettlementOverride(settlement, 11)).toEqual(settlement);
     expect(applyGrantedSettlementOverride(settlement, 4.5)).toEqual(settlement);
+  });
+});
+
+function uncalibrated(overrides: Partial<SelfWorkCalibration> = {}): SelfWorkCalibration {
+  return {
+    githubIssueId: 51,
+    githubPullRequestId: 5_100,
+    userId: "sponsor-id",
+    openingComparisonPoints: 5,
+    actualLabel: null,
+    actualPoints: null,
+    actualLabelEventId: null,
+    actualLabelActorLogin: null,
+    actualLabelAppliedAt: null,
+    rationaleCommentId: null,
+    rationaleActorLogin: null,
+    rationaleCommentedAt: null,
+    mergeCommitOid: "c".repeat(40),
+    mergedAt: "2026-09-01T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("granted correction applied to a folded self-work calibration", () => {
+  it("records the actual points a moderator granted", () => {
+    expect(applyGrantedSelfWorkCalibrationOverride(uncalibrated(), 6).actualPoints).toBe(6);
+  });
+
+  it("corrects a calibration the fold already priced at the wrong points", () => {
+    const miscalibrated = uncalibrated({ actualLabel: "delivered/2", actualPoints: 2 });
+
+    expect(applyGrantedSelfWorkCalibrationOverride(miscalibrated, 8).actualPoints).toBe(8);
+  });
+
+  it("invents none of the evidence GitHub never recorded", () => {
+    const before = uncalibrated();
+    const applied = applyGrantedSelfWorkCalibrationOverride(before, 6);
+
+    expect(applied.actualLabel).toBeNull();
+    expect(applied.actualLabelEventId).toBeNull();
+    expect(applied.actualLabelActorLogin).toBeNull();
+    expect(applied.actualLabelAppliedAt).toBeNull();
+    expect(applied.rationaleCommentId).toBeNull();
+    expect(applied.rationaleActorLogin).toBeNull();
+    expect(applied.rationaleCommentedAt).toBeNull();
+    expect(applied.openingComparisonPoints).toBe(before.openingComparisonPoints);
+    expect(applied.mergeCommitOid).toBe(before.mergeCommitOid);
+    expect(before.actualPoints).toBeNull();
+  });
+
+  it("ignores points outside the catalog range", () => {
+    const calibration = uncalibrated();
+
+    expect(applyGrantedSelfWorkCalibrationOverride(calibration, 0)).toEqual(calibration);
+    expect(applyGrantedSelfWorkCalibrationOverride(calibration, 11)).toEqual(calibration);
+    expect(applyGrantedSelfWorkCalibrationOverride(calibration, 4.5)).toEqual(calibration);
   });
 });
