@@ -533,7 +533,7 @@ function resolveSettledDifficulty(
     return {
       kind: "rejected",
       violation: "SETTLED_LABEL_UNAUTHORIZED",
-      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the issue owner \`${raterLogin}\`.`,
+      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the repository sponsor \`${raterLogin}\`.`,
     };
   }
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
@@ -564,7 +564,9 @@ function resolveSettledDifficulty(
     return {
       kind: "rejected",
       violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
-      reason: `No rationale comment by \`${raterLogin}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+      reason: candidates.length > 0
+        ? `Every qualifying rationale comment by \`${raterLogin}\` naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
+        : `No rationale comment by \`${raterLogin}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   const configured = actualByLabel.get(label)!;
