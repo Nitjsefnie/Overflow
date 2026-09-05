@@ -4,6 +4,7 @@ import type {
   EnforcementHistoryProjection,
   OpenAuditProjection,
   RecalibratingAccountProjection,
+  UnwritableClosureProjection,
 } from "@/lib/dashboard/queries";
 import {
   isModeratorSession,
@@ -21,12 +22,14 @@ export default async function ModerationPage() {
   const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { SettlementOverrideQueue } = await import("@/components/settlement-override-queue");
+  const { UnwritableClosureQueue } = await import("@/components/unwritable-closure-queue");
 
   let audits: OpenAuditProjection[] | null;
   let history: EnforcementHistoryProjection[] = [];
   let recalibratingAccounts: RecalibratingAccountProjection[] = [];
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] = [];
   const settlementCorrections = await listSettlementCorrections(session.user);
+  const unwritableClosures = await loadUnwritableClosures();
   try {
     const { listEnforcementHistory, listOpenAudits, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
@@ -93,6 +96,20 @@ export default async function ModerationPage() {
           <SettlementOverrideQueue requests={settlementCorrections} />
         )}
       </section>
+      <section className="surface override-card" aria-labelledby="unwritable-closures-heading">
+        <p className="eyebrow">Closures that settled nothing</p>
+        <h2 id="unwritable-closures-heading">Rejected settlement evidence</h2>
+        <p>
+          A closed issue with a merged pull request settles nothing when its label or rationale missed the
+          evidence window. The reason is recorded here so a moderator can review it, and a member or the
+          sponsor can request a correction from the settlement page.
+        </p>
+        {unwritableClosures === null ? (
+          <p>The closure queue could not be loaded.</p>
+        ) : (
+          <UnwritableClosureQueue closures={unwritableClosures} />
+        )}
+      </section>
       <section className="surface" aria-labelledby="recalibrating-heading">
         <h2 id="recalibrating-heading">Recalibration plans and reactivation</h2>
         {recalibratingAccounts.length === 0 ? <p>No accounts are recalibrating.</p> : (
@@ -148,6 +165,15 @@ async function listSettlementCorrections(
     const { SettlementOverrideService } = await import("@/lib/overrides/service");
     const service = new SettlementOverrideService(new PostgresSettlementOverrideStore());
     return await service.listOpenRequests({ id: moderator.id, role: moderator.role });
+  } catch {
+    return null;
+  }
+}
+
+async function loadUnwritableClosures(): Promise<UnwritableClosureProjection[] | null> {
+  try {
+    const { listUnwritableClosures } = await import("@/lib/dashboard/queries");
+    return await listUnwritableClosures();
   } catch {
     return null;
   }

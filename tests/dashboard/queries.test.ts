@@ -8,6 +8,7 @@ import {
   listOpenAudits,
   listRecalibratingAccounts,
   listSettlementHistory,
+  listUnwritableClosures,
   SETTLEMENT_HISTORY_LIMIT,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
@@ -28,6 +29,106 @@ function sqlHarness(responses: unknown[][]): { sql: DashboardSql; captures: Quer
 }
 
 const proof = "a".repeat(64);
+
+describe("unwritable closures", () => {
+  const rejected = {
+    id: "closure-1",
+    kind: "SETTLEMENT_EVIDENCE_REJECTED",
+    reason: "The settled label was applied after the evidence window.",
+    recorded_at: new Date("2026-09-05T10:00:00.000Z"),
+    repository_name: "co-op/harbour",
+    issue_number: "17",
+    issue_title: "Repair the tide gate",
+    issue_url: "https://github.com/co-op/harbour/issues/17",
+    pull_request_number: "18",
+    pull_request_title: "Repair the gate",
+    pull_request_url: "https://github.com/co-op/harbour/pull/18",
+    settlement_id: "settlement-1",
+    correction_state: null,
+    correction_requested_at: null,
+  };
+
+  it("projects both closure kinds and retains closures without a pull request or settlement", async () => {
+    const { sql, captures } = sqlHarness([[
+      rejected,
+      {
+        ...rejected,
+        id: "closure-2",
+        kind: "NO_CLOSING_PULL_REQUEST",
+        reason: "No merged GitHub GraphQL closing pull request was found.",
+        recorded_at: "2026-09-04T10:00:00.000Z",
+        issue_number: 19,
+        pull_request_number: null,
+        pull_request_title: null,
+        pull_request_url: null,
+        settlement_id: null,
+      },
+      { ...rejected, id: "closure-3", settlement_id: null },
+    ]]);
+
+    const closures = await listUnwritableClosures({ sql });
+
+    expect(closures).toEqual([
+      {
+        id: "closure-1",
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        reason: "The settled label was applied after the evidence window.",
+        recordedAt: "2026-09-05T10:00:00.000Z",
+        repositoryName: "co-op/harbour",
+        issueNumber: 17,
+        issueTitle: "Repair the tide gate",
+        issueUrl: "https://github.com/co-op/harbour/issues/17",
+        pullRequest: {
+          number: 18,
+          title: "Repair the gate",
+          url: "https://github.com/co-op/harbour/pull/18",
+        },
+        settlementId: "settlement-1",
+        latestCorrection: null,
+      },
+      expect.objectContaining({
+        id: "closure-2",
+        kind: "NO_CLOSING_PULL_REQUEST",
+        reason: "No merged GitHub GraphQL closing pull request was found.",
+        recordedAt: "2026-09-04T10:00:00.000Z",
+        issueNumber: 19,
+        pullRequest: null,
+        settlementId: null,
+        latestCorrection: null,
+      }),
+      expect.objectContaining({
+        id: "closure-3",
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        pullRequest: { number: 18, title: "Repair the gate", url: "https://github.com/co-op/harbour/pull/18" },
+        settlementId: null,
+      }),
+    ]);
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/left join pull_requests on pull_requests\.id = unwritable_closures\.pull_request_id/i);
+    expect(query).toMatch(/left join settlements on settlements\.issue_id = issues\.id/i);
+    expect(query).toMatch(/order by unwritable_closures\.created_at desc, issues\.github_issue_id asc/i);
+  });
+
+  it("selects only the newest correction for the issue, including decided requests", async () => {
+    const { sql, captures } = sqlHarness([[
+      {
+        ...rejected,
+        correction_state: "GRANTED",
+        correction_requested_at: new Date("2026-09-05T12:00:00.000Z"),
+      },
+    ]]);
+
+    const closures = await listUnwritableClosures({ sql });
+
+    expect(closures[0]?.latestCorrection).toEqual({
+      state: "GRANTED",
+      requestedAt: "2026-09-05T12:00:00.000Z",
+    });
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/left join lateral\s*\([\s\S]*from settlement_override_requests\s+where settlement_override_requests\.issue_id = issues\.id\s+order by settlement_override_requests\.created_at desc, settlement_override_requests\.id desc\s+limit 1\s*\) as latest_correction on true/i);
+    expect(query).not.toMatch(/state\s*=\s*'OPEN'/i);
+  });
+});
 
 describe("dashboard projections", () => {
   it("projects open claims, registered repositories, and enforcement notices without credentials", async () => {

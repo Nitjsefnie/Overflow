@@ -157,6 +157,20 @@ export type OpenAuditProjection = {
   cohortStatistics?: unknown;
 };
 
+export type UnwritableClosureProjection = {
+  id: string;
+  kind: "NO_CLOSING_PULL_REQUEST" | "SETTLEMENT_EVIDENCE_REJECTED";
+  reason: string;
+  recordedAt: string;
+  repositoryName: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  pullRequest: { number: number; title: string; url: string } | null;
+  settlementId: string | null;
+  latestCorrection: { state: "OPEN" | "GRANTED" | "DECLINED"; requestedAt: string } | null;
+};
+
 export type EnforcementHistoryProjection = {
   id: string;
   targetAccountId: string;
@@ -315,6 +329,23 @@ type OpenAuditRow = {
   sample_started_at?: string | Date;
   sample_ended_at?: string | Date;
   cohort_definition?: unknown;
+};
+
+type UnwritableClosureRow = {
+  id: string;
+  kind: UnwritableClosureProjection["kind"];
+  reason: string;
+  recorded_at: string | Date;
+  repository_name: string;
+  issue_number: number | string;
+  issue_title: string;
+  issue_url: string;
+  pull_request_number: number | string | null;
+  pull_request_title: string | null;
+  pull_request_url: string | null;
+  settlement_id: string | null;
+  correction_state: "OPEN" | "GRANTED" | "DECLINED" | null;
+  correction_requested_at: string | Date | null;
 };
 
 type EnforcementHistoryRow = {
@@ -748,6 +779,63 @@ export async function getCalibrationComparison(
   `;
 
   return compareCalibration(selfWorkRows.map(toCalibrationPair), outsiderRows.map(toCalibrationPair));
+}
+
+export async function listUnwritableClosures(
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<UnwritableClosureProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<UnwritableClosureRow[]>`
+    select
+      unwritable_closures.id,
+      unwritable_closures.kind::text,
+      unwritable_closures.reason,
+      unwritable_closures.created_at as recorded_at,
+      repositories.owner_name as repository_name,
+      issues.issue_number,
+      issues.title as issue_title,
+      issues.url as issue_url,
+      pull_requests.pull_request_number,
+      pull_requests.title as pull_request_title,
+      pull_requests.url as pull_request_url,
+      settlements.id as settlement_id,
+      latest_correction.state::text as correction_state,
+      latest_correction.created_at as correction_requested_at
+    from unwritable_closures
+    join issues on issues.id = unwritable_closures.issue_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    left join pull_requests on pull_requests.id = unwritable_closures.pull_request_id
+    left join settlements on settlements.issue_id = issues.id
+    left join lateral (
+      select settlement_override_requests.state, settlement_override_requests.created_at
+      from settlement_override_requests
+      where settlement_override_requests.issue_id = issues.id
+      order by settlement_override_requests.created_at desc, settlement_override_requests.id desc
+      limit 1
+    ) as latest_correction on true
+    order by unwritable_closures.created_at desc, issues.github_issue_id asc
+  `;
+
+  return rows.map((row) => ({
+    id: readText(row.id, "Closure identifier"),
+    kind: row.kind,
+    reason: readText(row.reason, "Closure reason"),
+    recordedAt: readTimestamp(row.recorded_at, "Closure recording time"),
+    repositoryName: readText(row.repository_name, "Repository name"),
+    issueNumber: readNumber(row.issue_number, "Issue number"),
+    issueTitle: readText(row.issue_title, "Issue title"),
+    issueUrl: readText(row.issue_url, "Issue URL"),
+    pullRequest: row.pull_request_number === null ? null : {
+      number: readNumber(row.pull_request_number, "Pull request number"),
+      title: readText(row.pull_request_title, "Pull request title"),
+      url: readText(row.pull_request_url, "Pull request URL"),
+    },
+    settlementId: row.settlement_id === null ? null : readText(row.settlement_id, "Settlement identifier"),
+    latestCorrection: row.correction_state === null ? null : {
+      state: row.correction_state,
+      requestedAt: readTimestamp(row.correction_requested_at!, "Correction request time"),
+    },
+  }));
 }
 
 export async function listOpenAudits(
