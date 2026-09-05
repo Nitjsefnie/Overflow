@@ -2,7 +2,6 @@
 !.gitignore
 !.env.example
 !README.md
-!README.html
 !CONTRIBUTING.md
 !docker-compose.yml
 !package.json
