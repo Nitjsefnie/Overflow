@@ -113,7 +113,7 @@ const requiredServiceValues: ReadonlyArray<readonly [string, string]> = [
  * cannot be admitted with its value left open.
  */
 const separatelyPinnedServiceKeys: ReadonlyMap<string, string> = new Map([
-  ["Environment", "pinned as the resolved environment map, last-wins and resets applied"],
+  ["Environment", "pinned as the unit's Environment= map, last-wins and resets applied"],
   ["ExecStart", "pinned as the whole command vector, token by token"],
   ["MemoryDenyWriteExecute", "pinned absent, or present in a spelling systemd reads as false"],
 ]);
@@ -223,7 +223,12 @@ const requiredStartCommand: ReadonlyArray<string> = [
   "3000",
 ];
 
-/** The environment the unit hands the service, resolved: exactly this, nothing more. */
+/**
+ * The unit's own Environment= assignments, with resets and last-wins applied.
+ * EnvironmentFile= is pinned separately to the reviewed path. Its root-owned
+ * contents are outside this repository and take precedence over Environment=;
+ * this map does not establish the environment the process actually receives.
+ */
 const requiredEnvironment: Readonly<Record<string, string>> = {
   NODE_ENV: "production",
   NEXT_TELEMETRY_DISABLED: "1",
@@ -390,14 +395,14 @@ describe("Overflow production unit", () => {
     expect(offending).toEqual([]);
   });
 
-  it("gives the service a PATH with no /root component", () => {
+  it("declares a PATH in Environment= with no /root component", () => {
     const searchPath = serviceEnvironment().get("PATH");
 
     expect(searchPath).toBeDefined();
     expect(searchPath!.split(":").filter(isUnderRoot)).toEqual([]);
   });
 
-  it("hands the service exactly the environment it is reviewed to get", () => {
+  it("pins the unit's own Environment= assignments to the reviewed map", () => {
     expect(Object.fromEntries(serviceEnvironment())).toEqual(requiredEnvironment);
   });
 
