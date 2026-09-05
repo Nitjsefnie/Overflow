@@ -8,6 +8,7 @@ import {
   type OpenAccountAuditInput,
   type RecalibrationClosure,
 } from "@/lib/moderation/service";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 const openAccountAuditSchema = z
   .object({
@@ -47,6 +48,11 @@ export type ModerationRouteDependencies = {
 
 export function createModerationPostHandler(dependencies: ModerationRouteDependencies) {
   return async function postModeration(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;
@@ -68,6 +74,11 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
 
 export function createModerationClosePatchHandler(dependencies: ModerationRouteDependencies) {
   return async function patchModeration(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;

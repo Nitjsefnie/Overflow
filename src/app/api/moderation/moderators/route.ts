@@ -8,6 +8,7 @@ import {
   type ModeratorRoleChange,
   type ModeratorSummary,
 } from "@/lib/moderation/service";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 const roleChangeSchema = z
   .object({
@@ -53,6 +54,11 @@ export function createModeratorGetHandler(dependencies: ModeratorRouteDependenci
 
 export function createModeratorPostHandler(dependencies: ModeratorRouteDependencies) {
   return async function postModerator(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 const { productionAuth, productionRole } = vi.hoisted(() => ({
   productionAuth: vi.fn(),
@@ -30,13 +31,21 @@ const recorded: SettlementOverrideRequest = {
   decidedAt: null,
 };
 
-function jsonRequest(body: unknown): Request {
+function jsonRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("https://overflow.test/api/overrides", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { origin: trustedOrigin, "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
+
+const foreignTextRequest = (body: unknown): Request =>
+  jsonRequest(body, { origin: foreignOrigin, "content-type": "text/plain" });
+
+const trustedTextRequest = (body: unknown): Request =>
+  jsonRequest(body, { "content-type": "text/plain" });
+
+useTrustedOrigin();
 
 describe("settlement override request API", () => {
   it("records a member's request against a settlement", async () => {
@@ -121,6 +130,45 @@ describe("settlement override request API", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "CONFLICT", message: "Already open." },
     });
+  });
+
+  // A forged request must cost the server nothing: no session read, no role
+  // lookup, no service.
+  it("refuses a foreign-origin request before reading the session or the role", async () => {
+    const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
+    const createService = vi.fn();
+    const handler = createSettlementOverridePostHandler({ getSession, getCurrentRole, createService });
+
+    const response = await handler(foreignTextRequest({ settlementId, reason: "Forged." }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getCurrentRole).not.toHaveBeenCalled();
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  it("refuses a trusted-origin request that is not JSON", async () => {
+    const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
+    const createService = vi.fn();
+    const handler = createSettlementOverridePostHandler({ getSession, getCurrentRole, createService });
+
+    const response = await handler(trustedTextRequest({ settlementId, reason: "Wrong type." }));
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getCurrentRole).not.toHaveBeenCalled();
+    expect(createService).not.toHaveBeenCalled();
   });
 });
 
@@ -244,5 +292,48 @@ describe("settlement override decision API", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  it("refuses a foreign-origin decision before reading the session or the role", async () => {
+    const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
+    const createService = vi.fn();
+    const handler = createSettlementOverridePatchHandler({ getSession, getCurrentRole, createService });
+
+    const response = await handler(
+      foreignTextRequest({ action: "grant", settledPoints: 6, reason: "Forged." }),
+      context,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getCurrentRole).not.toHaveBeenCalled();
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  it("refuses a trusted-origin decision that is not JSON", async () => {
+    const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
+    const createService = vi.fn();
+    const handler = createSettlementOverridePatchHandler({ getSession, getCurrentRole, createService });
+
+    const response = await handler(
+      trustedTextRequest({ action: "decline", reason: "Wrong type." }),
+      context,
+    );
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getCurrentRole).not.toHaveBeenCalled();
+    expect(createService).not.toHaveBeenCalled();
   });
 });

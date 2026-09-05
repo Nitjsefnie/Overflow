@@ -7,6 +7,7 @@ import {
   SettlementOverrideService,
   type SettlementOverrideRequest,
 } from "@/lib/overrides/service";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 const overrideRequestSchema = z
   .object({
@@ -34,6 +35,11 @@ export type SettlementOverrideRouteDependencies = {
 
 export function createSettlementOverridePostHandler(dependencies: SettlementOverrideRouteDependencies) {
   return async function postSettlementOverride(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await requiredMemberSession(dependencies);
     if (session instanceof Response) {
       return session;

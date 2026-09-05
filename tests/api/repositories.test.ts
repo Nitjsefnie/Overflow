@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { trustedOrigin } from "../support/trusted-origin";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -589,13 +590,20 @@ describe("Overflow token registration", () => {
       .mockResolvedValue("ACTIVE");
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
+    // Minting is a cookie-authenticated mutation, so it is same-origin only.
+    vi.stubEnv("APP_URL", trustedOrigin);
     const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchGitHub);
 
     const credentials: string[] = [];
     for (const [index, { account }] of identities.entries()) {
       readSession.mockResolvedValue({ user: account });
-      const response = await mintToken(new Request("https://overflow.example/api/tokens", { method: "POST" }));
+      const response = await mintToken(
+        new Request("https://overflow.example/api/tokens", {
+          method: "POST",
+          headers: { origin: trustedOrigin },
+        }),
+      );
       expect(response.status).toBe(201);
       const body = await response.json() as { token: string };
       expect(body.token).toMatch(/^ovf_[A-Za-z0-9_-]{43}$/);
