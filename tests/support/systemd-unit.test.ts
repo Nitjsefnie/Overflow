@@ -116,6 +116,31 @@ describe("systemd unit parsing", () => {
     );
   });
 
+  it.each([
+    ["EnvironmentFile=%h/overflow.env", "%h"],
+    ["WorkingDirectory=%h", "%h"],
+    ["ReadWritePaths=/srv/overflow/.next/cache %t/overflow", "%t"],
+    ["ExecStart=%S/overflow/next start", "%S"],
+    ["Environment=PATH=%h/.nvm/bin:/usr/bin", "%h"],
+  ])("refuses %s, whose specifier the parser does not expand", (assignment, specifier) => {
+    expect(() => parseUnitFile(`[Service]\n${assignment}\n`)).toThrow(
+      `the specifier ${specifier}`,
+    );
+  });
+
+  it("reads %% as the literal percent systemd expands it to", () => {
+    const parsed = parseUnitFile("[Service]\nSyslogIdentifier=100%% overflow\n");
+
+    expect(parsed).toEqual([
+      {
+        section: "Service",
+        key: "SyslogIdentifier",
+        value: "100% overflow",
+        words: ["100%", "overflow"],
+      },
+    ]);
+  });
+
   it("strips quotes from the directives systemd unquotes", () => {
     const parsed = parseUnitFile(
       [
