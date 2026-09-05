@@ -991,32 +991,38 @@ export async function listAuditCandidates(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<AuditCandidateProjection[]> {
   const sql = resolveSql(dependencies);
+  // These cohort predicates are shared with getCalibrationComparison below and with
+  // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all three together.
+  // Each side aggregates once and joins on the account, rather than re-aggregating per account row:
+  // neither self_work_calibrations.user_id nor settlements.debtor_id is indexed. Inside the outsider
+  // group the comparison's creditor_id <> account test is spelled against settlements.debtor_id, which
+  // the join then binds to users.id.
   const rows = await sql<AuditCandidateRow[]>`
     select
       users.id,
       users.github_login,
       users.enforcement_state::text,
-      self_work.pair_count as self_work_pair_count,
-      outsider.pair_count as outsider_pair_count,
+      coalesce(self_work.pair_count, 0) as self_work_pair_count,
+      coalesce(outsider.pair_count, 0) as outsider_pair_count,
       calibration_audits.id as open_audit_id
     from users
-    left join lateral (
-      select count(*) as pair_count
+    left join (
+      select self_work_calibrations.user_id, count(*) as pair_count
       from self_work_calibrations
       join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
-      where self_work_calibrations.user_id = users.id
-        and self_work_calibrations.actual_points is not null
+      where self_work_calibrations.actual_points is not null
         and pull_requests.proof_sha256 is not null
-    ) as self_work on true
-    left join lateral (
-      select count(*) as pair_count
+      group by self_work_calibrations.user_id
+    ) as self_work on self_work.user_id = users.id
+    left join (
+      select settlements.debtor_id, count(*) as pair_count
       from settlements
-      where settlements.debtor_id = users.id
-        and settlements.creditor_id is not null
-        and settlements.creditor_id <> users.id
+      where settlements.creditor_id is not null
+        and settlements.creditor_id <> settlements.debtor_id
         and settlements.status = 'SETTLED'
         and settlements.settled_points is not null
-    ) as outsider on true
+      group by settlements.debtor_id
+    ) as outsider on outsider.debtor_id = users.id
     left join calibration_audits
       on calibration_audits.account_id = users.id
       and calibration_audits.state = 'OPEN'
