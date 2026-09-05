@@ -670,6 +670,7 @@ describe("settlement rationale pairing", () => {
       authorLogin: "sponsor",
       body: "Re-settled as delivered/6 after reapplying the label.",
       createdAt: "2026-09-01T11:41:00.000Z",
+      lastEditedAt: null,
     });
 
     expect(foldRepository(snapshot).issues[0]).toMatchObject({
@@ -689,6 +690,7 @@ describe("settlement rationale pairing", () => {
       authorLogin: "sponsor",
       body: "Settled as delivered/6 after reviewing the final diff.",
       createdAt: "2026-09-01T11:05:00.000Z",
+      lastEditedAt: null,
     });
 
     expect(foldRepository(snapshot).issues[0]).toMatchObject({
@@ -707,6 +709,7 @@ describe("settlement rationale pairing", () => {
         authorLogin: "sponsor",
         body: "Settled as delivered/6 while applying the label.",
         createdAt: "2026-09-01T11:00:00.000Z",
+        lastEditedAt: null,
       },
       {
         id: "comment-3",
@@ -714,6 +717,7 @@ describe("settlement rationale pairing", () => {
         authorLogin: "sponsor",
         body: "Still delivered/6 after reviewing the final diff.",
         createdAt: "2026-09-01T11:05:00.000Z",
+        lastEditedAt: null,
       },
     );
 
@@ -730,6 +734,7 @@ describe("settlement rationale pairing", () => {
       authorLogin: "sponsor",
       body: "Still delivered/6 on a second look.",
       createdAt: "2026-09-01T11:45:00.000Z",
+      lastEditedAt: null,
     });
 
     expect(foldRepository(snapshot).issues[0]).toMatchObject({
@@ -750,6 +755,78 @@ describe("settlement rationale pairing", () => {
       settledRationaleCommentId: "comment-1",
       settledRationaleCommentedAt: "2026-09-01T11:30:00.000Z",
     });
+  });
+
+  it("skips an edited rationale at the reapplied label and prefers the first valid later one over the grace fallback", () => {
+    const snapshot = outsiderFixture();
+    reapplyActualLabel(snapshot, {
+      unlabeledAt: "2026-09-01T11:35:00.000Z",
+      relabeledAt: "2026-09-01T11:40:00.000Z",
+    });
+    const issue = snapshot.issues[0]!;
+    issue.comments.push(
+      {
+        ...issue.comments[0]!,
+        id: "comment-2",
+        databaseId: 402,
+        createdAt: "2026-09-01T11:40:00.000Z",
+        lastEditedAt: "2026-09-01T12:15:00.001Z",
+      },
+      {
+        ...issue.comments[0]!,
+        id: "comment-4",
+        databaseId: 404,
+        createdAt: "2026-09-01T11:45:00.000Z",
+      },
+      {
+        ...issue.comments[0]!,
+        id: "comment-3",
+        databaseId: 403,
+        createdAt: "2026-09-01T11:41:00.000Z",
+      },
+    );
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED",
+      settledPoints: 6,
+      settledLabelEventId: "actual-2",
+      settledRationaleCommentId: "comment-3",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it.each([
+    { fallback: "valid", lastEditedAt: null, accepted: true },
+    { fallback: "edited after close", lastEditedAt: "2026-09-01T12:15:00.001Z", accepted: false },
+  ])("handles a $fallback grace fallback when the reapplied label's own rationale was edited after close", ({ lastEditedAt, accepted }) => {
+    const snapshot = outsiderFixture();
+    reapplyActualLabel(snapshot, {
+      unlabeledAt: "2026-09-01T11:35:00.000Z",
+      relabeledAt: "2026-09-01T11:40:00.000Z",
+    });
+    const issue = snapshot.issues[0]!;
+    issue.comments[0]!.lastEditedAt = lastEditedAt;
+    issue.comments.push({
+      ...issue.comments[0]!,
+      id: "comment-2",
+      databaseId: 402,
+      createdAt: "2026-09-01T11:40:00.000Z",
+      lastEditedAt: "2026-09-01T12:15:00.001Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: accepted ? "SETTLED" : "UNSETTLED",
+      settledPoints: accepted ? 6 : null,
+      settledLabelEventId: accepted ? "actual-2" : null,
+      settledRationaleCommentId: accepted ? "comment-1" : null,
+    });
+    expect(result.policyViolations).toEqual(
+      accepted ? [] : [{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }],
+    );
   });
 });
 
