@@ -368,6 +368,49 @@ describe("initial PostgreSQL materialization", () => {
     }
   });
 
+  it("refuses the difficulty scheme upgrade with a null hand-added column outside public", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_nonpublic_${nextExternalId()}`;
+    const schemaName = "overflow_upgrade";
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    upgradeDatabaseUrl.searchParams.set("options", `-c search_path=${schemaName}`);
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await upgradeSql`create schema ${upgradeSql(schemaName)}`;
+      await runMigrations({ upTo: "001_initial.sql" });
+      await expect(upgradeSql`
+        select current_schema() as schema_name,
+          to_regclass('public.registered_repositories')::text as public_repository_table
+      `).resolves.toEqual([{ schema_name: schemaName, public_repository_table: null }]);
+      const ownerName = "legacy/z-nonpublic-awaiting-a-scheme";
+      const backfilledOwnerName = "legacy/a-nonpublic-backfilled";
+      await insertSchemelessRepository(upgradeSql, ownerName);
+      await insertSchemelessRepository(upgradeSql, backfilledOwnerName);
+      await upgradeSql`alter table registered_repositories add column difficulty_scheme jsonb`;
+      await upgradeSql`
+        update registered_repositories
+        set difficulty_scheme = ${upgradeSql.json(validDifficultyScheme())}::jsonb
+        where owner_name = ${backfilledOwnerName}
+      `;
+
+      await expect(runMigrations()).rejects.toHaveProperty(
+        "message", difficultySchemePreconditionMessage(1, ownerName),
+      );
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it("rejects an invalid difficulty scheme already backfilled by hand", async () => {
     const databaseUrl = process.env.DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
