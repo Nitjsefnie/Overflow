@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { signOutAction } from "@/lib/auth/sign-out-action";
 
 type AppShellProps = {
   memberName: string;
@@ -45,9 +46,16 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
             ) : null}
           </ul>
         </nav>
-        <p className="member-stamp">
-          Signed in as <span>{memberName}</span>
-        </p>
+        <div>
+          <p className="member-stamp">
+            Signed in as <span>{memberName}</span>
+          </p>
+          <form action={signOutAction}>
+            <button className="quiet-button" type="submit">
+              Sign out
+            </button>
+          </form>
+        </div>
       </header>
       <main id="main-content" className="page-content">
         {children}
