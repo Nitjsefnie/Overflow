@@ -43,171 +43,112 @@ describe("landing page", () => {
 // Issue 39: the sign-in button, the only control on the signed-out landing page,
 // sat below the fold. The hero h1 held its clamp ceiling at every desktop width
 // and wrapped to four lines, so the button's bottom edge landed at 897px (that
-// exact figure from about 1333px wide up; 891px at 1280) and the page needed a
+// figure from about 1333px wide up; 891px at 1280) and the page needed a
 // viewport that tall to show the button at all. Measured in headless Chromium,
-// the stylesheet pinned below brings the minimum clearing viewport height to
-// 572px, bisected at 1920, 1440, 1366 and 1280 and constant from 1037 up
-// (571px at 1024, 553px at 800). A 1366x768 laptop panel gives Chrome roughly
-// 625px of viewport once its chrome and a taskbar are subtracted, which is the
-// case the first fix missed.
+// the shipped stylesheet brings the minimum clearing viewport height to 572px,
+// bisected at 1920, 1440, 1366 and 1280 and constant from 1037 up (571px at
+// 1024, 553px at 800). A 1366x768 laptop panel gives Chrome roughly 625px of
+// viewport once its chrome and a taskbar are subtracted.
 //
 // The 96px hero ceiling is a design decision, not a layout constraint. The wrap
 // stays at three lines all the way down to the 56px floor, because the h1's
-// measure is 13ch and scales with the type wherever the ceiling binds (at
-// 800px wide and up; below that the container binds instead). A 4rem ceiling
-// measures a 472px clearing height. 96px buys the hero its presence, and 572px
-// already clears every common laptop viewport.
+// measure is 13ch and scales with the type wherever the ceiling binds (at 800px
+// wide and up; below that the container binds instead). A 4rem ceiling measures
+// a 472px clearing height. 96px buys the hero its presence.
 //
-// WHAT THIS GUARD IS. jsdom does no layout, so nothing here can measure where
-// the button lands - the browser measurement is the evidence and these
-// assertions are its preconditions. jsdom does resolve the cascade, clamp() and
-// vw against window.innerWidth, so the walk below reads what the browser would
-// resolve, at four widths covering every band of the three clamps.
+// WHAT THIS GUARD IS. A proxy. jsdom does no layout, so nothing here can measure
+// where the button lands - the browser measurement above is the evidence, and
+// these are bounds on the terms it rests on. Every one is an upper bound on
+// something that pushes the button down, or a lower bound on a measure that
+// narrowing would wrap into more lines: raising one is a deliberate act, not a
+// number to copy across from a diff. jsdom resolves the cascade, clamp() and vw
+// against window.innerWidth, so the bounds are read at 1440px, where all three
+// clamps sit at their ceilings, and 390px, where all three sit at their floors.
 //
-// WHAT IT IS NOT. It is not a fold check, and it cannot become one here:
-//   - it cannot see line counts, so a copy change moves the fold silently;
-//   - it covers the elements that stack above the button and no others;
-//   - it covers the computed properties listed below and no others - notably
-//     jsdom reports every border width as 16px, so a border inside a shorthand
-//     carrying var() is invisible;
-//   - it cannot evaluate a media, supports or container condition, so those are
-//     pinned as declarations instead of resolved;
-//   - it cannot see a construct jsdom's parser drops, so those are refused
-//     rather than passed;
-//   - it cannot tell a term declared as one of jsdom's unset readings (0, auto,
-//     none, normal, 16px) from one nobody declared, so a term dropped to one of
-//     those reads as absent - every such value is one that cannot lower the
-//     button, but it is not a distinction this guard makes;
-//   - it cannot follow a term respelled with a logical property, and says so
-//     rather than passing it.
+// WHAT IT IS NOT, in full. It is not a fold check, and cannot become one here -
 // Overflow issue 111 tracks the real fix, which is a browser in CI.
+//   - It cannot see line counts, so a copy change moves the fold silently.
+//   - It cannot see the type faces: the h1's wrap depends on the metrics behind
+//     var(--display), and pinning a font stack would be an equality, not a bound.
+//   - It covers the elements that stack above the button and no others, and the
+//     properties in the table below and no others.
+//   - Two border spellings are invisible, both measured: a border width that
+//     resolves to 16px, because that is also jsdom's `medium`
+//     (border-bottom-width: 1rem takes the button from 49px to 63px tall), and
+//     any border in a shorthand jsdom cannot parse, which includes every
+//     shorthand carrying var() (border: 3rem solid var(--line) takes it to
+//     141px). Reading border-style alongside the width does not help: jsdom
+//     reports `none` for the shipped button, so an effective-width bound would
+//     read zero everywhere and would stop catching the widths it catches today.
+//   - It cannot evaluate a media, supports or container condition; those are
+//     pinned as declarations instead. A @layer block is exempt, because an
+//     unlayered declaration always beats a layered one and nothing here is
+//     layered - which stops holding the day anything is.
+//   - It cannot see an at-rule jsdom's parser drops entirely, and does not try.
+//   - It reads one stylesheet, and refuses an @import rather than pretend to
+//     follow it.
 type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "form" | "button";
 
-// Every property that can move the button down: the vertical stack itself, the
-// width available for wrapping, and the text metrics that decide how many lines
-// the wrap takes.
-const LAYOUT_PROPERTIES = [
-  "display", "box-sizing",
-  "margin-top", "margin-bottom", "margin-left", "margin-right",
-  "padding-top", "padding-bottom", "padding-left", "padding-right",
-  "border-top-width", "border-bottom-width", "border-left-width", "border-right-width",
-  "width", "min-width", "max-width", "height", "min-height", "max-height",
-  "font-family", "font-size", "font-weight", "line-height",
-  "letter-spacing", "word-spacing", "text-transform", "white-space",
+// element, property, direction, and the bound at 1440px and at 390px - the
+// values the browser measurement above was taken over. Infinity is `none` or
+// `auto`: an unconstrained measure cannot wrap the text into another line.
+type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
+
+const FOLD_BUDGET: BudgetRow[] = [
+  // The page's own box, and the type it hands down: the button takes its font
+  // from here through `button, input, textarea { font: inherit }`.
+  ["page", "margin-top", "atMost", 0, 0],
+  ["page", "padding-top", "atMost", 40, 32],
+  ["page", "border-top-width", "atMost", 16, 16],
+  ["page", "font-size", "atMost", 16, 16],
+  ["page", "line-height", "atMost", 24, 24],
+  // The hero, whose max-width is the headline's wrap measure above ~102px of type.
+  ["hero", "margin-top", "atMost", 0, 0],
+  ["hero", "padding-top", "atMost", 0, 0],
+  ["hero", "border-top-width", "atMost", 16, 16],
+  ["hero", "line-height", "atMost", 24, 24],
+  ["hero", "max-width", "atLeast", 928, 928],
+  // The eyebrow: one line of type, and the space between it and the headline.
+  ["eyebrow", "margin-top", "atMost", 0, 0],
+  ["eyebrow", "margin-bottom", "atMost", 11.2, 11.2],
+  ["eyebrow", "border-top-width", "atMost", 16, 16],
+  ["eyebrow", "font-size", "atMost", 11.52, 11.52],
+  ["eyebrow", "line-height", "atMost", 17.28, 17.28],
+  ["eyebrow", "letter-spacing", "atMost", 0.2304, 0.2304],
+  ["eyebrow", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  ["eyebrow", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  // The headline: three lines at every width, and the four terms that decide it.
+  ["h1", "margin-top", "atMost", 0, 0],
+  ["h1", "margin-bottom", "atMost", 16, 16],
+  ["h1", "border-top-width", "atMost", 16, 16],
+  ["h1", "font-size", "atMost", 96, 56],
+  ["h1", "line-height", "atMost", 100.8, 58.8],
+  ["h1", "letter-spacing", "atMost", -4.32, -2.52],
+  ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  ["h1", "max-width", "atLeast", 624, 364],
+  // The lede: two lines at 1440, four at 390.
+  ["lede", "margin-top", "atMost", 0, 0],
+  ["lede", "margin-bottom", "atMost", 28.8, 28.8],
+  ["lede", "border-top-width", "atMost", 16, 16],
+  ["lede", "font-size", "atMost", 28, 20],
+  ["lede", "line-height", "atMost", 42, 30],
+  ["lede", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  ["lede", "max-width", "atLeast", 728, 520],
+  // The form wrapping the button contributes nothing of its own today.
+  ["form", "margin-top", "atMost", 0, 0],
+  ["form", "border-top-width", "atMost", 16, 16],
+  ["form", "font-size", "atMost", 16, 16],
+  ["form", "line-height", "atMost", 24, 24],
+  // The button's own box: 49px tall, 24px below the lede.
+  ["button", "margin-top", "atMost", 24, 24],
+  ["button", "padding-top", "atMost", 10.4, 10.4],
+  ["button", "padding-bottom", "atMost", 10.4, 10.4],
+  ["button", "border-top-width", "atMost", 16, 16],
+  ["button", "border-bottom-width", "atMost", 16, 16],
+  ["button", "min-height", "atMost", 44.8, 44.8],
+  ["button", "font-size", "atMost", 16, 16],
+  ["button", "line-height", "atMost", 24, 24],
 ];
-
-// jsdom keeps the logical properties as separate, half-resolved values: it
-// returns margin-block-start in px but padding-block as its unresolved source
-// text, and never maps either onto the physical box above. So they are pinned
-// alongside it: respelling a term logically empties its physical key and fills
-// a logical one, which reads as two changed entries rather than as silence.
-const LOGICAL_PROPERTIES = [
-  "padding-block", "padding-block-start", "padding-block-end",
-  "padding-inline", "padding-inline-start", "padding-inline-end",
-  "margin-block", "margin-block-start", "margin-block-end",
-  "margin-inline", "margin-inline-start", "margin-inline-end",
-  "inline-size", "block-size", "min-inline-size", "min-block-size",
-  "max-inline-size", "max-block-size",
-  "border-block-start-width", "border-block-end-width",
-  "border-inline-start-width", "border-inline-end-width",
-];
-
-const BUDGET_PROPERTIES = [...LAYOUT_PROPERTIES, ...LOGICAL_PROPERTIES];
-
-// What jsdom reports when nothing has been declared: 16px is both its `medium`
-// border width and this document's root font size. Values in this set are left
-// out of the snapshot, so a term that acquires one is a new key rather than a
-// changed one - which the comparison still catches.
-const UNSET = new Set(["", "0", "0px", "auto", "none", "normal", "16px"]);
-
-const SNAPSHOT_HEIGHT = 800;
-const BASE_WIDTH = 1440;
-
-// Resolved at 1440px wide, where all three clamps sit at their ceilings.
-const AT_BASE_WIDTH: Record<string, string> = {
-  "page display": "grid",
-  "page box-sizing": "border-box",
-  "page padding-top": "40px",
-  "page padding-bottom": "40px",
-  "page width": "min(100% - 2rem, 1180px)",
-  "page min-height": "800px",
-  "page font-family": "Arial, Helvetica, sans-serif",
-  "page line-height": "1.5",
-  "hero display": "block",
-  "hero box-sizing": "border-box",
-  "hero max-width": "928px",
-  "hero font-family": "Arial, Helvetica, sans-serif",
-  "hero line-height": "1.5",
-  "eyebrow display": "block",
-  "eyebrow box-sizing": "border-box",
-  "eyebrow margin-bottom": "11.2px",
-  // jsdom's UA stylesheet gives p and h1 a logical margin. It is dormant under
-  // the physical margins above, and pinned so that a change to it is visible.
-  "eyebrow margin-block": "1em",
-  "eyebrow font-family": "var(--mono)",
-  "eyebrow font-size": "11.52px",
-  "eyebrow font-weight": "800",
-  "eyebrow line-height": "1.5",
-  "eyebrow letter-spacing": "0.2304px",
-  "eyebrow text-transform": "uppercase",
-  "h1 display": "block",
-  "h1 box-sizing": "border-box",
-  "h1 max-width": "624px",
-  "h1 font-family": "var(--display)",
-  "h1 font-size": "96px",
-  "h1 font-weight": "bold",
-  "h1 line-height": "1.05",
-  "h1 letter-spacing": "-4.32px",
-  "h1 margin-block": "0.67em",
-  "lede display": "block",
-  "lede box-sizing": "border-box",
-  "lede margin-bottom": "28.8px",
-  "lede margin-block": "1em",
-  "lede max-width": "728px",
-  "lede font-family": "var(--display)",
-  "lede font-size": "28px",
-  "lede line-height": "1.5",
-  "form display": "block",
-  "form box-sizing": "border-box",
-  "form font-family": "Arial, Helvetica, sans-serif",
-  "form line-height": "1.5",
-  "button display": "inline-flex",
-  "button box-sizing": "border-box",
-  "button margin-top": "24px",
-  "button padding-top": "10.4px",
-  "button padding-bottom": "10.4px",
-  "button min-height": "44.8px",
-  "button font-family": "Arial, Helvetica, sans-serif",
-  "button font-weight": "850",
-  "button line-height": "1.5",
-};
-
-// The only terms that may differ at another width are the viewport-dependent
-// ones. 390px is the type floor, 600px the vw band, 1024px the width where the
-// lede's own vw term still binds while the hero's ceiling already does.
-// Everything absent from these tables must resolve exactly as it does at 1440.
-const AT_OTHER_WIDTHS: Record<number, Record<string, string>> = {
-  390: {
-    "page padding-top": "32px",
-    "page padding-bottom": "32px",
-    "h1 max-width": "364px",
-    "h1 font-size": "56px",
-    "h1 letter-spacing": "-2.52px",
-    "lede max-width": "520px",
-    "lede font-size": "20px",
-  },
-  600: {
-    "h1 max-width": "468px",
-    "h1 font-size": "72px",
-    "h1 letter-spacing": "-3.24px",
-    "lede max-width": "520px",
-    "lede font-size": "20px",
-  },
-  1024: {
-    "lede max-width": "718.848px",
-    "lede font-size": "27.648px",
-  },
-};
 
 // jsdom applies no condition, so a conditional declaration is pinned as text
 // rather than resolved. This one narrows the page's gutter on small screens and
@@ -215,6 +156,11 @@ const AT_OTHER_WIDTHS: Record<number, Record<string, string>> = {
 const CONDITIONAL_OVERRIDES = [
   "page | (max-width: 520px) | .app-shell, .landing-page | width: min(100% - 1.2rem, 1180px)",
 ];
+
+const BASE_WIDTH = 1440;
+const NARROW_WIDTH = 390;
+const VIEWPORT_HEIGHT = 800;
+const ROOT_FONT_SIZE = 16;
 
 type ParsedRule = { selectorText: string; condition: string | null; style: CSSStyleDeclaration; cssText: string };
 
@@ -240,7 +186,7 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   const previousWidth = window.innerWidth;
   const previousHeight = window.innerHeight;
   window.innerWidth = width;
-  window.innerHeight = SNAPSHOT_HEIGHT;
+  window.innerHeight = VIEWPORT_HEIGHT;
   const style = document.createElement("style");
   style.textContent = readFileSync("src/app/globals.css", "utf8");
   document.head.append(style);
@@ -255,16 +201,35 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   }
 }
 
-function snapshotSubtree(): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const [label, element] of landingSubtree()) {
-    const computed = getComputedStyle(element);
-    for (const property of BUDGET_PROPERTIES) {
-      const value = computed.getPropertyValue(property);
-      if (!UNSET.has(value)) resolved[`${label} ${property}`] = value;
-    }
+function toPixels(
+  value: string,
+  fontSize: number,
+  property: string,
+  direction: "atMost" | "atLeast",
+  term: string,
+): number {
+  const trimmed = value.trim();
+  // An unconstrained term is on the safe side of either bound: it imposes no
+  // height of its own, and it wraps the text into no extra line. Reading it as
+  // whichever end of the range the bound allows keeps a deleted measure or
+  // minimum from failing, since removing one can only raise the button. It says
+  // nothing about deleting a term that resolves to something else: dropping the
+  // headline's negative tracking widens the text, and the bound catches it.
+  if (trimmed === "none" || trimmed === "auto") {
+    return direction === "atMost" ? 0 : Number.POSITIVE_INFINITY;
   }
-  return resolved;
+  // `normal` is zero spacing; for anything else it is a value this cannot bound.
+  if (trimmed === "normal" && property.endsWith("-spacing")) return 0;
+  const number = Number.parseFloat(trimmed);
+  if (!Number.isNaN(number)) {
+    if (trimmed.endsWith("px")) return number;
+    if (trimmed.endsWith("rem")) return number * ROOT_FONT_SIZE;
+    if (/^-?[\d.]+$/.test(trimmed)) return number * fontSize; // a unitless line-height
+  }
+  throw new Error(
+    `${term} resolves to "${value}", which this guard cannot compare; measure the fold in a browser ` +
+      "and pin the term in px",
+  );
 }
 
 function conditionOf(rule: CSSRule): string {
@@ -272,14 +237,18 @@ function conditionOf(rule: CSSRule): string {
   return media || (rule as CSSConditionRule).conditionText || rule.cssText.split("{")[0].trim();
 }
 
-function parsedRules(sheet: CSSStyleSheet): { styleRules: ParsedRule[]; atRuleNames: string[] } {
-  const styleRules: ParsedRule[] = [];
-  const atRuleNames: string[] = [];
-  const walk = (rules: CSSRuleList, condition: string | null) => {
-    for (const rule of Array.from(rules)) {
+// Every style rule in the sheet, with the condition it sits under. A @layer
+// block is walked as if unconditional: jsdom applies neither, and in a browser
+// an unlayered declaration beats a layered one, so a layered rule cannot
+// override anything this stylesheet declares.
+function styleRules(sheet: CSSStyleSheet): { rules: ParsedRule[]; imports: string[] } {
+  const rules: ParsedRule[] = [];
+  const imports: string[] = [];
+  const walk = (list: CSSRuleList, condition: string | null) => {
+    for (const rule of Array.from(list)) {
       const styleRule = rule as CSSStyleRule;
       if (typeof styleRule.selectorText === "string") {
-        styleRules.push({
+        rules.push({
           selectorText: styleRule.selectorText.replace(/\s+/g, " "),
           condition,
           style: styleRule.style,
@@ -287,13 +256,18 @@ function parsedRules(sheet: CSSStyleSheet): { styleRules: ParsedRule[]; atRuleNa
         });
         continue;
       }
-      atRuleNames.push(/^@([a-z-]+)/.exec(rule.cssText)?.[1] ?? rule.constructor.name);
+      if (rule.constructor.name === "CSSImportRule") {
+        imports.push(rule.cssText);
+        continue;
+      }
       const grouping = rule as CSSGroupingRule;
-      if (grouping.cssRules) walk(grouping.cssRules, conditionOf(rule));
+      if (grouping.cssRules) {
+        walk(grouping.cssRules, rule.constructor.name === "CSSLayerBlockRule" ? condition : conditionOf(rule));
+      }
     }
   };
   walk(sheet.cssRules, null);
-  return { styleRules, atRuleNames };
+  return { rules, imports };
 }
 
 function appliesTo(element: Element, rule: ParsedRule): boolean {
@@ -309,38 +283,50 @@ function appliesTo(element: Element, rule: ParsedRule): boolean {
 }
 
 describe("landing hero fold budget", () => {
-  it.each([BASE_WIDTH, 390, 600, 1024])(
-    "resolves the stack above the sign-in button to the measured values at %ipx wide",
+  it.each([BASE_WIDTH, NARROW_WIDTH])(
+    "keeps the stack above the sign-in button within the budget measured at %ipx wide",
     (width) => {
-      const resolved = withLandingPageAt(width, snapshotSubtree);
-      const expected = { ...AT_BASE_WIDTH, ...(AT_OTHER_WIDTHS[width] ?? {}) };
+      // Read inside the mount: a CSSStyleDeclaration is live, and re-resolves to
+      // the defaults once the stylesheet and the element are gone.
+      const resolved = withLandingPageAt(width, () => {
+        const values = new Map<SubtreeElement, Record<string, string>>();
+        for (const [label, element] of landingSubtree()) {
+          const computed = getComputedStyle(element);
+          const read: Record<string, string> = { "font-size": computed.fontSize };
+          for (const [owner, property] of FOLD_BUDGET) {
+            if (owner === label) read[property] = computed.getPropertyValue(property);
+          }
+          values.set(label, read);
+        }
+        return values;
+      });
 
-      // Named separately, because the bare diff would read as a term that moved
-      // when what happened is that the guard stopped being able to see it.
-      expect
-        .soft(
-          Object.keys({ ...resolved, ...expected }).filter(
-            (key) =>
-              LOGICAL_PROPERTIES.some((property) => key.endsWith(` ${property}`)) &&
-              resolved[key] !== expected[key],
-          ),
-          "a term spelled with a logical property, which jsdom does not map onto the physical box this " +
-            "guard reads; measure the fold in a browser, then spell it physically or teach this guard " +
-            "to resolve it",
-        )
-        .toEqual([]);
-      expect(resolved, `computed box model of the landing hero at ${width}px wide`).toEqual(expected);
+      for (const [label, property, direction, atBase, atNarrow] of FOLD_BUDGET) {
+        const computed = resolved.get(label)!;
+        const raw = computed[property];
+        const bound = width === BASE_WIDTH ? atBase : atNarrow;
+        const term = `${label} ${property} at ${width}px wide (resolved from "${raw}")`;
+        // Rounded, because a unitless line-height times a font size lands a
+        // thousandth of a pixel above its own bound in binary floating point.
+        const pixels =
+          Math.round(toPixels(raw, Number.parseFloat(computed["font-size"]), property, direction, term) * 1000) / 1000;
+        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x600 before changing the bound`;
+        // Soft, so one run names every term that moved rather than only the first.
+        if (direction === "atMost") expect.soft(pixels, hint).toBeLessThanOrEqual(bound);
+        else expect.soft(pixels, hint).toBeGreaterThanOrEqual(bound);
+      }
     },
   );
 
-  it("declares no unpinned override behind a condition jsdom cannot evaluate", () => {
+  it("declares no fold-budget term behind a condition jsdom cannot evaluate", () => {
+    const budgeted = new Set(FOLD_BUDGET.map(([, property]) => property));
     const found = withLandingPageAt(BASE_WIDTH, (sheet) => {
       const subtree = landingSubtree();
-      return parsedRules(sheet)
-        .styleRules.filter((rule) => rule.condition !== null)
+      return styleRules(sheet)
+        .rules.filter((rule) => rule.condition !== null)
         .flatMap((rule) =>
           Array.from(rule.style)
-            .filter((property) => BUDGET_PROPERTIES.includes(property))
+            .filter((property) => budgeted.has(property))
             .flatMap((property) =>
               subtree
                 .filter(([, element]) => appliesTo(element, rule))
@@ -354,36 +340,41 @@ describe("landing hero fold budget", () => {
 
     expect(
       found,
-      "a conditional declaration reaching the hero: jsdom applies no condition, so measure the fold " +
-        "in a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
+      "a conditional declaration reaching the hero: jsdom applies no condition, so measure the fold in " +
+        "a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
     ).toEqual(CONDITIONAL_OVERRIDES);
   });
 
   it("refuses a rule jsdom's CSS parser did not fully understand", () => {
-    const { unparsed, atRuleNames } = withLandingPageAt(BASE_WIDTH, (sheet) => {
-      const { styleRules, atRuleNames: names } = parsedRules(sheet);
-      return {
-        // A brace left inside a declaration block is source jsdom kept verbatim
-        // instead of turning into declarations - the signature of CSS nesting
-        // and of anything else its parser is older than.
-        unparsed: styleRules
-          .filter((rule) => rule.cssText.slice(rule.cssText.indexOf("{")).includes("{", 1))
-          .map((rule) => `${rule.selectorText} { ${rule.cssText.replace(/\s+/g, " ").slice(0, 120)} }`),
-        atRuleNames: names,
-      };
-    });
+    const unparsed = withLandingPageAt(BASE_WIDTH, (sheet) =>
+      styleRules(sheet)
+        .rules.filter((rule) => {
+          // Everything jsdom kept for this rule, against everything it turned
+          // into declarations. A construct it does not implement - CSS nesting
+          // in any spelling, a nested at-rule - survives in one and not the
+          // other. Comparing the two asks jsdom what it understood instead of
+          // scanning the source for punctuation.
+          const block = rule.cssText.slice(rule.cssText.indexOf("{") + 1, rule.cssText.lastIndexOf("}"));
+          return block.trim() !== rule.style.cssText.trim();
+        })
+        .map((rule) => `${rule.selectorText} { ${rule.cssText.replace(/\s+/g, " ").slice(0, 120)} }`),
+    );
 
     expect(
       unparsed,
-      "jsdom kept this rule's block as text instead of declarations, so neither the resolved read nor " +
-        "the conditional pin can see inside it; measure the fold in a browser and express the rule in " +
-        "CSS this toolchain parses",
+      "jsdom kept part of this rule as text instead of declarations, so the bounds above cannot see " +
+        "inside it; measure the fold in a browser and express the rule in CSS this toolchain parses",
     ).toEqual([]);
+  });
+
+  it("reads the whole stylesheet", () => {
+    const imports = withLandingPageAt(BASE_WIDTH, (sheet) => styleRules(sheet).imports);
+
     expect(
-      atRuleNames,
-      "jsdom drops an at-rule it does not implement without a word, and the browser may still apply it; " +
-        "this compares the at-rules it parsed against the ones in the stylesheet source, so a difference " +
-        "means one of them vanished on the way in",
-    ).toEqual([...(readFileSync("src/app/globals.css", "utf8").matchAll(/^[ \t]*@([a-z-]+)/gm))].map((match) => match[1]));
+      imports,
+      "this guard reads src/app/globals.css and nothing else, and jsdom never fetches an @import while " +
+        "the bundler inlines it; measure the fold in a browser, then either move these rules into " +
+        "globals.css or teach this guard to follow the import",
+    ).toEqual([]);
   });
 });
