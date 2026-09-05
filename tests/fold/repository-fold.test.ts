@@ -40,6 +40,25 @@ describe("foldRepository", () => {
     expect(result.settlements[0]?.reviewRounds).toBe(2);
   });
 
+  it("excludes review rounds exactly at merge and one millisecond after merge", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.mergedAt = "2026-09-01T12:00:00.000Z";
+    snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
+      { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:59:59.999Z" },
+      { id: 302, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T12:00:00.000Z" },
+      { id: 303, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T12:00:00.001Z" },
+    ];
+
+    const result = foldRepository(snapshot);
+
+    expect.soft(result.pullRequests[0]?.reviewRounds).toEqual([
+      { githubReviewId: 301, submittedAt: "2026-09-01T11:59:59.999Z" },
+    ]);
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ settledPoints: 6, reviewRounds: 1, credits: 5 }),
+    ]);
+  });
+
   it("uses the configured S/M/L catalog rather than inferring a label's points", () => {
     const snapshot = outsiderFixture();
     setOpeningLabel(snapshot, "S");

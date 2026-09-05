@@ -983,6 +983,41 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ creditor_id: contributor.id, status: "SETTLED" }]);
   });
 
+  it.each([
+    ["exactly at merge", "2026-09-01T12:00:00.000Z", "UNCLAIMED"],
+    ["one millisecond after merge", "2026-09-01T12:00:00.001Z", "SETTLED"],
+    ["one millisecond before merge", "2026-09-01T11:59:59.999Z", "UNCLAIMED"],
+  ] as const)("resolves a claim when the claimant is banned %s", async (_boundary, sanctionedAt, status) => {
+    const pullRequest = await insertPullRequest(sql);
+    const contributorLogin = `merge-boundary-${nextExternalId()}`;
+    const contributor = await insertIdentity(sql, contributorLogin);
+    const moderatorId = await insertUser(sql);
+    await sql`
+      update pull_requests set merged_at = ${"2026-09-01T12:00:00.000Z"}
+      where id = ${pullRequest.id}
+    `;
+    await insertUnclaimedIdentitySettlement(sql, pullRequest, contributor.githubUserId, contributorLogin);
+    await sql`
+      insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, created_at)
+      values
+        (${contributor.id}, ${moderatorId}, ${"WARNED"}, ${"ACTIVE"}, ${"Restored before merge"},
+          ${"2026-09-01T11:00:00.000Z"}),
+        (${contributor.id}, ${moderatorId}, ${"ACTIVE"}, ${"BANNED"}, ${"Sanction at merge boundary"},
+          ${sanctionedAt})
+    `;
+    await sql`update users set enforcement_state = ${"BANNED"} where id = ${contributor.id}`;
+
+    await claimGitHubIdentity(sql, contributor.id, contributor.githubUserId);
+
+    await expect(sql<{ creditor_id: string | null; status: string; credits: number }[]>`
+      select creditor_id, status, credits from settlements where issue_id = ${pullRequest.issueId}
+    `).resolves.toEqual([{
+      creditor_id: status === "SETTLED" ? contributor.id : null,
+      status,
+      credits: 6,
+    }]);
+  });
+
   it("derives zero-sum ledger entries and account balances from settlements", async () => {
     const settlement = await insertSettledRecord("b".repeat(64));
 
