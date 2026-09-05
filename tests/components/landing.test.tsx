@@ -70,7 +70,9 @@ type BudgetTerm = {
   atLeastCh?: number;
 };
 
-// Every term the button's y position sums, with what each contributes at 1440x800.
+// Every term the button's y position sums, each bounded at the value this
+// stylesheet resolves to. Nothing here is a design opinion: raising one of
+// these lowers the button, so the bound is the measurement's precondition.
 const FOLD_BUDGET: BudgetTerm[] = [
   { term: "page block padding", element: "page", property: "padding-top", atMost: 40, ceilingAtMost: 40 },
   { term: "hero measure", element: "hero", property: "max-width", atLeast: 928 },
