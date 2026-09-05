@@ -2075,6 +2075,8 @@ describe("initial PostgreSQL materialization", () => {
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
       githubIssueId,
       githubPullRequestId,
       issueLabels: ["M"],
