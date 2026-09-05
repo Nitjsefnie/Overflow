@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubApiError } from "@/lib/github/client";
+import { GitHubApiError } from "@/lib/github/errors";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
   RegisteredRepository,
@@ -201,7 +201,14 @@ describe("explicit repository registration", () => {
     const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
     expect(error).toMatchObject({ code: "GITHUB_ACCESS" });
     const message = (error as Error).message;
-    expect(message).toContain(`GitHub refused to ${description} (HTTP ${status}).`);
+    if (status === 403) {
+      expect(message).toContain(`GitHub refused to ${description} (HTTP 403).`);
+    } else {
+      expect(message).toContain(`GitHub answered 404 for the request to ${description}.`);
+      expect(message).toContain("GitHub returns 404 rather than 403 when it will not reveal a resource, so the usual cause is missing authorization.");
+      expect(message).toContain("The repository may also have been renamed, moved or deleted since it was looked up.");
+      expect(message).not.toMatch(/denied|refused/);
+    }
     expect(message).toContain("https://github.com/settings/applications");
     expect(message).toContain("retry registration");
     if (ownerType === "ORGANIZATION") {
@@ -209,7 +216,8 @@ describe("explicit repository registration", () => {
       expect(message).toContain("https://github.com/organizations/Real-Owner/settings/oauth_application_policy");
       expect(message).not.toContain("/organizations/octo/");
     } else {
-      expect(message).toContain("GitHub denied Overflow access to this repository.");
+      expect(message).toContain("This may be caused by missing authorization for the Overflow OAuth application.");
+      expect(message).not.toContain("GitHub denied Overflow access to this repository.");
       expect(message).not.toMatch(/organization|oauth_application_policy/i);
     }
     if (step === "ensureDifficultyLabels") {
@@ -233,6 +241,61 @@ describe("explicit repository registration", () => {
       message,
     });
     expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it.each([403, 404])("explains lookup HTTP %s without guessing the owner type", async (status) => {
+    const harness = createHarness();
+    harness.dependencies.github.getRepository = async () => { throw new GitHubApiError(status); };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "GITHUB_ACCESS" });
+    const message = (error as Error).message;
+    expect(message).toContain("retrieve the submitted GitHub repository");
+    expect(message).toContain(String(status));
+    expect(message).toContain("https://github.com/settings/applications");
+    expect(message).toContain("For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy.");
+    expect(message).not.toContain("https://github.com/organizations/");
+    expect(message).toContain("retry registration");
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
+  describe.each([
+    ["getRepository", "retrieve the submitted GitHub repository", "Unable to retrieve the submitted GitHub repository."],
+    ["ensureDifficultyLabels", "configure difficulty labels", "Unable to configure difficulty labels on GitHub."],
+    ["createWebhook", "create the repository webhook", "Unable to create the repository webhook on GitHub."],
+  ] as const)("%s error classification", (step, description, upstreamMessage) => {
+    it.each([
+      [401, "UPSTREAM_FAILURE"],
+      [422, "UPSTREAM_FAILURE"],
+      [429, "GITHUB_RATE_LIMITED"],
+      [500, "UPSTREAM_FAILURE"],
+    ] as const)("classifies unthrottled HTTP %s as %s", async (status, code) => {
+      const harness = createHarness();
+      harness.dependencies.github[step] = async () => { throw new GitHubApiError(status); };
+
+      await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+        code,
+        message: status === 429
+          ? `GitHub rate-limited the request to ${description} (HTTP 429). Please retry registration later.`
+          : upstreamMessage,
+      });
+      expect(harness.createdRepositories).toEqual([]);
+    });
+
+    it.each([
+      [403, 60, " Retry after 60 seconds."],
+      [404, null, ""],
+      [500, 0, " Retry after 0 seconds."],
+    ] as const)("prioritizes throttling for HTTP %s with retry delay %s", async (status, retryAfterSeconds, delay) => {
+      const harness = createHarness({ owner: "Real-Owner", ownerType: "ORGANIZATION" });
+      harness.dependencies.github[step] = async () => { throw new GitHubApiError(status, true, retryAfterSeconds); };
+
+      await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+        code: "GITHUB_RATE_LIMITED",
+        message: `GitHub rate-limited the request to ${description} (HTTP ${status}).${delay} Please retry registration later.`,
+      });
+      expect(harness.createdRepositories).toEqual([]);
+    });
   });
 
   it("best-effort deletes the webhook when database persistence fails", async () => {

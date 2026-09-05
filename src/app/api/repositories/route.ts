@@ -153,6 +153,8 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
     case "FORBIDDEN":
     case "GITHUB_ACCESS":
       return errorResponse(403, error.code, error.message);
+    case "GITHUB_RATE_LIMITED":
+      return errorResponse(429, error.code, error.message);
     case "CONFLICT":
       return errorResponse(409, error.code, error.message);
     case "UPSTREAM_FAILURE":
