@@ -21,7 +21,8 @@ const cohortQuerySchema = z
 
 export function createModerationCohortGetHandler(dependencies: ModerationRouteDependencies) {
   return async function getModerationCohort(request: Request): Promise<Response> {
-    // No origin guard: a preview only reads, exactly like the moderators listing.
+    // rejectUntrustedRequest rejects a missing Origin header, but same-origin browser
+    // fetch() GETs send none, so applying it here would reject every moderation-page preview.
     const session = await requiredModeratorSession(dependencies);
     if (session instanceof Response) {
       return session;
@@ -50,6 +51,12 @@ export const GET = createModerationCohortGetHandler({
 });
 
 function parseCohortQuery(request: Request): Omit<OpenAccountAuditInput, "reason"> | null {
-  const result = cohortQuerySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
+  const searchParams = new URL(request.url).searchParams;
+  for (const name of searchParams.keys()) {
+    if (searchParams.getAll(name).length > 1) {
+      return null;
+    }
+  }
+  const result = cohortQuerySchema.safeParse(Object.fromEntries(searchParams));
   return result.success ? result.data : null;
 }
