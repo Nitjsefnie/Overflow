@@ -3,6 +3,10 @@ import type { UserRole } from "@/lib/db/types";
 import { GitHubGateway } from "@/lib/github/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
+import {
+  rejectUnsupportedMediaType,
+  rejectUntrustedRequest,
+} from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import {
   RepositoryRegistrationError,
@@ -50,7 +54,20 @@ export type RepositoryRouteDependencies = {
 
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
+    // Reading the credential is only a header parse, and it decides which guard
+    // this request gets. A cookie-authenticated request is one the browser
+    // authenticates on the client's behalf from whatever page asked, so it is
+    // same-origin only. A bearer credential is attached deliberately and never
+    // rides along on a cross-site request, so its origin is not consulted — but
+    // both paths must be JSON, and both are refused before the token is hashed,
+    // the session is read, or the body is parsed.
     const credential = readApiTokenCredential(request);
+    const refusal =
+      credential === null ? rejectUntrustedRequest(request) : rejectUnsupportedMediaType(request);
+    if (refusal !== null) {
+      return refusal;
+    }
+
     let session: RepositoryRouteSession | null;
     try {
       if (credential !== null) {
