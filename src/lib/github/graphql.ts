@@ -83,7 +83,7 @@ function graphqlFailureMessage(errors: unknown, accessToken: string): string {
       continue;
     }
 
-    // Five full previews use at most 7,673 units, so even the maximum count
+    // Five full previews use at most 7,674 units, so even the maximum count
     // suffix fits. Only the type-only tail can exhaust the remaining budget.
     if (fullPairs.length < maxErrorEntries) {
       const path = Array.isArray(error.path) ? ` path=${boundedErrorPath(error.path, accessToken)}` : "";
