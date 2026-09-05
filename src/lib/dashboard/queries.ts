@@ -991,7 +991,7 @@ export async function listAuditCandidates(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<AuditCandidateProjection[]> {
   const sql = resolveSql(dependencies);
-  // These cohort predicates are shared with getCalibrationComparison below and with
+  // These cohort predicates are shared with getCalibrationComparison above and with
   // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all three together.
   // Each side aggregates once and joins on the account, rather than re-aggregating per account row:
   // neither self_work_calibrations.user_id nor settlements.debtor_id is indexed. Inside the outsider
