@@ -17,8 +17,10 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
       <section className="surface rules-card" aria-labelledby="rules-opening-heading">
         <h2 id="rules-opening-heading">Before work starts</h2>
         <p>
-          Repositories choose their own difficulty labels, worth 1–10 points. The issue owner&apos;s earliest
-          starting-difficulty label before the first assignment sets the opening estimate.
+          Repositories choose their own difficulty labels, worth 1–10 points. The repository sponsor&apos;s
+          earliest starting-difficulty label before the first assignment sets the opening estimate. Only the
+          sponsor prices work: labels and comments from anyone else, including the person who filed the issue,
+          never set a price.
         </p>
         <p>
           Open issues assigned to outside contributors reserve points from the sponsor&apos;s balance. Your
@@ -31,16 +33,30 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <ol className="rules-list">
           <li>A merged pull request must close the issue in GitHub. A link alone does not count.</li>
           <li>
-            Between the pull request&apos;s final commit and merge, the issue owner must apply exactly one
-            final-difficulty label to the issue and leave a comment naming it.
+            Between the pull request&apos;s final commit and merge, the repository sponsor must apply exactly one
+            final-difficulty label to the issue and leave a nonblank comment naming it. A comment edited after
+            the window closes does not count.
           </li>
-          <li>Only issue labels count; pull request labels do not. A 15-minute tolerance applies to timing.</li>
+          <li>
+            Only issue labels count; pull request labels do not. A 15-minute tolerance applies to label and
+            comment timing; the settlement window closes 15 minutes after merge.
+          </li>
+          <li>
+            The earliest qualifying comment at or after the standing label is used, including when a label is
+            reapplied. If none exists, a comment up to 15 minutes before that label can count.
+          </li>
         </ol>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-credits-heading">
         <h2 id="rules-credits-heading">Credits</h2>
         <p className="rules-formula">Credits = final difficulty points − distinct review rounds, with a minimum of 0.</p>
+        <p>
+          Review rounds are distinct changes-requested reviews submitted before merge, counted as they stood
+          when the pull request merged. A review dismissed after the merge still counts; one dismissed before
+          the merge does not. A dismissal exactly at merge also leaves the round counted. No timing tolerance
+          applies to reviews.
+        </p>
         <p>
           Work you complete in a repository you sponsor does not change balances; it helps check that difficulty
           ratings are consistent.

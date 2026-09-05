@@ -318,26 +318,38 @@ are worth reading in full before you touch a label.
 
 The two consequences to hold on to:
 
-- **`offered:` belongs to the issue owner, at filing.** Opening difficulty is
-  the earliest opening label the owner applied *before the first assignment*.
+- **`offered:` belongs to the repository sponsor, at filing.** Opening difficulty is
+  the earliest opening label the sponsor applied *before the first assignment*.
   Work has to be priced before it is spoken for, so a label applied after
   someone has taken the issue cannot set its price — it is not a late correction,
-  it is nothing.
+  it is nothing. Labels from anyone else, including the issue's author, do not
+  price it at all.
 - **`settled:` has a window with two halves.** The label must be applied by the
-  issue owner between the closing pull request's **final commit** and its
-  **merge**, and a nonblank comment from the owner in that same window must name
+  repository sponsor between the closing pull request's **final commit** and its
+  **merge**, and a nonblank comment from the sponsor must name
   the label. Both halves are the evidence; a label with no comment, or a comment
-  that does not name the label, settles nothing. Exactly one actual-catalog
-  label may be active — two settle nothing. Labels on the pull request never
-  price anything.
+  that does not name the label, settles nothing. A comment edited after the
+  window closes settles nothing either — its current body is not evidence of
+  what was written before the close. Exactly one actual-catalog label may be
+  active — two settle nothing. Labels on the pull request never price anything.
 
 Those orderings are checked with a **fifteen-minute tolerance**, because they
 are a sequence people perform by hand and the order things land in is routinely
 off by a little — labelling and assigning in one `gh issue create` invocation
 applies the assignee first, for instance. The tolerance absorbs that. It does
-not widen the rule: evidence outside it is still rejected, and **the window
-cannot be reopened after the merge**. A settled label applied an hour later
-proves nothing about what the reviewer saw.
+not widen the rule: evidence outside it is still rejected. **The settlement
+window closes fifteen minutes after merge and cannot be reopened.** A settled
+label applied an hour later proves nothing about what the reviewer saw. The
+earliest qualifying comment at or after the standing label is used, including
+when a label is reapplied; if none exists, a comment up to fifteen minutes
+before that label can count. The comment must be created by the window close
+and must not be edited after it.
+
+Review rounds are frozen at merge. `credits = max(0, actual points − distinct
+review rounds)` counts the changes-requested reviews submitted before merge as
+they stood when the pull request merged: dismissing one after the merge does
+not remove it, and dismissing one before the merge does. A dismissal exactly at
+merge also leaves the round counted; no timing tolerance applies to reviews.
 
 So: labels are never applied to tidy an issue up, and never adjusted because a
 branch turned out harder or easier than expected. Retitling an issue is
