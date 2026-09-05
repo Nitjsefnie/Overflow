@@ -394,5 +394,6 @@ function reconciliationPullRequest(input: { id: number; number: number }) {
     mergeCommitOid: `${input.id.toString(16).padStart(40, "0")}`,
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: "contributor",
+    authorGitHubUserId: null,
   };
 }
