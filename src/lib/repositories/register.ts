@@ -195,9 +195,12 @@ function githubSetupError(
     if (repository === null) {
       cause += " For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy.";
     }
+    const temporaryLimitingAdvice = error.status === 403
+      ? " GitHub also answers 403 when it is temporarily limiting requests, so if those settings look right, wait a minute and retry before changing anything."
+      : "";
     return new RepositoryRegistrationError(
       "GITHUB_ACCESS",
-      `${observation} ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
+      `${observation} ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.${temporaryLimitingAdvice}`,
     );
   }
 

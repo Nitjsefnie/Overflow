@@ -140,6 +140,20 @@ describe("GitHubGateway REST transport", () => {
     });
   });
 
+  it.each([
+    [{ "x-ratelimit-remaining": "0" }, null],
+    [{ "retry-after": "60" }, 60],
+  ] satisfies Array<[Record<string, string>, number | null]>)("marks HTTP 429 with %j as rate limited in the transport", async (headers, retryAfterSeconds) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private-body", { status: 429, headers }),
+    });
+
+    const error = await gateway.getRepository({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toMatchObject({ status: 429, rateLimited: true, retryAfterSeconds });
+  });
+
   it("aborts a stalled GitHub request and exposes only a sanitized timeout error", async () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
