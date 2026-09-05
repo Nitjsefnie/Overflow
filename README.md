@@ -4,25 +4,26 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 
 **Overflow is already running at <https://overflow.nitjsefni.eu>.** Pointing you at that instance is what this repository is for. You do not need to deploy anything to use Overflow — sign in there and join the ledger that already exists. The setup instructions further down build a development environment for changing Overflow itself; they are not the way to use it.
 
+This repository is registered in that instance. `Nitjsefnie/Overflow` is a row in its ledger and the issues in this tracker are rows joined to it, so the mechanism described below can be watched working on this repository itself.
+
 ## Join the running instance
 
 1. **Sign in.** Open <https://overflow.nitjsefni.eu> and choose *Sign in with GitHub*. That is the whole account setup — there is nothing to install and nothing to configure.
-2. **Register a repository you administer.** Use *Register a repository* and submit one `owner/name` or canonical `https://github.com/owner/name` URL. Registration is explicit and one at a time, and GitHub must report you as an administrator of that repository.
-3. **Choose the repository's catalogs.** The opening catalog is the set of `offered:` labels the repository prices work with, in its own vocabulary; the actual catalog maps each point from 1 through 10 onto a settlement label. The words are yours, the point scale is shared.
-4. **Label the work.** Apply an opening label when you file an issue, before anyone is assigned, and settle it between the closing pull request's final commit and its merge with a label and a comment naming that label. Those labels are the ledger's input, not decoration.
-5. **Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Calibration* and *Rules*, and the in-product rules page states the same rules this file does.
+2. **Register a repository, catalogs and all, on one form.** *Register a repository* takes the repository and both of its catalogs and submits them together; there is no separate catalog-editing page afterwards, so decide the labels and their points before you start. Bring a public repository you administer. Registration writes to it: Overflow creates the catalog labels there and installs its webhook. [What the ledger records](#what-the-ledger-records) is the reference for what a catalog has to contain.
+3. **Offer work, then settle it.** Apply an opening label when you file an issue, and a result label with a comment naming it before you merge the closing pull request. Those are the labels Overflow created for you in step 2. [What the ledger records](#what-the-ledger-records) states the evidence each label has to satisfy, and [Scoring and calibration](#scoring-and-calibration) what it is worth.
+4. **Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Register a repository*, *Calibration* and *Rules*.
 
-Closing work needs no repository of your own. Take an issue in a repository that is already registered, and the settlement lands in your ledger when the pull request merges and the issue owner settles it — if you have not signed in yet it waits as an unclaimed settlement until your GitHub identity is claimed.
+Closing work needs no repository of your own. Take an issue in a repository that is already registered; [What the ledger records](#what-the-ledger-records) and [Scoring and calibration](#scoring-and-calibration) are the terms the credit settles on, including what happens when you have not signed in yet.
 
 ## What the ledger records
 
 - GitHub OAuth signs a member in at `/api/auth/callback/github`.
-- Repository registration is explicit and one at a time. The signed-in person must have GitHub administrator permission for the submitted `owner/name` or canonical `https://github.com/owner/name` URL.
+- Repository registration is explicit and one at a time. The submitted `owner/name` or canonical `https://github.com/owner/name` URL must be a public repository, and the signed-in person must have GitHub administrator permission for it.
 - Each repository chooses its own opening catalog. S/M/L is allowed, but so are arbitrary labels such as `moonlit ridge`, `risk: high`, or anything else the repository understands. Each opening label carries comparison and reserve points from 1 through 10.
 - Every actual catalog has exactly one editable mapping for each point from 1 through 10. The labels are repository-defined; the point mapping is the common settlement scale.
 - The dashboard uses materialized ledger entries and balances. Available headroom is `settled balance − reserve points` for open issues assigned to outside contributors, and negative headroom remains visible. This release enforces no credit floor and exposes no floor configuration; optional group floors await a later idempotent assignment-enforcement design.
 
-Closing-link evidence comes only from GitHub GraphQL `closedByPullRequestsReferences`. Opening difficulty is reconstructed from the earliest configured label that the issue owner applied before the first assignment. Settled difficulty requires an issue-owner label applied between the closing pull request’s final commit and merge, plus a nonblank owner comment in that window that names the label. Pull-request labels never price work. Overflow retains those event/comment identifiers and timestamps, the exact merge commit OID, and the diff fingerprint so every scoring input is reproducible.
+Closing-link evidence comes only from GitHub GraphQL `closedByPullRequestsReferences`. Opening difficulty is reconstructed from the earliest configured label that the issue owner applied before the first assignment. Settled difficulty requires an issue-owner label applied between the closing pull request's final commit and merge, plus a nonblank owner comment in that window that names the label. Pull-request labels never price work. Overflow retains those event/comment identifiers and timestamps, the exact merge commit OID, and the diff fingerprint so every scoring input is reproducible.
 
 ## Scoring and calibration
 
@@ -44,13 +45,9 @@ Open an audit only with the required paired samples, warn when the record suppor
 
 ## Running your own instance is not the way to use Overflow
 
-Everything below this line is for people changing Overflow's code or operating a deployment. The instructions are accurate and contributors need them, but what they build is a development environment, not a route to using Overflow.
-
 Each instance keeps its own ledger. Balances, reserves, settlements, proof records and calibration history live in that instance's own PostgreSQL database, and nothing in this codebase moves them between deployments. A second instance therefore starts empty and stays private to itself: no registered repositories, no counterpart to settle with, and no credit that anyone else can see or honour. Signing in at <https://overflow.nitjsefni.eu> is what puts your work in a ledger other people are already reading.
 
 ## Development setup
-
-These steps stand up a local copy for working on Overflow itself.
 
 1. Copy `.env.example` to `.env` and replace every placeholder. `AUTH_SECRET` can be generated with `npx auth secret`; `TOKEN_ENCRYPTION_KEY` must be an unpadded base64url encoding of 32 random bytes.
 2. Use an already-installed PostgreSQL 17 server **or** start the local Compose service:
