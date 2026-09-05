@@ -378,10 +378,10 @@ describe("initial PostgreSQL materialization", () => {
     await expect(insertIdentity(sql, "another-login", first.githubUserId)).rejects.toThrow();
   });
 
-  it("rejects non-positive GitHub user ids on pull requests and settlements", async () => {
+  it.each([0, -1])("rejects non-positive GitHub user id %s on pull requests and settlements", async (githubUserId) => {
     const pullRequest = await insertPullRequest(sql);
     await expect(sql`
-      update pull_requests set author_github_user_id = 0 where id = ${pullRequest.id}
+      update pull_requests set author_github_user_id = ${githubUserId} where id = ${pullRequest.id}
     `).rejects.toThrow(/check/);
     await expect(sql`
       insert into settlements (
@@ -389,7 +389,7 @@ describe("initial PostgreSQL materialization", () => {
         opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
       )
       values (
-        ${pullRequest.id}, ${pullRequest.issueId}, null, ${"someone"}, -1, ${pullRequest.sponsorId},
+        ${pullRequest.id}, ${pullRequest.issueId}, null, ${"someone"}, ${githubUserId}, ${pullRequest.sponsorId},
         5, 6, 0, 6, ${"c".repeat(64)}, ${"UNCLAIMED"}
       )
     `).rejects.toThrow(/check/);
@@ -678,6 +678,98 @@ describe("initial PostgreSQL materialization", () => {
       select user_id, opening_comparison_points, actual_points
       from self_work_calibrations where issue_id = ${pullRequest.issueId}
     `).resolves.toEqual([{ user_id: pullRequest.sponsorId, opening_comparison_points: 5, actual_points: 6 }]);
+  });
+
+  it("never converts another account's credits to self-work when the sponsor holds its recycled login", async () => {
+    const pullRequest = await insertPullRequest(sql);
+    const originalGitHubUserId = nextExternalId();
+    const sponsorGitHubUserId = await githubUserIdOf(sql, pullRequest.sponsorId);
+    const login = `recycled-self-${nextExternalId()}`;
+    await sql`update users set github_login = ${login} where id = ${pullRequest.sponsorId}`;
+    await insertUnclaimedIdentitySettlement(sql, pullRequest, originalGitHubUserId, login);
+
+    await claimGitHubIdentity(sql, pullRequest.sponsorId, sponsorGitHubUserId);
+
+    await expect(sql`
+      select creditor_id, creditor_github_user_id, status, credits, proof_sha256
+      from settlements where issue_id = ${pullRequest.issueId}
+    `).resolves.toEqual([{
+      creditor_id: null, creditor_github_user_id: String(originalGitHubUserId),
+      status: "UNCLAIMED", credits: 6, proof_sha256: "a".repeat(64),
+    }]);
+    await expect(sql`select id from self_work_calibrations where issue_id = ${pullRequest.issueId}`)
+      .resolves.toHaveLength(0);
+
+    const original = await insertIdentity(sql, `${login}-renamed`, originalGitHubUserId);
+    await claimGitHubIdentity(sql, original.id, original.githubUserId);
+    await expect(sql`select creditor_id, status, credits from settlements where issue_id = ${pullRequest.issueId}`)
+      .resolves.toEqual([{ creditor_id: original.id, status: "SETTLED", credits: 6 }]);
+  });
+
+  it.each(["BANNED", "RECALIBRATING"] as const)("leaves self-work unclaimed when the claimant was %s at merge", async (state) => {
+    const pullRequest = await insertPullRequest(sql);
+    const githubUserId = await githubUserIdOf(sql, pullRequest.sponsorId);
+    await insertUnclaimedIdentitySettlement(sql, pullRequest, githubUserId, "ineligible-self");
+    await sql`update users set enforcement_state = ${state} where id = ${pullRequest.sponsorId}`;
+
+    await claimGitHubIdentity(sql, pullRequest.sponsorId, githubUserId);
+
+    await expect(sql`select creditor_id, status, credits from settlements where issue_id = ${pullRequest.issueId}`)
+      .resolves.toEqual([{ creditor_id: null, status: "UNCLAIMED", credits: 6 }]);
+    await expect(sql`select id from self_work_calibrations where issue_id = ${pullRequest.issueId}`)
+      .resolves.toHaveLength(0);
+  });
+
+  it.each([1, Number.MAX_SAFE_INTEGER])("claims credits for valid boundary account id %s", async (githubUserId) => {
+    const pullRequest = await insertPullRequest(sql);
+    const claimant = await insertIdentity(sql, `boundary-${githubUserId}`, githubUserId);
+    await insertUnclaimedIdentitySettlement(sql, pullRequest, githubUserId, "boundary-old-login");
+
+    await claimGitHubIdentity(sql, claimant.id, githubUserId);
+
+    await expect(sql`select creditor_id, status, credits from settlements where issue_id = ${pullRequest.issueId}`)
+      .resolves.toEqual([{ creditor_id: claimant.id, status: "SETTLED", credits: 6 }]);
+  });
+
+  it.each(["self-work", "outside work"])("leaves %s unclaimed without a merged pull request", async (kind) => {
+    const pullRequest = await insertPullRequest(sql);
+    const claimantId = kind === "self-work" ? pullRequest.sponsorId : await insertUser(sql);
+    const githubUserId = await githubUserIdOf(sql, claimantId);
+    await sql`update pull_requests set state = ${"OPEN"}, merged_at = null where id = ${pullRequest.id}`;
+    await insertUnclaimedIdentitySettlement(sql, pullRequest, githubUserId, "unmerged-author");
+
+    await claimGitHubIdentity(sql, claimantId, githubUserId);
+
+    await expect(sql`select creditor_id, status, credits from settlements where issue_id = ${pullRequest.issueId}`)
+      .resolves.toEqual([{ creditor_id: null, status: "UNCLAIMED", credits: 6 }]);
+    await expect(sql`select id from self_work_calibrations where issue_id = ${pullRequest.issueId}`)
+      .resolves.toHaveLength(0);
+  });
+
+  it("claims authorship and other credits in the same call after converting self-work", async () => {
+    const selfWork = await insertPullRequest(sql);
+    const otherWork = await insertPullRequest(sql);
+    const claimantId = selfWork.sponsorId;
+    const githubUserId = await githubUserIdOf(sql, claimantId);
+    for (const pullRequest of [selfWork, otherWork]) {
+      await sql`
+        update pull_requests set author_id = null, author_github_user_id = ${githubUserId}
+        where id = ${pullRequest.id}
+      `;
+      await insertUnclaimedIdentitySettlement(sql, pullRequest, githubUserId, "both-kinds-author");
+    }
+
+    await claimGitHubIdentity(sql, claimantId, githubUserId);
+
+    await expect(sql`select id from settlements where issue_id = ${selfWork.issueId}`).resolves.toHaveLength(0);
+    await expect(sql`
+      select user_id, actual_points from self_work_calibrations where issue_id = ${selfWork.issueId}
+    `).resolves.toEqual([{ user_id: claimantId, actual_points: 6 }]);
+    await expect(sql`select creditor_id, status, credits from settlements where issue_id = ${otherWork.issueId}`)
+      .resolves.toEqual([{ creditor_id: claimantId, status: "SETTLED", credits: 6 }]);
+    await expect(sql`
+      select author_id from pull_requests where id in (${selfWork.id}, ${otherWork.id})
+    `).resolves.toEqual([{ author_id: claimantId }, { author_id: claimantId }]);
   });
 
   it("claims an unclaimed GitHub identity without rewriting its proof or amount", async () => {
@@ -1206,9 +1298,23 @@ describe("initial PostgreSQL materialization", () => {
       update pull_requests set author_github_user_id = null where github_pull_request_id = ${githubPullRequestId}
     `;
 
+    const unknownAuthorSnapshot = structuredClone(snapshot);
+    unknownAuthorSnapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
+    await expect(store.materialize({
+      repositoryId, runId: await store.beginRun(repositoryId), fold: foldRepository(unknownAuthorSnapshot),
+    })).resolves.toEqual({ adds: 0, changes: 0, removals: 0 });
+
     const rebuildRun = await store.beginRun(repositoryId);
     await expect(store.materialize({ repositoryId, runId: rebuildRun, fold: foldRepository(snapshot) }))
       .resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    const changes = await sql`
+      select before_state, after_state from reconciliation_changes
+      where reconciliation_run_id = ${rebuildRun} and entity_kind = ${"SETTLEMENT"} and change_kind = ${"CHANGE"}
+    `;
+    expect(changes).toEqual([{
+      before_state: expect.objectContaining({ creditorGitHubUserId: null }),
+      after_state: expect.objectContaining({ creditorGitHubUserId: contributorGitHubUserId }),
+    }]);
     await expect(sql<{ creditor_github_user_id: number; status: string }[]>`
       select settlements.creditor_github_user_id::integer, settlements.status
       from settlements join issues on issues.id = settlements.issue_id
@@ -2760,13 +2866,25 @@ async function insertIdentity(
 }
 
 async function insertUserWithLogin(client: QueryableSql, githubLogin: string): Promise<string> {
-  const githubUserId = nextExternalId();
-  const [user] = await client<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
-    values (${githubUserId}, ${githubLogin})
-    returning id
+  return (await insertIdentity(client, githubLogin)).id;
+}
+
+async function insertUnclaimedIdentitySettlement(
+  client: QueryableSql,
+  pullRequest: { id: string; issueId: string; sponsorId: string },
+  githubUserId: number,
+  githubLogin: string,
+): Promise<void> {
+  await client`
+    insert into settlements (
+      pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+    )
+    values (
+      ${pullRequest.id}, ${pullRequest.issueId}, null, ${githubLogin}, ${githubUserId}, ${pullRequest.sponsorId},
+      5, 6, 0, 6, ${"a".repeat(64)}, ${"UNCLAIMED"}
+    )
   `;
-  return user.id;
 }
 
 async function githubUserIdOf(client: QueryableSql, userId: string): Promise<number> {
