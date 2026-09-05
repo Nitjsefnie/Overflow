@@ -33,9 +33,10 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <ol className="rules-list">
           <li>A merged pull request must close the issue in GitHub. A link alone does not count.</li>
           <li>
-            Between the pull request&apos;s final commit and merge, the repository sponsor must apply exactly one
-            final-difficulty label to the issue and leave a nonblank comment naming it. A comment edited after
-            the window closes does not count.
+            Exactly one final-difficulty label must be active on the issue when the window closes. Its standing
+            application must be by the repository sponsor between the pull request&apos;s final commit and merge.
+            The sponsor must leave a nonblank comment naming it. A comment edited after the window closes does
+            not count.
           </li>
           <li>
             Only issue labels count; pull request labels do not. A 15-minute tolerance applies to label and
@@ -55,7 +56,8 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
           Review rounds are distinct changes-requested reviews submitted before merge, counted as they stood
           when the pull request merged. A review dismissed after the merge still counts; one dismissed before
           the merge does not. A dismissal exactly at merge also leaves the round counted. No timing tolerance
-          applies to reviews.
+          applies to reviews. A dismissed review counts only if its dismissal history establishes that it
+          requested changes; missing history or an unknown previous state does not count.
         </p>
         <p>
           Work you complete in a repository you sponsor does not change balances; it helps check that difficulty
