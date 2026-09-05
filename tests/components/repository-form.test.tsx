@@ -108,4 +108,40 @@ describe("repository registration form", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(initialValues);
     expect(await screen.findByRole("status")).toHaveTextContent("co-op/harbour is registered.");
   });
+
+  it("says existing work was not imported when the registration could not ingest it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, existingWorkIngested: false }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "co-op/harbour is registered, but its existing issues could not be imported yet.",
+    );
+  });
+
+  it("confirms existing work was imported when the registration ingested it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, existingWorkIngested: true }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "co-op/harbour is registered and its existing issues were imported.",
+    );
+  });
 });
