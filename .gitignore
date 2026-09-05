@@ -97,6 +97,9 @@ src/lib/*
 !src/lib/async/
 src/lib/async/*
 !src/lib/async/*.ts
+!src/lib/auth/
+src/lib/auth/*
+!src/lib/auth/*.ts
 !src/lib/calibration/
 src/lib/calibration/*
 !src/lib/calibration/*.ts
