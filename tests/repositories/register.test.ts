@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GitHubApiError } from "@/lib/github/client";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
   RegisteredRepository,
@@ -179,7 +180,57 @@ describe("explicit repository registration", () => {
 
     await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
       code: "UPSTREAM_FAILURE",
-      message: "Unable to register the repository with GitHub.",
+      message: "Unable to create the repository webhook on GitHub.",
+    });
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it.each([
+    ["ensureDifficultyLabels", "configure difficulty labels", 403, "ORGANIZATION"],
+    ["ensureDifficultyLabels", "configure difficulty labels", 404, "ORGANIZATION"],
+    ["createWebhook", "create the repository webhook", 403, "ORGANIZATION"],
+    ["createWebhook", "create the repository webhook", 404, "ORGANIZATION"],
+    ["ensureDifficultyLabels", "configure difficulty labels", 403, "USER"],
+    ["ensureDifficultyLabels", "configure difficulty labels", 404, "USER"],
+    ["createWebhook", "create the repository webhook", 403, "USER"],
+    ["createWebhook", "create the repository webhook", 404, "USER"],
+  ] as const)("explains %s (%s) HTTP %s access failures for %s owners", async (step, description, status, ownerType) => {
+    const harness = createHarness({ owner: "Real-Owner", ownerType });
+    harness.dependencies.github[step] = async () => { throw new GitHubApiError(status); };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "GITHUB_ACCESS" });
+    const message = (error as Error).message;
+    expect(message).toContain(`GitHub refused to ${description} (HTTP ${status}).`);
+    expect(message).toContain("https://github.com/settings/applications");
+    expect(message).toContain("retry registration");
+    if (ownerType === "ORGANIZATION") {
+      expect(message).toContain("the Overflow OAuth application is not approved for that organization");
+      expect(message).toContain("https://github.com/organizations/Real-Owner/settings/oauth_application_policy");
+      expect(message).not.toContain("/organizations/octo/");
+    } else {
+      expect(message).toContain("GitHub denied Overflow access to this repository.");
+      expect(message).not.toMatch(/organization|oauth_application_policy/i);
+    }
+    if (step === "ensureDifficultyLabels") {
+      expect(message).not.toContain("webhook");
+      expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
+    }
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it.each([
+    ["ensureDifficultyLabels", new Error("network secret"), "Unable to configure difficulty labels on GitHub."],
+    ["createWebhook", new Error("network secret"), "Unable to create the repository webhook on GitHub."],
+    ["ensureDifficultyLabels", new GitHubApiError(500), "Unable to configure difficulty labels on GitHub."],
+    ["createWebhook", new GitHubApiError(500), "Unable to create the repository webhook on GitHub."],
+  ] as const)("keeps %s failure %s as a sanitized upstream failure", async (step, failure, message) => {
+    const harness = createHarness();
+    harness.dependencies.github[step] = async () => { throw failure; };
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message,
     });
     expect(harness.createdRepositories).toEqual([]);
   });
@@ -230,6 +281,8 @@ type HarnessOptions = {
   actorRole?: "MEMBER" | "MODERATOR";
   actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
   canAdminister?: boolean;
+  owner?: string;
+  ownerType?: "USER" | "ORGANIZATION";
   visibility?: "PUBLIC" | "PRIVATE";
   existing?: RegisteredRepository | null;
   webhookFailure?: boolean;
@@ -260,11 +313,12 @@ function createHarness(options: HarnessOptions = {}) {
         githubCalls.push(`getRepository:${repository.owner}/${repository.name}`);
         return {
           id: 42,
-          owner: "octo",
+          owner: options.owner ?? "octo",
+          ownerType: options.ownerType ?? "USER",
           name: "overflow",
-          fullName: "octo/overflow",
+          fullName: `${options.owner ?? "octo"}/overflow`,
           visibility: options.visibility ?? "PUBLIC",
-          url: "https://github.com/octo/overflow",
+          url: `https://github.com/${options.owner ?? "octo"}/overflow`,
           canAdminister: options.canAdminister ?? true,
         };
       },

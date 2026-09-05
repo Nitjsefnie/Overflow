@@ -28,9 +28,16 @@ type GitHubRestRepository = {
   full_name: string;
   private: boolean;
   html_url: string;
-  owner: { login: string };
+  owner: { login: string; type?: string };
   permissions?: { admin?: boolean };
 };
+
+export class GitHubApiError extends Error {
+  public constructor(public readonly status: number) {
+    super(`GitHub API request failed with status ${status}.`);
+    this.name = "GitHubApiError";
+  }
+}
 
 export class GitHubGateway {
   private readonly accessToken: string;
@@ -59,6 +66,7 @@ export class GitHubGateway {
     return {
       id: payload.id,
       owner: payload.owner.login,
+      ownerType: payload.owner.type === "Organization" ? "ORGANIZATION" : "USER",
       name: payload.name,
       fullName: payload.full_name,
       visibility: payload.private ? "PRIVATE" : "PUBLIC",
@@ -357,7 +365,7 @@ export class GitHubGateway {
       }
 
       if (!response.ok) {
-        throw new Error(`GitHub API request failed with status ${response.status}.`);
+        throw new GitHubApiError(response.status);
       }
 
       return response;
@@ -370,7 +378,7 @@ export class GitHubGateway {
         throw new Error("GitHub request timed out.");
       }
 
-      if (error instanceof Error && /^GitHub API request failed with status \d+\.$/.test(error.message)) {
+      if (error instanceof GitHubApiError) {
         throw error;
       }
 
