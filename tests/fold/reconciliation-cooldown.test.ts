@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -57,6 +57,82 @@ describe("persisted reconciliation cooldown", () => {
     expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
   });
 
+  it.each([
+    { offset: -1, attempted: 0, reconciled: 0, skipped: 1, gatewayCalls: [], runRows: [] },
+    { offset: 0, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["issues"], runRows: [{ status: "COMPLETED" }] },
+    { offset: 1, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["issues"], runRows: [{ status: "COMPLETED" }] },
+  ])("checks the sweep expiry boundary at offset $offset ms", async ({ offset, attempted, reconciled, skipped, gatewayCalls, runRows }) => {
+    const { store, repositoryId, github, calls } = await cooledRepository();
+    const now = () => new Date(notBefore.getTime() + offset);
+    const summary = await sweepReconciliations({
+      listActiveRepositoryIds: async () => [repositoryId],
+      getReconciliationCooldown: (id) => store.getReconciliationCooldown(id),
+      now,
+      reconcile: (id) => reconcileRepository({ store, github, now }, id),
+    });
+    expect(summary).toEqual({ attempted, reconciled, failed: 0, skipped });
+    expect(calls).toEqual(gatewayCalls);
+    expect(await runs(repositoryId)).toEqual(runRows);
+    expect(await store.getReconciliationCooldown(repositoryId)).toEqual(skipped === 1 ? notBefore : null);
+  });
+
+  it("reads a contender's cooldown after acquiring the real repository lock", async () => {
+    const { store, repositoryId, github, calls } = await cooledRepository();
+    await store.setReconciliationCooldown(repositoryId, null);
+    const ownerAcquired = signal();
+    const releaseOwner = signal();
+    const contenderBlocked = signal();
+    const contenderSql = postgres(process.env.DATABASE_URL!, {
+      transform: {
+        row: (row) => {
+          // Observe PostgreSQL rejecting the contender's real lock attempt; preserve every row.
+          if (row.acquired === false) contenderBlocked.resolve();
+          return row;
+        },
+      },
+    });
+    const contenderStore = new PostgresFoldStore(contenderSql, tokenEncryptionKey);
+    const owner = store.withRepositoryReconciliation(repositoryId, async () => {
+      ownerAcquired.resolve();
+      await releaseOwner.promise;
+    });
+    const prechecks: Array<Date | null> = [];
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    let sweep: ReturnType<typeof sweepReconciliations> | undefined;
+    try {
+      await Promise.race([ownerAcquired.promise, owner]);
+      sweep = sweepReconciliations({
+        listActiveRepositoryIds: async () => [repositoryId],
+        getReconciliationCooldown: async (id) => {
+          const value = await store.getReconciliationCooldown(id);
+          prechecks.push(value);
+          return value;
+        },
+        now,
+        reconcile: (id) => reconcileRepository({ store: contenderStore, github, now }, id),
+      });
+      await Promise.race([
+        contenderBlocked.promise,
+        sweep.then(() => { throw new Error("Contender completed without waiting for the owner lock."); }),
+      ]);
+      expect(prechecks).toEqual([null]);
+      expect(calls).toEqual([]);
+      expect(await runs(repositoryId)).toEqual([]);
+      await store.setReconciliationCooldown(repositoryId, notBefore);
+      releaseOwner.resolve();
+      await owner;
+      const summary = await sweep;
+      expect(calls).toEqual([]);
+      expect(await runs(repositoryId)).toEqual([]);
+      expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
+      expect(summary).toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+    } finally {
+      releaseOwner.resolve();
+      await Promise.allSettled([owner, sweep]);
+      await contenderSql.end();
+    }
+  });
+
   it.each([0, 1])("creates no run for a cooled-down webhook, then reconciles at expiry plus %s ms and clears it", async (offset) => {
     const { store, repositoryId, githubRepositoryId, ownerName, github, calls } = await cooledRepository();
     let instant = new Date("2030-01-02T03:04:05.678Z");
@@ -84,6 +160,12 @@ describe("persisted reconciliation cooldown", () => {
     `).resolves.toEqual([{ reconciliation_not_before: null }]);
   });
 });
+
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 async function runs(repositoryId: string) {
   return sql`select status from reconciliation_runs where repository_id = ${repositoryId}`;
