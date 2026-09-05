@@ -339,6 +339,99 @@ describe("initial PostgreSQL materialization", () => {
     }
   });
 
+  it("refuses the difficulty scheme upgrade when the hand-added column is still null", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_unbackfilled_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      const ownerName = "legacy/still-awaiting-a-scheme";
+      await insertSchemelessRepository(upgradeSql, ownerName);
+      await upgradeSql`alter table registered_repositories add column difficulty_scheme jsonb`;
+
+      await expect(runMigrations()).rejects.toHaveProperty(
+        "message", difficultySchemePreconditionMessage(1, ownerName),
+      );
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
+  it("rejects an invalid difficulty scheme already backfilled by hand", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_invalid_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      const ownerName = "legacy/invalid-scheme";
+      await insertSchemelessRepository(upgradeSql, ownerName);
+      await upgradeSql`alter table registered_repositories add column difficulty_scheme jsonb`;
+      await upgradeSql`
+        update registered_repositories
+        set difficulty_scheme = '{"openingName":"","actualLabels":[]}'::jsonb
+        where owner_name = ${ownerName}
+      `;
+
+      await expect(runMigrations()).rejects.toMatchObject({
+        code: "23514",
+        constraint_name: "registered_repositories_difficulty_scheme_check",
+      });
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
+  it("counts and lists legacy repositories in owner-name order in the difficulty scheme refusal", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `difficulty_scheme_ordered_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "001_initial.sql" });
+      await insertSchemelessRepository(upgradeSql, "legacy/z-last");
+      await insertSchemelessRepository(upgradeSql, "legacy/a-first");
+
+      await expect(runMigrations()).rejects.toMatchObject({
+        code: "P0001",
+        message: difficultySchemePreconditionMessage(2, "legacy/a-first", "legacy/z-last"),
+      });
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
+      `).resolves.toEqual([]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it("upgrades a refused database once its difficulty scheme is backfilled by hand", async () => {
     const databaseUrl = process.env.DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
@@ -377,10 +470,13 @@ describe("initial PostgreSQL materialization", () => {
           and column_name = 'difficulty_scheme'
       `).resolves.toEqual([{ is_nullable: "NO" }]);
       await expect(upgradeSql`
-        select conname from pg_constraint
+        select conname, convalidated from pg_constraint
         where conrelid = 'registered_repositories'::regclass
           and conname = 'registered_repositories_difficulty_scheme_check'
-      `).resolves.toEqual([{ conname: "registered_repositories_difficulty_scheme_check" }]);
+      `).resolves.toEqual([{
+        conname: "registered_repositories_difficulty_scheme_check",
+        convalidated: true,
+      }]);
 
       // A constraint that exists but does not bite is the false green the split risks.
       const invalidScheme = validDifficultyScheme();
