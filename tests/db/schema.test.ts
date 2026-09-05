@@ -94,6 +94,7 @@ describe("initial PostgreSQL materialization", () => {
       "007_authoritative_history_and_merge_proof.sql",
       "008_moderator_role_changes.sql",
       "009_settlement_override_requests.sql",
+      "010_settled_evidence_ordering_grace.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -111,6 +112,32 @@ describe("initial PostgreSQL materialization", () => {
           settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
       where id = ${issue.id}
     `).rejects.toThrow();
+  });
+
+  it("accepts a settled rationale comment up to fifteen minutes before its label and rejects an older one", async () => {
+    const settle = (issueId: string, commentedAt: string) => sql`
+      update issues
+      set settled_label = ${"delivered/6"}, settled_points = 6,
+          settled_label_event_id = ${"settled-event-6"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:00:00.000Z"},
+          settled_rationale_comment_id = ${"comment-6"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${commentedAt}
+      where id = ${issueId}
+    `;
+
+    const withinGrace = await insertIssue(sql);
+    await settle(withinGrace.id, "2026-09-01T10:45:00.000Z");
+    const [settled] = await sql<{ settled_points: number | null }[]>`
+      select settled_points from issues where id = ${withinGrace.id}
+    `;
+    expect(settled).toEqual({ settled_points: 6 });
+
+    const beyondGrace = await insertIssue(sql);
+    await expect(settle(beyondGrace.id, "2026-09-01T10:44:59.000Z")).rejects.toThrow(
+      /issues_settled_evidence_complete_check/,
+    );
   });
 
   it("rejects duplicate GitHub user and repository identifiers", async () => {
