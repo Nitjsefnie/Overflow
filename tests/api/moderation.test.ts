@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   expectNoDependencyCall,
   guardedRequests,
+  requestHost,
   unusedDependencies,
   useTrustedOrigin,
 } from "../support/trusted-origin";
@@ -24,8 +25,13 @@ import {
 } from "@/app/api/moderation/[id]/route";
 import { createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
 import {
+  GET as productionCohortGet,
+  createModerationCohortGetHandler,
+} from "@/app/api/moderation/cohort/route";
+import {
   ModerationServiceError,
   type AccountAudit,
+  type CalibrationCohortPreview,
   type ModeratorRoleChange,
   type RecalibrationClosure,
 } from "@/lib/moderation/service";
@@ -33,6 +39,7 @@ import {
 const moderatorSession = { user: { id: "00000000-0000-4000-8000-000000000001", role: "MODERATOR" as const } };
 const memberSession = { user: { id: "00000000-0000-4000-8000-000000000002", role: "MEMBER" as const } };
 const targetAccountId = "00000000-0000-4000-8000-000000000003";
+const repositoryScopeId = "00000000-0000-4000-8000-000000000005";
 const auditId = "00000000-0000-4000-8000-000000000004";
 
 useTrustedOrigin();
@@ -220,6 +227,196 @@ describe("account moderation API", () => {
   });
 });
 
+describe("calibration cohort preview API", () => {
+  it("answers a moderator's candidate window with the paired evidence it would audit", async () => {
+    const preview = previewFixture();
+    const previewCalibrationCohort = vi.fn().mockResolvedValue(preview);
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
+    });
+
+    const response = await handler(cohortRequest(cohortQuery()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ preview });
+    expect(previewCalibrationCohort).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      {
+        targetAccountId,
+        repositoryId: repositoryScopeId,
+        sampleStartedAt: "2026-01-01T00:00:00.000Z",
+        sampleEndedAt: "2026-02-01T00:00:00.000Z",
+      },
+    );
+  });
+
+  it("previews an account-wide window when no repository scope is requested", async () => {
+    const previewCalibrationCohort = vi.fn().mockResolvedValue(previewFixture({ repositoryId: null }));
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
+    });
+
+    const response = await handler(cohortRequest({ ...cohortQuery(), repositoryId: undefined }));
+
+    expect(response.status).toBe(200);
+    expect(previewCalibrationCohort).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      {
+        targetAccountId,
+        sampleStartedAt: "2026-01-01T00:00:00.000Z",
+        sampleEndedAt: "2026-02-01T00:00:00.000Z",
+      },
+    );
+  });
+
+  it("serves a cohort short of the audit floor rather than an error", async () => {
+    const preview = previewFixture({
+      meetsMinimumSampleSize: false,
+      comparison: {
+        selfWork: { count: 3, meanDelta: 1, medianDelta: 1 },
+        outsider: { count: 12, meanDelta: 0, medianDelta: 0 },
+        differenceBetweenMeans: 1,
+      },
+    });
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ preview: async () => preview }),
+    });
+
+    const response = await handler(cohortRequest(cohortQuery()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ preview });
+  });
+
+  it("revokes an already-issued moderator session immediately after the database role is demoted", async () => {
+    const getCurrentRole = vi.fn().mockResolvedValue("MEMBER");
+    const createService = vi.fn(async () => serviceHarness());
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole,
+      createService,
+    } as Parameters<typeof createModerationCohortGetHandler>[0]);
+
+    const response = await handler(cohortRequest(cohortQuery()));
+
+    expect(response.status).toBe(403);
+    expect(getCurrentRole).toHaveBeenCalledWith(moderatorSession.user.id);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
+  it("returns a structured 401 for an unauthenticated cohort read", async () => {
+    const createService = vi.fn(async () => serviceHarness());
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService,
+    } as Parameters<typeof createModerationCohortGetHandler>[0]);
+
+    const response = await handler(cohortRequest(cohortQuery()));
+
+    expect(response.status).toBe(401);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it.each([
+    ["no target account", { targetAccountId: undefined }],
+    ["a target account that is not a uuid", { targetAccountId: "target-account" }],
+    ["a repository scope that is not a uuid", { repositoryId: "repository-scope" }],
+    ["no sample start", { sampleStartedAt: undefined }],
+    ["no sample end", { sampleEndedAt: undefined }],
+    ["a misspelled repository scope", { repositoryId: undefined, repository: repositoryScopeId }],
+  ] as const)("refuses a cohort request with %s before any database work", async (_label, overrides) => {
+    const previewCalibrationCohort = vi.fn();
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
+    });
+
+    const response = await handler(cohortRequest({ ...cohortQuery(), ...overrides }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(previewCalibrationCohort).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["NOT_FOUND", 404],
+    ["INVALID_INPUT", 422],
+  ] as const)("maps a %s preview outcome to structured HTTP %s", async (code, status) => {
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        serviceHarness({
+          preview: async () => {
+            throw new ModerationServiceError(code, "internal detail must not change the route contract");
+          },
+        }),
+    });
+
+    const response = await handler(cohortRequest(cohortQuery()));
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message: "Unable to process moderation request." },
+    });
+  });
+
+  it("returns a sanitized 500 without database or upstream details", async () => {
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        serviceHarness({
+          preview: async () => {
+            throw new Error("postgresql://moderator:password@db.example/overflow");
+          },
+        }),
+    });
+
+    const response = await handler(cohortRequest(cohortQuery()));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Unable to process moderation request." },
+    });
+    expect(JSON.stringify(body)).not.toContain("password");
+  });
+
+  it("uses the real production cohort resolver for direct 401 and 403 responses", async () => {
+    productionAuth.mockResolvedValueOnce(null);
+    const unauthenticated = await productionCohortGet(cohortRequest(cohortQuery()));
+    expect(unauthenticated.status).toBe(401);
+    await expect(unauthenticated.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+
+    productionAuth.mockResolvedValueOnce(memberSession);
+    productionRole.mockResolvedValueOnce("MEMBER");
+    const memberResponse = await productionCohortGet(cohortRequest(cohortQuery()));
+    expect(memberResponse.status).toBe(403);
+    await expect(memberResponse.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+});
+
 describe("moderation mutations reachable only from the deployment's own origin", () => {
   const auditContext = () => ({ params: Promise.resolve({ id: auditId }) });
 
@@ -380,6 +577,41 @@ const unsupportedMediaTypeRejection = [
   "The request must use the application/json content type.",
 ] as const;
 
+function cohortQuery() {
+  return {
+    targetAccountId,
+    repositoryId: repositoryScopeId,
+    sampleStartedAt: "2026-01-01T00:00:00.000Z",
+    sampleEndedAt: "2026-02-01T00:00:00.000Z",
+  };
+}
+
+function cohortRequest(query: Record<string, string | undefined>): Request {
+  const url = new URL("/api/moderation/cohort", requestHost);
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined) {
+      url.searchParams.set(name, value);
+    }
+  }
+  return new Request(url, { method: "GET" });
+}
+
+function previewFixture(overrides: Partial<CalibrationCohortPreview> = {}): CalibrationCohortPreview {
+  return {
+    targetAccountId,
+    repositoryId: repositoryScopeId,
+    sampleStartedAt: "2026-01-01T00:00:00.000Z",
+    sampleEndedAt: "2026-02-01T00:00:00.000Z",
+    comparison: {
+      selfWork: { count: 12, meanDelta: 1.5, medianDelta: 2 },
+      outsider: { count: 11, meanDelta: 0.25, medianDelta: 0 },
+      differenceBetweenMeans: 1.25,
+    },
+    meetsMinimumSampleSize: true,
+    ...overrides,
+  };
+}
+
 function openPayload() {
   return {
     targetAccountId,
@@ -395,8 +627,13 @@ function serviceHarness(overrides: Partial<{
   dismiss: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, reason: string) => Promise<AccountAudit>;
   substantiate: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, reason: string) => Promise<AccountAudit>;
   close: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, id: string, plan: string) => Promise<RecalibrationClosure>;
+  preview: (
+    actor: { id: string; role: "MEMBER" | "MODERATOR" },
+    input: ReturnType<typeof cohortQuery>,
+  ) => Promise<CalibrationCohortPreview>;
 }> = {}) {
   return {
+    previewCalibrationCohort: overrides.preview ?? (async () => previewFixture()),
     openAccountAudit: overrides.open ?? (async () => auditFixture()),
     dismissAccountAudit: overrides.dismiss ?? (async () => auditFixture({ state: "DISMISSED" })),
     substantiateAccountAudit: overrides.substantiate ?? (async () => auditFixture({ state: "SUBSTANTIATED" })),
