@@ -172,6 +172,7 @@ describe("POST /api/repositories", () => {
       },
     });
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -199,6 +200,7 @@ describe("POST /api/repositories", () => {
     const dependencies = successfulDependencies();
     dependencies.github = failingGitHubGateway("lookup", status);
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -228,6 +230,7 @@ describe("POST /api/repositories", () => {
       const dependencies = successfulDependencies();
       dependencies.github = failingGitHubGateway(step, status, headers);
       const handler = createRepositoryPostHandler({
+        findAccountByTokenHash: async () => null,
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -263,6 +266,7 @@ describe("POST /api/repositories", () => {
       const dependencies = successfulDependencies();
       dependencies.github = failingGitHubGateway(step, status, headers, ownerType);
       const handler = createRepositoryPostHandler({
+        findAccountByTokenHash: async () => null,
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -285,6 +289,7 @@ describe("POST /api/repositories", () => {
     const dependencies = successfulDependencies();
     dependencies.github = failingGitHubGateway("webhook", 404, {}, "User");
     const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
