@@ -170,6 +170,22 @@ export type FoldResult = {
   ledgerEntries: LedgerEntry[];
 };
 
+/**
+ * Tolerance applied to every settlement-evidence ordering comparison.
+ *
+ * The evidence window is a sequence a person performs by hand — push the final
+ * commit, apply the settled label, comment naming it, merge — and the order it
+ * lands in is routinely off by a few minutes: the comment written before the
+ * label, both remembered just after the merge, the label applied while the last
+ * commit is still going up. Enforced to the second, each of those discards work
+ * that was genuinely settled, and the window cannot be reopened afterwards.
+ *
+ * The grace absorbs that without widening the window into a different rule:
+ * evidence outside it is still rejected, so a label applied an hour after merge
+ * still proves nothing about what the reviewer saw.
+ */
+const SETTLEMENT_EVIDENCE_GRACE_MS = 15 * 60 * 1000;
+
 type OpeningResolution = {
   githubIssueId: number;
   openingLabel: string;
@@ -423,7 +439,7 @@ function resolveSettledDifficulty(
     if (
       (event.kind !== "LABELED" && event.kind !== "UNLABELED") ||
       !actualByLabel.has(event.label) ||
-      Date.parse(event.createdAt) > mergeTime
+      Date.parse(event.createdAt) > mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
     ) {
       continue;
     }
@@ -440,8 +456,8 @@ function resolveSettledDifficulty(
   const sourceTime = Date.parse(source.createdAt);
   if (
     normalizedNonblankLogin(source.actorLogin) !== ownerLogin ||
-    sourceTime < finalCommitTime ||
-    sourceTime > mergeTime
+    sourceTime < finalCommitTime - SETTLEMENT_EVIDENCE_GRACE_MS ||
+    sourceTime > mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
   ) {
     return null;
   }
@@ -454,8 +470,8 @@ function resolveSettledDifficulty(
         normalizedNonblankLogin(comment.authorLogin) === ownerLogin &&
         comment.body.trim().length > 0 &&
         comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
-        commentTime >= sourceTime &&
-        commentTime <= mergeTime
+        commentTime >= sourceTime - SETTLEMENT_EVIDENCE_GRACE_MS &&
+        commentTime <= mergeTime + SETTLEMENT_EVIDENCE_GRACE_MS
       );
     });
   if (rationale === undefined) {
