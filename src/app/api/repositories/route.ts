@@ -151,6 +151,7 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
     case "INVALID_INPUT":
       return errorResponse(400, error.code, error.message);
     case "FORBIDDEN":
+    case "GITHUB_ACCESS":
       return errorResponse(403, error.code, error.message);
     case "CONFLICT":
       return errorResponse(409, error.code, error.message);

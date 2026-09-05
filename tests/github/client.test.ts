@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubGateway } from "@/lib/github/client";
+import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
 
 describe("GitHubGateway REST transport", () => {
   it("uses GitHub's versioned API headers when reading one explicitly named repository", async () => {
@@ -23,6 +23,7 @@ describe("GitHubGateway REST transport", () => {
     await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).resolves.toEqual({
       id: 42,
       owner: "octo",
+      ownerType: "USER",
       name: "overflow",
       fullName: "octo/overflow",
       visibility: "PUBLIC",
@@ -34,6 +35,52 @@ describe("GitHubGateway REST transport", () => {
     expect(capturedRequest?.headers.get("accept")).toBe("application/vnd.github+json");
     expect(capturedRequest?.headers.get("x-github-api-version")).toBe("2022-11-28");
     expect(capturedRequest?.headers.get("authorization")).toBe("Bearer test-access-token");
+  });
+
+  it.each([
+    ["Organization", "ORGANIZATION"],
+    ["User", "USER"],
+    ["Unknown", "USER"],
+    [undefined, "USER"],
+  ])("maps REST owner type %s to %s", async (type, ownerType) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        id: 42,
+        name: "overflow",
+        full_name: "real-owner/overflow",
+        private: false,
+        html_url: "https://github.com/real-owner/overflow",
+        owner: { login: "real-owner", type },
+        permissions: { admin: true },
+      }),
+    });
+
+    await expect(gateway.getRepository({ owner: "old-owner", name: "overflow" })).resolves.toMatchObject({
+      owner: "real-owner",
+      ownerType,
+    });
+  });
+
+  it.each([403, 404, 502])("carries HTTP status %s in a GitHubApiError", async (status) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private response test-access-token", { status }),
+    });
+
+    const error = await gateway.getRepository({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ status, message: `GitHub API request failed with status ${status}.` });
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  it("sanitizes a transport error even when its text resembles an HTTP error", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => { throw new Error("GitHub API request failed with status 403."); },
+    });
+
+    await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).rejects.toThrow("GitHub request failed.");
   });
 
   it("aborts a stalled GitHub request and exposes only a sanitized timeout error", async () => {
