@@ -4,16 +4,16 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 
 **Overflow is already running at <https://overflow.nitjsefni.eu>.** Pointing you at that instance is what this repository is for. You do not need to deploy anything to use Overflow — sign in there and join the ledger that already exists. The setup instructions further down build a development environment for changing Overflow itself; they are not the way to use it.
 
-This repository is registered in that instance. `Nitjsefnie/Overflow` is a row in its ledger and the issues in this tracker are rows joined to it, so the mechanism described below can be watched working on this repository itself.
+`Nitjsefnie/Overflow` is itself registered in that instance, and the issues in this tracker are materialized there, so the mechanism described below can be watched working on this repository itself.
 
 ## Join the running instance
 
 1. **Sign in.** Open <https://overflow.nitjsefni.eu> and choose *Sign in with GitHub*. That is the whole account setup — there is nothing to install and nothing to configure.
 2. **Register a repository, catalogs and all, on one form.** *Register a repository* takes the repository and both of its catalogs and submits them together; there is no separate catalog-editing page afterwards, so decide the labels and their points before you start. Bring a public repository you administer. Registration writes to it: Overflow creates the catalog labels there and installs its webhook. [What the ledger records](#what-the-ledger-records) is the reference for what a catalog has to contain.
-3. **Offer work, then settle it.** Apply an opening label when you file an issue, and a result label with a comment naming it before you merge the closing pull request. Those are the labels Overflow created for you in step 2. [What the ledger records](#what-the-ledger-records) states the evidence each label has to satisfy, and [Scoring and calibration](#scoring-and-calibration) what it is worth.
+3. **Offer work, then settle it.** Apply an opening label when you file an issue, and an actual-catalog label with a comment naming it after the closing pull request's final commit and before you merge it. Those are the labels Overflow created for you in step 2. [What the ledger records](#what-the-ledger-records) states the evidence each label has to satisfy, and [Scoring and calibration](#scoring-and-calibration) says what it is worth.
 4. **Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Register a repository*, *Calibration* and *Rules*.
 
-Closing work needs no repository of your own. Take an issue in a repository that is already registered; [What the ledger records](#what-the-ledger-records) and [Scoring and calibration](#scoring-and-calibration) are the terms the credit settles on, including what happens when you have not signed in yet.
+Closing work needs no repository of your own. Take an issue in a repository that is already registered; the sections that follow are the terms the credit settles on, including what happens when you have not signed in yet.
 
 ## What the ledger records
 
@@ -48,6 +48,8 @@ Open an audit only with the required paired samples, warn when the record suppor
 Each instance keeps its own ledger. Balances, reserves, settlements, proof records and calibration history live in that instance's own PostgreSQL database, and nothing in this codebase moves them between deployments. A second instance therefore starts empty and stays private to itself: no registered repositories, no counterpart to settle with, and no credit that anyone else can see or honour. Signing in at <https://overflow.nitjsefni.eu> is what puts your work in a ledger other people are already reading.
 
 ## Development setup
+
+These steps stand up a local copy of the application against a local PostgreSQL database.
 
 1. Copy `.env.example` to `.env` and replace every placeholder. `AUTH_SECRET` can be generated with `npx auth secret`; `TOKEN_ENCRYPTION_KEY` must be an unpadded base64url encoding of 32 random bytes.
 2. Use an already-installed PostgreSQL 17 server **or** start the local Compose service:
