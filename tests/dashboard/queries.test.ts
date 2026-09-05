@@ -7,6 +7,8 @@ import {
   listEnforcementHistory,
   listOpenAudits,
   listRecalibratingAccounts,
+  listSettlementHistory,
+  SETTLEMENT_HISTORY_LIMIT,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
 
@@ -513,5 +515,130 @@ describe("dashboard projections", () => {
     expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
       /encrypted_oauth_token|access_token|webhook_secret|credential/,
     );
+  });
+});
+
+describe("settlement history", () => {
+  it("lists every settlement the account is party to, newest first, without hiding unsettled work", async () => {
+    const { sql, captures } = sqlHarness([
+      [
+        {
+          id: "settlement-9",
+          status: "SETTLED",
+          repository_name: "co-op/harbour",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          credits: 4,
+          review_rounds: 3,
+          balance_effect: 4,
+          settled_at: "2026-09-03T00:00:00.000Z",
+        },
+        {
+          id: "settlement-8",
+          status: "UNSETTLED",
+          repository_name: "co-op/harbour",
+          issue_number: 8,
+          issue_title: "Chart the shoal",
+          issue_url: "https://github.com/co-op/harbour/issues/8",
+          credits: 0,
+          review_rounds: 1,
+          balance_effect: 0,
+          settled_at: "2026-09-02T00:00:00.000Z",
+        },
+        {
+          id: "settlement-7",
+          status: "UNCLAIMED",
+          repository_name: "co-op/harbour",
+          issue_number: 7,
+          issue_title: "Dredge the channel",
+          issue_url: "https://github.com/co-op/harbour/issues/7",
+          credits: 6,
+          review_rounds: 0,
+          balance_effect: -6,
+          settled_at: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const settlements = await listSettlementHistory("member-1", { sql });
+
+    expect(settlements).toEqual([
+      {
+        id: "settlement-9",
+        status: "SETTLED",
+        repositoryName: "co-op/harbour",
+        issueNumber: 9,
+        issueTitle: "Close the lock",
+        issueUrl: "https://github.com/co-op/harbour/issues/9",
+        credits: 4,
+        reviewRounds: 3,
+        balanceEffect: 4,
+        settledAt: "2026-09-03T00:00:00.000Z",
+      },
+      {
+        id: "settlement-8",
+        status: "UNSETTLED",
+        repositoryName: "co-op/harbour",
+        issueNumber: 8,
+        issueTitle: "Chart the shoal",
+        issueUrl: "https://github.com/co-op/harbour/issues/8",
+        credits: 0,
+        reviewRounds: 1,
+        balanceEffect: 0,
+        settledAt: "2026-09-02T00:00:00.000Z",
+      },
+      {
+        id: "settlement-7",
+        status: "UNCLAIMED",
+        repositoryName: "co-op/harbour",
+        issueNumber: 7,
+        issueTitle: "Dredge the channel",
+        issueUrl: "https://github.com/co-op/harbour/issues/7",
+        credits: 6,
+        reviewRounds: 0,
+        balanceEffect: -6,
+        settledAt: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
+    const query = captures[0]?.text ?? "";
+    expect(query).not.toMatch(/status in/i);
+    expect(query).toMatch(/order by\s+settlements\.created_at desc/i);
+    expect(captures[0]?.values).toContain("member-1");
+  });
+
+  it("selects both sides of the settlement and caps the list at a stated depth", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    const settlements = await listSettlementHistory("member-1", { sql });
+
+    expect(settlements).toEqual([]);
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/settlements\.creditor_id = \?/);
+    expect(query).toMatch(/settlements\.debtor_id = \?/);
+    expect(query).toMatch(/limit/i);
+    expect(captures[0]?.values).toContain(SETTLEMENT_HISTORY_LIMIT);
+    expect(SETTLEMENT_HISTORY_LIMIT).toBeGreaterThan(5);
+  });
+
+  it("rejects a settlement row whose status is not a ledger status", async () => {
+    const { sql } = sqlHarness([
+      [
+        {
+          id: "settlement-9",
+          status: "MYSTERY",
+          repository_name: "co-op/harbour",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          credits: 4,
+          review_rounds: 3,
+          balance_effect: 4,
+          settled_at: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    await expect(listSettlementHistory("member-1", { sql })).rejects.toThrow("Settlement status was invalid.");
   });
 });

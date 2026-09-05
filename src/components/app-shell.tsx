@@ -27,6 +27,9 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
               <Link href="/issues">Issues</Link>
             </li>
             <li>
+              <Link href="/settlements">Settlements</Link>
+            </li>
+            <li>
               <Link href="/repositories/new">Register a repository</Link>
             </li>
             <li>

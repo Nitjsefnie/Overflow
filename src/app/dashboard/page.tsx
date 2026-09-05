@@ -35,26 +35,35 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
         {dashboard.recentSettlements.length === 0 ? (
           <p className="empty-copy">No settlement proof belongs to this ledger yet. Complete eligible work to add one.</p>
         ) : (
-          <ol className="recent-settlement-list">
-            {dashboard.recentSettlements.map((settlement) => (
-              <li key={settlement.id}>
-                <article className="recent-settlement">
-                  <p className="mono-meta">{settlement.repositoryName} · closing-link proof</p>
-                  <p className="recent-settlement-links">
-                    <a href={settlement.issueUrl}>Issue #{settlement.issueNumber}: {settlement.issueTitle}</a>
-                    <a href={settlement.pullRequestUrl}>
-                      Pull request #{settlement.pullRequestNumber}: {settlement.pullRequestTitle}
-                    </a>
-                  </p>
-                  <p className="mono-meta">{settlement.credits} credits · review deduction {settlement.reviewRounds}</p>
-                  <Link className="text-link" href={`/settlements/${settlement.id}`}>
-                    View proof for issue #{settlement.issueNumber}
-                  </Link>
-                </article>
-              </li>
-            ))}
-          </ol>
+          <>
+            <p className="settlement-history-cue">
+              The five newest proofs are below. Everything else — including work that merged and scored zero — is
+              on the history page.
+            </p>
+            <ol className="recent-settlement-list">
+              {dashboard.recentSettlements.map((settlement) => (
+                <li key={settlement.id}>
+                  <article className="recent-settlement">
+                    <p className="mono-meta">{settlement.repositoryName} · closing-link proof</p>
+                    <p className="recent-settlement-links">
+                      <a href={settlement.issueUrl}>Issue #{settlement.issueNumber}: {settlement.issueTitle}</a>
+                      <a href={settlement.pullRequestUrl}>
+                        Pull request #{settlement.pullRequestNumber}: {settlement.pullRequestTitle}
+                      </a>
+                    </p>
+                    <p className="mono-meta">{settlement.credits} credits · review deduction {settlement.reviewRounds}</p>
+                    <Link className="text-link" href={`/settlements/${settlement.id}`}>
+                      View proof for issue #{settlement.issueNumber}
+                    </Link>
+                  </article>
+                </li>
+              ))}
+            </ol>
+          </>
         )}
+        <Link className="text-link" href="/settlements">
+          See the full settlement history
+        </Link>
       </section>
       <section className="surface" aria-labelledby="open-claims-heading">
         <h2 id="open-claims-heading">Open claims</h2>
