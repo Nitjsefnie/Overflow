@@ -372,7 +372,10 @@ describe("settlement override service", () => {
 
     await expect(
       conflicting.decideRequest({ id: "moderator-id", role: "MODERATOR" }, "request-id", decision),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This correction request has already been decided.",
+    });
     await expect(
       missing.decideRequest({ id: "moderator-id", role: "MODERATOR" }, "request-id", decision),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
