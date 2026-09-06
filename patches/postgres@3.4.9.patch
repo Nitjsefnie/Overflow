@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..2df5d8e90f8e9cbc82f9b184baa1ad3546dff995 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..73925d3fdbe20a3c36b1c77cb55c6daaaf2d015a 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -14,3 +14,51 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..2df5d8e90f8e9cbc82f9b184baa1ad35
      while (sent.length)
        queryError(sent.shift(), err)
    }
+@@ -564,9 +569,15 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+         return fetchArrayTypes()
+       }
+ 
+-      initial && !initial.reserve && execute(initial)
++      // A reserve is not a query to execute: it is settled by handing this connection to the
++      // pool, which is what onopen does. Skipping both -- not executing it and not opening --
++      // leaves the reserve waiting on an onopen that never comes and this connection stuck in
++      // the pool's connecting queue.
++      const opening = initial.reserve
++      !opening && execute(initial)
+       options.shared.retries = retries = 0
+       initial = null
++      opening && onopen(connection)
+       return
+     }
+ 
+diff --git a/src/index.js b/src/index.js
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..76ec71519514f3103e2c567f8022420081fd4ad7 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -423,7 +423,13 @@ function Postgres(a, b) {
+     c.reserved = null
+     c.onclose && (c.onclose(e), c.onclose = null)
+     options.onclose && options.onclose(c.id)
+-    queries.length && connect(c, queries.shift())
++    // A reserve pseudo-query is only ever settled by onopen, which reads it back out of
++    // `queries`. Shifting one out here to hand it to the reconnect as that connection's
++    // `initial` drops it: a reserve is never executed as an `initial`, so it is neither
++    // resolved nor rejected and its caller waits forever. Leave a queued reserve where it is --
++    // reserve() itself already passes a still-queued reserve to connect() -- so the reconnected
++    // socket's onopen resolves it exactly as it resolves a fresh one.
++    queries.length && connect(c, queries.peek().reserve ? queries.peek() : queries.shift())
+   }
+ }
+ 
+diff --git a/src/queue.js b/src/queue.js
+index c4ef97164f057db99dce1b9af3401dbb1af37e31..8fba891b879e8f5c7fdb03ea0590753663c824c3 100644
+--- a/src/queue.js
++++ b/src/queue.js
+@@ -15,6 +15,7 @@ function Queue(initial = []) {
+         : (xs.splice(index, 1), x)
+     },
+     push: (x) => (xs.push(x), x),
++    peek: () => xs[index],
+     shift: () => {
+       const out = xs[index++]
+ 
