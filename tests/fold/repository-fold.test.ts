@@ -33,6 +33,73 @@ describe("foldRepository", () => {
     });
   });
 
+  it.each([
+    "other/fork",
+    // Same owner, different repository: the whole name is what identifies it.
+    "octo/other-example",
+  ])("refuses to settle a closing pull request that belongs to %s", (repositoryNameWithOwner) => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = repositoryNameWithOwner;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([]);
+    expect(result.pullRequests).toEqual([]);
+    expect(result.selfWorkCalibrations).toEqual([]);
+    expect(result.ledgerEntries).toEqual([]);
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: expect.stringContaining(repositoryNameWithOwner),
+    }]);
+    expect(result.unwritableClosures[0]!.reason).toContain("11");
+  });
+
+  it("settles the registered repository's closing pull request over one merged earlier elsewhere", () => {
+    const snapshot = outsiderFixture();
+    const registered = snapshot.issues[0]!.closingPullRequests[0]!;
+    // Selection takes the earliest merge, so a foreign pull request merged
+    // first displaces the real one unless the repository is checked.
+    snapshot.issues[0]!.closingPullRequests.unshift({
+      ...registered,
+      id: 202,
+      number: 12,
+      url: "https://github.com/other/fork/pull/12",
+      repositoryNameWithOwner: "other/fork",
+      mergedAt: "2026-09-01T11:45:00.000Z",
+      mergeCommitOid: "89abcdef0123456789abcdef0123456789abcdef",
+      rawDiff: "foreign diff",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, githubPullRequestId: 201, status: "SETTLED", credits: 6 }),
+    ]);
+    expect(result.pullRequests.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
+    expect(result.unwritableClosures).toEqual([]);
+  });
+
+  it.each([
+    { registered: "OCTO/EXAMPLE", owning: "octo/example" },
+    { registered: "octo/example", owning: "Octo/Example" },
+  ])(
+    "settles when the registered $registered and owning $owning names differ only in case",
+    ({ registered, owning }) => {
+      const snapshot = outsiderFixture();
+      snapshot.repository.ownerName = registered;
+      snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = owning;
+
+      const result = foldRepository(snapshot);
+
+      expect(result.unwritableClosures).toEqual([]);
+      expect(result.settlements).toEqual([
+        expect.objectContaining({ githubIssueId: 101, githubPullRequestId: 201, status: "SETTLED" }),
+      ]);
+    },
+  );
+
   it("subtracts each unique formal changes-requested review submitted before merge", () => {
     const result = foldRepository(twoReviewRoundsFixture());
 
