@@ -93,7 +93,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = started.databaseUrl;
   sql = getSql();
   await runMigrations();
-  // One account sponsors both repositories: `users.github_login` is unique, so
+  // One account sponsors all repositories in this suite: `users.github_login` is unique, so
   // the stored login the rename left behind can only exist once.
   sponsorId = await insertSponsor();
 });
