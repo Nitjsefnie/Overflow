@@ -1084,6 +1084,40 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("runs the startup sweep before it tries to arm anything", async () => {
+    // The startup sweep is the pass that repairs the deliveries missed while the
+    // server was down, and it used to sit behind a retrieval that could throw. A
+    // console that fails is what makes the order observable: reporting an
+    // unusable scheduler is fatal there, deliberately, so for the sweep to have
+    // run it has to have run first.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+    const intervals = captureIntervals();
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get schedule(): (callback: () => void, everyMs: number) => void {
+        throw new Error("The scheduler is not wired up yet");
+      },
+    };
+
+    try {
+      expect(() => {
+        startReconciliationSweep(schedule);
+      }).toThrow(TypeError);
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toEqual([]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
   it("installs an unrefed interval when no scheduler is supplied", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
