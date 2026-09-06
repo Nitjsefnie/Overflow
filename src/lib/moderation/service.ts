@@ -339,29 +339,23 @@ function normalizeOpenInput(input: OpenAccountAuditInput): NormalizedAuditWindow
 }
 
 /**
- * The ISO 8601 subset a sample-window bound may use: a full date-time closed by either the
- * UTC designator or a numeric offset, with optional seconds and optional fractional seconds.
+ * Sample-window bounds use RFC 3339's explicit-offset and fractional-second syntax, with
+ * ISO 8601 signed six-digit years so the normalizer accepts its own `toISOString` output
+ * outside years 0000–9999. Minute precision remains a compatibility extension; the date/time
+ * separator is uppercase T and seconds are limited to 00–59 (Date cannot parse leap seconds).
  *
- * Anything looser is refused rather than resolved. ECMAScript resolves a date-time carrying
- * no offset in the timezone of the server process, so `2026-01-01T00:00` would name a
- * different instant on a Europe/Prague host than on a UTC one, and the bounds decide which
- * merged pairs enter an audit's calibration cohort. A date-only bound is refused for the
- * same reason: its UTC default is a spec quirk rather than something a caller stated.
+ * ECMAScript resolves a date-time carrying no offset in the timezone of the server process,
+ * so `2026-01-01T00:00` would name a different instant on a Europe/Prague host than on a UTC
+ * one, and the bounds decide which merged pairs enter an audit's calibration cohort. A
+ * date-only bound is refused too: its UTC default is not an offset the caller stated.
  *
- * Fractional seconds run to nine digits because `toISOString` is not the only producer of a
- * bound: Python's `datetime.isoformat` writes six digits and Go's RFC3339Nano writes as many
- * as the value needs. Digits below millisecond precision are truncated by `Date`, which is
- * a deliberate loss of precision rather than of meaning — such a bound still names exactly
- * one instant, and refusing it would break an integrator over a spelling.
- *
- * Two spellings that name one instant are still refused, by decision rather than oversight.
- * A comma decimal separator (`00:00:00,5Z`) is ISO 8601 but `new Date` reads it as NaN. An
- * end-of-day hour (`24:00:00Z`) parses as midnight the next day, but no mainstream
- * serializer emits it — JavaScript, Python and Go all write `00:00` of the following day —
- * and admitting it would mean an alternation that still has to keep `24:30` out.
+ * RFC 3339 permits Z or z, numeric offsets with a colon, and one or more fractional digits.
+ * Digits below millisecond precision are truncated by Date: a deliberate loss of precision
+ * rather than of meaning. RFC 3339 excludes hour 24 and colonless numeric offsets, even
+ * though Date parses them, and uses a dot rather than a comma for fractional seconds.
  */
 const SAMPLE_WINDOW_BOUND_PATTERN =
-  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+  /^(\d{4}|[+-]\d{6})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
 function normalizeTimestamp(value: unknown, label: string): string {
   if (typeof value !== "string") {
@@ -374,12 +368,15 @@ function normalizeTimestamp(value: unknown, label: string): string {
       `${label} must be an ISO 8601 timestamp with an explicit UTC offset.`,
     );
   }
-  // The pattern can only bound the day at 31, and `new Date` rolls a day past the end of its
-  // month into the next month instead of reporting NaN, so the calendar is checked here.
+  // After a pattern match, check the calendar: Date rolls February 31 into March.
+  // This gets the valid-timestamp message; out-of-pattern dates (month 00 or day 32)
+  // get the explicit-offset message above.
   if (!namesARealDate(Number(bound[1]), Number(bound[2]), Number(bound[3]))) {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
   const timestamp = new Date(value);
+  // Backstop between the grammar and toISOString, which throws for an invalid Date
+  // (for example, the expanded-year shape -000000).
   if (Number.isNaN(timestamp.getTime())) {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
@@ -387,7 +384,7 @@ function normalizeTimestamp(value: unknown, label: string): string {
 }
 
 function namesARealDate(year: number, month: number, day: number): boolean {
-  // setUTCFullYear rather than Date.UTC, which reads a year below 100 as 19xx.
+  // setUTCFullYear rather than Date.UTC, which interprets years 0–99 as 1900–1999.
   const probe = new Date(0);
   probe.setUTCFullYear(year, month - 1, day);
   return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
