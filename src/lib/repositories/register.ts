@@ -253,7 +253,7 @@ function githubSetupError(
   }
 
   if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
-    const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} seconds.`;
+    const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${error.retryAfterSeconds === 1 ? "second" : "seconds"}.`;
     return new RepositoryRegistrationError(
       "GITHUB_RATE_LIMITED",
       `GitHub rate-limited the request to ${step} (HTTP ${error.status}).${delay} Please retry registration later.`,

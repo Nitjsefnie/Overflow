@@ -47,7 +47,7 @@ export function SettlementHistoryContent({ memberName, isModerator, settlements 
                     </a>
                   </p>
                   <p className="mono-meta">
-                    {settlement.credits} credits · review deduction {settlement.reviewRounds} · balance effect{" "}
+                    {settlement.credits} {settlement.credits === 1 ? "credit" : "credits"} · review deduction {settlement.reviewRounds} · balance effect{" "}
                     {formatSigned(settlement.balanceEffect)}
                   </p>
                   <p className="settlement-history-note">{statusExplanation(settlement.status)}</p>
