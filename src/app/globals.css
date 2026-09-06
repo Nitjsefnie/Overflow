@@ -160,6 +160,7 @@ a {
 
 .session-controls {
   display: grid;
+  gap: 0.45rem;
   justify-items: end;
 }
 
