@@ -285,6 +285,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           unavailable_since = null,
           updated_at = now()
         where id = ${input.repositoryId}
+          and (owner_name, visibility, unavailable_reason)
+            is distinct from (${input.ownerName}, ${input.visibility}, null)
       `;
     } catch (error) {
       if (!isUniqueViolation(error)) {
@@ -293,6 +295,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       // owner_name is unique and a rename can land on a path another registration
       // still holds. The numeric id already proved which repository this row is, so
       // keep the crawl available and leave the display name to the row that owns it.
+      console.warn(
+        `Verified owner name ${input.ownerName} for repository ${input.repositoryId} is already registered `
+        + "to another repository; the stored path was left unchanged.",
+      );
       await this.sql`
         update registered_repositories
         set
