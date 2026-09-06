@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..b8fb58c7f74e6370c70c5bf9d1a4eb515c2b79fe 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f3d00a5dbed94b41eb3d9c35b984fc3865323461 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -14,20 +14,22 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..b8fb58c7f74e6370c70c5bf9d1a4eb51
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -451,6 +456,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -451,6 +456,14 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        return reconnect()
  
      !hadError && (query || sent.length) && error(Errors.connection('CONNECTION_CLOSED', options, socket))
-+    // A socket that has gone away brings no ReadyForQuery, so terminate() — the only place
-+    // ended() is invoked — is unreachable from here, and an end() awaiting it would never
-+    // settle. Settle it before onclose(), which may hand this connection a new query. The
-+    // reconnecting return above is deliberately left out: that connection is coming back, so
-+    // its ReadyForQuery, and with it terminate(), is still reachable.
++    // A socket that has gone away brings no ReadyForQuery, so terminate() — the only other
++    // place ended() is invoked — is unreachable from here, and an end() awaiting it would never
++    // settle. Settled before onclose(), the conservative order, in case onclose() hands this
++    // connection a new query. The reconnecting return above stays out: a completed reconnect
++    // reaches terminate() by its own ReadyForQuery, and an attempt that errors nulls initial so
++    // the next closed() lands here — but attempts that only close cleanly, with no error and no
++    // protocol message, do neither, and strand the end(). Overflow issue 164 tracks that gap.
 +    ended && (ended(), ending = ended = null)
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +575,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +577,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
