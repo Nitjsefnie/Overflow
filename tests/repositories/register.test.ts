@@ -179,9 +179,9 @@ describe("explicit repository registration", () => {
     await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
       code: "CONFLICT",
       message:
-        "The GitHub webhook id for the submitted repository is claimed by a different registration. "
-        + "The submitted repository is not registered, and it cannot be registered while another "
-        + "registration holds that webhook id.",
+        "The GitHub webhook created for the submitted repository collided with one a different "
+        + "registration already records. The submitted repository is not registered. GitHub "
+        + "assigns a new webhook id on each attempt, so registering again is the first thing to try.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
