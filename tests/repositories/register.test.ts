@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GitHubApiError } from "@/lib/github/errors";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
@@ -15,6 +15,11 @@ import {
   parseGitHubRepository,
   registerRepository,
 } from "@/lib/repositories/register";
+
+const claimWorkflow: ClaimPathEvidence = {
+  path: ".github/workflows/claim.yml",
+  content: "on: issue_comment\njobs:\n  claim:\n    steps:\n      - run: gh api repos/octo/overflow/issues/1/assignees -f assignees[]=contributor\n",
+};
 
 describe("explicit repository registration", () => {
   it("normalizes a canonical GitHub repository URL", () => {
@@ -72,6 +77,20 @@ describe("explicit repository registration", () => {
       "createWebhook:octo/overflow",
       "listWorkflowFiles:octo/overflow",
     ]);
+  });
+
+  it("reads workflows for the submitted repository when both owner and name differ from the default fixture", async () => {
+    const harness = createHarness({ owner: "harbour-coop", name: "contributions" });
+    const listWorkflowFiles = vi.spyOn(harness.dependencies.github, "listWorkflowFiles");
+
+    await expect(registerRepository(harness.dependencies, createInput({
+      repositoryUrl: "https://github.com/harbour-coop/contributions.git",
+    }))).resolves.toMatchObject({ id: "registered-repository-id" });
+
+    expect(listWorkflowFiles).toHaveBeenCalledExactlyOnceWith({
+      owner: "harbour-coop",
+      name: "contributions",
+    });
   });
 
   it.each(["WARNED", "UNDER_AUDIT"] as const)(
@@ -401,11 +420,12 @@ describe("explicit repository registration", () => {
   });
 
   it("keeps the registration and reports an unscheduled import when the enqueue fails", async () => {
-    const harness = createHarness({ scheduleFailure: true });
+    const harness = createHarness({ scheduleFailure: true, workflows: [claimWorkflow] });
 
     await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
       id: "registered-repository-id",
       initialImportScheduled: false,
+      claimPath: "EVIDENCE_FOUND",
     });
 
     expect(harness.createdRepositories).toHaveLength(1);
@@ -413,20 +433,18 @@ describe("explicit repository registration", () => {
   });
 
   it("reports an unscheduled import when no scheduler is wired up", async () => {
-    const harness = createHarness({ withoutScheduleInitialImport: true });
+    const harness = createHarness({ withoutScheduleInitialImport: true, workflows: [claimWorkflow] });
 
     await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
       initialImportScheduled: false,
+      claimPath: "EVIDENCE_FOUND",
     });
   });
 
   it.each<{ description: string; workflows: ClaimPathEvidence[]; expected: string }>([
     {
       description: "a workflow reacting to comments and referencing assignment",
-      workflows: [{
-        path: ".github/workflows/claim.yml",
-        content: "on: issue_comment\njobs:\n  claim:\n    steps:\n      - run: gh api repos/octo/overflow/issues/1/assignees -f assignees[]=contributor\n",
-      }],
+      workflows: [claimWorkflow],
       expected: "EVIDENCE_FOUND",
     },
     {
@@ -435,6 +453,15 @@ describe("explicit repository registration", () => {
       expected: "NO_EVIDENCE_FOUND",
     },
     { description: "an empty workflow list", workflows: [], expected: "NO_EVIDENCE_FOUND" },
+    {
+      description: "several workflow files with qualifying evidence only in the last file",
+      workflows: [
+        { path: ".github/workflows/ci.yml", content: "on: push\njobs: {}\n" },
+        { path: ".github/workflows/comments.yml", content: "on: issue_comment\njobs: {}\n" },
+        claimWorkflow,
+      ],
+      expected: "EVIDENCE_FOUND",
+    },
   ])("reports claim-path evidence for $description after persistence", async ({ workflows, expected }) => {
     const harness = createHarness({ workflows });
 
@@ -444,6 +471,24 @@ describe("explicit repository registration", () => {
     });
     expect(harness.workflowReadRepositoryCounts).toEqual([1]);
     expect(harness.githubCalls.at(-1)).toBe("listWorkflowFiles:octo/overflow");
+  });
+
+  it.each([
+    { description: "a string", rejection: "workflow read failed" },
+    { description: "a plain object", rejection: { reason: "workflow read failed" } },
+  ])("keeps a successful registration when the workflow gateway rejects with $description", async ({ rejection }) => {
+    const harness = createHarness();
+    harness.dependencies.github.listWorkflowFiles = async () => { throw rejection; };
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      id: "registered-repository-id",
+      githubWebhookId: 501,
+      claimPath: "NOT_CHECKED",
+      initialImportScheduled: true,
+    });
+    expect(harness.createdRepositories).toHaveLength(1);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.scheduledRepositoryIds).toEqual(["registered-repository-id"]);
   });
 
   it.each(["gateway", "assessment"] as const)(
@@ -476,6 +521,7 @@ type HarnessOptions = {
   actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
   canAdminister?: boolean;
   owner?: string;
+  name?: string;
   ownerType?: "USER" | "ORGANIZATION";
   visibility?: "PUBLIC" | "PRIVATE";
   existing?: RegisteredRepository | null;
@@ -517,10 +563,10 @@ function createHarness(options: HarnessOptions = {}) {
           id: 42,
           owner: options.owner ?? "octo",
           ownerType: options.ownerType ?? "USER",
-          name: "overflow",
-          fullName: `${options.owner ?? "octo"}/overflow`,
+          name: options.name ?? "overflow",
+          fullName: `${options.owner ?? "octo"}/${options.name ?? "overflow"}`,
           visibility: options.visibility ?? "PUBLIC",
-          url: `https://github.com/${options.owner ?? "octo"}/overflow`,
+          url: `https://github.com/${options.owner ?? "octo"}/${options.name ?? "overflow"}`,
           canAdminister: options.canAdminister ?? true,
         };
       },
