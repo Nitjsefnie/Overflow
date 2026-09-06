@@ -207,9 +207,9 @@ describe("initial PostgreSQL materialization", () => {
       "013_reconciliation_cooldown.sql",
       "014_opening_authority_precondition.sql",
       "015_normalize_settlement_status_check.sql",
-      "015_refreshable_display_logins.sql",
       "016_repository_identity_verification.sql",
       "017_cross_repository_closures.sql",
+      "018_refreshable_display_logins.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
