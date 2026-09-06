@@ -52,21 +52,35 @@ closing socket — which is what makes clearing safe there.
 Clearing the slot only settles the order in which `end()` runs after the death.
 Called while a query is still on the wire, `end()` cannot take its fast path at
 all: it returns `ending = new Promise(r => ended = r)`, and stock `postgres`
-invokes `ended` from exactly one place, `terminate()`. Every route into
-`terminate()` needs a backend that is still answering — `end()`'s own fast path
-on an idle connection, and the arms of `ReadyForQuery`, a message a dead
-backend never sends — so a connection whose socket has already gone leaves that
-promise pending forever.
+invokes `ended` from exactly one place, `terminate()`. Every route to
+`terminate()` in `src/connection.js` is either an arm of `ReadyForQuery`, which
+a dead backend never sends, or `end()`'s own fast path — and that fast path is
+gated on the connection being **idle** rather than on the backend, so it does
+run with the socket already nulled. That is the route the first hunk above
+relies on. What puts it out of reach here is something else: `end()` opens
+`return ending || …`, so once the slow path has assigned `ending` every later
+call hands back that same promise, and the fast path is never taken again. The
+promise stays pending forever.
+
+`terminate` is also public on the connection object, and the pool has one
+escape hatch that reaches it with no backend at all: `sql.end({ timeout })`
+races the connections' own shutdown against a timer, and when the timer wins,
+`destroy()` calls `c.terminate()` on every connection (`src/index.js`). That is a deadline rather than a settle — it abandons the
+connections instead of waiting for them — and it exists only for a caller that
+asks for it. `closeSql()` calls `end()` with no timeout, so this repository's
+shutdown path never arms it, and no later call can: the pool's `end()` short-circuits on its own `ending` exactly as a connection's does. That is why the hunk below is what settles it.
 
 The second hunk settles it from `closed()`, adding
 `ended && (ended(), ending = ended = null)` after the line that fails the
 in-flight query and before `onclose()`.
 `tests/db/closesql-shutdown-before-death.test.ts` holds the behaviour.
 
-`closed()` rather than `terminate()` because `closed()` is the one place a dead
-socket does reach: it is the socket's own `close` handler, it runs whether or
-not the close carried an error, and by the time it runs there is no protocol
-traffic left to hang on.
+`closed()` rather than `terminate()` because `closed()` is on the socket's own
+event path, where `error()` above it also sits: the two are registered together
+as the socket's `error` and `close` handlers. `closed()` is the one of them
+that runs however the socket goes away, error or none, and by the time it runs
+there is no protocol traffic left to hang on. `terminate()` is on no such path
+— nothing in `src/connection.js` calls it when a socket dies.
 
 The position **before** `onclose()` is the conservative order rather than a
 demonstrated necessity, and the difference is worth stating plainly.
