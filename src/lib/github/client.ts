@@ -444,6 +444,9 @@ export class GitHubGateway {
   }
 }
 
+/** What every actor/author selection reports: a `login`, plus a `databaseId` when the account is a User. */
+type GitHubGraphqlAccount = { login: string; databaseId?: number | null };
+
 type GitHubGraphqlLabel = { name: string };
 type GitHubGraphqlLabelConnection = GitHubGraphqlPage<GitHubGraphqlLabel>;
 
@@ -456,7 +459,7 @@ type GitHubGraphqlIssueNode = {
   state: "OPEN" | "CLOSED";
   createdAt: string;
   closedAt: string | null;
-  author: { login: string } | null;
+  author: GitHubGraphqlAccount | null;
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
   timelineItems: GitHubGraphqlIssueTimelineConnection;
@@ -475,7 +478,7 @@ type GitHubGraphqlPullRequestNode = {
   mergedAt: string | null;
   mergeCommit: { oid: string } | null;
   commits: { nodes: Array<{ commit: { committedDate: string } }> };
-  author: { login: string; databaseId?: number | null } | null;
+  author: GitHubGraphqlAccount | null;
   repository: { databaseId: unknown; nameWithOwner: unknown } | null;
 };
 
@@ -484,14 +487,14 @@ type GitHubGraphqlIssueTimelineNode =
       __typename: "LabeledEvent" | "UnlabeledEvent";
       id: string;
       createdAt: string;
-      actor: { login: string } | null;
+      actor: GitHubGraphqlAccount | null;
       label: { name: string };
     }
   | {
       __typename: "AssignedEvent" | "UnassignedEvent";
       id: string;
       createdAt: string;
-      actor: { login: string } | null;
+      actor: GitHubGraphqlAccount | null;
       assignee: { login?: string } | null;
     }
   | {
@@ -500,7 +503,7 @@ type GitHubGraphqlIssueTimelineNode =
       databaseId: number | null;
       createdAt: string;
       lastEditedAt: string | null;
-      author: { login: string } | null;
+      author: GitHubGraphqlAccount | null;
       body: string;
     };
 
@@ -533,7 +536,7 @@ const issuesQuery = `
           state
           createdAt
           closedAt
-          author { login }
+          author { login ... on User { databaseId } }
           labels(first: 20) {
             nodes { name }
             pageInfo { hasNextPage endCursor }
@@ -565,11 +568,11 @@ const issuesQuery = `
           ) {
             nodes {
               __typename
-              ... on LabeledEvent { id createdAt actor { login } label { name } }
-              ... on UnlabeledEvent { id createdAt actor { login } label { name } }
-              ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-              ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-              ... on IssueComment { id databaseId createdAt lastEditedAt author { login } body }
+              ... on LabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+              ... on AssignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+              ... on UnassignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+              ... on IssueComment { id databaseId createdAt lastEditedAt author { login ... on User { databaseId } } body }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -631,11 +634,11 @@ const issueTimelineQuery = `
         ) {
           nodes {
             __typename
-            ... on LabeledEvent { id createdAt actor { login } label { name } }
-            ... on UnlabeledEvent { id createdAt actor { login } label { name } }
-            ... on AssignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-            ... on UnassignedEvent { id createdAt actor { login } assignee { ... on User { login } } }
-            ... on IssueComment { id databaseId createdAt lastEditedAt author { login } body }
+            ... on LabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+            ... on UnlabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+            ... on AssignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+            ... on UnassignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+            ... on IssueComment { id databaseId createdAt lastEditedAt author { login ... on User { databaseId } } body }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -706,6 +709,7 @@ function toGitHubIssue(
     createdAt: node.createdAt,
     closedAt: node.closedAt,
     authorLogin: node.author?.login ?? null,
+    authorGitHubUserId: accountGitHubUserId(node.author),
     labels,
     claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),
     history: timeline.history,
@@ -738,7 +742,7 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     mergeCommitOid: node.mergeCommit?.oid ?? null,
     finalCommitAt: node.commits.nodes.at(-1)?.commit.committedDate ?? null,
     authorLogin: node.author?.login ?? null,
-    authorGitHubUserId: authorGitHubUserId(node.author),
+    authorGitHubUserId: accountGitHubUserId(node.author),
     repositoryGitHubId: repositoryGitHubId(node),
     repositoryNameWithOwner: repositoryNameWithOwner(node),
   };
@@ -769,8 +773,13 @@ function repositoryNameWithOwner(node: GitHubGraphqlPullRequestNode): string {
   return nameWithOwner;
 }
 
-function authorGitHubUserId(author: GitHubGraphqlPullRequestNode["author"]): number | null {
-  const databaseId = author?.databaseId;
+/**
+ * The account's immutable numeric identity, which survives a login rename.
+ * Null whenever GitHub reported no usable one: an absent account, or one that
+ * is not a User (Bot, Mannequin, Organization) and so has no `User.databaseId`.
+ */
+function accountGitHubUserId(account: GitHubGraphqlAccount | null): number | null {
+  const databaseId = account?.databaseId;
   return typeof databaseId === "number" && Number.isSafeInteger(databaseId) && databaseId > 0 ? databaseId : null;
 }
 
@@ -789,6 +798,7 @@ function toGitHubIssueTimelineItem(
           kind: node.__typename === "LabeledEvent" ? "LABELED" : "UNLABELED",
           id: node.id,
           actorLogin: node.actor?.login ?? null,
+          actorGitHubUserId: accountGitHubUserId(node.actor),
           label: node.label.name,
           createdAt: node.createdAt,
         },
@@ -801,6 +811,7 @@ function toGitHubIssueTimelineItem(
           kind: node.__typename === "AssignedEvent" ? "ASSIGNED" : "UNASSIGNED",
           id: node.id,
           actorLogin: node.actor?.login ?? null,
+          actorGitHubUserId: accountGitHubUserId(node.actor),
           assigneeLogin: node.assignee?.login ?? null,
           createdAt: node.createdAt,
         },
@@ -812,6 +823,7 @@ function toGitHubIssueTimelineItem(
           id: node.id,
           databaseId: node.databaseId,
           authorLogin: node.author?.login ?? null,
+          authorGitHubUserId: accountGitHubUserId(node.author),
           body: node.body,
           createdAt: node.createdAt,
           lastEditedAt: node.lastEditedAt ?? null,
