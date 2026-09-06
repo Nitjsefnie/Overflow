@@ -102,4 +102,27 @@ describe("settlement proof page", () => {
     expect(proof.outerHTML).toBe(emptyHistoryProof);
     expect(screen.getByRole("button", { name: "Report this settlement as incorrect" })).toBeVisible();
   });
+
+  it("offers ledger recovery without reading corrections when the settlement proof query fails", async () => {
+    sql.mockClear();
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlements")) {
+        throw new Error("Settlement proof query unavailable");
+      }
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    render(await SettlementProofPage(settlementParams));
+
+    const recovery = screen.getByRole("region", { name: /settlement proof.*could not be loaded/i });
+    expect(recovery).toBeVisible();
+    expect(within(recovery).getByRole("link")).toHaveAttribute("href", "/dashboard");
+    const queries = sql.mock.calls.map(([strings]) => (strings as TemplateStringsArray).join("?"));
+    expect(queries).toEqual([expect.stringContaining("from settlements")]);
+    expect(queries.some((query) => query.includes("from settlement_override_requests"))).toBe(false);
+  });
 });
