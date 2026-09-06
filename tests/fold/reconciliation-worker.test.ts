@@ -321,6 +321,72 @@ describe("running the next reconciliation job", () => {
 });
 
 describe("reconciliation lease heartbeat", () => {
+  it("stops renewing ten minutes after the claim even while the fold stays pending", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const claimedAt = Date.parse("2030-01-01T12:00:00Z");
+    let time = claimedAt;
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      now: () => new Date(time),
+      ...timer.dependencies,
+    });
+    await timer.armed;
+
+    try {
+      time = claimedAt + 5_000;
+      await timer.tick();
+      time = claimedAt + 10 * 60_000;
+      await timer.tick();
+      time += 5_000;
+      await timer.tick();
+      expect(calls).toEqual([
+        { method: "claim", args: [] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+      ]);
+      expect(timer.cancellations).toBe(1);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+    expect(timer.cancellations).toBe(1);
+  });
+
+  it("continues renewing immediately before the ten-minute cap", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const claimedAt = Date.parse("2030-01-01T12:00:00Z");
+    let time = claimedAt;
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      now: () => new Date(time),
+      ...timer.dependencies,
+    });
+    await timer.armed;
+
+    try {
+      for (const elapsed of [5_000, 5 * 60_000, 10 * 60_000 - 1]) {
+        time = claimedAt + elapsed;
+        await timer.tick();
+      }
+      expect(calls).toEqual([
+        { method: "claim", args: [] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+      ]);
+      expect(timer.cancellations).toBe(0);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+    expect(timer.cancellations).toBe(1);
+  });
+
   it("renews the claimed lease every five seconds while the fold is in flight", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
     const timer = createRenewalTimer();
