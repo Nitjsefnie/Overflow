@@ -4052,6 +4052,7 @@ function materializationSnapshot(input: {
         createdAt: "2026-09-01T08:00:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
         authorLogin,
+        authorGitHubUserId: null,
         labels: [...input.issueLabels, input.actualLabel],
         claimAssigneeGitHubLogin: contributorLogin,
         history: [
