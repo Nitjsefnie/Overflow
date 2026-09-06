@@ -191,11 +191,12 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  * switches on the code gets the fields typed where they exist and is not made
  * to handle an absence that cannot happen.
  *
- * The accusation answers it twice over, and neither field is redundant: the two
- * logins are STRUCTURED facts for tooling to group and filter on, and `reason`
- * is the PROSE a moderator reads. Only the prose can carry the discriminator
- * where an account has taken the login the sponsor's record still stores, since
- * there the structured login is the sponsor's own and says nothing.
+ * The label and one actor login are STRUCTURED facts for tooling to group and
+ * filter on, and `reason` is the PROSE a moderator reads. The sponsor's stored
+ * login appears only in that prose, so it is not redundant. Only the prose can
+ * carry the discriminator where an account has taken the login the sponsor's
+ * record still stores, since there the structured login is the sponsor's own
+ * and says nothing.
  */
 export type OpeningRefusal =
   | { code: "OPENING_LABEL_MISSING" }
@@ -597,10 +598,9 @@ function resolveOpening(
  */
 function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusal {
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
-  // The earliest application that could be compared at all, which is the one the
-  // row names: an earlier candidate nothing could be compared against accuses
-  // nobody, so naming it would put an account in the record that was never
-  // refused.
+  // With a stored sponsor login, every candidate can be compared, so name the
+  // earliest. With no stored login, name the earliest candidate carrying an id;
+  // the idless candidates could not be compared and must not be named here.
   const attributable = candidates.find(
     (candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null,
   );
