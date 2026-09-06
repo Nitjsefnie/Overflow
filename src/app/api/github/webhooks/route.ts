@@ -1,11 +1,9 @@
-import { GitHubGateway } from "@/lib/github/client";
 import {
   parseGitHubWebhookDelivery,
   type GitHubWebhookDelivery,
 } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { reconcileRepository } from "@/lib/fold/reconcile";
 import { processWebhook } from "@/lib/webhooks/processor";
 
 export type GitHubWebhookRouteDependencies = {
@@ -57,20 +55,7 @@ export async function POST(request: Request): Promise<Response> {
       const store = new PostgresFoldStore();
       return processWebhook({
         store,
-        reconcileRepository: async (repositoryId) => {
-          const repository = await store.getRepository(repositoryId);
-          if (repository === null) {
-            throw new Error("Repository was not found.");
-          }
-          const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
-          if (accessToken === null) {
-            throw new Error("GitHub access token was not available.");
-          }
-          return reconcileRepository({
-            store,
-            github: new GitHubGateway({ accessToken }),
-          }, repositoryId);
-        },
+        enqueueReconciliation: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "WEBHOOK"),
       }, delivery);
     },
   })(request);

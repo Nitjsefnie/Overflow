@@ -4,14 +4,12 @@ export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
   markProcessed(deliveryId: string, leaseToken: string): Promise<boolean>;
-  renewDeliveryLease(deliveryId: string, leaseToken: string): Promise<boolean>;
   markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
 };
 
 export type WebhookProcessorDependencies = {
   store: WebhookDeliveryStore;
-  reconcileRepository(repositoryId: string): Promise<unknown>;
-  leaseHeartbeatIntervalMs?: number;
+  enqueueReconciliation(repositoryId: string): Promise<unknown>;
 };
 
 export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" };
@@ -20,6 +18,13 @@ export type WebhookDeliveryClaim =
   | { status: "CLAIMED"; leaseToken: string }
   | { status: "DUPLICATE" };
 
+/**
+ * Records the delivery and schedules the repository's fold, rather than folding.
+ *
+ * The whole request is now two short queries, so the delivery lease taken by
+ * `claimDelivery` covers it outright and nothing has to renew it. The fold
+ * itself belongs to the reconciliation worker, which survives this process.
+ */
 export async function processWebhook(
   dependencies: WebhookProcessorDependencies,
   delivery: GitHubWebhookDelivery,
@@ -29,25 +34,14 @@ export async function processWebhook(
     return { status: "DUPLICATE" };
   }
 
-  const heartbeat = startLeaseHeartbeat(
-    dependencies.store,
-    delivery.deliveryId,
-    claim.leaseToken,
-    dependencies.leaseHeartbeatIntervalMs ?? 60_000,
-  );
   try {
     const repository = await dependencies.store.findRepositoryByGitHubId(delivery.repositoryGitHubId);
     if (repository !== null && repository.active) {
-      await dependencies.reconcileRepository(repository.id);
-    }
-    const leaseStillOwned = await heartbeat.stop();
-    if (!leaseStillOwned) {
-      return { status: "DUPLICATE" };
+      await dependencies.enqueueReconciliation(repository.id);
     }
     const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
     return { status: markedProcessed ? "PROCESSED" : "DUPLICATE" };
   } catch {
-    await heartbeat.stop();
     try {
       await dependencies.store.markFailed(delivery.deliveryId, claim.leaseToken, "Webhook processing failed.");
     } catch {
@@ -55,32 +49,4 @@ export async function processWebhook(
     }
     throw new Error("Webhook processing failed.");
   }
-}
-
-function startLeaseHeartbeat(
-  store: WebhookDeliveryStore,
-  deliveryId: string,
-  leaseToken: string,
-  intervalMs: number,
-): { stop(): Promise<boolean> } {
-  let leaseStillOwned = true;
-  let renewal = Promise.resolve();
-  const timer = setInterval(() => {
-    renewal = renewal.then(async () => {
-      if (leaseStillOwned) {
-        leaseStillOwned = await store.renewDeliveryLease(deliveryId, leaseToken);
-      }
-    }).catch(() => {
-      leaseStillOwned = false;
-    });
-  }, intervalMs);
-  timer.unref();
-
-  return {
-    async stop() {
-      clearInterval(timer);
-      await renewal;
-      return leaseStillOwned;
-    },
-  };
 }
