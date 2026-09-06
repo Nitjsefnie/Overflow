@@ -532,9 +532,7 @@ describe("the scheduled reconciliation worker", () => {
     // only undefined; a nullish member is no scheduler at all, not a broken one.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const timers: Array<{ unrefed: boolean }> = [];
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
-      _callback: () => void,
-    ) => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((() => {
       const timer = { unrefed: false };
       timers.push(timer);
       return { unref: () => { timer.unrefed = true; } } as unknown as ReturnType<typeof setInterval>;
