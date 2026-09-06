@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { reconcileRepository, type ReconciliationStore } from "@/lib/fold/reconcile";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { GitHubGateway } from "@/lib/github/client";
+import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 const pageInfo = { hasNextPage: false, endCursor: null };
 
@@ -18,6 +19,10 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
   const github = new GitHubGateway({
     accessToken: "fixture-token",
     fetch: async (input, init) => {
+      // Identity verification precedes the crawl and is not one of the bounded calls.
+      if (String(input).endsWith("/repositories/5001")) {
+        return Response.json(verifiedRepositoryPayload(5001, "sponsor/repository"));
+      }
       const request = String(input).endsWith("/graphql") ? JSON.parse(String(init?.body)) : null;
       const operation = request === null ? "diff" : /query (\w+)/.exec(request.query)![1]!;
       const number = request === null
@@ -61,7 +66,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
   const store: ReconciliationStore = {
     withRepositoryReconciliation: async (_id, work) => work(),
     getRepository: async () => ({
-      id: "repository", ownerName: "sponsor/repository", active: true,
+      id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: {
         openingName: "Size", actualName: "Delivered",
@@ -76,6 +81,8 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
       id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE",
     }],
     beginRun: async () => "run", completeRun: async () => {}, failRun: async () => {}, materialize,
+    recordVerifiedRepositoryIdentity: async () => {},
+    markRepositoryUnavailable: async () => {},
   };
   const run = reconcileRepository({ store, github }, "repository");
   try {

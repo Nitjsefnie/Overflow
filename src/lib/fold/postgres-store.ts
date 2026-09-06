@@ -19,6 +19,7 @@ import type {
   ReconciliationDeltas,
   ReconciliationRepository,
   ReconciliationStore,
+  RepositoryUnavailableReason,
 } from "@/lib/fold/reconcile";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { applyGrantedSettlementOverride } from "@/lib/overrides/apply";
@@ -27,6 +28,7 @@ import { decryptToken } from "@/lib/security/token-cipher";
 
 type RepositoryRow = {
   id: string;
+  github_repository_id: number | string;
   owner_name: string;
   active: boolean;
   difficulty_scheme: DifficultyScheme;
@@ -242,6 +244,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     const [row] = await this.sql<RepositoryRow[]>`
       select
         repositories.id,
+        repositories.github_repository_id,
         repositories.owner_name,
         repositories.active,
         repositories.difficulty_scheme,
@@ -265,6 +268,59 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       limit 1
     `;
     return row === undefined ? null : toReconciliationRepository(row);
+  }
+
+  public async recordVerifiedRepositoryIdentity(input: {
+    repositoryId: string;
+    ownerName: string;
+    visibility: "PUBLIC" | "PRIVATE";
+  }): Promise<void> {
+    try {
+      await this.sql`
+        update registered_repositories
+        set
+          owner_name = ${input.ownerName},
+          visibility = ${input.visibility},
+          unavailable_reason = null,
+          unavailable_since = null,
+          updated_at = now()
+        where id = ${input.repositoryId}
+      `;
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+      // owner_name is unique and a rename can land on a path another registration
+      // still holds. The numeric id already proved which repository this row is, so
+      // keep the crawl available and leave the display name to the row that owns it.
+      await this.sql`
+        update registered_repositories
+        set
+          visibility = ${input.visibility},
+          unavailable_reason = null,
+          unavailable_since = null,
+          updated_at = now()
+        where id = ${input.repositoryId}
+      `;
+    }
+  }
+
+  public async markRepositoryUnavailable(input: {
+    repositoryId: string;
+    reason: RepositoryUnavailableReason;
+    at: Date;
+  }): Promise<void> {
+    await this.sql`
+      update registered_repositories
+      set
+        unavailable_reason = ${input.reason},
+        unavailable_since = case
+          when unavailable_reason = ${input.reason} then unavailable_since
+          else ${input.at}
+        end,
+        updated_at = now()
+      where id = ${input.repositoryId}
+    `;
   }
 
   public async findRepositoryByOwnerName(ownerName: string): Promise<{ id: string } | null> {
@@ -1280,6 +1336,7 @@ function combineDeltas(...deltas: readonly ReconciliationDeltas[]): Reconciliati
 function toReconciliationRepository(row: RepositoryRow): ReconciliationRepository {
   return {
     id: row.id,
+    githubRepositoryId: toSafeInteger(row.github_repository_id),
     ownerName: row.owner_name,
     active: row.active,
     difficultyScheme: row.difficulty_scheme,
@@ -1317,6 +1374,10 @@ function toSafeInteger(value: number | string): number {
     throw new Error("Database record was invalid.");
   }
   return parsed;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
 }
 
 function timestampToIso(value: string | Date | null): string {

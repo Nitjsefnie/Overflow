@@ -7,10 +7,12 @@ import {
 } from "@/lib/fold/reconcile";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { GitHubGateway } from "@/lib/github/client";
+import type { GitHubRepository } from "@/lib/github/types";
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
+import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 describe("reconcileRepository", () => {
   it.each([120, 0, null])("records only rate-limit cooldowns with retryAfterSeconds=%s from the injected clock", async (retryAfterSeconds) => {
@@ -73,6 +75,7 @@ describe("reconcileRepository", () => {
     const result = reconcileRepository({
       store,
       github: {
+        getRepositoryById: async () => verifiedRepository(),
         listIssues: () => record("issues", issues),
         getPullRequestReviews: (_repository, number) => record("reviews", [], number),
         getPullRequestDiff: (_repository, number) => record("diff", `diff ${number}`, number),
@@ -386,6 +389,111 @@ describe("reconcileRepository", () => {
     },
   );
 
+  it("crawls the path the registered numeric identity resolves to, not the stored one", async () => {
+    const dependencies = reconciliationDependencies({
+      github: {
+        getRepositoryById: vi.fn().mockResolvedValue(
+          verifiedRepository({ owner: "new-owner", name: "repo", fullName: "new-owner/repo" }),
+        ),
+      },
+    });
+    const repository = await dependencies.store.getRepository("repository");
+    repository!.ownerName = "old-owner/repo";
+    (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
+
+    await reconcileRepository(dependencies, "repository");
+
+    const reference = { owner: "new-owner", name: "repo" };
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference);
+    expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(reference, 11);
+    expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(reference, 11);
+    expect(dependencies.github.getRepositoryById).toHaveBeenCalledWith(5001);
+    expect(dependencies.store.recordVerifiedRepositoryIdentity).toHaveBeenCalledWith({
+      repositoryId: "repository",
+      ownerName: "new-owner/repo",
+      visibility: "PUBLIC",
+    });
+  });
+
+  it.each([
+    { reason: "NOT_FOUND", verified: null },
+    { reason: "IDENTITY_MISMATCH", verified: verifiedRepository({ id: 6002 }) },
+    { reason: "NOT_PUBLIC", verified: verifiedRepository({ visibility: "PRIVATE" }) },
+  ] as const)("declines the crawl and records $reason instead of materializing another repository", async ({ reason, verified }) => {
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    const dependencies = reconciliationDependencies({
+      github: { getRepositoryById: vi.fn().mockResolvedValue(verified) },
+    });
+
+    const summary = await reconcileRepository({ ...dependencies, now }, "repository");
+
+    expect(summary).toEqual({
+      repositoryId: "repository",
+      runId: "run-1",
+      skipped: false,
+      adds: 0,
+      changes: 0,
+      removals: 0,
+      added: 0,
+      changed: 0,
+      removed: 0,
+    });
+    expect(dependencies.store.markRepositoryUnavailable).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository",
+      reason,
+      at: now(),
+    });
+    expect(dependencies.store.completeRun).toHaveBeenCalledWith("run-1");
+    expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
+    expect(dependencies.store.failRun).not.toHaveBeenCalled();
+    expect(dependencies.store.materialize).not.toHaveBeenCalled();
+    expect(dependencies.store.findUsersByGitHubUserIds).not.toHaveBeenCalled();
+    expect(dependencies.store.recordVerifiedRepositoryIdentity).not.toHaveBeenCalled();
+    expect(dependencies.github.listIssues).not.toHaveBeenCalled();
+  });
+
+  it("records the verified identity of an unrenamed repository and reconciles it", async () => {
+    const dependencies = reconciliationDependencies();
+
+    await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
+      runId: "run-1",
+      adds: 1,
+      changes: 0,
+      removals: 0,
+    });
+
+    expect(dependencies.store.recordVerifiedRepositoryIdentity).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository",
+      ownerName: "octo/example",
+      visibility: "PUBLIC",
+    });
+    expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" });
+    expect(dependencies.store.materialize).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("fails the run when identity verification itself fails, rateLimited=%s", async (rateLimited) => {
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    const upstream = new GitHubApiError(403, rateLimited, 120);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const dependencies = reconciliationDependencies({
+        github: { getRepositoryById: vi.fn().mockRejectedValue(upstream) },
+      });
+
+      await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
+
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
+      expect(dependencies.github.listIssues).not.toHaveBeenCalled();
+      expect(vi.mocked(dependencies.store.setReconciliationCooldown).mock.calls).toEqual(
+        rateLimited ? [["repository", new Date(now().getTime() + 120 * 1000)]] : [],
+      );
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("records a no-op run for an inactive repository without deleting historical settlements", async () => {
     const dependencies = reconciliationDependencies();
     const repository = await dependencies.store.getRepository("repository");
@@ -480,6 +588,8 @@ function reconciliationDependencies(
   store: ReconciliationDependencies["store"] & {
     failRun: ReturnType<typeof vi.fn>;
     completeRun: ReturnType<typeof vi.fn>;
+    recordVerifiedRepositoryIdentity: ReturnType<typeof vi.fn>;
+    markRepositoryUnavailable: ReturnType<typeof vi.fn>;
   };
 } {
   const github = {
@@ -527,6 +637,7 @@ function reconciliationDependencies(
     ]),
     getPullRequestReviews: vi.fn().mockResolvedValue([]),
     getPullRequestDiff: vi.fn().mockResolvedValue("diff"),
+    getRepositoryById: vi.fn().mockResolvedValue(verifiedRepository()),
     ...overrides.github,
   };
   const failRun = vi.fn().mockResolvedValue(undefined);
@@ -536,6 +647,7 @@ function reconciliationDependencies(
     withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),
     getRepository: vi.fn().mockResolvedValue({
       id: "repository",
+      githubRepositoryId: 5001,
       ownerName: "octo/example",
       active: true,
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
@@ -555,6 +667,8 @@ function reconciliationDependencies(
     completeRun: vi.fn().mockResolvedValue(undefined),
     materialize: overrides.materialize ?? vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 }),
     failRun,
+    recordVerifiedRepositoryIdentity: vi.fn().mockResolvedValue(undefined),
+    markRepositoryUnavailable: vi.fn().mockResolvedValue(undefined),
   };
 
   return { store, github } as ReconciliationDependencies & {
@@ -562,7 +676,23 @@ function reconciliationDependencies(
     store: ReconciliationDependencies["store"] & {
       failRun: ReturnType<typeof vi.fn>;
       completeRun: ReturnType<typeof vi.fn>;
+      recordVerifiedRepositoryIdentity: ReturnType<typeof vi.fn>;
+      markRepositoryUnavailable: ReturnType<typeof vi.fn>;
     };
+  };
+}
+
+function verifiedRepository(overrides: Partial<GitHubRepository> = {}): GitHubRepository {
+  return {
+    id: 5001,
+    owner: "octo",
+    name: "example",
+    ownerType: "USER",
+    fullName: "octo/example",
+    visibility: "PUBLIC",
+    url: "https://github.com/octo/example",
+    canAdminister: true,
+    ...overrides,
   };
 }
 
@@ -676,6 +806,9 @@ function pagedReconciliationGateway(
   return new GitHubGateway({
     accessToken: "test-token",
     fetch: async (input, init) => {
+      if (String(input).endsWith("/repositories/5001")) {
+        return Response.json(verifiedRepositoryPayload(5001, "octo/example"));
+      }
       if (String(input).endsWith("/graphql")) {
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;

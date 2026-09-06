@@ -9,6 +9,7 @@ import { closeSql, getSql, withTransaction } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
@@ -2004,6 +2005,7 @@ describe("initial PostgreSQL materialization", () => {
     ];
     let snapshotIndex = 0;
     const github: ReconciliationGateway = {
+      getRepositoryById: verifiedRepositoryAt(repository.owner_name),
       listIssues: async () => {
         const snapshot = snapshots[snapshotIndex];
         snapshotIndex += 1;
@@ -3578,6 +3580,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     issue.closingPullRequests.map((pullRequest) => [pullRequest.number, pullRequest] as const)
   )));
   return {
+    getRepositoryById: verifiedRepositoryAt(snapshot.repository.ownerName),
     listIssues: async () => issues,
     getPullRequestReviews: async (_repository, pullRequestNumber) => (
       evidenceByPullRequest.get(pullRequestNumber)?.reviews ?? []
