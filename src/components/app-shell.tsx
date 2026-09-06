@@ -46,7 +46,7 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
             ) : null}
           </ul>
         </nav>
-        <div>
+        <div className="session-controls">
           <p className="member-stamp">
             Signed in as <span>{memberName}</span>
           </p>
