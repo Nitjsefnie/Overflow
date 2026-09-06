@@ -844,6 +844,7 @@ function reconciliationDependencies(
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
         createdAt: "2026-09-01T08:00:00.000Z",
+        closedAt: "2026-09-01T12:00:00.000Z",
         authorLogin: "sponsor",
         labels: ["M", "delivered/6"],
         claimAssigneeGitHubLogin: "contributor",
@@ -877,6 +878,7 @@ function reconciliationDependencies(
       githubRepositoryId: 5001,
       ownerName: "octo/example",
       active: true,
+      registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: {
         openingName: "Size",
@@ -965,6 +967,7 @@ function reconciliationIssue(input: { id: number; number: number }) {
     url: `https://github.com/octo/example/issues/${input.number}`,
     state: "CLOSED" as const,
     createdAt: "2026-09-01T08:00:00.000Z",
+    closedAt: "2026-09-01T12:00:00.000Z",
     authorLogin: "sponsor",
     labels: ["M", "delivered/6"],
     claimAssigneeGitHubLogin: "contributor",

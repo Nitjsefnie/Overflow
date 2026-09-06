@@ -455,6 +455,7 @@ type GitHubGraphqlIssueNode = {
   url: string;
   state: "OPEN" | "CLOSED";
   createdAt: string;
+  closedAt: string | null;
   author: { login: string } | null;
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
@@ -531,6 +532,7 @@ const issuesQuery = `
           url
           state
           createdAt
+          closedAt
           author { login }
           labels(first: 20) {
             nodes { name }
@@ -702,6 +704,7 @@ function toGitHubIssue(
     url: node.url,
     state: node.state,
     createdAt: node.createdAt,
+    closedAt: node.closedAt,
     authorLogin: node.author?.login ?? null,
     labels,
     claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),

@@ -22,6 +22,8 @@ export type GitHubIssue = {
   url: string;
   state: IssueState;
   createdAt: string;
+  /** GraphQL `Issue.closedAt`; null while the issue is open. */
+  closedAt: string | null;
   authorLogin: string | null;
   labels: string[];
   claimAssigneeGitHubLogin: string | null;

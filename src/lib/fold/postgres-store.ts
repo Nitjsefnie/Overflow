@@ -34,6 +34,7 @@ type RepositoryRow = {
   github_repository_id: number | string;
   owner_name: string;
   active: boolean;
+  created_at: string | Date;
   difficulty_scheme: DifficultyScheme;
   sponsor_id: string;
   sponsor_github_user_id: number | string;
@@ -289,6 +290,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repositories.github_repository_id,
         repositories.owner_name,
         repositories.active,
+        repositories.created_at,
         repositories.difficulty_scheme,
         sponsors.id as sponsor_id,
         sponsors.github_user_id as sponsor_github_user_id,
@@ -1417,6 +1419,7 @@ function toReconciliationRepository(row: RepositoryRow): ReconciliationRepositor
     githubRepositoryId: toSafeInteger(row.github_repository_id),
     ownerName: row.owner_name,
     active: row.active,
+    registeredAt: timestampToIso(row.created_at),
     difficultyScheme: row.difficulty_scheme,
     sponsor: {
       id: row.sponsor_id,

@@ -15,6 +15,7 @@ const tokenEncryptionKey = Buffer.alloc(32, 26).toString("base64url");
 const firstObservation = new Date("2030-01-02T03:04:05.678Z");
 const laterObservation = new Date("2030-02-03T04:05:06.789Z");
 const staleUpdate = new Date("2000-01-01T00:00:00.000Z");
+const registrationInstant = new Date("2029-11-12T13:14:15.678Z");
 
 describe("registered repository identity verification", () => {
   beforeAll(async () => {
@@ -44,6 +45,14 @@ describe("registered repository identity verification", () => {
       githubRepositoryId,
       ownerName,
       active: true,
+    });
+  });
+
+  it("reads the registration instant a closure's evidence window is measured against", async () => {
+    const { repositoryId } = await registeredRepository();
+
+    await expect(store.getRepository(repositoryId)).resolves.toMatchObject({
+      registeredAt: registrationInstant.toISOString(),
     });
   });
 
@@ -192,8 +201,11 @@ async function registeredRepository() {
   };
   const [repository] = await sql<{ id: string }[]>`
     insert into registered_repositories
-      (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
-    values (${githubRepositoryId}, ${ownerName}, ${sponsor!.id}, 'PUBLIC', ${externalId++}, ${sql.json(difficultyScheme)})
+      (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme, created_at)
+    values (
+      ${githubRepositoryId}, ${ownerName}, ${sponsor!.id}, 'PUBLIC', ${externalId++},
+      ${sql.json(difficultyScheme)}, ${registrationInstant}
+    )
     returning id
   `;
   return { repositoryId: repository!.id, githubRepositoryId, ownerName };
