@@ -98,11 +98,11 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
 
     try {
       const registrationDependencies = await dependencies.createRegistrationDependencies(session);
-      const { initialImportScheduled, ...repository } = await registerRepository(
+      const { initialImportScheduled, claimPath, ...repository } = await registerRepository(
         registrationDependencies,
         input,
       );
-      return Response.json({ repository, initialImportScheduled }, { status: 201 });
+      return Response.json({ repository, initialImportScheduled, claimPath }, { status: 201 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
