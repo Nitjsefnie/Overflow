@@ -6,6 +6,8 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const inFlightSleepSeconds = 300;
+const inFlightStatement = `select pg_sleep(${inFlightSleepSeconds})`;
 let container: StartedTestContainer | undefined;
 let databaseUrl: string;
 
@@ -79,7 +81,7 @@ describe("closing the shared clients before a socket error", () => {
     try {
       const [backend] = await sql<{ pid: number }[]>`select pg_backend_pid() as pid`;
       // Longer than the test timeout: completion cannot rescue a stranded shutdown.
-      const inFlight = sql`select pg_sleep(300)`.then(
+      const inFlight = sql`select pg_sleep(${sql.unsafe(String(inFlightSleepSeconds))})`.then(
         () => "resolved",
         (error: { code?: string }) => {
           observed.push("query rejected");
@@ -92,7 +94,7 @@ describe("closing the shared clients before a socket error", () => {
       while (!running) {
         const rows = await observer`
           select 1 from pg_stat_activity
-          where pid = ${backend!.pid} and state = 'active' and query = 'select pg_sleep(300)'
+          where pid = ${backend!.pid} and state = 'active' and query = ${inFlightStatement}
         `;
         running = rows.length === 1;
       }

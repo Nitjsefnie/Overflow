@@ -11,7 +11,7 @@ const originalDatabaseUrl = process.env.DATABASE_URL;
  * The statement below is found again by its text in `pg_stat_activity`, so the duration it is
  * recognised by is stated once here and read from here by both the statement and the pattern.
  */
-const inFlightSleepSeconds = 30;
+const inFlightSleepSeconds = 300;
 const inFlightStatementPattern = `%pg_sleep(${inFlightSleepSeconds})%`;
 
 /** Teardown only. A wedged observer would otherwise replace a named assertion failure with a bare suite timeout. */
