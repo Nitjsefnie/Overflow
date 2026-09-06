@@ -21,11 +21,15 @@ describe("GitHub Actions release gates", () => {
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
       packageManager?: string;
       engines?: Record<string, string>;
+      scripts?: Record<string, string>;
     };
     expect(manifest).toMatchObject({
       packageManager: "pnpm@10.33.0",
       engines: { node: "24.17.0", pnpm: "10.33.0" },
     });
+    expect(manifest.scripts?.["db:migrate"]).toBe(
+      "node --env-file-if-exists=.env scripts/migrate.ts"
+    );
     expect(workflow.on).toEqual(expect.objectContaining({
       push: { branches: ["main"] },
       pull_request: { branches: ["main"] },
