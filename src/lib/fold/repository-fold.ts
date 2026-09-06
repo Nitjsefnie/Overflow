@@ -163,7 +163,10 @@ export type SelfWorkCalibration = {
 
 export type UnwritableClosure = {
   githubIssueId: number;
-  kind: "NO_CLOSING_PULL_REQUEST" | "SETTLEMENT_EVIDENCE_REJECTED";
+  kind:
+    | "NO_CLOSING_PULL_REQUEST"
+    | "SETTLEMENT_EVIDENCE_REJECTED"
+    | "CROSS_REPOSITORY_CLOSING_PULL_REQUEST";
   githubPullRequestId: number | null;
   reason: string;
 };
@@ -246,6 +249,13 @@ type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   finalCommitAt: string;
 };
 
+type ClosingPullRequestSelection =
+  | { kind: "SELECTED"; pullRequest: AuthoritativeClosingPullRequest }
+  | { kind: "CROSS_REPOSITORY"; pullRequest: AuthoritativeClosingPullRequest }
+  | { kind: "NONE" };
+
+const noClosingPullRequest: ClosingPullRequestSelection = { kind: "NONE" };
+
 export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const usersByGitHubUserId = new Map(snapshot.users.map((user) => [user.githubUserId, user]));
   // The sponsor pays for the work, so only the sponsor's labels and rationale
@@ -272,9 +282,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       policyViolations.push({ code: "OPENING_LABEL_MUTATED", githubIssueId: issue.id });
     }
 
-    const pullRequest = issue.state === "CLOSED"
-      ? selectClosingPullRequest(issue.closingPullRequests)
-      : null;
+    const selection = issue.state === "CLOSED"
+      ? selectClosingPullRequest(issue.closingPullRequests, snapshot.repository.ownerName)
+      : noClosingPullRequest;
+    const pullRequest = selection.kind === "SELECTED" ? selection.pullRequest : null;
     const settledResolution = pullRequest === null
       ? null
       : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, raterLogin);
@@ -313,12 +324,21 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     }
 
     if (pullRequest === null) {
-      unwritableClosures.push({
-        githubIssueId: issue.id,
-        kind: "NO_CLOSING_PULL_REQUEST",
-        githubPullRequestId: null,
-        reason: "No merged GitHub GraphQL closing pull request was found.",
-      });
+      // A foreign closing pull request is never materialized, so the closure
+      // that records it can reference no pull request row.
+      unwritableClosures.push(selection.kind === "CROSS_REPOSITORY"
+        ? {
+          githubIssueId: issue.id,
+          kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+          githubPullRequestId: null,
+          reason: crossRepositoryReason(selection.pullRequest, snapshot.repository.ownerName),
+        }
+        : {
+          githubIssueId: issue.id,
+          kind: "NO_CLOSING_PULL_REQUEST",
+          githubPullRequestId: null,
+          reason: "No merged GitHub GraphQL closing pull request was found.",
+        });
       continue;
     }
 
@@ -456,9 +476,15 @@ function resolveOpening(
   };
 }
 
+/**
+ * Overflow's authority ends at the registered repository, so a closing
+ * reference naming a pull request elsewhere is reported rather than folded:
+ * its diff and reviews are not evidence about work this repository sponsored.
+ */
 function selectClosingPullRequest(
   pullRequests: readonly RepositoryFoldPullRequest[],
-): AuthoritativeClosingPullRequest | null {
+  registeredNameWithOwner: string,
+): ClosingPullRequestSelection {
   const merged = pullRequests.filter(
     (pullRequest): pullRequest is AuthoritativeClosingPullRequest =>
       pullRequest.state === "MERGED" &&
@@ -470,15 +496,32 @@ function selectClosingPullRequest(
   ).map((pullRequest) => ({
     ...pullRequest,
     mergeCommitOid: pullRequest.mergeCommitOid.toLowerCase(),
-  }));
-  if (merged.length === 0) {
-    return null;
-  }
-
-  return merged.sort((left, right) => {
+  })).sort((left, right) => {
     const timestampDifference = Date.parse(left.mergedAt!) - Date.parse(right.mergedAt!);
     return timestampDifference || left.number - right.number || left.id - right.id;
-  })[0] ?? null;
+  });
+
+  const registered = merged.find(
+    (pullRequest) => ownsPullRequest(registeredNameWithOwner, pullRequest.repositoryNameWithOwner),
+  );
+  if (registered !== undefined) {
+    return { kind: "SELECTED", pullRequest: registered };
+  }
+  const foreign = merged[0];
+  return foreign === undefined ? noClosingPullRequest : { kind: "CROSS_REPOSITORY", pullRequest: foreign };
+}
+
+function crossRepositoryReason(
+  pullRequest: AuthoritativeClosingPullRequest,
+  registeredNameWithOwner: string,
+): string {
+  return `Closing pull request ${pullRequest.number} belongs to ${pullRequest.repositoryNameWithOwner}, `
+    + `not the registered repository ${registeredNameWithOwner}.`;
+}
+
+/** GitHub owner and repository names are compared without regard to case. */
+function ownsPullRequest(registeredNameWithOwner: string, pullRequestNameWithOwner: string): boolean {
+  return registeredNameWithOwner.toLowerCase() === pullRequestNameWithOwner.toLowerCase();
 }
 
 function resolveSettledDifficulty(
