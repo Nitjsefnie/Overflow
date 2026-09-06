@@ -5,7 +5,6 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { RECONCILIATION_COORDINATION_POOL_MAX } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 
-const coordinationFailure = "Unable to coordinate repository reconciliation.";
 const queuedRepositoryIds = ["queued-a", "queued-b", "queued-c", "queued-d"] as const;
 
 type QueuedOutcome = { id: string; ran: boolean; outcome: string };
@@ -89,8 +88,9 @@ describe("a coordination connection that dies while reconciliations are queued b
     expect(victim?.pid).toEqual(expect.any(Number));
     await observer!`select pg_terminate_backend(${victim!.pid})`;
 
-    // The nine surviving holders keep their connections, so the queued four are served by the
-    // pool's replacement for the connection that died plus the holders released below.
+    // The nine surviving holders keep their connections all the way through this await, so the
+    // single replacement for the connection that died serves the queued four on its own: each
+    // one's callback returns at once and its release hands the connection to the next.
     const outcomes = await Promise.all(queued);
     releaseHolders();
     await Promise.all(holders);
@@ -98,6 +98,5 @@ describe("a coordination connection that dies while reconciliations are queued b
     expect(outcomes).toEqual(
       queuedRepositoryIds.map((id) => ({ id, ran: true, outcome: "resolved" })),
     );
-    expect(outcomes.map(({ outcome }) => outcome)).not.toContain(`rejected: ${coordinationFailure}`);
   });
 });
