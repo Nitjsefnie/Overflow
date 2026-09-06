@@ -31,6 +31,63 @@ afterEach(() => {
 });
 
 describe("repository registration form", () => {
+  it.each([
+    ["EVIDENCE_FOUND", { claimPath: "EVIDENCE_FOUND" }],
+    ["missing claimPath", {}],
+  ])("keeps the existing success message for %s", async (_name, claimPathFields) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      initialImportScheduled: true,
+      ...claimPathFields,
+    }, { status: 201 })));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "success");
+    expect(feedback.textContent).toBe(
+      "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
+    );
+  });
+
+  it.each([
+    [true, "co-op/harbour is registered. Its existing issues are being imported and will appear shortly."],
+    [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."],
+  ])("warns about NO_EVIDENCE_FOUND with initialImportScheduled: %s", async (initialImportScheduled, importMessage) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      initialImportScheduled,
+      claimPath: "NO_EVIDENCE_FOUND",
+    }, { status: 201 })));
+    const { container } = render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "warning");
+    expect(container.querySelector(".feedback.success")).toBeNull();
+    expect(feedback.textContent).toBe(
+      `${importMessage} No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example.`,
+    );
+  });
+
+  it("explains NOT_CHECKED while keeping registration successful", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      claimPath: "NOT_CHECKED",
+    }, { status: 201 })));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "success");
+    expect(feedback.textContent).toBe(
+      "co-op/harbour is registered. The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed.",
+    );
+  });
+
   it.each([403, 429, 502])("shows an HTTP %s API response's error message verbatim", async (status) => {
     const message = "GitHub rate-limited the request to create the repository webhook (HTTP 403). Retry after 60 seconds. Please retry registration later.";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
