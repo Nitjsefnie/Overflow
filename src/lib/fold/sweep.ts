@@ -316,10 +316,10 @@ function armSweepInterval(
  * The message names the residual state and not just the failure, because
  * containing this one is what leaves a process alive and permanently not
  * sweeping: the line is all an operator gets, so it has to say that a restart is
- * what brings the sweep back. It overstates on one path — a scheduler that arms
- * the tick and then rejects, awaiting a registry write after setInterval say,
- * gets the same line while the interval really is armed. Every synchronous
- * failure, and a scheduler that rejects before arming, it describes exactly.
+ * what brings the sweep back. Every failure before arming it describes exactly.
+ * It overstates on a scheduler that arms the tick and then fails — throwing
+ * after setInterval, or rejecting on a registry write that follows it — which
+ * gets the same line while the interval really is armed.
  *
  * The line survives a reason that refuses to be printed, for the reason
  * logRepositoryFailure gives. There is a reason to print only when something
