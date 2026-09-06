@@ -180,8 +180,9 @@ describe("explicit repository registration", () => {
       code: "CONFLICT",
       message:
         "The GitHub webhook created for the submitted repository collided with one a different "
-        + "registration already records. The submitted repository is not registered. GitHub "
-        + "assigns a new webhook id on each attempt, so registering again is the first thing to try.",
+        + "registration already records. The submitted repository is not registered. Registering "
+        + "again requests a new webhook from GitHub, so retry once before treating this as stored "
+        + "state that has to be resolved.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
