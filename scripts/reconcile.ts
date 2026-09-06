@@ -16,21 +16,20 @@ export async function runReconciliationCli(
 ): Promise<void>;
 export async function runReconciliationCli(
   argumentsList: readonly string[] = process.argv.slice(2),
-  dependencies: ReconcileCliDependencies = productionDependencies(),
+  dependencies?: ReconcileCliDependencies,
 ): Promise<void> {
-  const repositoryIds = await repositoryIdsForArguments(argumentsList, dependencies.store);
+  const ownerName = parseArguments(argumentsList);
+  dependencies ??= productionDependencies();
+  const repositoryIds = await repositoryIdsForOwnerName(ownerName, dependencies.store);
   for (const repositoryId of repositoryIds) {
     const summary = await dependencies.reconcile(repositoryId);
     dependencies.write(JSON.stringify(summary));
   }
 }
 
-async function repositoryIdsForArguments(
-  argumentsList: readonly string[],
-  store: ReconcileCliDependencies["store"],
-): Promise<string[]> {
+function parseArguments(argumentsList: readonly string[]): string | null {
   if (argumentsList.length === 0) {
-    return store.listActiveRepositoryIds();
+    return null;
   }
   if (
     argumentsList.length !== 2 ||
@@ -40,7 +39,17 @@ async function repositoryIdsForArguments(
     throw new Error("Usage: pnpm reconcile [--repository owner/name]");
   }
 
-  const repository = await store.findRepositoryByOwnerName(argumentsList[1]!);
+  return argumentsList[1]!;
+}
+
+async function repositoryIdsForOwnerName(
+  ownerName: string | null,
+  store: ReconcileCliDependencies["store"],
+): Promise<string[]> {
+  if (ownerName === null) {
+    return store.listActiveRepositoryIds();
+  }
+  const repository = await store.findRepositoryByOwnerName(ownerName);
   if (repository === null) {
     throw new Error("Registered active repository was not found.");
   }
