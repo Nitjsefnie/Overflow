@@ -332,6 +332,7 @@ describe("POST /api/repositories", () => {
         githubWebhookId: 501,
       },
       initialImportScheduled: true,
+      claimPath: "NO_EVIDENCE_FOUND",
     });
   });
 
@@ -504,6 +505,7 @@ describe("Overflow token registration", () => {
         githubWebhookId: 501,
       },
       initialImportScheduled: true,
+      claimPath: "NO_EVIDENCE_FOUND",
     });
     expect(JSON.stringify(body)).not.toContain(credential);
   });
@@ -838,6 +840,7 @@ function successfulDependencies(
         };
       },
       async ensureDifficultyLabels() {},
+      async listWorkflowFiles() { return []; },
       async createWebhook() {
         if (options.webhookFailure) {
           throw new Error("upstream access-token-should-not-leak");

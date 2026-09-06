@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubApiError } from "@/lib/github/errors";
+import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
   RegisteredRepository,
@@ -54,6 +55,7 @@ describe("explicit repository registration", () => {
       "getRepository:octo/overflow",
       "ensureDifficultyLabels:octo/overflow",
       "createWebhook:octo/overflow",
+      "listWorkflowFiles:octo/overflow",
     ]);
     expect(harness.githubCalls.some((call) => call.includes("listAccessibleRepositories"))).toBe(false);
   });
@@ -68,6 +70,7 @@ describe("explicit repository registration", () => {
       "getRepository:octo/overflow",
       "ensureDifficultyLabels:octo/overflow",
       "createWebhook:octo/overflow",
+      "listWorkflowFiles:octo/overflow",
     ]);
   });
 
@@ -84,6 +87,7 @@ describe("explicit repository registration", () => {
         "getRepository:octo/overflow",
         "ensureDifficultyLabels:octo/overflow",
         "createWebhook:octo/overflow",
+        "listWorkflowFiles:octo/overflow",
       ]);
       expect(harness.createdRepositories).toHaveLength(1);
     },
@@ -415,6 +419,56 @@ describe("explicit repository registration", () => {
       initialImportScheduled: false,
     });
   });
+
+  it.each<{ description: string; workflows: ClaimPathEvidence[]; expected: string }>([
+    {
+      description: "a workflow reacting to comments and referencing assignment",
+      workflows: [{
+        path: ".github/workflows/claim.yml",
+        content: "on: issue_comment\njobs:\n  claim:\n    steps:\n      - run: gh api repos/octo/overflow/issues/1/assignees -f assignees[]=contributor\n",
+      }],
+      expected: "EVIDENCE_FOUND",
+    },
+    {
+      description: "a workflow without assignment evidence",
+      workflows: [{ path: ".github/workflows/ci.yml", content: "on: push\njobs: {}\n" }],
+      expected: "NO_EVIDENCE_FOUND",
+    },
+    { description: "an empty workflow list", workflows: [], expected: "NO_EVIDENCE_FOUND" },
+  ])("reports claim-path evidence for $description after persistence", async ({ workflows, expected }) => {
+    const harness = createHarness({ workflows });
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      id: "registered-repository-id",
+      claimPath: expected,
+    });
+    expect(harness.workflowReadRepositoryCounts).toEqual([1]);
+    expect(harness.githubCalls.at(-1)).toBe("listWorkflowFiles:octo/overflow");
+  });
+
+  it.each(["gateway", "assessment"] as const)(
+    "keeps a successful registration and reports NOT_CHECKED when the %s throws",
+    async (failure) => {
+      const workflows: ClaimPathEvidence[] = [{
+        path: ".github/workflows/claim.yml",
+        get content(): string {
+          throw new Error("workflow assessment failed");
+        },
+      }];
+      const harness = createHarness({ workflows, workflowFailure: failure === "gateway" });
+
+      await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+        id: "registered-repository-id",
+        githubWebhookId: 501,
+        claimPath: "NOT_CHECKED",
+        initialImportScheduled: true,
+      });
+      expect(harness.createdRepositories).toHaveLength(1);
+      expect(harness.workflowReadRepositoryCounts).toEqual([1]);
+      expect(harness.deletedWebhookIds).toEqual([]);
+      expect(harness.scheduledRepositoryIds).toEqual(["registered-repository-id"]);
+    },
+  );
 });
 
 type HarnessOptions = {
@@ -434,6 +488,8 @@ type HarnessOptions = {
   storeRaisesRegistrationError?: boolean;
   scheduleFailure?: boolean;
   withoutScheduleInitialImport?: boolean;
+  workflows?: ClaimPathEvidence[];
+  workflowFailure?: boolean;
 };
 
 function createHarness(options: HarnessOptions = {}) {
@@ -442,6 +498,7 @@ function createHarness(options: HarnessOptions = {}) {
   const deletedWebhookIds: number[] = [];
   const duplicateLookupIds: number[] = [];
   const scheduledRepositoryIds: string[] = [];
+  const workflowReadRepositoryCounts: number[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const actor = {
@@ -480,6 +537,14 @@ function createHarness(options: HarnessOptions = {}) {
       },
       async deleteWebhook(_repository, webhookId) {
         deletedWebhookIds.push(webhookId);
+      },
+      async listWorkflowFiles(repository) {
+        githubCalls.push(`listWorkflowFiles:${repository.owner}/${repository.name}`);
+        workflowReadRepositoryCounts.push(createdRepositories.length);
+        if (options.workflowFailure) {
+          throw new Error("workflow read failed");
+        }
+        return options.workflows ?? [];
       },
     },
     store: {
@@ -536,6 +601,7 @@ function createHarness(options: HarnessOptions = {}) {
     duplicateLookupIds,
     createdRepositories,
     scheduledRepositoryIds,
+    workflowReadRepositoryCounts,
   };
 }
 

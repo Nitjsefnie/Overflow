@@ -179,6 +179,7 @@ async function surfacedFailure(
         };
       },
       async ensureDifficultyLabels() {},
+      async listWorkflowFiles() { return []; },
       async createWebhook() {
         return { id: 501 };
       },

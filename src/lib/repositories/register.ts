@@ -1,5 +1,6 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
 import { GitHubApiError } from "@/lib/github/errors";
+import { assessClaimPath, type ClaimPathEvidence } from "@/lib/domain/claim-path";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -42,6 +43,7 @@ export type RepositoryRegistrationGateway = {
     configuration: GitHubWebhookConfiguration,
   ): Promise<GitHubWebhook>;
   deleteWebhook(repository: GitHubRepositoryReference, webhookId: number): Promise<void>;
+  listWorkflowFiles(repository: GitHubRepositoryReference): Promise<ClaimPathEvidence[]>;
 };
 
 export type RepositoryRegistrationStore = {
@@ -59,6 +61,7 @@ export type RepositoryRegistrationDependencies = {
 
 export type RepositoryRegistrationResult = RegisteredRepository & {
   initialImportScheduled: boolean;
+  claimPath: "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND" | "NOT_CHECKED";
 };
 
 export class RepositoryRegistrationError extends Error {
@@ -225,7 +228,20 @@ export async function registerRepository(
   // never deliver it because it was created after that work. So schedule that import
   // durably here rather than holding the response open for a full crawl, and report a
   // failure to schedule it to the sponsor rather than undoing a registration that stands.
-  return { ...created, initialImportScheduled: await scheduleInitialImport(dependencies, created.id) };
+  const initialImportScheduled = await scheduleInitialImport(dependencies, created.id);
+
+  // Report the claim-path verdict after registration rather than enforce it: workflow
+  // text supplies evidence, not proof, and may carry a claim path this check cannot
+  // recognise. Refusing registration on that basis would block a legitimate one.
+  // A failed check likewise cannot undo or fail the registration that already stands.
+  let claimPath: RepositoryRegistrationResult["claimPath"];
+  try {
+    claimPath = assessClaimPath(await dependencies.github.listWorkflowFiles(submittedRepository));
+  } catch {
+    claimPath = "NOT_CHECKED";
+  }
+
+  return { ...created, initialImportScheduled, claimPath };
 }
 
 function githubSetupError(
