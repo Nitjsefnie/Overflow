@@ -43,6 +43,7 @@ export type ReconciliationWorkerSchedule = {
   drain(): Promise<unknown>;
   schedule?(callback: () => void, everyMs: number): void;
   intervalMs?: number;
+  onFailure?(error: unknown): void;
 };
 
 export type ReconciliationJobOutcome =
@@ -121,6 +122,9 @@ export async function drainReconciliationJobs(
   const outcomes: ReconciliationJobOutcome[] = [];
 
   while (outcomes.length < maxJobs) {
+    // A store call that throws ends the drain here rather than being caught per
+    // job: the store is the one dependency every remaining job also needs, so
+    // the next poll retrying the whole drain is the useful response.
     const outcome = await runNextReconciliationJob(dependencies);
     if (outcome === "IDLE") {
       break;
@@ -159,6 +163,13 @@ async function deferralTime(
  * A tick arriving while the previous drain is still running is dropped rather
  * than queued: the queue is still there, and a second concurrent drain would
  * only race the first one for the same jobs.
+ *
+ * A drain that rejects — the store itself being briefly unreachable is the
+ * ordinary case — is reported and swallowed. Node throws on an unhandled
+ * rejection, so letting one escape would take the whole server down over a
+ * transient database failure, which is far worse than the stale repository this
+ * worker exists to repair. The running flag is cleared either way, so the next
+ * tick drains again rather than finding the worker wedged.
  */
 export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule): void {
   const everyMs = schedule.intervalMs ?? RECONCILIATION_WORKER_POLL_INTERVAL_MS;
@@ -170,9 +181,15 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
       return;
     }
     running = true;
-    void schedule.drain().finally(() => {
-      running = false;
-    });
+    void (async () => {
+      try {
+        await schedule.drain();
+      } catch (error) {
+        schedule.onFailure?.(error);
+      } finally {
+        running = false;
+      }
+    })();
   };
 
   drain();

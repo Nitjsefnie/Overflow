@@ -213,7 +213,7 @@ describe("draining the reconciliation queue", () => {
   });
 
   it("stops at the job bound it was given", async () => {
-    const { store, calls } = createFakeStore({ jobs: endlessJobs() });
+    const { store, calls } = createFakeStore({ jobs: moreJobsThanAnyDrainTakes() });
 
     await expect(
       drainReconciliationJobs(
@@ -226,7 +226,7 @@ describe("draining the reconciliation queue", () => {
   });
 
   it("stops after fifty jobs when no bound is given", async () => {
-    const { store, calls } = createFakeStore({ jobs: endlessJobs() });
+    const { store, calls } = createFakeStore({ jobs: moreJobsThanAnyDrainTakes() });
 
     await expect(
       drainReconciliationJobs({ store, reconcile: async () => {} }),
@@ -299,6 +299,81 @@ describe("the scheduled reconciliation worker", () => {
     expect(timer.intervalMs).toBe(250);
   });
 
+  it("reports a drain that rejects instead of letting the rejection escape", async () => {
+    const rejections = watchUnhandledRejections();
+    try {
+      const timer = createTimer();
+      const failure = new Error("PostgreSQL is unreachable");
+      const reported: unknown[] = [];
+
+      startReconciliationWorker({
+        drain: async () => {
+          throw failure;
+        },
+        schedule: timer.schedule,
+        onFailure: (error) => {
+          reported.push(error);
+        },
+      });
+      await timer.settle();
+      await timer.settle();
+
+      expect(reported).toEqual([failure]);
+      expect(rejections.recorded).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
+  });
+
+  it("survives a drain that rejects with no failure reporter attached", async () => {
+    const rejections = watchUnhandledRejections();
+    try {
+      const timer = createTimer();
+
+      startReconciliationWorker({
+        drain: async () => {
+          throw new Error("PostgreSQL is unreachable");
+        },
+        schedule: timer.schedule,
+      });
+      await timer.settle();
+      await timer.settle();
+
+      expect(rejections.recorded).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
+  });
+
+  it("drains again on the next tick after a drain rejected", async () => {
+    const rejections = watchUnhandledRejections();
+    try {
+      const timer = createTimer();
+      const drains: string[] = [];
+      let failing = true;
+
+      startReconciliationWorker({
+        drain: async () => {
+          if (failing) {
+            failing = false;
+            drains.push("rejected");
+            throw new Error("PostgreSQL is unreachable");
+          }
+          drains.push("drained");
+        },
+        schedule: timer.schedule,
+        onFailure: () => {},
+      });
+      await timer.settle();
+      expect(drains).toEqual(["rejected"]);
+
+      await timer.tick();
+      expect(drains).toEqual(["rejected", "drained"]);
+    } finally {
+      rejections.stop();
+    }
+  });
+
   it("polls every five seconds, because a webhook now waits out this poll", () => {
     expect(RECONCILIATION_WORKER_POLL_INTERVAL_MS).toBe(5_000);
   });
@@ -319,7 +394,7 @@ function job(overrides: Partial<ClaimedReconciliationJob> = {}): ClaimedReconcil
   };
 }
 
-function endlessJobs(): ClaimedReconciliationJob[] {
+function moreJobsThanAnyDrainTakes(): ClaimedReconciliationJob[] {
   return Array.from({ length: 200 }, (_value, index) =>
     job({ id: `job-${index + 1}`, repositoryId: `repo-${index + 1}` }),
   );
@@ -382,6 +457,28 @@ function createTimer() {
     },
     async settle() {
       await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+  };
+}
+
+/**
+ * Records the rejections Node would otherwise have thrown on.
+ *
+ * Node's default for an unhandled rejection is to throw, which would take the
+ * server down, so the tests below need to see the ones that got away rather
+ * than only the ones the worker reported.
+ */
+function watchUnhandledRejections() {
+  const recorded: unknown[] = [];
+  const listener = (reason: unknown) => {
+    recorded.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+
+  return {
+    recorded,
+    stop() {
+      process.off("unhandledRejection", listener);
     },
   };
 }
