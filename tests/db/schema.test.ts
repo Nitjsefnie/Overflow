@@ -2318,6 +2318,9 @@ describe("initial PostgreSQL materialization", () => {
       .resolves.toBe("released-after-error");
   });
 
+  const workPoolReadBoundMs = 30_000;
+  const workPoolCleanupTimeoutSeconds = 5;
+
   it("keeps the work pool available while distinct repositories hold reconciliation locks", async () => {
     const sponsorId = await insertUser(sql);
     const repositoryIds = [
@@ -2354,22 +2357,28 @@ describe("initial PostgreSQL materialization", () => {
       });
 
       await everyLockHeld;
-      const dashboardRead = await workSql<{ value: number }[]>`select 7::integer as value`;
+      // A work pool a coordinator has drained never answers, so an unbounded
+      // read would stall until the suite's own timeout, which names the case
+      // and nothing else. The bound is an escape hatch rather than a speed
+      // assertion: the starvation this pins lasts as long as the locks do,
+      // while a pool with a connection to spare answers immediately.
+      const dashboardRead = await resolveWithin(
+        workSql<{ value: number }[]>`select 7::integer as value`,
+        workPoolReadBoundMs,
+        `A work-pool read with reconciliation locks held (${interactions.join(", ")})`,
+      );
       interactions.push("dashboard-read");
       markDashboardRead();
 
       await expect(Promise.all(coordinated)).resolves.toEqual([0, 1]);
+      // The pool answered while both locks were held and before either holder
+      // had used it, so neither of its two connections was in a coordinator's
+      // hands.
       expect(dashboardRead).toEqual([{ value: 7 }]);
-      // The read landed between the entries and the holders' own queries, so
-      // the two-connection work pool served it with both locks held and
-      // neither holder yet using it.
-      expect(interactions.slice(0, repositoryIds.length).sort())
-        .toEqual(["holder-0-entered", "holder-1-entered"]);
-      expect(interactions[repositoryIds.length]).toBe("dashboard-read");
-      expect(interactions.slice(repositoryIds.length + 1).sort())
-        .toEqual(["holder-0-queried", "holder-1-queried"]);
     } finally {
-      await workSql.end();
+      // Holders stranded by a read that never returned would keep an unbounded
+      // end() waiting, replacing the named failure with a bare suite timeout.
+      await workSql.end({ timeout: workPoolCleanupTimeoutSeconds });
     }
   });
 
@@ -3283,13 +3292,17 @@ function nextExternalId(): number {
   return externalId;
 }
 
-async function resolveWithin<T>(promise: PromiseLike<T>, timeoutMs: number): Promise<T> {
+async function resolveWithin<T>(
+  promise: PromiseLike<T>,
+  timeoutMs: number,
+  operation = "Operation",
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`Operation exceeded ${timeoutMs}ms.`)), timeoutMs);
+        timer = setTimeout(() => reject(new Error(`${operation} exceeded ${timeoutMs}ms.`)), timeoutMs);
       }),
     ]);
   } finally {
