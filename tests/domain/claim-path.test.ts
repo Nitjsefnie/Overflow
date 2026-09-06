@@ -225,6 +225,38 @@ describe("claim path assessment", () => {
 
 describe("known limits of textual evidence, not guaranteed runtime assignment", () => {
   it.each([
+    ["an Actions fallback || separator inside the quoted endpoint", 'gh api -X POST "repos/$REPO/issues/${{ github.event.issue.number || inputs.issue_number }}/assignees" -f "assignees[]=$ACTOR"'],
+    ["a jq pipe separator inside the quoted endpoint command substitution", 'gh api -X POST "repos/$REPO/issues/$(jq -r \'.issue | .number\' "$GITHUB_EVENT_PATH")/assignees" -f "assignees[]=$ACTOR"'],
+    ["a semicolon separator inside the quoted endpoint required-variable expansion", 'gh api -X POST "repos/$REPO/issues/${ISSUE:?Missing issue number; refusing to assign}/assignees" -f "assignees[]=$ACTOR"'],
+  ])("deliberately reports NO_EVIDENCE_FOUND for %s", (_limit, assignment) => {
+    const content = [
+      "name: Claim an issue",
+      "on:",
+      "  issue_comment:",
+      "    types: [created]",
+      "permissions:",
+      "  issues: write",
+      "jobs:",
+      "  claim:",
+      "    if: github.event.comment.body == '/claim' && !github.event.issue.pull_request",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Assign the commenter",
+      "        env:",
+      "          GH_TOKEN: ${{ github.token }}",
+      "          REPO: ${{ github.repository }}",
+      "          ISSUE: ${{ github.event.issue.number }}",
+      "          ACTOR: ${{ github.event.comment.user.login }}",
+      "        run: |",
+      "          set -euo pipefail",
+      `          ${assignment}`,
+      "",
+    ].join("\n");
+
+    expect(assessClaimPath([{ path: ".github/workflows/claim.yml", content }])).toBe("NO_EVIDENCE_FOUND");
+  });
+
+  it.each([
     ["a read-only GET on the assignees collection", 'gh api -X GET "repos/acme/demo/issues/42/assignees"'],
     ["a commented-out assignment command", `# ${restAssignment}`],
     ["a POST assigning a fixed maintainer instead of the commenter", 'gh api -X POST "repos/acme/demo/issues/42/assignees" -f "assignees[]=maintainer"'],
