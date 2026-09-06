@@ -11,7 +11,7 @@ export type RepositoryFormValues = {
   actualLabels: ActualDifficultyLabel[];
 };
 
-type Feedback = { kind: "error" | "success"; message: string } | null;
+type Feedback = { kind: "error" | "success" | "warning"; message: string } | null;
 
 type OpeningLabelRow = OpeningDifficultyLabel & { rowId: string };
 
@@ -74,7 +74,10 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
       }
 
       const ownerName = body?.repository?.ownerName ?? values.repositoryUrl.trim();
-      setFeedback({ kind: "success", message: registrationMessage(ownerName, body?.initialImportScheduled) });
+      setFeedback({
+        kind: body?.claimPath === "NO_EVIDENCE_FOUND" ? "warning" : "success",
+        message: registrationMessage(ownerName, body?.initialImportScheduled, body?.claimPath),
+      });
     } catch {
       setFeedback({
         kind: "error",
@@ -200,6 +203,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 
       {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
       {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+      {feedback?.kind === "warning" ? <p className="feedback warning" role="status">{feedback.message}</p> : null}
       <button className="action-button" type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Registering…" : "Register repository"}
       </button>
@@ -210,6 +214,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 type RegistrationResponse = {
   repository?: { ownerName?: string };
   initialImportScheduled?: boolean;
+  claimPath?: "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND" | "NOT_CHECKED";
   error?: { message?: string };
 };
 
@@ -219,14 +224,25 @@ type RegistrationResponse = {
 // and only the periodic repair sweep will pick the repository up. Either way the
 // registration stands, so the sponsor is told which happened rather than being left
 // to wonder why an empty issue list is empty.
-function registrationMessage(ownerName: string, initialImportScheduled: boolean | undefined): string {
+function registrationMessage(
+  ownerName: string,
+  initialImportScheduled: boolean | undefined,
+  claimPath: RegistrationResponse["claimPath"],
+): string {
+  let message = `${ownerName} is registered.`;
   if (initialImportScheduled === true) {
-    return `${ownerName} is registered. Its existing issues are being imported and will appear shortly.`;
+    message = `${ownerName} is registered. Its existing issues are being imported and will appear shortly.`;
+  } else if (initialImportScheduled === false) {
+    message = `${ownerName} is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.`;
   }
-  if (initialImportScheduled === false) {
-    return `${ownerName} is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.`;
+
+  if (claimPath === "NO_EVIDENCE_FOUND") {
+    return `${message} No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example.`;
   }
-  return `${ownerName} is registered.`;
+  if (claimPath === "NOT_CHECKED") {
+    return `${message} The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed.`;
+  }
+  return message;
 }
 
 function createFormState(values: RepositoryFormValues): RepositoryFormState {
