@@ -369,10 +369,12 @@ describe("calibration cohort preview", () => {
 
 // A sample-window bound selects which merged pairs enter the calibration cohort, so a bound
 // that names a wall-clock reading rather than an instant makes the audit's evidence depend
-// on where the server happens to run. The service refuses those rather than guessing a zone.
-describe("sample-window bounds that do not denote exactly one instant", () => {
+// on where the server happens to run. The service refuses those rather than guessing a zone,
+// and refuses the spellings outside its accepted subset alongside them, so that one accepted
+// subset is the whole rule.
+describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
   const offsetRequirement = /must be an ISO 8601 timestamp with an explicit UTC offset\./;
-  const ambiguousBounds = [
+  const refusedBounds = [
     ["an offset-less date-time", "2026-01-01T00:00"],
     ["an offset-less date-time carrying milliseconds", "2026-01-01T00:00:00.000"],
     ["a date-only bound", "2026-01-01"],
@@ -380,6 +382,11 @@ describe("sample-window bounds that do not denote exactly one instant", () => {
     ["an unparseable bound", "the first of January"],
     ["a lowercase UTC designator", "2026-01-01T00:00:00.000z"],
     ["a numeric offset written without its colon", "2026-01-01T00:00+0200"],
+    // Unambiguous, but outside the subset by decision rather than by accident: `new Date`
+    // reads a comma separator as NaN, and admitting an end-of-day hour would mean an
+    // alternation that still has to keep 24:30 out for one spelling nothing emits.
+    ["a comma decimal separator", "2026-01-01T00:00:00,5Z"],
+    ["an end-of-day hour", "2026-01-01T24:00:00Z"],
   ] as const;
 
   const originalTimeZone = process.env.TZ;
@@ -391,7 +398,7 @@ describe("sample-window bounds that do not denote exactly one instant", () => {
     }
   });
 
-  it.each(ambiguousBounds)("refuses %s as an audit's sample start", async (_label, bound) => {
+  it.each(refusedBounds)("refuses %s as an audit's sample start", async (_label, bound) => {
     const store = eligibleStore();
 
     await expect(
@@ -409,7 +416,7 @@ describe("sample-window bounds that do not denote exactly one instant", () => {
 
   // The start sits a year earlier so that every bound below reads as a window that ends after
   // it starts under any timezone, leaving the offset rule as the only thing that can refuse it.
-  it.each(ambiguousBounds)("refuses %s as an audit's sample end", async (_label, bound) => {
+  it.each(refusedBounds)("refuses %s as an audit's sample end", async (_label, bound) => {
     const store = eligibleStore();
 
     await expect(
@@ -428,7 +435,7 @@ describe("sample-window bounds that do not denote exactly one instant", () => {
 
   // previewCalibrationCohort normalizes the same window through its own entry point, so a
   // guard proved only on openAccountAudit would leave the preview reading a different cohort.
-  it.each(ambiguousBounds)("refuses %s in a cohort preview", async (_label, bound) => {
+  it.each(refusedBounds)("refuses %s in a cohort preview", async (_label, bound) => {
     const store = eligibleStore();
 
     await expect(
@@ -475,6 +482,14 @@ describe("sample-window bounds that do not denote exactly one instant", () => {
     ["a negative numeric offset", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.000Z"],
     ["a negative zero offset", "2026-01-01T00:00-00:00", "2026-01-01T00:00:00.000Z"],
     ["a leap day in a leap year", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
+    // Producers other than `toISOString` write a different number of fractional digits:
+    // Python's `datetime.isoformat` writes six, Go's RFC3339Nano writes as many as it needs,
+    // and a hand-written bound may carry one. Each names exactly one instant, so each is
+    // accepted; `Date` truncates below milliseconds, which loses precision but not meaning.
+    ["a single fractional digit", "2026-01-01T00:00:00.5Z", "2026-01-01T00:00:00.500Z"],
+    ["microsecond precision", "2026-01-01T00:00:00.123456Z", "2026-01-01T00:00:00.123Z"],
+    ["nanosecond precision", "2026-01-01T00:00:00.123456789Z", "2026-01-01T00:00:00.123Z"],
+    ["a fractional second on an offset-bearing bound", "2026-01-01T02:00:00.5+02:00", "2026-01-01T00:00:00.500Z"],
   ] as const)("accepts %s and stores the instant it names", async (_label, bound, instant) => {
     const store = eligibleStore();
 
