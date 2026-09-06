@@ -2329,9 +2329,10 @@ describe("initial PostgreSQL materialization", () => {
     const workSql = postgres(process.env.DATABASE_URL!, { max: 2 });
     const interactions: string[] = [];
     let holders = 0;
-    let maximumConcurrentHolders = 0;
     let markEveryLockHeld!: () => void;
     const everyLockHeld = new Promise<void>((resolve) => { markEveryLockHeld = resolve; });
+    let markDashboardRead!: () => void;
+    const dashboardReadDone = new Promise<void>((resolve) => { markDashboardRead = resolve; });
 
     try {
       const coordinated = repositoryIds.map((repositoryId, index) => {
@@ -2339,29 +2340,33 @@ describe("initial PostgreSQL materialization", () => {
         return store.withRepositoryReconciliation(repositoryId, async () => {
           interactions.push(`holder-${index}-entered`);
           holders += 1;
-          maximumConcurrentHolders = Math.max(maximumConcurrentHolders, holders);
           if (holders === repositoryIds.length) {
             markEveryLockHeld();
           }
           await everyLockHeld;
+          // Every lock is held, and no holder touches the work pool until the
+          // ordinary read has been served by it.
+          await dashboardReadDone;
           const [row] = await workSql<{ value: number }[]>`select ${index}::integer as value`;
           interactions.push(`holder-${index}-queried`);
-          holders -= 1;
           return row.value;
         });
       });
 
       await everyLockHeld;
-      const dashboardRead = workSql<{ value: number }[]>`select 7::integer as value`;
+      const dashboardRead = await workSql<{ value: number }[]>`select 7::integer as value`;
+      interactions.push("dashboard-read");
+      markDashboardRead();
 
       await expect(Promise.all(coordinated)).resolves.toEqual([0, 1]);
-      await expect(dashboardRead).resolves.toEqual([{ value: 7 }]);
-      expect(maximumConcurrentHolders).toBe(repositoryIds.length);
-      // Both critical sections were entered before either could query, so the
-      // locks were held concurrently rather than one after the other.
+      expect(dashboardRead).toEqual([{ value: 7 }]);
+      // The read landed between the entries and the holders' own queries, so
+      // the two-connection work pool served it with both locks held and
+      // neither holder yet using it.
       expect(interactions.slice(0, repositoryIds.length).sort())
         .toEqual(["holder-0-entered", "holder-1-entered"]);
-      expect(interactions.slice(repositoryIds.length).sort())
+      expect(interactions[repositoryIds.length]).toBe("dashboard-read");
+      expect(interactions.slice(repositoryIds.length + 1).sort())
         .toEqual(["holder-0-queried", "holder-1-queried"]);
     } finally {
       await workSql.end();
