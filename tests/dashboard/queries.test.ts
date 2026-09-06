@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getCalibrationComparison,
   getDashboard,
+  getSelfWorkCalibrationProof,
   getSettlementProof,
   listAuditCandidates,
   listEligibleIssues,
@@ -9,8 +10,10 @@ import {
   listModerationRepositories,
   listOpenAudits,
   listRecalibratingAccounts,
+  listSelfWorkCalibrations,
   listSettlementHistory,
   listUnwritableClosures,
+  SELF_WORK_CALIBRATION_HISTORY_LIMIT,
   SETTLEMENT_HISTORY_LIMIT,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
@@ -937,5 +940,131 @@ describe("audit targeting", () => {
     expect(query).toMatch(/where active = true/i);
     expect(query).toMatch(/order by owner_name, id/i);
     expect(query).not.toMatch(/encrypted_oauth_token|github_webhook_id|webhook_secret|credential/i);
+  });
+});
+
+describe("self-work calibrations", () => {
+  const calibrationRow = {
+    id: "calibration-1",
+    repository_name: "co-op/harbour",
+    opening_name: "Offer band",
+    actual_name: "Delivered band",
+    issue_number: "17",
+    issue_title: "Repair the tide gate",
+    issue_url: "https://github.com/co-op/harbour/issues/17",
+    opening_label: "shoal",
+    actual_label: "landed/4",
+    pull_request_number: "18",
+    pull_request_title: "Repair the gate myself",
+    pull_request_url: "https://github.com/co-op/harbour/pull/18",
+    merge_commit_oid: "0123456789abcdef0123456789abcdef01234567",
+    merged_at: "2026-09-05T11:00:00.000Z",
+    proof_sha256: proof,
+    opening_comparison_points: "7",
+    actual_points: "4",
+  };
+
+  it("withholds a calibration that belongs to another account", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    const calibration = await getSelfWorkCalibrationProof("member-1", "calibration-1", { sql });
+
+    expect(calibration).toBeNull();
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/where self_work_calibrations\.id = \?\s+and self_work_calibrations\.user_id = \?/i);
+    expect(captures[0]?.values).toEqual(["calibration-1", "member-1"]);
+  });
+
+  it("returns the owner's calibration evidence with the closing-link proof", async () => {
+    const { sql } = sqlHarness([[calibrationRow]]);
+
+    const calibration = await getSelfWorkCalibrationProof("member-1", "calibration-1", { sql });
+
+    expect(calibration).toEqual({
+      id: "calibration-1",
+      repositoryName: "co-op/harbour",
+      issueNumber: 17,
+      issueTitle: "Repair the tide gate",
+      issueUrl: "https://github.com/co-op/harbour/issues/17",
+      pullRequestNumber: 18,
+      pullRequestTitle: "Repair the gate myself",
+      pullRequestUrl: "https://github.com/co-op/harbour/pull/18",
+      proofSha256: proof,
+      openingComparisonPoints: 7,
+      actualPoints: 4,
+      openingName: "Offer band",
+      actualName: "Delivered band",
+      openingLabel: "shoal",
+      actualLabel: "landed/4",
+      mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+      mergedAt: "2026-09-05T11:00:00.000Z",
+    });
+  });
+
+  it("keeps the calibration whose settled evidence was rejected, with no actual figure", async () => {
+    const { sql } = sqlHarness([[
+      { ...calibrationRow, actual_label: null, actual_points: null, proof_sha256: null },
+    ]]);
+
+    const calibration = await getSelfWorkCalibrationProof("member-1", "calibration-1", { sql });
+
+    expect(calibration).toMatchObject({
+      openingComparisonPoints: 7,
+      actualLabel: null,
+      actualPoints: null,
+      proofSha256: null,
+    });
+  });
+
+  it("lists the account's calibrations newest merge first, capped at a stated depth", async () => {
+    const { sql, captures } = sqlHarness([[
+      {
+        id: "calibration-1",
+        repository_name: "co-op/harbour",
+        issue_number: "17",
+        issue_title: "Repair the tide gate",
+        opening_comparison_points: "7",
+        actual_points: null,
+        merged_at: "2026-09-05T11:00:00.000Z",
+      },
+      {
+        id: "calibration-2",
+        repository_name: "co-op/harbour",
+        issue_number: "12",
+        issue_title: "Dredge the channel",
+        opening_comparison_points: "3",
+        actual_points: "5",
+        merged_at: new Date("2026-09-01T11:00:00.000Z"),
+      },
+    ]]);
+
+    const calibrations = await listSelfWorkCalibrations("member-1", { sql });
+
+    expect(calibrations).toEqual([
+      {
+        id: "calibration-1",
+        repositoryName: "co-op/harbour",
+        issueNumber: 17,
+        issueTitle: "Repair the tide gate",
+        openingComparisonPoints: 7,
+        actualPoints: null,
+        mergedAt: "2026-09-05T11:00:00.000Z",
+      },
+      {
+        id: "calibration-2",
+        repositoryName: "co-op/harbour",
+        issueNumber: 12,
+        issueTitle: "Dredge the channel",
+        openingComparisonPoints: 3,
+        actualPoints: 5,
+        mergedAt: "2026-09-01T11:00:00.000Z",
+      },
+    ]);
+    const query = captures[0]?.text ?? "";
+    expect(query).toMatch(/where self_work_calibrations\.user_id = \?/i);
+    expect(query).toMatch(/order by pull_requests\.merged_at desc nulls last, self_work_calibrations\.id desc/i);
+    expect(query).toMatch(/limit/i);
+    expect(captures[0]?.values).toEqual(["member-1", SELF_WORK_CALIBRATION_HISTORY_LIMIT]);
+    expect(SELF_WORK_CALIBRATION_HISTORY_LIMIT).toBeGreaterThan(5);
   });
 });
