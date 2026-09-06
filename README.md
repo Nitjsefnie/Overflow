@@ -166,6 +166,8 @@ status and code, then use the message to distinguish causes:
 | 502 | `UPSTREAM_FAILURE` | `Unable to register the repository with GitHub.` | Creating catalog labels or the webhook failed; check GitHub access and availability. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Database lookup or saving the registration failed; check service health before retrying. |
 
+Angle-bracketed text in the `Exact message` column is a value substituted at runtime.
+
 Catalog validation returns one of these exact `INVALID_INPUT` messages:
 
 - `Display names must not be empty.`
