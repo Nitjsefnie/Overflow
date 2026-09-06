@@ -758,10 +758,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         where (
             (job.state = ${"PENDING"} and job.run_after <= now())
             or (job.state = ${"RUNNING"} and job.lease_expires_at <= now())
-            -- One build transition: an unmarked lease predates duration tracking.
-            -- Once every row has been claimed by a build that writes the marker,
-            -- this arm is inert. It can remain permanently: current leases always
-            -- carry a duration and cannot be mistaken for legacy leases.
+            -- A NULL duration identifies the current lease as an old build's,
+            -- including after a rollback or mixed-version takeover. Claims bind
+            -- their marker to the lease token; releases clear it, and the database
+            -- clears an inherited marker when an old writer changes that token.
             or (job.state = ${"RUNNING"} and job.lease_duration_ms is null)
           )
         order by job.run_after, job.created_at
@@ -772,6 +772,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       set state = ${"RUNNING"},
           lease_token = ${leaseToken},
           lease_duration_ms = ${RECONCILIATION_LEASE_MS},
+          lease_duration_token = ${leaseToken},
           lease_expires_at = now() + make_interval(secs => ${RECONCILIATION_LEASE_MS / 1000}),
           attempt_count = repository_reconciliation_jobs.attempt_count + 1
       from due

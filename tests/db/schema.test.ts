@@ -825,16 +825,14 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ id: jobId }]);
   });
 
-  it.each(["PENDING", "FAILED", "RUNNING"])("rejects a %s job with an inconsistent lease duration", async (state) => {
+  it.each([0, -1])("rejects a lease duration of %s with otherwise valid lease fields", async (duration) => {
     const sponsorId = await insertUser(sql);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const running = state === "RUNNING";
     await expect(sql`
       insert into repository_reconciliation_jobs
         (repository_id, reason, state, lease_token, lease_expires_at, lease_duration_ms)
-      values (${repositoryId}, 'WEBHOOK', ${state}::repository_reconciliation_job_state,
-        ${running ? "11111111-1111-4111-8111-111111111111" : null},
-        ${running ? new Date("2100-01-01") : null}, ${running ? null : 20000})
+      values (${repositoryId}, 'WEBHOOK', 'RUNNING', gen_random_uuid(),
+        now() + interval '20 seconds', ${duration})
     `).rejects.toThrow(/repository_reconciliation_jobs_lease_duration_check/);
   });
 
