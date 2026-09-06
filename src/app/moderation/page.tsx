@@ -122,9 +122,10 @@ export default async function ModerationPage() {
         <h2 id="settlement-corrections-heading">Settlement corrections</h2>
         <p>
           A settlement is derived from GitHub history, so reconciliation cannot repair one whose evidence never
-          existed. Granting a correction records the settled points to apply instead; credits are recomputed
-          from those points and the review rounds the fold counted, and the correction is reapplied on every
-          later reconciliation.
+          existed. Granting a correction records the figure to apply instead: where credits move, they are
+          recomputed from that figure and the review rounds the fold counted, and where the sponsor closed their
+          own issue it becomes the calibration figure their comparison is drawn from. Either way the correction
+          is reapplied on every later reconciliation.
         </p>
         {settlementCorrections === null ? (
           <p>The settlement correction queue could not be loaded.</p>
@@ -137,9 +138,10 @@ export default async function ModerationPage() {
         <h2 id="unwritable-closures-heading">Rejected settlement evidence</h2>
         <p>
           A closed issue with a merged pull request settles nothing when its label or rationale missed the
-          evidence window. The reason is recorded here so a moderator can review it, and a member or the
-          sponsor can request a correction from the settlement page.
-          A moderator who is not a party cannot open the settlement; the parties named on each entry can.
+          evidence window. The reason is recorded here so a moderator can review it, and the account named on
+          each entry can request a correction: a party from the settlement page, a sponsor who closed their own
+          issue from the calibration page.
+          A moderator who is not a party cannot open either page.
         </p>
         {unwritableClosures === null ? (
           <p>The closure queue could not be loaded.</p>

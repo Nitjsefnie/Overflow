@@ -196,6 +196,22 @@ describe("moderation closure section", () => {
     ]);
   });
 
+  it("says what a granted correction moves for each kind of outcome", async () => {
+    sql.mockImplementation(async () => []);
+
+    render(await ModerationPage());
+
+    const section = screen.getByRole("region", { name: "Settlement corrections" });
+    const explanation = within(section).getByText(/reconciliation cannot repair one whose evidence never existed/);
+    expect(explanation).toHaveTextContent(
+      "Granting a correction records the figure to apply instead: where credits move, they are recomputed from "
+      + "that figure and the review rounds the fold counted, and where the sponsor closed their own issue it "
+      + "becomes the calibration figure their comparison is drawn from.",
+    );
+    expect(explanation).toHaveTextContent("reapplied on every later reconciliation");
+    expect(within(section).queryByText(/credits are recomputed from those points/)).toBeNull();
+  });
+
   it("shows a closure load error without hiding the other moderation queues", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
       if (strings.join("?").includes("from unwritable_closures")) throw new Error("Closure query unavailable");
@@ -205,7 +221,7 @@ describe("moderation closure section", () => {
     render(await ModerationPage());
 
     expect(screen.getByText("The closure queue could not be loaded.")).toBeVisible();
-    expect(screen.getByText(/A moderator who is not a party cannot open the settlement; the parties named on each entry can\./)).toBeVisible();
+    expect(screen.getByText(/A moderator who is not a party cannot open either page\./)).toBeVisible();
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
     expect(screen.getByText("No accounts are recalibrating.")).toBeVisible();
