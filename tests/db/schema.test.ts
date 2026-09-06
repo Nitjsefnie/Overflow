@@ -198,6 +198,7 @@ describe("initial PostgreSQL materialization", () => {
       "013_reconciliation_cooldown.sql",
       "014_opening_authority_precondition.sql",
       "015_normalize_settlement_status_check.sql",
+      "016_repository_identity_verification.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -599,6 +600,72 @@ describe("initial PostgreSQL materialization", () => {
     await expect(sql`
       select reconciliation_not_before from registered_repositories where id = ${repositoryId}
     `).resolves.toEqual([{ reconciliation_not_before: null }]);
+  });
+
+  it.each(["NOT_FOUND", "NOT_PUBLIC", "IDENTITY_MISMATCH"])(
+    "records %s unavailability with the moment it was first observed",
+    async (reason) => {
+      const sponsorId = await insertUser(sql);
+      const repositoryId = await insertRepository(sql, sponsorId);
+      await expect(sql`
+        select column_name, data_type, is_nullable from information_schema.columns
+        where table_name = 'registered_repositories'
+          and column_name in ('unavailable_reason', 'unavailable_since')
+        order by column_name
+      `).resolves.toEqual([
+        { column_name: "unavailable_reason", data_type: "text", is_nullable: "YES" },
+        { column_name: "unavailable_since", data_type: "timestamp with time zone", is_nullable: "YES" },
+      ]);
+      await expect(sql`
+        select unavailable_reason, unavailable_since from registered_repositories where id = ${repositoryId}
+      `).resolves.toEqual([{ unavailable_reason: null, unavailable_since: null }]);
+
+      await sql`
+        update registered_repositories
+        set unavailable_reason = ${reason}, unavailable_since = ${"2026-09-01T10:00:00.000Z"}
+        where id = ${repositoryId}
+      `;
+
+      await expect(sql`
+        select unavailable_reason, unavailable_since from registered_repositories where id = ${repositoryId}
+      `).resolves.toEqual([{
+        unavailable_reason: reason,
+        unavailable_since: new Date("2026-09-01T10:00:00.000Z"),
+      }]);
+    },
+  );
+
+  it.each([
+    {
+      name: "a reason with no first observation",
+      reason: "NOT_FOUND",
+      since: null,
+      constraint: /registered_repositories_unavailability_check/,
+    },
+    {
+      name: "a first observation with no reason",
+      reason: null,
+      since: "2026-09-01T10:00:00.000Z",
+      constraint: /registered_repositories_unavailability_check/,
+    },
+    {
+      name: "a reason outside the verified set",
+      reason: "ARCHIVED",
+      since: "2026-09-01T10:00:00.000Z",
+      constraint: /registered_repositories_unavailable_reason_check/,
+    },
+  ])("rejects $name on a registered repository", async ({ reason, since, constraint }) => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+
+    await expect(sql`
+      update registered_repositories
+      set unavailable_reason = ${reason}, unavailable_since = ${since}
+      where id = ${repositoryId}
+    `).rejects.toThrow(constraint);
+    await expect(sql`
+      select unavailable_reason, unavailable_since from registered_repositories where id = ${repositoryId}
+    `).resolves.toEqual([{ unavailable_reason: null, unavailable_since: null }]);
   });
 
   it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
