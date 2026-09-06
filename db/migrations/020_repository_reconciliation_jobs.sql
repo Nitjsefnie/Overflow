@@ -20,17 +20,23 @@
 --
 -- Claims use a short window (RECONCILIATION_LEASE_MS in
 -- src/lib/fold/reconciliation-worker.ts), renewed throughout the fold and its
--- outcome write. Advisory locking still makes reclaiming a slow live worker
--- safe: the reclaimer serializes behind the first fold, and the cost is one
--- redundant idempotent fold. That reasoning alone did not cover a dead worker,
--- for which lease expiry is the only recovery path. A thirty-minute lease meant
--- thirty minutes of ledger staleness after a deploy that interrupted a fold.
+-- outcome write. Advisory locking serializes a reclaimer behind a slow live
+-- worker's fold. The cost is one redundant idempotent fold only if that worker
+-- releases the lock within the reclaimer's sixty-second acquisition deadline.
+-- Otherwise the claim has already consumed an attempt: lock timeout causes
+-- durable retry backoff, and exhausted attempts can reach FAILED. The lock
+-- protects correctness, but a spurious reclaim is not unconditionally harmless.
 --
--- Renewing a short lease gives both properties: a live-but-slow worker keeps
--- ownership, while a dead worker stops renewing and is reclaimed within the
--- lease plus one poll (twenty seconds plus five seconds). The redundant-fold
--- safety net remains underneath: even a spurious reclaim after a busy event
--- loop starves renewal is harmless, which makes this aggressive window safe.
+-- Slow-worker serialization does not recover a dead worker's job before its
+-- lease expires. A thirty-minute lease meant thirty minutes of ledger staleness
+-- after a deploy that interrupted a fold. Renewing a short lease lets a live-but-
+-- slow worker retain ownership while a dead worker stops renewing. Expiry makes
+-- the job claimable within the lease plus one poll (twenty seconds plus five
+-- seconds); actual pickup additionally needs a free worker, since a drain busy
+-- folding another repository delays it (issue 202). The advisory-lock safety
+-- net still applies if a busy event loop starves renewal, with the deadline and
+-- backoff costs above. Claims also recognize leases beyond the current rollout
+-- margin, so an old build's thirty-minute lease need not expire before recovery.
 --
 -- The lease check keeps `state` and the lease columns from drifting apart. A
 -- claim sets all three together and a release clears them together, so a
