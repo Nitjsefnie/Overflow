@@ -27,6 +27,8 @@ const UNARMED_POLL_MESSAGE =
   "Reconciliation worker poll was not armed; no further drains will run until the process restarts";
 const DEFAULTED_INTERVAL_MESSAGE =
   "Reconciliation worker poll interval could not be read; the recurring tick is armed at the default interval instead";
+const DEFAULTED_CONCURRENCY_MESSAGE =
+  "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
   it("reports an idle queue without reconciling anything", async () => {
@@ -908,17 +910,15 @@ describe("the scheduled reconciliation worker", () => {
     expect(drains).toBe(3);
   });
 
-  it("drops a tick that arrives while the previous drain is still running", async () => {
+  it("starts a second drain on a poll while another is still folding (issue 202)", async () => {
     const timer = createTimer();
     let started = 0;
-    let release: (() => void) | undefined;
+    const held = signal();
 
     startReconciliationWorker({
       drain: async () => {
         started += 1;
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        await held.promise;
       },
       schedule: timer.schedule,
     });
@@ -926,13 +926,158 @@ describe("the scheduled reconciliation worker", () => {
     expect(started).toBe(1);
 
     await timer.tick();
+    expect(started).toBe(2);
+  });
+
+  it.each([undefined, 1, 2, 6])("admits ticks up to concurrency %s and drops ticks at capacity", async (concurrency) => {
+    const timer = createTimer();
+    const held = signal();
+    let started = 0;
+    const capacity = concurrency ?? 4;
+
+    startReconciliationWorker({
+      drain: async () => {
+        started += 1;
+        await held.promise;
+      },
+      schedule: timer.schedule,
+      concurrency,
+    });
     expect(started).toBe(1);
+    for (let expected = 2; expected <= capacity; expected += 1) {
+      await timer.tick();
+      expect(started).toBe(expected);
+    }
+    await timer.tick();
+    await timer.tick();
+    expect(started).toBe(capacity);
+  });
 
-    release?.();
-    await timer.settle();
+  it.each(["resolves", "rejects"] as const)("releases exactly one slot when a drain %s", async (outcome) => {
+    const timer = createTimer();
+    const first = signal();
+    const others = signal();
+    const failure = new Error("drain failed");
+    const reported: unknown[] = [];
+    let started = 0;
 
+    startReconciliationWorker({
+      drain: async () => {
+        started += 1;
+        if (started === 1) {
+          await first.promise;
+          if (outcome === "rejects") throw failure;
+        } else {
+          await others.promise;
+        }
+      },
+      schedule: timer.schedule,
+      concurrency: 2,
+      onFailure: (error) => { reported.push(error); },
+    });
     await timer.tick();
     expect(started).toBe(2);
+    await timer.tick();
+    expect(started).toBe(2);
+
+    first.resolve();
+    await timer.settle();
+    expect(reported).toEqual(outcome === "rejects" ? [failure] : []);
+    // Completing a drain releases its slot; admission still waits for a tick.
+    expect(started).toBe(2);
+    await timer.tick();
+    expect(started).toBe(3);
+    await timer.tick();
+    expect(started).toBe(3);
+  });
+
+  it("contains a throwing concurrency accessor and keeps the default capacity and poll", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const unreadable = new Error("the concurrency is not wired up yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => { started += 1; await held.promise; },
+      schedule: timer.schedule,
+      get concurrency(): number { throw unreadable; },
+    });
+    expect(started).toBe(1);
+    expect(timer.intervalMs).toBe(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
+    expect(logged.mock.calls).toEqual([[DEFAULTED_CONCURRENCY_MESSAGE, unreadable]]);
+    for (let tick = 0; tick < 4; tick += 1) await timer.tick();
+    expect(started).toBe(4);
+  });
+
+  it("runs the startup drain before reading concurrency, interval or scheduler", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const order: string[] = [];
+
+    startReconciliationWorker({
+      drain: async () => { order.push("drained"); await held.promise; },
+      get concurrency() { order.push("read concurrency"); return 1; },
+      get intervalMs() { order.push("read interval"); return 250; },
+      get schedule() { order.push("read scheduler"); return timer.schedule; },
+    });
+    expect(order).toEqual(["drained", "read concurrency", "read interval", "read scheduler"]);
+    await timer.tick();
+    expect(order).toEqual(["drained", "read concurrency", "read interval", "read scheduler"]);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity, "2"])("reports invalid concurrency %s and uses the default capacity", async (concurrency) => {
+    const timer = createTimer();
+    const held = signal();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => { started += 1; await held.promise; },
+      schedule: timer.schedule,
+      concurrency,
+    } as unknown as Parameters<typeof startReconciliationWorker>[0]);
+    expect(logged.mock.calls).toEqual([[DEFAULTED_CONCURRENCY_MESSAGE, concurrency]]);
+    for (let tick = 0; tick < 4; tick += 1) await timer.tick();
+    expect(started).toBe(4);
+  });
+
+  it.each([null, undefined])("uses the default capacity silently for nullish concurrency %s", async (concurrency) => {
+    const timer = createTimer();
+    const held = signal();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => { started += 1; await held.promise; },
+      schedule: timer.schedule,
+      concurrency,
+    } as unknown as Parameters<typeof startReconciliationWorker>[0]);
+    for (let tick = 0; tick < 4; tick += 1) await timer.tick();
+    expect(started).toBe(4);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("keeps the concurrency fallback report when its reason cannot be printed", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const unreadable = new Error("unprintable concurrency failure");
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      if (args.length === 2) throw new Error("cannot print reason");
+    });
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => { started += 1; await held.promise; },
+      schedule: timer.schedule,
+      get concurrency(): number { throw unreadable; },
+    });
+    expect(logged.mock.calls).toEqual([
+      [DEFAULTED_CONCURRENCY_MESSAGE, unreadable],
+      [DEFAULTED_CONCURRENCY_MESSAGE],
+    ]);
+    for (let tick = 0; tick < 4; tick += 1) await timer.tick();
+    expect(started).toBe(4);
   });
 
   it("contains an intervalMs accessor that throws and arms the default cadence", async () => {
