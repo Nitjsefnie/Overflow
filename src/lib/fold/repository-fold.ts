@@ -316,10 +316,11 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     const settledResolution = pullRequest === null
       ? null
       : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, raterLogin);
-    // Said once for both recording sites. A closure's evidence window shuts
-    // fifteen minutes after the merge that closed the issue — the same fifteen
-    // minutes every rejection reason quotes back to a moderator — or, where no
-    // pull request of this repository closed it, at the close of the issue.
+    // Said once for both gated recording sites. A closure's evidence window
+    // shuts fifteen minutes after the merge that closed the issue — the same
+    // fifteen minutes every rejection reason quotes back to a moderator — or,
+    // where nothing merged, at the close of the issue itself. A closure naming
+    // a foreign pull request reads neither: it is not gated at all.
     const evidenceWindowClosedAt = pullRequest === null
       ? parsedInstant(issue.closedAt)
       : Date.parse(pullRequest.mergedAt) + EVIDENCE_ORDERING_GRACE_MS;
@@ -621,6 +622,12 @@ function resolveSettledDifficulty(
   raterLogin: string | null,
 ): SettledDifficultyResolution {
   if (raterLogin === null) {
+    // Unreachable while `resolveOpening` also refuses a null rater login: the
+    // loop prices no issue and continues before it ever gets here. Kept, and
+    // kept UNBOUNDED, because the reason it cannot fire lives in another
+    // function — decouple the two and this refusal becomes live, at which
+    // point it must not be gated. A sponsor's missing login is a fact about
+    // the account today, and no evidence window bounds fixing it.
     return {
       kind: "rejected",
       reach: { kind: "UNBOUNDED" },
