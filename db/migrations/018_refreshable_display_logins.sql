@@ -31,6 +31,17 @@
 -- missing timestamp makes the arm false and the row is refused outright. The
 -- gap is tracked as issue 19 and is why the trigger carries the null transition.
 --
+-- Two paths the trigger does not reach at all. It fires `before update`, so it
+-- never runs on an INSERT: a row can be created with a whitespace-only login
+-- beside attached opening evidence, and `issues_opening_source_complete_check`,
+-- with the one-argument `trim()` above, is the only guard there. And its column
+-- list names the opening columns alone, so no trigger of any kind sits on the
+-- settled evidence columns — `issues_settled_evidence_complete_check`, which
+-- spells `length(trim(...)) > 0` the same way, is all that guards those. That
+-- shared constraint weakness is tracked as issue 141, "Evidence completeness
+-- constraints accept whitespace-only records because trim strips only spaces".
+-- It and issue 19 are different holes in the same idiom, and both are open.
+--
 -- This replaces the body of the function behind trigger
 -- `issues_opening_rating_immutable`, created in migration 007. That trigger's
 -- `before update of ...` column list still lives there, unchanged, and is what
