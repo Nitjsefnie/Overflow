@@ -6,8 +6,12 @@
 -- The outstanding index is partial rather than a plain unique constraint on
 -- `repository_id`: a repository may hold at most one job that is waiting or has
 -- given up, while a job that is already RUNNING must not block a follow-up job
--- for an event that arrived mid-fold. Two rows per repository is therefore the
--- ceiling, and a successful job deletes its own row.
+-- for an event that arrived mid-fold. What the index guarantees is therefore
+-- exactly that one waiting-or-failed row per repository, and nothing here bounds
+-- RUNNING rows. The familiar ceiling of two rows per repository holds only if
+-- the worker never holds two concurrent leases for one repository, which is the
+-- worker's obligation rather than the schema's. A successful job deletes its own
+-- row.
 --
 -- The lease check keeps `state` and the lease columns from drifting apart. A
 -- claim sets all three together and a release clears them together, so a
@@ -15,9 +19,9 @@
 -- RUNNING row with no lease at all.
 --
 -- Deliberately absent: any column holding an upstream error message. An
--- upstream GitHub error can carry the sponsor's token in a URL --
--- `src/lib/fold/reconcile.ts` already records a fixed message for that reason
--- -- so the visible failure state here is `state`, `attempt_count` and
+-- upstream GitHub error can carry the sponsor's token in a URL, and
+-- `src/lib/fold/reconcile.ts` already records a fixed message for that reason,
+-- so the visible failure state here is `state`, `attempt_count` and
 -- `last_failure_at`, and the cause reaches the service log only.
 
 create type repository_reconciliation_job_state as enum ('PENDING', 'RUNNING', 'FAILED');
