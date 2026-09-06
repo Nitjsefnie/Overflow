@@ -3,15 +3,20 @@
 -- later event used to repair it; a job row survives the request that noticed,
 -- so the repair happens whether or not anyone touches the repository again.
 --
--- The outstanding index is partial rather than a plain unique constraint on
--- `repository_id`: a repository may hold at most one job that is waiting or has
--- given up, while a job that is already RUNNING must not block a follow-up job
--- for an event that arrived mid-fold. What the index guarantees is therefore
--- exactly that one waiting-or-failed row per repository, and nothing here bounds
--- RUNNING rows. The familiar ceiling of two rows per repository holds only if
--- the worker never holds two concurrent leases for one repository, which is the
--- worker's obligation rather than the schema's. A successful job deletes its own
--- row.
+-- One row per repository, whatever its state, enforced by a total unique
+-- constraint. A successful job deletes its own row, so the absence of a row is
+-- what "nothing outstanding" means. An event arriving mid-fold therefore cannot
+-- open a second row: it sets `follow_up_requested` on the row being worked, and
+-- the completing worker turns that flag back into a fresh PENDING job instead
+-- of deleting the row.
+--
+-- The alternative — a partial unique index excluding RUNNING, so that a
+-- follow-up row could be inserted beside the one being folded — was rejected.
+-- It makes the queue's shape a worker obligation rather than a schema
+-- guarantee, and worse, every path out of RUNNING (`defer`, `retry`, `fail`)
+-- returns its own row to PENDING or FAILED and collides with that follow-up
+-- row. That collision lands on the ordinary "webhook arrives during a fold that
+-- then fails" path, which is precisely the path this table exists to survive.
 --
 -- The lease check keeps `state` and the lease columns from drifting apart. A
 -- claim sets all three together and a release clears them together, so a
@@ -36,17 +41,15 @@ create table repository_reconciliation_jobs (
   lease_token uuid,
   lease_expires_at timestamp with time zone,
   last_failure_at timestamp with time zone,
+  follow_up_requested boolean not null default false,
   created_at timestamp with time zone not null default now(),
+  constraint repository_reconciliation_jobs_repository_key unique (repository_id),
   constraint repository_reconciliation_jobs_lease_check check (
     (state = 'RUNNING' and lease_token is not null and lease_expires_at is not null)
     or
     (state <> 'RUNNING' and lease_token is null and lease_expires_at is null)
   )
 );
-
-create unique index repository_reconciliation_jobs_outstanding_key
-  on repository_reconciliation_jobs (repository_id)
-  where state in ('PENDING', 'FAILED');
 
 create index repository_reconciliation_jobs_due_key
   on repository_reconciliation_jobs (run_after)
