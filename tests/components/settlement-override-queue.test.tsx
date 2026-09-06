@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { OpenSettlementOverrideRequest } from "@/lib/overrides/service";
@@ -44,7 +44,7 @@ function selfWorked(
     calibration: {
       calibrationId: "00000000-0000-4000-8000-000000000004",
       ownerLogin: "grace",
-      openingComparisonPoints: 5,
+      openingComparisonPoints: 7,
       actualLabel: "delivered/4",
       actualPoints: 4,
       pullRequestNumber: 61,
@@ -53,6 +53,21 @@ function selfWorked(
       ...calibration,
     },
   });
+}
+
+/**
+ * The value beside a term in the evidence list.
+ *
+ * Read from that one node rather than from the whole entry: an assertion over
+ * the entry's text passes on a digit anywhere in it, including the timestamp,
+ * so a wrong figure would go unnoticed.
+ */
+function evidenceValue(entry: HTMLElement, term: string): string {
+  const value = within(entry).getByText(term).nextElementSibling;
+  if (value === null) {
+    throw new Error(`The evidence list carries no value beside “${term}”.`);
+  }
+  return value.textContent ?? "";
 }
 
 describe("moderator settlement correction queue", () => {
@@ -114,12 +129,9 @@ describe("moderator settlement correction queue", () => {
       "href",
       "https://github.com/co-op/harbour/pull/61",
     );
-    expect(entry).toHaveTextContent("Opening comparison");
-    expect(entry).toHaveTextContent("5");
-    expect(entry).toHaveTextContent("Actual difficulty");
-    expect(entry).toHaveTextContent("delivered/4 · 4");
-    expect(entry).toHaveTextContent("Self-worked by");
-    expect(entry).toHaveTextContent("grace");
+    expect(evidenceValue(entry, "Opening comparison")).toBe("7");
+    expect(evidenceValue(entry, "Actual difficulty")).toBe("delivered/4 · 4");
+    expect(evidenceValue(entry, "Self-worked by")).toBe("grace");
     expect(entry).not.toHaveTextContent("The settled outcome for this issue is no longer materialized.");
   });
 
@@ -136,9 +148,16 @@ describe("moderator settlement correction queue", () => {
   it("says the actual difficulty is unrecorded when the closure's settled evidence was rejected", () => {
     render(<SettlementOverrideQueue requests={[selfWorked({ actualLabel: null, actualPoints: null })]} />);
 
-    const entry = screen.getByRole("listitem");
-    expect(entry).toHaveTextContent("Actual difficulty");
-    expect(entry).toHaveTextContent("Never recorded");
+    expect(evidenceValue(screen.getByRole("listitem"), "Actual difficulty")).toBe("Never recorded");
+  });
+
+  // A granted correction writes the calibration's actual points while the
+  // issue's settled label stays null, so the very state this branch produces is
+  // points without a label — visible on any later request against that issue.
+  it("shows corrected actual points that no label ever backed", () => {
+    render(<SettlementOverrideQueue requests={[selfWorked({ actualLabel: null, actualPoints: 4 })]} />);
+
+    expect(evidenceValue(screen.getByRole("listitem"), "Actual difficulty")).toBe("no label recorded · 4");
   });
 
   it("says so rather than hiding a request whose settlement and calibration are both gone", () => {
@@ -148,6 +167,15 @@ describe("moderator settlement correction queue", () => {
       "The settled outcome for this issue is no longer materialized.",
     );
     expect(screen.getByRole("button", { name: "Grant correction" })).toBeVisible();
+  });
+
+  it("keeps the self-work note off a settlement, where credits did move", () => {
+    render(<SettlementOverrideQueue requests={[queued()]} />);
+
+    const entry = screen.getByRole("listitem");
+    expect(entry).not.toHaveTextContent("The sponsor closed this issue themselves");
+    expect(entry).not.toHaveTextContent("no credits moved");
+    expect(entry).toHaveTextContent("Credits moved");
   });
 
   it("offers a decision for every queued request", () => {
