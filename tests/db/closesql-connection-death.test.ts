@@ -39,10 +39,12 @@ describe("closing the shared clients after a backend dies mid-query", () => {
     await expect(sql`select 1 as value`).resolves.toEqual([{ value: 1 }]);
 
     // The backend terminates itself, so this query can only reject. The rejection is the
-    // fixture rather than the subject — but it is asserted, because a statement that
-    // somehow resolved would leave the pool healthy and make the shutdown below prove
-    // nothing at all.
-    await expect(sql`select pg_terminate_backend(pg_backend_pid())`).rejects.toThrow("CONNECTION_CLOSED");
+    // fixture rather than the subject — but that it rejected at all is asserted, because a
+    // statement that somehow resolved would leave the pool healthy and make the shutdown
+    // below prove nothing. Which error it carries is deliberately left open: a clean FIN
+    // surfaces CONNECTION_CLOSED and a reset surfaces the socket's own error, and that
+    // distinction belongs to the kernel rather than to anything under test here.
+    await expect(sql`select pg_terminate_backend(pg_backend_pid())`).rejects.toThrow();
 
     await expect(closeSql()).resolves.toBeUndefined();
   });
