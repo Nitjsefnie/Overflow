@@ -21,8 +21,10 @@ export type ReconciliationSweepSchedule = {
   intervalMs?: number;
   /**
    * Reports a sweep that failed as a whole, as distinct from the per-repository
-   * `onFailure` on the dependencies. Defaults to console.error, and a hook that
-   * throws is swallowed rather than allowed to kill the process.
+   * `onFailure` on the dependencies. A hook that fails — by throwing, or by
+   * rejecting if it is async — costs neither the process nor the report: the
+   * sweep failure reaches console.error instead. Omit the hook to report there
+   * in the first place.
    */
   onSweepFailure?(error: unknown): void;
 };
@@ -137,32 +139,58 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
 }
 
 /**
- * Reports a sweep that failed as a whole, and cannot itself throw.
+ * Reports a sweep that failed as a whole, on the console when the caller has no
+ * hook of its own.
  *
  * The hook is invoked through the schedule rather than through a reference
  * hoisted out of it, so one written in method form keeps its receiver: the type
  * declares it as a method and the sibling per-repository hook is called the same
  * way, so a detached call would leave `this` undefined and turn the hook into
- * exactly the process-killing throw this catch exists to prevent.
+ * exactly the process-killing throw the caller's catch exists to prevent.
  *
- * A hook that throws for any other reason is swallowed. Losing the report is
- * bad; losing the process is worse, and any last-resort report here could throw
- * in turn, so there is nothing safe left to try.
+ * A hook that fails costs neither the process nor the report. A synchronous
+ * throw is caught; a rejection is caught too, which takes settling whatever the
+ * hook returned, because a `try` cannot see a rejected promise and an async
+ * reporter shipping to a collector is the ordinary shape of this hook. Either
+ * way the failure still reaches the console.
+ *
+ * Only the hook is guarded. The scheduler's own logging sits outside, so a
+ * defect there surfaces rather than being swallowed on the one path production
+ * uses.
  */
 function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknown): void {
+  // Anything uncallable — including the null an untyped caller can pass where
+  // the optional member expresses only undefined — counts as no hook at all.
+  if (typeof schedule.onSweepFailure !== "function") {
+    logSweepFailure(error);
+    return;
+  }
+
   try {
-    if (schedule.onSweepFailure === undefined) {
+    void Promise.resolve(schedule.onSweepFailure(error)).catch(() => {
       logSweepFailure(error);
-      return;
-    }
-    schedule.onSweepFailure(error);
+    });
   } catch {
-    // Deliberately swallowed; see above.
+    logSweepFailure(error);
   }
 }
 
+/**
+ * Logs a sweep failure, keeping the line even when the reason is what breaks.
+ *
+ * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
+ * getter with a side effect — and losing the whole line to that would hide the
+ * sweep failure entirely. A console broken outright is still fatal, deliberately:
+ * hiding that behind another catch would leave the scheduler with no way to
+ * report anything at all and no sign of it.
+ */
 function logSweepFailure(error: unknown): void {
-  console.error("Reconciliation sweep aborted before it finished", error);
+  const message = "Reconciliation sweep aborted before it finished";
+  try {
+    console.error(message, error);
+  } catch {
+    console.error(message);
+  }
 }
 
 function defaultSchedule(callback: () => void, everyMs: number): void {
