@@ -1146,7 +1146,7 @@ function compareHistoryItems(
   left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
   right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
 ): number {
-  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id);
 }
 
 function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
