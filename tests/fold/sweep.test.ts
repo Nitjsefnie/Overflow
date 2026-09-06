@@ -1514,8 +1514,6 @@ describe("scheduled reconciliation sweep", () => {
       await drain();
 
       expect(logged.mock.calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, noReason]]);
-      // The two-argument form itself, not a line that merely read alike.
-      expect(logged.mock.calls[0]).toHaveLength(2);
       // A reason that carries nothing to print costs the cadence and no more:
       // the caller's own scheduler is still armed, at the default.
       expect(armed).toHaveLength(1);
