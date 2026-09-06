@@ -3,7 +3,7 @@ import type { SettlementOverrideRequest, SettlementOverrideTarget } from "@/lib/
 
 type SettlementCorrectionsProps = {
   target: SettlementOverrideTarget;
-  requests: readonly SettlementOverrideRequest[];
+  requests: readonly SettlementOverrideRequest[] | null;
 };
 
 /**
@@ -13,6 +13,12 @@ type SettlementCorrectionsProps = {
  * The form is withheld while a request is open, because the ledger holds one
  * open request per issue; the reason is stated rather than the button being
  * silently absent.
+ * When history is unreadable (`null`), keep the form available so a transient
+ * read failure does not cost a member their recourse. The database's partial
+ * unique index `settlement_override_requests_one_open_idx` (migration 009),
+ * not this component's `open === undefined` check, enforces one open request.
+ * The Postgres store maps its SQLSTATE 23505 violation to a CONFLICT, refusing
+ * a duplicate submission even when this component cannot read the open request.
  *
  * A settlement and a self-work calibration are corrected through the same
  * request, but they are not the same thing to the member reading this: a
@@ -22,7 +28,7 @@ type SettlementCorrectionsProps = {
  * happen, so each kind gets its own sentence.
  */
 export function SettlementCorrections({ target, requests }: SettlementCorrectionsProps) {
-  const open = requests.find((request) => request.state === "OPEN");
+  const open = requests?.find((request) => request.state === "OPEN");
   const outcome = target.kind === "settlement" ? "settlement" : "calibration";
 
   return (
@@ -42,7 +48,9 @@ export function SettlementCorrections({ target, requests }: SettlementCorrection
           issue, and the corrected figure is what your calibration comparison is drawn from.
         </p>
       )}
-      {requests.length === 0 ? (
+      {requests === null ? (
+        <p className="mono-meta">The correction history for this {outcome} could not be loaded.</p>
+      ) : requests.length === 0 ? (
         <p className="mono-meta">No correction has been requested for this {outcome}.</p>
       ) : (
         <ol className="override-history">

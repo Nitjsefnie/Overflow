@@ -230,13 +230,41 @@ describe("self-work calibration proof page", () => {
     expect(screen.queryByRole("button", { name: "Report this calibration as incorrect" })).toBeNull();
   });
 
-  it("keeps the proof when the correction history cannot be read", async () => {
-    respondWith({ corrections: new Error("Correction history unavailable") });
+  it("distinguishes declined, empty, and unreadable correction history while keeping the proof and recourse", async () => {
+    respondWith({ corrections: [{
+      id: "request-1",
+      issue_id: "issue-1",
+      requester_id: "sponsor-1",
+      reason: "The actual label was recorded late.",
+      state: "DECLINED",
+      settled_points: null,
+      decided_by_id: "moderator-1",
+      decision_reason: "The recorded evidence stands.",
+      created_at: "2026-09-05T12:00:00.000Z",
+      decided_at: "2026-09-05T13:00:00.000Z",
+    }] });
+    render(await CalibrationProofPage(calibrationParams));
+    expect(screen.getByText("Declined")).toBeVisible();
+    expect(screen.getByRole("article", { name: "co-op/harbour calibration" })).toBeVisible();
 
+    cleanup();
+    respondWith({ corrections: [] });
+    render(await CalibrationProofPage(calibrationParams));
+    const emptyRecourse = screen.getByRole("region", { name: "Is this calibration wrong?" }).textContent;
+    expect(screen.getByText("No correction has been requested for this calibration.")).toBeVisible();
+    expect(screen.getByRole("article", { name: "co-op/harbour calibration" })).toBeVisible();
+
+    cleanup();
+    respondWith({ corrections: new Error("Correction history unavailable") });
     render(await CalibrationProofPage(calibrationParams));
 
+    const failedRecourse = screen.getByRole("region", { name: "Is this calibration wrong?" });
+    expect.soft(failedRecourse.textContent).not.toBe(emptyRecourse);
+    expect.soft(within(failedRecourse).queryByText(/correction history.*calibration.*could not be loaded/i)).toBeVisible();
+    expect.soft(within(failedRecourse).queryByText(/No correction has been requested/)).toBeNull();
+    expect(screen.getByRole("article", { name: "co-op/harbour calibration" })).toBeVisible();
     expect(proofValue("Delivered band")).toBe("landed/4 · 4");
-    expect(screen.getByText("No correction has been requested for this calibration.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Report this calibration as incorrect" })).toBeVisible();
   });
 
   it("falls back to the ledger when the calibration cannot be read", async () => {
