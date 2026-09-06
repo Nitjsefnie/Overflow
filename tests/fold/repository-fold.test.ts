@@ -663,6 +663,11 @@ describe("rejected settlement closure records", () => {
     expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({
       githubIssueId: 101, githubPullRequestId: 201, userId: "sponsor", actualPoints: null,
     })]);
+    // Both halves of the impossibility the correction queue relies on, in one
+    // arrangement: the queue branches a calibration's figure on the points
+    // alone because absent points imply an absent label, and pinning the two in
+    // different fixtures would let either half move without a control failing.
+    expect(result.issues[0]).toMatchObject({ settledLabel: null, settledPoints: null });
     expect(result.settlements).toEqual([]);
     expect(result.ledgerEntries).toEqual([]);
   });
