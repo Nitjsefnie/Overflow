@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
@@ -185,23 +185,107 @@ describe("running the next reconciliation job", () => {
     });
   });
 
-  it("survives a fold that throws with no failure reporter attached", async () => {
+  it("reports a fold that throws on the console when no reporter is attached", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
+    const unfolded = new Error("GitHub is unreachable");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(
-      runNextReconciliationJob({
-        store,
-        now: () => new Date("2030-01-02T03:04:05.678Z"),
-        reconcile: async () => {
-          throw new Error("GitHub is unreachable");
-        },
-      }),
-    ).resolves.toBe("RETRY_SCHEDULED");
+    try {
+      await expect(
+        runNextReconciliationJob({
+          store,
+          now: () => new Date("2030-01-02T03:04:05.678Z"),
+          reconcile: async () => {
+            throw unfolded;
+          },
+        }),
+      ).resolves.toBe("RETRY_SCHEDULED");
 
-    expect(calls.at(-1)).toEqual({
-      method: "retry",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
-    });
+      expect(calls.at(-1)).toEqual({
+        method: "retry",
+        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      });
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation failed for repository", "repo-a", unfolded],
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("treats a failure reporter whose retrieval throws as no reporter at all", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const unfolded = new Error("GitHub is unreachable");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A lazily wired reporter: the accessor throws until its collector is
+    // configured, and reading the member is the first thing the worker does with
+    // it. Guarding only the call leaves this one to escape.
+    const dependencies = {
+      store,
+      now: () => new Date("2030-01-02T03:04:05.678Z"),
+      reconcile: async () => {
+        throw unfolded;
+      },
+      get onFailure(): (repositoryId: string, error: unknown) => void {
+        throw new Error("the reporter is not wired up yet");
+      },
+    };
+
+    try {
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RETRY_SCHEDULED");
+
+      expect(calls.at(-1)).toEqual({
+        method: "retry",
+        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      });
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation failed for repository", "repo-a", unfolded],
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("records the retry when the failure reporter rejects instead of throwing", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const unfolded = new Error("GitHub is unreachable");
+    const rejections = watchUnhandledRejections();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const reports: string[] = [];
+
+    try {
+      await expect(
+        runNextReconciliationJob({
+          store,
+          now: () => new Date("2030-01-02T03:04:05.678Z"),
+          reconcile: async () => {
+            throw unfolded;
+          },
+          // The ordinary shape of a reporter that ships the failure somewhere:
+          // async, and able to reject. A `try` around the call cannot see that
+          // rejection, and the returned promise is not the worker's to discard.
+          onFailure: async (repositoryId) => {
+            reports.push(repositoryId);
+            throw new Error("shipping the report failed");
+          },
+        }),
+      ).resolves.toBe("RETRY_SCHEDULED");
+
+      expect(reports).toEqual(["repo-a"]);
+      expect(calls.at(-1)).toEqual({
+        method: "retry",
+        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      });
+      await settle();
+      await settle();
+      expect(rejections.recorded).toEqual([]);
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation failed for repository", "repo-a", unfolded],
+      ]);
+    } finally {
+      logged.mockRestore();
+      rejections.stop();
+    }
   });
 });
 
@@ -347,8 +431,10 @@ describe("the scheduled reconciliation worker", () => {
     }
   });
 
-  it("survives a drain that rejects with no failure reporter attached", async () => {
+  it("reports a drain that rejects on the console when no reporter is attached", async () => {
     const rejections = watchUnhandledRejections();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const undrained = new Error("PostgreSQL is unreachable");
     try {
       const timer = createTimer();
       let drains = 0;
@@ -356,7 +442,7 @@ describe("the scheduled reconciliation worker", () => {
       startReconciliationWorker({
         drain: async () => {
           drains += 1;
-          throw new Error("PostgreSQL is unreachable");
+          throw undrained;
         },
         schedule: timer.schedule,
       });
@@ -367,7 +453,85 @@ describe("the scheduled reconciliation worker", () => {
       // and really rejected, rather than for a drain that never happened.
       expect(drains).toBe(1);
       expect(rejections.recorded).toEqual([]);
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation worker could not drain the job queue", undrained],
+      ]);
     } finally {
+      logged.mockRestore();
+      rejections.stop();
+    }
+  });
+
+  it("treats a drain reporter whose retrieval throws as no reporter at all", async () => {
+    const rejections = watchUnhandledRejections();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const undrained = new Error("PostgreSQL is unreachable");
+    try {
+      const timer = createTimer();
+      const drains: string[] = [];
+      // The same lazily wired reporter, on the schedule this time: reading the
+      // member throws, which no guard around the call can contain.
+      const schedule = {
+        drain: async () => {
+          drains.push("drained");
+          throw undrained;
+        },
+        schedule: timer.schedule,
+        get onFailure(): (error: unknown) => void {
+          throw new Error("the reporter is not wired up yet");
+        },
+      };
+
+      startReconciliationWorker(schedule);
+      await timer.settle();
+      await timer.settle();
+
+      expect(rejections.recorded).toEqual([]);
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation worker could not drain the job queue", undrained],
+      ]);
+
+      // A reporter that could not even be read must still leave the worker able
+      // to drain again.
+      await timer.tick();
+      await timer.settle();
+      expect(drains).toEqual(["drained", "drained"]);
+      expect(rejections.recorded).toEqual([]);
+    } finally {
+      logged.mockRestore();
+      rejections.stop();
+    }
+  });
+
+  it("contains a drain reporter that rejects rather than throwing", async () => {
+    const rejections = watchUnhandledRejections();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const undrained = new Error("PostgreSQL is unreachable");
+    try {
+      const timer = createTimer();
+      const reports: unknown[] = [];
+
+      startReconciliationWorker({
+        drain: async () => {
+          throw undrained;
+        },
+        schedule: timer.schedule,
+        onFailure: async (error) => {
+          reports.push(error);
+          throw new Error("shipping the report failed");
+        },
+      });
+      await timer.settle();
+      await timer.settle();
+      await settle();
+
+      expect(reports).toEqual([undrained]);
+      expect(rejections.recorded).toEqual([]);
+      expect(logged.mock.calls).toEqual([
+        ["Reconciliation worker could not drain the job queue", undrained],
+      ]);
+    } finally {
+      logged.mockRestore();
       rejections.stop();
     }
   });
@@ -494,6 +658,11 @@ function createFakeStore(
   };
 
   return { store, calls };
+}
+
+/** Lets a floating promise settle, for the cases that have no timer to settle. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function createTimer() {
