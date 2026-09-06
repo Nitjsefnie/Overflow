@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   MINIMUM_CALIBRATION_SAMPLE_SIZE,
   type CalibrationPair,
@@ -367,6 +367,164 @@ describe("calibration cohort preview", () => {
   });
 });
 
+// A sample-window bound selects which merged pairs enter the calibration cohort, so a bound
+// that names a wall-clock reading rather than an instant makes the audit's evidence depend
+// on where the server happens to run. The service refuses those rather than guessing a zone.
+describe("sample-window bounds that do not denote exactly one instant", () => {
+  const offsetRequirement = /must be an ISO 8601 timestamp with an explicit UTC offset\./;
+  const ambiguousBounds = [
+    ["an offset-less date-time", "2026-01-01T00:00"],
+    ["an offset-less date-time carrying milliseconds", "2026-01-01T00:00:00.000"],
+    ["a date-only bound", "2026-01-01"],
+    ["a non-ISO string V8 resolves in the local zone", "Jan 1 2026"],
+    ["an unparseable bound", "the first of January"],
+    ["a lowercase UTC designator", "2026-01-01T00:00:00.000z"],
+    ["a numeric offset written without its colon", "2026-01-01T00:00+0200"],
+  ] as const;
+
+  const originalTimeZone = process.env.TZ;
+  afterEach(() => {
+    if (originalTimeZone === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTimeZone;
+    }
+  });
+
+  it.each(ambiguousBounds)("refuses %s as an audit's sample start", async (_label, bound) => {
+    const store = eligibleStore();
+
+    await expect(
+      new AccountModerationService(store).openAccountAudit(moderator(), {
+        ...openAuditInput(),
+        sampleStartedAt: bound,
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: expect.stringMatching(offsetRequirement) as unknown as string,
+    });
+    expect(store.cohortReadCount).toBe(0);
+    expect(store.lastOpenInput).toBeUndefined();
+  });
+
+  // The start sits a year earlier so that every bound below reads as a window that ends after
+  // it starts under any timezone, leaving the offset rule as the only thing that can refuse it.
+  it.each(ambiguousBounds)("refuses %s as an audit's sample end", async (_label, bound) => {
+    const store = eligibleStore();
+
+    await expect(
+      new AccountModerationService(store).openAccountAudit(moderator(), {
+        ...openAuditInput(),
+        sampleStartedAt: "2025-01-01T00:00:00.000Z",
+        sampleEndedAt: bound,
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: expect.stringMatching(offsetRequirement) as unknown as string,
+    });
+    expect(store.cohortReadCount).toBe(0);
+    expect(store.lastOpenInput).toBeUndefined();
+  });
+
+  // previewCalibrationCohort normalizes the same window through its own entry point, so a
+  // guard proved only on openAccountAudit would leave the preview reading a different cohort.
+  it.each(ambiguousBounds)("refuses %s in a cohort preview", async (_label, bound) => {
+    const store = eligibleStore();
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        sampleStartedAt: bound,
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: expect.stringMatching(offsetRequirement) as unknown as string,
+    });
+    expect(store.cohortReadCount).toBe(0);
+  });
+
+  // `new Date` rolls an impossible day into the following month rather than reporting NaN,
+  // so a shape check alone would silently audit a window nobody asked for.
+  it.each([
+    ["a day past the end of February", "2026-02-31T00:00:00Z"],
+    ["a leap day in a common year", "2026-02-29T00:00:00Z"],
+    ["a day past the end of April", "2026-04-31T00:00:00Z"],
+  ] as const)("refuses %s even though its shape is well formed", async (_label, bound) => {
+    const store = eligibleStore();
+
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        sampleStartedAt: bound,
+        // Late enough that the rolled-over instant still opens a window, so the refusal
+        // cannot come from the end-after-start rule.
+        sampleEndedAt: "2027-01-01T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: "Sample start must be a valid timestamp.",
+    });
+    expect(store.cohortReadCount).toBe(0);
+  });
+
+  it.each([
+    ["a minute-precision UTC designator", "2026-01-01T00:00Z", "2026-01-01T00:00:00.000Z"],
+    ["a second-precision UTC designator", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000Z"],
+    ["a millisecond-precision UTC designator", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    ["a positive numeric offset", "2026-01-01T02:00:00+02:00", "2026-01-01T00:00:00.000Z"],
+    ["a negative numeric offset", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.000Z"],
+    ["a negative zero offset", "2026-01-01T00:00-00:00", "2026-01-01T00:00:00.000Z"],
+    ["a leap day in a leap year", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
+  ] as const)("accepts %s and stores the instant it names", async (_label, bound, instant) => {
+    const store = eligibleStore();
+
+    const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+      ...previewInput(),
+      sampleStartedAt: bound,
+    });
+
+    expect(preview.sampleStartedAt).toBe(instant);
+    expect(store.lastCohortInput?.sampleStartedAt).toBe(instant);
+  });
+
+  // The bug this pins: before the offset requirement, one request body recorded a different
+  // instant on a Europe/Prague host than on a UTC one, with nothing in the response to say so.
+  it("normalizes an offset-bearing bound identically in every server timezone", async () => {
+    const zones = ["UTC", "America/New_York", "Asia/Tokyo"] as const;
+    const normalized: string[] = [];
+
+    for (const zone of zones) {
+      process.env.TZ = zone;
+      const store = eligibleStore();
+
+      const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        sampleStartedAt: "2026-01-01T02:00:00+02:00",
+      });
+
+      normalized.push(preview.sampleStartedAt);
+    }
+
+    expect(normalized).toEqual(zones.map(() => "2026-01-01T00:00:00.000Z"));
+  });
+
+  it.each(["UTC", "America/New_York", "Asia/Tokyo"])(
+    "refuses an offset-less bound on a server running in %s",
+    async (zone) => {
+      process.env.TZ = zone;
+      const store = eligibleStore();
+
+      await expect(
+        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          sampleStartedAt: "2026-01-01T00:00",
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+      expect(store.cohortReadCount).toBe(0);
+    },
+  );
+});
+
 type LoadedCohortRequest = {
   targetAccountId: string;
   repositoryId: string | null;
@@ -462,6 +620,14 @@ class TestModerationStore implements ModerationStore {
   public async setModeratorRole(): Promise<ModerationStoreResult<never>> {
     return { kind: "not_found" };
   }
+}
+
+/** A store with cohorts large enough to open an audit, so a refusal is the window's doing. */
+function eligibleStore(): TestModerationStore {
+  return new TestModerationStore({
+    selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
+    outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
+  });
 }
 
 function moderator() {
