@@ -3,7 +3,21 @@ export type ReconciliationSweepDependencies = {
   getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
   reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
   now?: () => Date;
-  onFailure?(repositoryId: string, error: unknown): void;
+  /**
+   * Reports one repository this sweep could not reconcile, as distinct from the
+   * whole-sweep `onSweepFailure` on the schedule. A hook that fails costs
+   * neither the sweep nor the report, whichever way it fails: reading the member
+   * can throw, since it may be an accessor wired lazily; the call can throw; and
+   * an async hook can reject. Each of the three ends with the repository failure
+   * on console.error instead, and the sweep carries on to the next repository.
+   * Omit the hook to report there in the first place.
+   *
+   * The return is declared, not left as `void`, because an async hook is
+   * supported rather than merely tolerated by TypeScript's void-return
+   * assignability: whatever the hook returns is settled and its rejection is
+   * handled.
+   */
+  onFailure?(repositoryId: string, error: unknown): void | PromiseLike<unknown>;
 };
 
 export type ReconciliationSweepSummary = {
@@ -93,11 +107,88 @@ export async function sweepReconciliations(
       reconciled += 1;
     } catch (error) {
       failed += 1;
-      dependencies.onFailure?.(repositoryId, error);
+      reportRepositoryFailure(dependencies, repositoryId, error);
     }
   }
 
   return { attempted: reconciled + failed, reconciled, failed, skipped };
+}
+
+/**
+ * Reports one repository's failure, on the console when the caller has no hook
+ * of its own.
+ *
+ * Guarded the three ways the scheduler's reportSweepFailure is, and for the same
+ * reasons: retrieving the member is its own failure — it may be an accessor
+ * wired lazily, which throws before any hook exists — while the call can throw
+ * or, if the hook is async, reject. All three are contained and all three still
+ * reach the console, so a failing hook costs neither the report nor the sweep.
+ *
+ * Costing the sweep is what is new here. The counters are already settled when
+ * this is reached, so they are untouched either way; what a throw used to cost
+ * was every repository still queued behind the failing one, since it propagated
+ * out of the loop and left them unreconciled. A diagnostic must not be able to
+ * do that.
+ *
+ * The hook is settled, not awaited. Containing a rejection does not require
+ * awaiting one, and sweepReconciliations is serial, so awaiting would put every
+ * remaining repository behind a diagnostic and let a hook that never settles
+ * stall the whole sweep rather than one report.
+ */
+function reportRepositoryFailure(
+  dependencies: ReconciliationSweepDependencies,
+  repositoryId: string,
+  error: unknown,
+): void {
+  let hook: ReconciliationSweepDependencies["onFailure"];
+  try {
+    // Read exactly once, and behind its own guard: an accessor can have a side
+    // effect, and it can throw instead of yielding a hook at all.
+    hook = dependencies.onFailure;
+  } catch {
+    hook = undefined;
+  }
+
+  // Anything uncallable — a hook that could not be retrieved, or the null an
+  // untyped caller can pass where the optional member expresses only undefined —
+  // counts as no hook at all.
+  if (typeof hook !== "function") {
+    logRepositoryFailure(repositoryId, error);
+    return;
+  }
+
+  try {
+    // `hook.call(dependencies, …)` because the local no longer supplies the
+    // receiver the property access did: the type declares a method, so a bare
+    // `hook(…)` would leave `this` undefined and turn the hook itself into the
+    // throw this guard exists to prevent. A hook that cannot be invoked this way
+    // falls into the guard below like any other failing hook.
+    void Promise.resolve(hook.call(dependencies, repositoryId, error)).catch(() => {
+      logRepositoryFailure(repositoryId, error);
+    });
+  } catch {
+    logRepositoryFailure(repositoryId, error);
+  }
+}
+
+/**
+ * Logs a repository failure, keeping the line even when the reason is what
+ * breaks.
+ *
+ * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
+ * getter with a side effect — and losing the whole line to that would hide the
+ * failure entirely. The repository id is passed as its own argument rather than
+ * built into the message, so the line that survives still says which repository
+ * it was about. A console broken outright is left to surface, for the reason
+ * given on logSweepFailure.
+ */
+function logRepositoryFailure(repositoryId: string, error: unknown): void {
+  const message = "Reconciliation failed for repository";
+  try {
+    console.error(message, repositoryId, error);
+  } catch {
+    console.error(message, repositoryId);
+  }
 }
 
 /**
