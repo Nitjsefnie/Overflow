@@ -189,6 +189,77 @@ describe("the client's reserve contract", () => {
     expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("still queued");
   });
 
+  it("does not dispatch queued work to a connection the pool has already reclaimed", async () => {
+    const record: string[] = [];
+    const uncaught: string[] = [];
+    const observe = (error: Error): void => {
+      uncaught.push(error.message);
+    };
+    let reclaimed = (): void => {};
+    // The pool calls this option from inside its own `onclose`, which is where it takes the
+    // reservation back, and it does so before the reconnect it schedules can have run. Resuming
+    // from this promise is a microtask of that same turn, so no timer has fired in between: the
+    // release below lands in the window by ordering rather than by waiting for it.
+    const reclaimedByPool = new Promise<void>((resolve) => {
+      reclaimed = resolve;
+    });
+    // A short connect budget so that a wedged reconnect refuses the queued work instead of sitting
+    // on the driver's thirty-second default. Nothing below asserts on how long anything took.
+    const sql = postgres(databaseUrl, { max: 1, connect_timeout: 5, onclose: () => reclaimed() });
+
+    // The dispatched write is flushed from a `setImmediate`, so a driver that writes to a socket
+    // that is already gone throws where no caller can catch it and the process exits. Awaiting the
+    // queries below would never see that, so it is observed directly. The listener is this test's
+    // own and is removed again in the `finally`, so nothing outside it is left unguarded.
+    process.on("uncaughtException", observe);
+    try {
+      const holder = await sql.reserve();
+      const [backend] = await holder<{ pid: number }[]>`select pg_backend_pid()::integer as pid`;
+      // The pool is at its bound and its only connection is reserved, so all three are queued. It
+      // takes three because the close path hands the head of that queue to the reconnect as its
+      // startup query: with nothing left behind it the pool would have nothing to dispatch, and
+      // the release would be harmless for a reason that has nothing to do with the repair.
+      //
+      // Their rows are reported rather than destructured, because "resolved with no rows at all"
+      // is one of the two things that go wrong here: a query dispatched onto a connection with no
+      // socket is still sitting in its query slot when the replacement socket finishes its
+      // handshake, and that handshake's ReadyForQuery resolves it with the empty result collected
+      // so far. Which of that and the uncaught throw below a run gets is a race. Neither is
+      // allowed, so both are asserted.
+      const queued = [0, 1, 2].map((value) =>
+        sql<{ value: number }[]>`select ${value}::integer as value`.execute().then(
+          (rows) => `queued ${value}: ${rows.length === 1 ? rows[0]!.value : `${rows.length} rows`}`,
+          (error: { code?: string }) => `queued ${value}: ${error.code}`,
+        ));
+      const held = holder`select pg_sleep(30)`.then(
+        () => "held: served",
+        (error: { code?: string }) => `held: ${error.code}`,
+      );
+
+      // Deliberately not awaited here: the await below has to be reached before the death is
+      // processed, or the resumption lands a turn late with the reconnect already under way.
+      const terminated = observer!`select pg_terminate_backend(${backend!.pid})`.execute();
+      await reclaimedByPool;
+      // The connection is the pool's again and has no socket. A release that hands it back a
+      // second time is the pool dispatching queued work onto a dead connection.
+      holder.release();
+
+      record.push(await held, ...(await Promise.all(queued)));
+      await terminated;
+
+      expect(uncaught).toEqual([]);
+      expect(record).toEqual([
+        "held: CONNECTION_CLOSED",
+        "queued 0: 0",
+        "queued 1: 1",
+        "queued 2: 2",
+      ]);
+    } finally {
+      process.off("uncaughtException", observe);
+      await sql.end({ timeout: 0 });
+    }
+  });
+
   it("does not refuse a queued query with the error that killed the connection before it", async () => {
     const sql = postgres(databaseUrl, { max: 1 });
 
@@ -216,6 +287,44 @@ describe("the client's reserve contract", () => {
       // The queued query never reached the backend that died, so the death is not its answer: it
       // runs on the connection the pool opened in its place.
       expect([await held, await queued]).toEqual(["held: CONNECTION_CLOSED", "queued: 1"]);
+    } finally {
+      await sql.end({ timeout: 0 });
+    }
+  });
+
+  it("keeps a spent reservation from taking back a connection someone else now holds", async () => {
+    const sql = postgres(databaseUrl, { max: 1, fetch_types: false });
+
+    try {
+      const first = await sql.reserve();
+      first.release();
+      // The pool's one connection is free again, so this reservation takes that same connection.
+      const second = await sql.reserve();
+      // The release a caller makes twice — a `finally` that runs on a retried path, a wrapper that
+      // releases what it has already released. It is spent, and the connection is no longer its
+      // own to give away.
+      first.release();
+
+      let outcome = "queued";
+      void sql.reserve().then(
+        (reserved) => {
+          outcome = "served";
+          reserved.release();
+        },
+        () => {
+          outcome = "refused";
+        },
+      );
+      // A turn boundary rather than a duration: `setImmediate` runs once the microtask queue has
+      // drained, so a reservation the pool was willing to serve has already been served by here.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // The pool is at its bound and `second` holds its only connection, so there is nothing to
+      // serve a third reservation with. A spent release that put that connection back into the
+      // pool's open queue hands one backend to two holders that each believe it is theirs alone.
+      expect(outcome).toBe("queued");
+      await expect(second<{ one: number }[]>`select 1 as one`).resolves.toEqual([{ one: 1 }]);
+      second.release();
     } finally {
       await sql.end({ timeout: 0 });
     }
