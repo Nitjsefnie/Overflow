@@ -97,11 +97,11 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
 
     try {
       const registrationDependencies = await dependencies.createRegistrationDependencies(session);
-      const { existingWorkIngested, ...repository } = await registerRepository(
+      const { initialImportScheduled, ...repository } = await registerRepository(
         registrationDependencies,
         input,
       );
-      return Response.json({ repository, existingWorkIngested }, { status: 201 });
+      return Response.json({ repository, initialImportScheduled }, { status: 201 });
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
@@ -145,14 +145,10 @@ export const POST = createRepositoryPostHandler({
       store,
       webhook: requiredWebhookConfiguration(),
       // Existing issues predate the webhook this registration creates, so only a
-      // reconciliation can bring them in. See ingestExistingWork in register.ts.
-      async reconcile(repositoryId) {
+      // reconciliation can bring them in. See scheduleInitialImport in register.ts.
+      async scheduleInitialImport(repositoryId) {
         const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
-        const { reconcileRepository } = await import("@/lib/fold/reconcile");
-        return reconcileRepository(
-          { store: new PostgresFoldStore(), github: new GitHubGateway({ accessToken }) },
-          repositoryId,
-        );
+        return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
     };
   },

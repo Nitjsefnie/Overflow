@@ -74,7 +74,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
       }
 
       const ownerName = body?.repository?.ownerName ?? values.repositoryUrl.trim();
-      setFeedback({ kind: "success", message: registrationMessage(ownerName, body?.existingWorkIngested) });
+      setFeedback({ kind: "success", message: registrationMessage(ownerName, body?.initialImportScheduled) });
     } catch {
       setFeedback({
         kind: "error",
@@ -209,19 +209,22 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 
 type RegistrationResponse = {
   repository?: { ownerName?: string };
-  existingWorkIngested?: boolean;
+  initialImportScheduled?: boolean;
   error?: { message?: string };
 };
 
-// Registration ingests the issues that already exist in the repository. That step can
-// fail without invalidating the registration, so the sponsor is told which happened
-// rather than being left to wonder why an empty issue list is empty.
-function registrationMessage(ownerName: string, existingWorkIngested: boolean | undefined): string {
-  if (existingWorkIngested === true) {
-    return `${ownerName} is registered and its existing issues were imported.`;
+// Registration only queues the import of the issues that already exist in the
+// repository, so `true` promises that the import is coming and not that it has
+// happened, and `false` means the queueing itself failed: nothing is waiting to run,
+// and only the periodic repair sweep will pick the repository up. Either way the
+// registration stands, so the sponsor is told which happened rather than being left
+// to wonder why an empty issue list is empty.
+function registrationMessage(ownerName: string, initialImportScheduled: boolean | undefined): string {
+  if (initialImportScheduled === true) {
+    return `${ownerName} is registered. Its existing issues are being imported and will appear shortly.`;
   }
-  if (existingWorkIngested === false) {
-    return `${ownerName} is registered, but its existing issues could not be imported yet. They will appear after the next reconciliation.`;
+  if (initialImportScheduled === false) {
+    return `${ownerName} is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.`;
   }
   return `${ownerName} is registered.`;
 }

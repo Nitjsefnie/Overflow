@@ -54,11 +54,11 @@ export type RepositoryRegistrationDependencies = {
   github: RepositoryRegistrationGateway;
   store: RepositoryRegistrationStore;
   webhook: GitHubWebhookConfiguration;
-  reconcile?: (repositoryId: string) => Promise<unknown>;
+  scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
 };
 
 export type RepositoryRegistrationResult = RegisteredRepository & {
-  existingWorkIngested: boolean;
+  initialImportScheduled: boolean;
 };
 
 export class RepositoryRegistrationError extends Error {
@@ -222,9 +222,10 @@ export async function registerRepository(
 
   // The registration is committed by this point. Work that already exists in the
   // repository only enters the ledger through a reconciliation, and a webhook can
-  // never deliver it because it was created after that work. So ingest it here, and
-  // report a failure to the sponsor rather than undoing a registration that stands.
-  return { ...created, existingWorkIngested: await ingestExistingWork(dependencies, created.id) };
+  // never deliver it because it was created after that work. So schedule that import
+  // durably here rather than holding the response open for a full crawl, and report a
+  // failure to schedule it to the sponsor rather than undoing a registration that stands.
+  return { ...created, initialImportScheduled: await scheduleInitialImport(dependencies, created.id) };
 }
 
 function githubSetupError(
@@ -267,16 +268,16 @@ function githubSetupError(
   );
 }
 
-async function ingestExistingWork(
+async function scheduleInitialImport(
   dependencies: RepositoryRegistrationDependencies,
   repositoryId: string,
 ): Promise<boolean> {
-  if (dependencies.reconcile === undefined) {
+  if (dependencies.scheduleInitialImport === undefined) {
     return false;
   }
 
   try {
-    await dependencies.reconcile(repositoryId);
+    await dependencies.scheduleInitialImport(repositoryId);
     return true;
   } catch {
     return false;
