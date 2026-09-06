@@ -319,14 +319,15 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     reason: RepositoryUnavailableReason;
     at: Date;
   }): Promise<void> {
+    // The where guard is what preserves the first observation: a row whose reason
+    // already equals the input never reaches this set list, so every row that does
+    // is taking on a reason it did not carry before. Relaxing that guard would
+    // require unavailable_since to go back to keeping the earlier value.
     await this.sql`
       update registered_repositories
       set
         unavailable_reason = ${input.reason},
-        unavailable_since = case
-          when unavailable_reason = ${input.reason} then unavailable_since
-          else ${input.at}
-        end,
+        unavailable_since = ${input.at},
         updated_at = now()
       where id = ${input.repositoryId}
         and unavailable_reason is distinct from ${input.reason}

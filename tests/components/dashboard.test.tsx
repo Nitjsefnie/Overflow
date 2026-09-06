@@ -164,8 +164,8 @@ describe("member dashboard", () => {
     );
 
     expect(screen.getByText(/co-op\/harbour.*· unavailable: not found on GitHub or no longer public$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/lighthouse.*unavailable: no longer public/)).toBeVisible();
-    expect(screen.getByText(/co-op\/breakwater.*unavailable: identity mismatch/)).toBeVisible();
+    expect(screen.getByText(/co-op\/lighthouse.*· unavailable: no longer public$/)).toBeVisible();
+    expect(screen.getByText(/co-op\/breakwater.*· unavailable: identity mismatch$/)).toBeVisible();
     expect(screen.getByText(/co-op\/seawall/)).not.toHaveTextContent(/unavailable/i);
     expect(screen.queryByText(/NOT_FOUND|NOT_PUBLIC|IDENTITY_MISMATCH/)).not.toBeInTheDocument();
   });
