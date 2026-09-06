@@ -45,10 +45,5 @@ export async function register(): Promise<void> {
           console.error(`Reconciliation sweep failed for repository ${repositoryId}`, error);
         },
       }),
-    onFailure: (error) => {
-      // A sweep can reject before it reaches any repository — an unreachable
-      // database cannot list them. Report it and let the next interval retry.
-      console.error("Reconciliation sweep failed", error);
-    },
   });
 }
