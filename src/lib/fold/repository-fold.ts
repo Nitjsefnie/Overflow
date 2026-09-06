@@ -181,21 +181,32 @@ export type UnwritableClosure = {
 export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SETTLED_RATIONALE_EDITED";
 
 /**
- * The two ways an opening can be refused, which a moderator reading the change
- * log has to be able to tell apart: no opening-catalog label stood on the issue
- * inside its opening window at all, or one did and the account that applied it
- * is not the repository sponsor. Only the second names an account.
+ * What a refusal records, and why the unauthorized one says more than its code.
+ *
+ * This row is the only record a moderator gets — the fold emits it,
+ * `recordPolicyViolations` writes it to `reconciliation_changes`, and nothing
+ * else is kept — so an accusation has to answer "which label, and who applied
+ * it" without one. An absence has neither to report, so the two are a union on
+ * `code` rather than one shape with two nullable columns: a consumer that
+ * switches on the code gets the fields typed where they exist and is not made
+ * to handle an absence that cannot happen.
  */
-export type OpeningRefusalCode = "OPENING_LABEL_MISSING" | "OPENING_LABEL_UNAUTHORIZED";
+export type OpeningRefusal =
+  | { code: "OPENING_LABEL_MISSING" }
+  | {
+      code: "OPENING_LABEL_UNAUTHORIZED";
+      /** The opening-catalog label the refused application applied. */
+      openingLabel: string;
+      /** The login GitHub reported for the account that applied it, or `unknown`. */
+      openingSourceActorLogin: string;
+    };
 
-export type FoldPolicyViolation = {
-  code:
-    | OpeningRefusalCode
-    | "OPENING_LABEL_AMBIGUOUS"
-    | "OPENING_LABEL_MUTATED"
-    | SettlementEvidenceViolationCode;
-  githubIssueId: number;
-};
+export type FoldPolicyViolation =
+  | (OpeningRefusal & { githubIssueId: number })
+  | {
+      code: "OPENING_LABEL_AMBIGUOUS" | "OPENING_LABEL_MUTATED" | SettlementEvidenceViolationCode;
+      githubIssueId: number;
+    };
 
 export type FoldResult = {
   issues: FoldIssue[];
@@ -245,7 +256,7 @@ type OpeningResolution = {
 
 type OpeningResolutionResult =
   | { kind: "resolved"; opening: OpeningResolution }
-  | { kind: "refused"; code: OpeningRefusalCode };
+  | { kind: "refused"; violation: OpeningRefusal };
 
 /** A `LABELED` timeline event, the only history event an opening can be read from. */
 type OpeningLabelEvent = Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>;
@@ -315,10 +326,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   for (const issue of snapshot.issues) {
     const resolution = resolveOpening(issue, snapshot.repository.difficultyScheme, sponsor);
     if (resolution.kind === "refused") {
-      policyViolations.push({
-        code: resolution.code,
-        githubIssueId: issue.id,
-      });
+      policyViolations.push({ ...resolution.violation, githubIssueId: issue.id });
       continue;
     }
     const opening = resolution.opening;
@@ -501,7 +509,7 @@ function resolveOpening(
   // Neither of these is a fact about a label's authority — there is no label to
   // read an actor from yet — so both stay the absence refusal.
   if (ownerLogin === null || !validTimestamp(issue.createdAt)) {
-    return { kind: "refused", code: "OPENING_LABEL_MISSING" };
+    return { kind: "refused", violation: { code: "OPENING_LABEL_MISSING" } };
   }
   const openingByLabel = new Map(scheme.openingLabels.map((entry) => [entry.label, entry]));
   const orderedHistory = issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems);
@@ -529,7 +537,7 @@ function resolveOpening(
       isRepositorySponsor({ login: event.actorLogin, githubUserId: event.actorGitHubUserId }, sponsor),
   );
   if (sourceIndex < 0) {
-    return { kind: "refused", code: openingRefusalCode(orderedHistory.filter(openingCandidate), sponsor) };
+    return { kind: "refused", violation: openingRefusal(orderedHistory.filter(openingCandidate), sponsor) };
   }
   const source = orderedHistory[sourceIndex] as OpeningLabelEvent;
   const configured = openingByLabel.get(source.label)!;
@@ -572,12 +580,26 @@ function resolveOpening(
  * a candidate: that is a timing refusal, and it reads as missing rather than
  * being absorbed into an authority one.
  */
-function openingRefusalCode(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusalCode {
+function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusal {
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
-  const attributable = candidates.some(
+  // The earliest application that could be compared at all, which is the one the
+  // row names: an earlier candidate nothing could be compared against accuses
+  // nobody, so naming it would put an account in the record that was never
+  // refused.
+  const attributable = candidates.find(
     (candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null,
   );
-  return attributable ? "OPENING_LABEL_UNAUTHORIZED" : "OPENING_LABEL_MISSING";
+  if (attributable === undefined) {
+    return { code: "OPENING_LABEL_MISSING" };
+  }
+  return {
+    code: "OPENING_LABEL_UNAUTHORIZED",
+    openingLabel: attributable.label,
+    // Deliberately not `sponsorDisplayLogin`: that helper falls back to the
+    // SPONSOR's stored login when the payload names no actor, which here would
+    // record the sponsor as the account that applied an unauthorized label.
+    openingSourceActorLogin: attributable.actorLogin?.trim() || "unknown",
+  };
 }
 
 /**

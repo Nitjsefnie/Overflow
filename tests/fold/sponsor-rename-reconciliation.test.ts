@@ -243,6 +243,8 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       after_state: {
         code: "OPENING_LABEL_UNAUTHORIZED",
         githubIssueId: impostorIssueGitHubId,
+        openingLabel: "M",
+        openingSourceActorLogin: STORED_SPONSOR_LOGIN,
       },
     }]);
     // Pinned to the literal, not to `removals.length`: a defect that recorded
