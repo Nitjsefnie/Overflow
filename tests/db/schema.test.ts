@@ -1901,6 +1901,66 @@ describe("initial PostgreSQL materialization", () => {
     })]);
   });
 
+  it("refuses a materialization redating the same opening event for an already proven issue", async () => {
+    const sponsorLogin = `redated-owner-${nextExternalId()}`;
+    const contributorLogin = `redated-worker-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const store = new PostgresFoldStore(sql);
+    await store.materialize({
+      repositoryId,
+      runId: await store.beginRun(repositoryId),
+      fold: foldRepository(snapshot),
+    });
+    const storedIssue = async () => sql`
+      select owner_github_login, opening_source_actor_login, opening_source_event_id,
+             opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
+      from issues where github_issue_id = ${githubIssueId}
+    `;
+    const before = await storedIssue();
+
+    // The opening event keeps its node id and only its timestamp moves, so the
+    // event-id comparison alone cannot see this rewritten history.
+    const redatedSnapshot = structuredClone(snapshot);
+    redatedSnapshot.issues[0]!.history[0]!.createdAt = "2026-09-01T08:02:00.000Z";
+    const redated = foldRepository(redatedSnapshot);
+    expect(redated.issues[0]).toMatchObject({
+      openingSourceEventId: `opening-${githubIssueId}`,
+      openingSourceAt: "2026-09-01T08:02:00.000Z",
+    });
+
+    await expect(store.materialize({
+      repositoryId,
+      runId: await store.beginRun(repositoryId),
+      fold: redated,
+    })).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
+    await expect(storedIssue()).resolves.toEqual(before);
+    expect(before).toEqual([expect.objectContaining({
+      opening_source_event_id: `opening-${githubIssueId}`,
+      opening_source_at: new Date("2026-09-01T08:01:00.000Z"),
+    })]);
+  });
+
   it("establishes a legacy unclaimed settlement's creditor id on rebuild so the original account can claim it", async () => {
     const sponsorLogin = `backfill-sponsor-${nextExternalId()}`;
     const sponsor = await insertIdentity(sql, sponsorLogin);
