@@ -953,6 +953,33 @@ describe("initial PostgreSQL materialization", () => {
     }]);
   });
 
+  it("refuses redating an opening timestamp standing without its event id", async () => {
+    // The completeness check is three-valued, so it admits a row carrying an
+    // opening timestamp and nothing else (issue 19). From that state the guard's
+    // event-id half sees nothing, and only its timestamp half can refuse a
+    // redate of evidence the row already holds.
+    const issue = await insertIssue(sql);
+    await sql`
+      update issues set opening_source_at = ${"2026-09-01T09:00:00.000Z"} where id = ${issue.id}
+    `;
+    await expect(sql`
+      select owner_github_login, opening_source_event_id, opening_source_actor_login, opening_source_at
+      from issues where id = ${issue.id}
+    `).resolves.toEqual([{
+      owner_github_login: null,
+      opening_source_event_id: null,
+      opening_source_actor_login: null,
+      opening_source_at: new Date("2026-09-01T09:00:00.000Z"),
+    }]);
+
+    await expect(sql`
+      update issues set opening_source_at = ${"2026-09-02T09:00:00.000Z"} where id = ${issue.id}
+    `).rejects.toThrow("Issue opening rating is immutable");
+    await expect(sql`
+      select opening_source_at from issues where id = ${issue.id}
+    `).resolves.toEqual([{ opening_source_at: new Date("2026-09-01T09:00:00.000Z") }]);
+  });
+
   it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
     const pullRequest = await insertPullRequest(sql);
     const mergeCommitOid = "0123456789abcdef0123456789abcdef01234567";
