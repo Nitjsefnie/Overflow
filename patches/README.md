@@ -96,10 +96,15 @@ query.**
   `reserve()` itself does when it hands a queued reserve to a freshly opened
   connection, so the two paths now agree.
 - `src/index.js` — `reserve()` takes its own pseudo-query back out of `queries`
-  when it is rejected. Rejection happens in the package's `errored()`, which has
-  no handle on the pool's queue, so the rejected reserve would otherwise stay
-  queued and swallow the next connection that reaches it. See *What it fixes that
-  stock did not* below.
+  when it is rejected. The rejection this repairs happens in the package's
+  `errored()`, which has no handle on the pool's queue, so the rejected reserve
+  would otherwise stay queued and swallow the next connection that reaches it.
+  See *What it fixes that stock did not* below. A queued reserve is also rejected
+  by the pool's own `destroy()`, which *does* hold the queue and shifts each item
+  out before rejecting it — `Queue.remove`'s `-1` guard is what keeps the wrapper
+  inert there. Removing by identity rather than by position is what makes that
+  safe: a positional removal would take the *next* queued item out instead, and
+  the drain would stop one short of it with its caller left waiting forever.
 - `src/queue.js` — a `peek`. `Queue` had `push`, `shift` and `remove`, and no way
   to read the head without taking it, which is exactly what `onclose` needs.
 - `src/connection.js` — the startup handler opens the connection when its startup
@@ -120,11 +125,13 @@ held backend terminated, every queued reconciliation still served.
 that opens the pool's first connection and one queued behind a terminated
 connection, both with array-type fetching off; a later reservation served after a
 reconnect's connect timed out; a non-reserve query queued behind a terminated
-reserved connection running exactly once; and `end()` settling instead of handing
-a connection out of a pool that is shutting down.
+reserved connection running exactly once; `end()` settling instead of handing
+a connection out of a pool that is shutting down; and every reservation queued
+behind a destroyed pool refused rather than only the first, which is what says
+the rejection removes by identity and not by position.
 `tests/db/postgres-queue.test.ts` holds the `peek` those paths read the queue
 with — that it names the element the next `shift` returns at every read position,
-not only the first.
+not only the first, across a refill of a partly drained queue as well.
 
 #### Where this diverges from upstream
 
@@ -163,7 +170,10 @@ the reserve out before the failing connect; the `onclose` hunk above deliberatel
 keeps it in, so on its own it would widen the path rather than leave it alone. A
 later `onopen` would then shift a rejected reserve, call `resolve` on it — a
 no-op — and return **without moving the connection out of `connecting`**, leaving
-the pool a slot down until `max_lifetime` recycles it half an hour later.
+the pool a slot down. That connection is alive and idle where nothing looks for
+it, so the only thing that ends it is its own `max_lifetime` timer, started when
+its socket connected and defaulted by `max_lifetime()` in `src/index.js` to a
+random 30 to 60 minutes; every caller in between finds the pool full.
 
 The `reserve()` hunk closes it: the pseudo-query leaves `queries` at the moment it
 is rejected, so the connection that opens afterwards finds either the next queued
@@ -180,6 +190,17 @@ process, on `main` as well as on this patch before this hunk.
 
 ### Housekeeping
 
+- **Only the ESM build is patched.** All five hunks land in `src/`. The
+  package also ships `cjs/src/` and `cf/src/` copies, and both still shift the
+  queue in `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, and
+  carry no `peek` in their `queue.js` — the same as on `main`, so this is a
+  standing property of the patch rather than something a release regressed. It
+  does not bite today: the package's `exports` map sends `import` to `src/`, and
+  `next build` bundles that build into every server chunk that reaches the client,
+  the edge chunk included. Reaching `postgres` through `require` (`default` →
+  `cjs/src/index.js`) or under the `workerd` condition (`cf/src/index.js`) would
+  silently get the unpatched client, so re-check this before moving anything that
+  talks to the database onto either route.
 - **The patch file and `pnpm-lock.yaml` move together.** The lockfile pins the
   patch by content hash, so hand-editing the patch without re-running
   `pnpm patch-commit` makes `pnpm install --frozen-lockfile` fail.
