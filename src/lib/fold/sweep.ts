@@ -41,6 +41,25 @@ export type ReconciliationSweepSchedule = {
    * costs.
    */
   schedule?(callback: () => void, everyMs: number): void | PromiseLike<unknown>;
+  /**
+   * How often the recurring tick runs. Omit it for the default cadence, which is
+   * what production takes: nothing wires an interval — the instrumentation hook
+   * passes only runSweep — so this is an injection seam and a failure here is a
+   * caller defect. Reading it can throw, since it may be an accessor wired
+   * lazily; that is contained and reported, RECONCILIATION_SWEEP_INTERVAL_MS
+   * stands in, and the recurring tick is still armed. readSweepInterval says
+   * what a failure costs, and names the one console failure that is fatal even
+   * here.
+   *
+   * Still arming it is what separates this member from `schedule`, where a
+   * member the caller supplied and broke arms nothing. `schedule` is the
+   * mechanism, so standing defaultSchedule in for it would arm a real six-hour
+   * interval in a process that asked to be armed some other way. This is a
+   * tuning number on a mechanism the caller still supplies and which still
+   * works, so the fallback runs the caller's own scheduler at this module's own
+   * documented cadence: nothing is substituted for the mechanism, and the wrong
+   * cadence is the whole of what the fallback costs.
+   */
   intervalMs?: number;
   /**
    * Reports a sweep that failed as a whole, as distinct from the per-repository
@@ -195,14 +214,15 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
  * the first sweep runs at startup, so a database that cannot list the
  * repositories would kill the server as it boots.
  *
- * One read is not guarded, and it is the first: `intervalMs` is taken before the
- * immediate sweep, so an accessor that throws there is fatal and costs the
- * startup pass as well. armSweepInterval treats the scheduler member as hostile
- * and the immediate sweep survives everything it can do; that does not extend
- * to this line.
+ * Every member the caller supplies is treated as hostile, and both of the ones
+ * read to arm the tick are read after the immediate sweep: readSweepInterval
+ * contains a failing `intervalMs` and armSweepInterval a failing `schedule`. So
+ * neither the cadence nor the arming mechanism can cost the startup pass, and
+ * the two differ only in what survives their own failure — the cadence falls
+ * back and the tick is armed anyway, while a broken mechanism is replaced by
+ * nothing and leaves nothing armed.
  */
 export function startReconciliationSweep(schedule: ReconciliationSweepSchedule): void {
-  const everyMs = schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
   let running = false;
 
   const sweep = () => {
@@ -225,7 +245,7 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
   };
 
   sweep();
-  armSweepInterval(schedule, sweep, everyMs);
+  armSweepInterval(schedule, sweep, readSweepInterval(schedule));
 }
 
 /**
@@ -348,6 +368,65 @@ function logUnarmedInterval(reason?: unknown): void {
     return;
   }
 
+  try {
+    console.error(message, reason);
+  } catch {
+    console.error(message);
+  }
+}
+
+/**
+ * Reads the caller's interval, standing the module's own default in when the
+ * read fails.
+ *
+ * `intervalMs` is an injection seam like the callables around it, and it can be
+ * an accessor wired lazily, so retrieving it can throw. callGuarded is not the
+ * guard for it: that helper contains the three ways a callable fails, and a data
+ * member has only the first of them.
+ *
+ * The fallback is reported rather than silent, and the tick is armed rather than
+ * abandoned. What failed is a tuning number and not the mechanism, so arming the
+ * caller's own scheduler at this module's documented cadence substitutes nothing
+ * for what the caller asked for; the wrong cadence is the whole of the cost, and
+ * it is a far smaller one than trading away every later sweep in a process that
+ * stays up. armSweepInterval takes the opposite course on `schedule` for the
+ * opposite reason, and says so.
+ *
+ * A console broken at both arities stays fatal, as callGuarded describes. Its
+ * throw propagates synchronously out of here and out of
+ * startReconciliationSweep, but only after the immediate sweep has already been
+ * started, so the startup pass that repairs the deliveries missed while the
+ * server was down survives it. What is lost is the recurring tick, which is
+ * never armed at all: the throw leaves before armSweepInterval is reached, so
+ * the tick is not armed and nothing says so.
+ */
+function readSweepInterval(schedule: ReconciliationSweepSchedule): number {
+  try {
+    return schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
+  } catch (error) {
+    logDefaultedInterval(error);
+    return RECONCILIATION_SWEEP_INTERVAL_MS;
+  }
+}
+
+/**
+ * Logs that the caller's interval could not be read, keeping the line even when
+ * the reason is what breaks.
+ *
+ * The message names the residual state and not just the failure, as
+ * logUnarmedInterval's does: sweeps go on running here, at a cadence the caller
+ * did not choose, and that difference is the whole of what an operator has to
+ * act on. There is always a reason to print, since nothing reaches this but a
+ * read that threw.
+ *
+ * The line survives a reason that refuses to be printed, for the reason
+ * logRepositoryFailure gives. A console broken at both arities stays fatal, as
+ * callGuarded describes; readSweepInterval says where that throw lands and what
+ * it costs.
+ */
+function logDefaultedInterval(reason: unknown): void {
+  const message =
+    "Reconciliation sweep interval could not be read; the recurring tick is armed at the default interval instead";
   try {
     console.error(message, reason);
   } catch {
