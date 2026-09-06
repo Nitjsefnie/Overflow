@@ -624,8 +624,8 @@ describe("initial PostgreSQL materialization", () => {
         select 'CROSS_REPOSITORY_CLOSING_PULL_REQUEST'::unwritable_closure_kind
       `).rejects.toThrow(/invalid input value for enum unwritable_closure_kind/);
 
-      // Every migration runs inside one transaction, so the added enum value has
-      // to survive an ALTER TYPE against a type that predates that transaction.
+      // The migration runs inside a transaction, so the added enum value has to
+      // survive an ALTER TYPE against a type that predates it.
       await expect(runMigrations()).resolves.toBeUndefined();
 
       const issue = await insertIssue(upgradeSql);
