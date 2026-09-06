@@ -3,6 +3,7 @@ import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
   RECONCILIATION_RETRY_DELAYS_MS,
+  RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS,
   RECONCILIATION_WORKER_POLL_INTERVAL_MS,
   runNextReconciliationJob,
   startReconciliationWorker,
@@ -317,6 +318,229 @@ describe("running the next reconciliation job", () => {
       rejections.stop();
     }
   });
+});
+
+describe("reconciliation lease heartbeat", () => {
+  it("renews the claimed lease every five seconds while the fold is in flight", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      ...timer.dependencies,
+    });
+    await settle();
+
+    try {
+      expect(timer.intervalMs).toBe(5_000);
+      expect(timer.intervalMs).toBe(RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS);
+      await timer.tick();
+      await timer.tick();
+      expect(calls).toEqual([
+        { method: "claim", args: [] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+        { method: "renew", args: ["job-1", "lease-1"] },
+      ]);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+  });
+
+  it.each([
+    { path: "reconciled", writer: "completeReconciliationJob", outcome: "RECONCILED", attempt: 1 },
+    { path: "deferred", writer: "deferReconciliationJob", outcome: "DEFERRED", attempt: 1 },
+    { path: "fold threw and retried", writer: "retryReconciliationJob", outcome: "RETRY_SCHEDULED", attempt: 1 },
+    { path: "fold threw and failed", writer: "failReconciliationJob", outcome: "FAILED", attempt: 5 },
+  ] as const)("renews through the $path outcome write and stops exactly once", async ({ writer, outcome, attempt }) => {
+    const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: attempt })] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const write = signal();
+    const enteredWrite = signal();
+    const original = store[writer].bind(store);
+    store[writer] = async (id: string, token: string, runAfter?: Date) => {
+      enteredWrite.resolve();
+      await write.promise;
+      return Reflect.apply(original, store, [id, token, runAfter]);
+    };
+    const running = runNextReconciliationJob({
+      store,
+      ...timer.dependencies,
+      onFailure: () => {},
+      reconcile: async () => {
+        await fold.promise;
+        if (outcome === "DEFERRED") return { skipped: true };
+        if (outcome !== "RECONCILED") throw new Error("fold failed");
+      },
+    });
+    try {
+      await settle();
+      await timer.tick();
+      expect(timer.cancellations).toBe(0);
+      fold.resolve();
+      await enteredWrite.promise;
+      await timer.tick();
+      expect(timer.cancellations).toBe(0);
+      expect(calls.filter(({ method }) => method === "renew")).toHaveLength(2);
+      write.resolve();
+      await expect(running).resolves.toBe(outcome);
+      expect(calls.at(-1)?.method).toBe(writer.replace("ReconciliationJob", ""));
+      expect(timer.cancellations).toBe(1);
+      const completedCalls = [...calls];
+      await timer.tick();
+      expect(calls).toEqual(completedCalls);
+      expect(timer.cancellations).toBe(1);
+    } finally {
+      fold.resolve();
+      write.resolve();
+      await running;
+    }
+  });
+
+  it.each([
+    { writer: "completeReconciliationJob", outcome: "RECONCILED", attempt: 1 },
+    { writer: "deferReconciliationJob", outcome: "DEFERRED", attempt: 1 },
+    { writer: "retryReconciliationJob", outcome: "RETRY_SCHEDULED", attempt: 1 },
+    { writer: "failReconciliationJob", outcome: "FAILED", attempt: 5 },
+  ] as const)("stops exactly once when $writer throws", async ({ writer, outcome, attempt }) => {
+    const { store, calls } = createFakeStore({ jobs: [job({ attemptCount: attempt })] });
+    const timer = createRenewalTimer();
+    const failure = new Error("outcome write failed");
+    store[writer] = async () => { throw failure; };
+    await expect(runNextReconciliationJob({
+      store,
+      ...timer.dependencies,
+      onFailure: () => {},
+      reconcile: async () => {
+        if (outcome === "DEFERRED") return { skipped: true };
+        if (outcome !== "RECONCILED") throw new Error("fold failed");
+      },
+    })).rejects.toBe(failure);
+    expect(timer.cancellations).toBe(1);
+    const completedCalls = [...calls];
+    await timer.tick();
+    expect(calls).toEqual(completedCalls);
+    expect(timer.cancellations).toBe(1);
+  });
+
+  it("reports a rejected renewal, keeps renewing, and preserves the fold outcome", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const failure = new Error("renewal database hiccup");
+    const renew = store.renewReconciliationJobLease.bind(store);
+    let attempts = 0;
+    store.renewReconciliationJobLease = async (id, token) => {
+      await renew(id, token);
+      if (++attempts === 1) throw failure;
+      return true;
+    };
+    const rejections = watchUnhandledRejections();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
+    try {
+      await settle();
+      await timer.tick();
+      await timer.tick();
+      expect(calls.filter(({ method }) => method === "renew")).toHaveLength(2);
+      expect(rejections.recorded).toEqual([]);
+      expect(logged.mock.calls).toEqual([["Reconciliation lease heartbeat failed for job", "job-1", failure]]);
+      expect(timer.cancellations).toBe(0);
+      fold.resolve();
+      await expect(running).resolves.toBe("RECONCILED");
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
+      expect(timer.cancellations).toBe(1);
+    } finally {
+      fold.resolve();
+      await running;
+      logged.mockRestore();
+      rejections.stop();
+    }
+  });
+
+  it("stops on a lost lease and still attempts the guarded outcome write", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const renew = store.renewReconciliationJobLease.bind(store);
+    store.renewReconciliationJobLease = async (id, token) => { await renew(id, token); return false; };
+    const complete = store.completeReconciliationJob.bind(store);
+    store.completeReconciliationJob = async (id, token) => { await complete(id, token); return false; };
+    const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
+    try {
+      await settle();
+      await timer.tick();
+      expect(timer.cancellations).toBe(1);
+      await timer.tick();
+      expect(calls.filter(({ method }) => method === "renew")).toHaveLength(1);
+      fold.resolve();
+      await expect(running).resolves.toBe("RECONCILED");
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
+      expect(timer.cancellations).toBe(1);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+  });
+
+  it("unrefs the default renewal timer and clears the same timer on completion", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const unref = vi.fn();
+    const timer = { unref } as unknown as ReturnType<typeof setInterval>;
+    const schedule = vi.spyOn(globalThis, "setInterval").mockReturnValue(timer);
+    const cancel = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    try {
+      await expect(runNextReconciliationJob({ store, reconcile: async () => {} })).resolves.toBe("RECONCILED");
+      expect(schedule).toHaveBeenCalledWith(expect.any(Function), 5_000);
+      expect(unref).toHaveBeenCalledTimes(1);
+      expect(cancel.mock.calls).toEqual([[timer]]);
+    } finally {
+      schedule.mockRestore();
+      cancel.mockRestore();
+    }
+  });
+
+  it.each(["scheduleLeaseRenewal", "cancelLeaseRenewal"] as const)(
+    "contains failures from the injected %s member",
+    async (member) => {
+      for (const mode of ["accessor", "throw", "reject", "uncallable"] as const) {
+        const { store, calls } = createFakeStore({ jobs: [job()] });
+        const timer = createRenewalTimer();
+        const failure = new Error(`${member} ${mode}`);
+        const dependencies = { store, reconcile: async () => {}, ...timer.dependencies };
+        Object.defineProperty(dependencies, member, {
+          get() {
+            if (mode === "accessor") throw failure;
+            if (mode === "uncallable") return "broken timer";
+            return function (this: unknown) {
+              expect(this).toBe(dependencies);
+              if (mode === "reject") return Promise.reject(failure);
+              throw failure;
+            };
+          },
+        });
+        const rejections = watchUnhandledRejections();
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+          await settle();
+          expect(rejections.recorded, mode).toEqual([]);
+          expect(logged.mock.calls, mode).toEqual([
+            ["Reconciliation lease heartbeat failed for job", "job-1", mode === "uncallable" ? undefined : failure],
+          ]);
+          expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
+          const completedCalls = [...calls];
+          await timer.tick();
+          expect(calls).toEqual(completedCalls);
+        } finally {
+          logged.mockRestore();
+          rejections.stop();
+        }
+      }
+    },
+  );
 });
 
 describe("draining the reconciliation queue", () => {
@@ -796,6 +1020,10 @@ function createFakeStore(
       record("claim", []);
       return pending.shift() ?? null;
     },
+    renewReconciliationJobLease: async (jobId, leaseToken) => {
+      record("renew", [jobId, leaseToken]);
+      return true;
+    },
     completeReconciliationJob: async (jobId, leaseToken) => {
       record("complete", [jobId, leaseToken]);
       return true;
@@ -866,6 +1094,34 @@ function watchUnhandledRejections() {
     recorded,
     stop() {
       process.off("unhandledRejection", listener);
+    },
+  };
+}
+
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+function createRenewalTimer() {
+  let fire: (() => void) | undefined;
+  let intervalMs: number | undefined;
+  let cancellations = 0;
+  return {
+    dependencies: {
+      scheduleLeaseRenewal(callback: () => void, everyMs: number) {
+        fire = callback;
+        intervalMs = everyMs;
+      },
+      cancelLeaseRenewal() { cancellations += 1; },
+    },
+    get intervalMs() { return intervalMs; },
+    get cancellations() { return cancellations; },
+    async tick() {
+      // Deliberately retain the callback, to simulate a queued tick after stop.
+      fire?.();
+      await settle();
     },
   };
 }

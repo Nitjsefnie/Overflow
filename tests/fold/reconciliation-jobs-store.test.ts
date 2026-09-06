@@ -8,7 +8,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
-import { RECONCILIATION_LEASE_MINUTES } from "@/lib/fold/reconciliation-worker";
+import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -292,17 +292,67 @@ describe("PostgreSQL reconciliation job queue", () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
 
-    await claimOrFail();
+    // now() is fixed throughout this transaction: assert the written window,
+    // without a wall-clock margin between the claim and the read.
+    await sql.begin(async (transaction) => {
+      await new PostgresFoldStore(transaction as unknown as Sql).claimNextReconciliationJob();
+      const [row] = await transaction<{ milliseconds: number }[]>`
+        select (extract(epoch from (lease_expires_at - now())) * 1000)::float8 as milliseconds
+        from repository_reconciliation_jobs
+        where repository_id = ${repositoryId}
+      `;
+      expect(row.milliseconds).toBe(20_000);
+      expect(row.milliseconds).toBe(RECONCILIATION_LEASE_MS);
+    });
+  });
 
-    // Read as an interval the database computes, so the only slack is the clock
-    // between the claim and this query rather than anything waited on here.
-    const [row] = await sql<{ minutes: number }[]>`
-      select (extract(epoch from (lease_expires_at - now())) / 60)::float8 as minutes
-      from repository_reconciliation_jobs
-      where repository_id = ${repositoryId}
-    `;
-    expect(row.minutes).toBeGreaterThan(RECONCILIATION_LEASE_MINUTES - 1);
-    expect(row.minutes).toBeLessThanOrEqual(RECONCILIATION_LEASE_MINUTES);
+  it("renews the matching running lease for the documented window", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+    await expireLease(claimed.id);
+    const before = await onlyJobFor(repositoryId);
+
+    await sql.begin(async (transaction) => {
+      const renewingStore = new PostgresFoldStore(transaction as unknown as Sql);
+      expect(await renewingStore.renewReconciliationJobLease(claimed.id, claimed.leaseToken)).toBe(true);
+      const [row] = await transaction<{ milliseconds: number }[]>`
+        select (extract(epoch from (lease_expires_at - now())) * 1000)::float8 as milliseconds
+        from repository_reconciliation_jobs where id = ${claimed.id}
+      `;
+      expect(row.milliseconds).toBe(20_000);
+      expect(row.milliseconds).toBe(RECONCILIATION_LEASE_MS);
+      expect(await renewingStore.claimNextReconciliationJob()).toBeNull();
+    });
+    const after = await onlyJobFor(repositoryId);
+    expect(after.lease_expires_at!.getTime()).toBeGreaterThan(before.lease_expires_at!.getTime());
+    expect(after).toEqual({ ...before, lease_expires_at: after.lease_expires_at });
+  });
+
+  it("does not renew a different job or a stale lease token", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+    const before = await jobById(claimed.id);
+
+    expect(await store.renewReconciliationJobLease(randomUUID(), claimed.leaseToken)).toBe(false);
+    expect(await store.renewReconciliationJobLease(claimed.id, randomUUID())).toBe(false);
+    expect(await jobById(claimed.id)).toEqual(before);
+  });
+
+  it.each(["PENDING", "FAILED"])("does not renew a %s job", async (state) => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+    if (state === "FAILED") {
+      await store.failReconciliationJob(claimed.id, claimed.leaseToken);
+    } else {
+      await store.deferReconciliationJob(claimed.id, claimed.leaseToken, new Date());
+    }
+    const before = await jobById(claimed.id);
+
+    expect(await store.renewReconciliationJobLease(claimed.id, claimed.leaseToken)).toBe(false);
+    expect(await jobById(claimed.id)).toEqual(before);
   });
 
   it("keeps a mid-fold event whose enqueue is still uncommitted when the fold completes", async () => {

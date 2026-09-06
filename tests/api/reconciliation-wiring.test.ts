@@ -202,6 +202,11 @@ function createQueueingStore() {
         leaseToken: job.leaseToken,
       };
     },
+    async renewReconciliationJobLease(jobId, leaseToken) {
+      return pending.some(
+        (job) => `job-${job.repositoryId}` === jobId && job.leaseToken === leaseToken,
+      );
+    },
     async completeReconciliationJob(jobId, leaseToken) {
       const index = pending.findIndex(
         (job) => `job-${job.repositoryId}` === jobId && job.leaseToken === leaseToken,
