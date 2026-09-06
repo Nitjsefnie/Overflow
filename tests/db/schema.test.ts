@@ -1952,6 +1952,7 @@ describe("initial PostgreSQL materialization", () => {
 
   it("refuses a materialization redating the same opening event for an already proven issue", async () => {
     const sponsorLogin = `redated-owner-${nextExternalId()}`;
+    const renamedSponsorLogin = `redated-owner-renamed-${nextExternalId()}`;
     const contributorLogin = `redated-worker-${nextExternalId()}`;
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
@@ -1961,14 +1962,16 @@ describe("initial PostgreSQL materialization", () => {
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
-    const snapshot = materializationSnapshot({
+    const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
+    const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
+    const snapshotAs = (ownerLogin: string) => materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
-      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
-      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
-      sponsorLogin,
+      sponsorGitHubUserId,
+      contributorGitHubUserId,
+      sponsorLogin: ownerLogin,
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
@@ -1979,21 +1982,28 @@ describe("initial PostgreSQL materialization", () => {
     await store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
-      fold: foldRepository(snapshot),
+      fold: foldRepository(snapshotAs(sponsorLogin)),
     });
     const storedIssue = async () => sql`
-      select owner_github_login, opening_source_actor_login, opening_source_event_id,
+      select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
              opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
       from issues where github_issue_id = ${githubIssueId}
     `;
     const before = await storedIssue();
 
     // The opening event keeps its node id and only its timestamp moves, so the
-    // event-id comparison alone cannot see this rewritten history.
-    const redatedSnapshot = structuredClone(snapshot);
+    // event-id comparison alone cannot see this rewritten history. The refused
+    // payload also carries edits the store writes willingly — a renamed account
+    // and a retitled issue — so a store that wrote the row and skipped the
+    // rollback would leave a visibly different row behind.
+    const redatedSnapshot = snapshotAs(renamedSponsorLogin);
+    redatedSnapshot.issues[0]!.title = "A retitled materialized issue";
     redatedSnapshot.issues[0]!.history[0]!.createdAt = "2026-09-01T08:02:00.000Z";
     const redated = foldRepository(redatedSnapshot);
     expect(redated.issues[0]).toMatchObject({
+      title: "A retitled materialized issue",
+      ownerGitHubLogin: renamedSponsorLogin,
+      openingSourceActorLogin: renamedSponsorLogin,
       openingSourceEventId: `opening-${githubIssueId}`,
       openingSourceAt: "2026-09-01T08:02:00.000Z",
     });
@@ -2005,6 +2015,9 @@ describe("initial PostgreSQL materialization", () => {
     })).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
     await expect(storedIssue()).resolves.toEqual(before);
     expect(before).toEqual([expect.objectContaining({
+      title: "A materialized issue",
+      owner_github_login: sponsorLogin,
+      opening_source_actor_login: sponsorLogin,
       opening_source_event_id: `opening-${githubIssueId}`,
       opening_source_at: new Date("2026-09-01T08:01:00.000Z"),
     })]);
