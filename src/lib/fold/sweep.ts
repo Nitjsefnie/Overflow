@@ -421,13 +421,13 @@ function readSweepInterval(schedule: ReconciliationSweepSchedule): number {
  * read, arming is the step after it, and a caller that broke both members — or
  * one that supplied no scheduler and left defaultSchedule's own setInterval to
  * throw — gets logUnarmedInterval's line next, and that one is the one that
- * holds.
- * There is always a reason to print, since nothing reaches this but a read that
- * threw. So a reason that is itself `undefined` still goes to the two-argument
- * line here, where logUnarmedInterval folds the same input into its reasonless
- * one: that helper also reports a member that never failed, so an `undefined`
- * beside its line would suggest a reason went missing, while nothing reaches
- * this line but a failure. The two helpers diverge on that input, deliberately.
+ * holds. There is always a failure to report, since nothing reaches this but a
+ * read that threw. So a reason that is itself `undefined` still goes to the
+ * two-argument line here, where logUnarmedInterval folds the same input into its
+ * reasonless one: that helper also reports a member that never failed, so an
+ * `undefined` beside its line would suggest a reason went missing, while nothing
+ * reaches this line but a failure. The two helpers diverge on that input,
+ * deliberately.
  *
  * The line survives a reason that refuses to be printed, for the reason
  * logRepositoryFailure gives. A console broken at both arities stays fatal, as
