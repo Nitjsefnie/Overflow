@@ -927,6 +927,7 @@ describe("scheduled reconciliation sweep", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
     const unarmable = new Error("The tick could not be registered");
+    const sweepFailures: unknown[] = [];
     let sweeps = 0;
 
     try {
@@ -940,6 +941,11 @@ describe("scheduled reconciliation sweep", () => {
           schedule: () => {
             throw unarmable;
           },
+          // A registration that never armed an interval is not a sweep that
+          // failed, so this is not the hook it is reported through.
+          onSweepFailure: (error) => {
+            sweepFailures.push(error);
+          },
         });
       }).not.toThrow();
       await drain();
@@ -949,6 +955,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(unhandled).toEqual([]);
       // A scheduler that failed is not replaced by the default one.
       expect(intervals.armed).toEqual([]);
+      expect(sweepFailures).toEqual([]);
       expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE, unarmable]]);
     } finally {
       intervals.restore();
@@ -1010,6 +1017,38 @@ describe("scheduled reconciliation sweep", () => {
       expect(reported).toContain("was not armed");
       expect(reported).toContain("no further sweeps will run");
       expect(reported).toContain("until the process restarts");
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("still reports an unarmed interval whose reason cannot be printed", async () => {
+    const unarmable = new Error("The tick could not be registered");
+    const calls: unknown[][] = [];
+    // Printing the reason is what fails here — a custom inspector that throws, a
+    // proxy, a getter with a side effect. The line itself has to survive that:
+    // it is the only notice anyone gets that the sweep will not run again.
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+      if (args.length > 1) {
+        throw new TypeError("This reason cannot be printed");
+      }
+    });
+    const intervals = captureIntervals();
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {},
+        schedule: () => {
+          throw unarmable;
+        },
+      });
+      await drain();
+
+      // The reason is what could not be printed, so the line survives without it.
+      expect(calls).toEqual([[UNARMED_MESSAGE, unarmable], [UNARMED_MESSAGE]]);
+      expect(intervals.armed).toEqual([]);
     } finally {
       intervals.restore();
       logged.mockRestore();
