@@ -169,6 +169,43 @@ describe("opening label authority", () => {
     }]);
   });
 
+  it.each([false, true])("uses event ids to break opening refusal ties (reversed: %s)", (reverse) => {
+    const snapshot = openingFixture({ opening: outsider });
+    applyOpeningLabel(snapshot, {
+      id: "opening-2",
+      label: "S",
+      actor: { login: "maintainer", githubUserId: 3001 },
+      createdAt: OPENING_LABELED_AT,
+    });
+    if (reverse) snapshot.issues[0]!.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+    }]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it.each([false, true])("uses event ids to break accepted opening ties (reversed: %s)", (reverse) => {
+    const snapshot = openingFixture();
+    applyOpeningLabel(snapshot, {
+      id: "opening-2", label: "S", actor: sponsor, createdAt: OPENING_LABELED_AT,
+    });
+    if (reverse) snapshot.issues[0]!.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.issues).toEqual([expect.objectContaining({
+      openingLabel: "M", openingComparisonPoints: 5, openingSourceEventId: "opening-1",
+    })]);
+    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_MUTATED", githubIssueId: 101 }]);
+  });
+
   it("names the first candidate that can be compared, skipping one that cannot", () => {
     // With no sponsor login stored, an idless actor is unattributable on its own
     // — it is the later event carrying an account id that makes the refusal an

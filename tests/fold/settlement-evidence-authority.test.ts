@@ -36,6 +36,89 @@ describe("integrated rejected settlement closure reasons", () => {
   });
 });
 
+describe("same-instant settlement evidence ordering", () => {
+  it.each([false, true])("uses the last event id for a reapplied settled label (reversed: %s)", (reverse) => {
+    const snapshot = evidenceFixture({ settler: "contributor" });
+    const issue = snapshot.issues[0]!;
+    issue.history.push({ ...issue.history[1]!, id: "actual-2", actorLogin: "sponsor" });
+    if (reverse) issue.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", credits: 6, settledLabelEventId: "actual-2", settledLabelActorLogin: "sponsor",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it.each([false, true])("applies same-instant settled label removals by event id (reversed: %s)", (reverse) => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.history.push({
+      kind: "UNLABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: null,
+      label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z",
+    });
+    if (reverse) issue.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", credits: 0 });
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
+      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+  });
+
+  it.each([false, true])("names same-instant ambiguous settled labels by event id (reversed: %s)", (reverse) => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.history.push({
+      kind: "LABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: null,
+      label: "delivered/7", createdAt: "2026-09-01T11:00:00.000Z",
+    });
+    if (reverse) issue.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
+      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: `delivered/6`, `delivered/7`. Exactly one is required.",
+    }]);
+  });
+
+  it.each([false, true])("names the first later settled application by event id (reversed: %s)", (reverse) => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.history[1]!.createdAt = "2026-09-01T12:30:00.000Z";
+    issue.history.push({
+      kind: "LABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: null,
+      label: "delivered/7", createdAt: "2026-09-01T12:30:00.000Z",
+    });
+    if (reverse) issue.history.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
+      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z. The earliest later application, `delivered/6` at 2026-09-01T12:30:00.000Z, came after that window.",
+    }]);
+  });
+
+  it.each([false, true])("selects same-instant rationales by comment id (reversed: %s)", (reverse) => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.comments.push({ ...issue.comments[0]!, id: "comment-2", databaseId: 402 });
+    if (reverse) issue.comments.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", credits: 6, settledRationaleCommentId: "comment-1",
+    });
+    expect(result.policyViolations).toEqual([]);
+  });
+});
+
 describe("policy audit across participation eligibility", () => {
   const cases = (["SETTLED_LABEL_UNAUTHORIZED", "SETTLED_RATIONALE_EDITED"] as const).flatMap((code) =>
     (["BANNED", "RECALIBRATING"] as const).flatMap((state) =>
