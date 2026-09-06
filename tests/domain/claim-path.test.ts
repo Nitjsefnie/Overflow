@@ -69,6 +69,20 @@ describe("claim path assessment", () => {
     expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
   });
 
+  it.each([":disabled", "=disabled"])("rejects an assignees endpoint continued by %s", (suffix) => {
+    const assignment = `gh api -X POST "repos/acme/demo/issues/42/assignees${suffix}" -f "assignees[]=$ACTOR"`;
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+  });
+
+  for (const method of ["-X POST", "--method POST", "-x post", "--METHOD post"]) {
+    it.each([
+      ["repository name", `gh api ${method} "repos/acme/removeAssignees/issues/42/assignees" -f "assignees[]=$ACTOR"`],
+      ["trailing comment", `gh api ${method} "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"  # use -X DELETE to unclaim`],
+    ])(`accepts ${method} despite a deletion reference in the %s`, (_context, assignment) => {
+      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+    });
+  }
+
   it("rejects a REST URL with a hyphenated non-issues segment", () => {
     expect(assessClaimPath([workflow("on: issue_comment", "gh api example.com/non-issues/123/assignees")])).toBe("ABSENT");
   });
