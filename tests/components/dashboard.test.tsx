@@ -237,7 +237,7 @@ describe("member dashboard", () => {
     );
 
     expect(screen.getByText(
-      /co-op\/harbour.*· reconciliation is failing \(since 2026-09-04\); Overflow keeps retrying$/,
+      /co-op\/harbour.*· reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
     )).toBeVisible();
     expect(screen.getByText(/co-op\/lighthouse.*· retrying reconciliation after a failure$/)).toBeVisible();
     expect(screen.getByText(/co-op\/breakwater.*· retrying reconciliation after a failure$/)).toBeVisible();
@@ -275,7 +275,7 @@ describe("member dashboard", () => {
     );
 
     expect(screen.getByText(
-      /co-op\/harbour.*· unavailable: not found on GitHub or no longer public · reconciliation is failing \(since 2026-09-04\); Overflow keeps retrying$/,
+      /co-op\/harbour.*· unavailable: not found on GitHub or no longer public · reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
     )).toBeVisible();
   });
 
@@ -301,7 +301,55 @@ describe("member dashboard", () => {
     );
 
     expect(screen.getByText(/co-op\/harbour.*· reconciliation is failing; Overflow keeps retrying$/)).toBeVisible();
-    expect(screen.queryByText(/since/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/last failed/)).not.toBeInTheDocument();
+  });
+
+  it("promises no retry for a failing repository that is no longer active", () => {
+    const failedAt = new Date("2026-09-04T11:00:00.000Z");
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            {
+              ...registered("repo-1", "co-op/harbour"),
+              active: false,
+              reconciliationState: "FAILED",
+              reconciliationLastFailureAt: failedAt,
+            },
+            {
+              ...registered("repo-2", "co-op/lighthouse"),
+              active: true,
+              reconciliationState: "FAILED",
+              reconciliationLastFailureAt: failedAt,
+            },
+            // A queued job still drains for an inactive repository, because claiming one does not
+            // consult `active`; only the sweep's revival of a FAILED job does.
+            { ...registered("repo-3", "co-op/breakwater"), active: false, reconciliationState: "PENDING" },
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    // Only the sweep revives a FAILED job and it enqueues active repositories only, so promising
+    // a retry here would be a plain untruth on a line that already says "inactive".
+    expect(screen.getByText(
+      /co-op\/harbour.*· reconciliation is failing \(last failed 2026-09-04\); it will not be retried while the repository is inactive$/,
+    )).toBeVisible();
+    expect(screen.getByText(/co-op\/harbour/)).not.toHaveTextContent(/keeps retrying/);
+    expect(screen.getByText(
+      /co-op\/lighthouse.*· reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
+    )).toBeVisible();
+    expect(screen.getByText(/co-op\/breakwater.*· reconciliation queued$/)).toBeVisible();
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {
