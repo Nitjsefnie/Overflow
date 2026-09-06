@@ -51,4 +51,23 @@ describe("the patched client queue's peek", () => {
       { length: 1, peeked: refilled, shifted: refilled },
     ]);
   });
+
+  it("names the head of a queue that was drained empty and filled again", () => {
+    const queue = Queue<{ id: string }>();
+    queue.push({ id: "only" });
+    // Draining the last element takes the other branch of `shift`: instead of blanking the
+    // consumed slot it resets the read index to 0 and replaces the backing array. A queue filled
+    // after that has to be read from the front again, and the two halves of the reset have to
+    // agree -- keeping either the old index or the old array leaves `peek` on a slot `shift` will
+    // never return.
+    queue.shift();
+
+    const afterReset = queue.push({ id: "next" });
+
+    expect({ length: queue.length, peeked: queue.peek(), shifted: queue.shift() }).toEqual({
+      length: 1,
+      peeked: afterReset,
+      shifted: afterReset,
+    });
+  });
 });
