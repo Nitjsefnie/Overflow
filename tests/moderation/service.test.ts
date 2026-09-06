@@ -372,7 +372,7 @@ describe("calibration cohort preview", () => {
 // on where the server happens to run. The service refuses those rather than guessing a zone,
 // and refuses the spellings outside its accepted subset alongside them, so that one accepted
 // subset is the whole rule.
-describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
+describe("sample-window bound normalization", () => {
   const offsetRequirement = /must be an ISO 8601 timestamp with an explicit UTC offset\./;
   const refusedBounds = [
     ["an offset-less date-time", "2026-01-01T00:00"],
@@ -380,11 +380,8 @@ describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
     ["a date-only bound", "2026-01-01"],
     ["a non-ISO string V8 resolves in the local zone", "Jan 1 2026"],
     ["an unparseable bound", "the first of January"],
-    ["a lowercase UTC designator", "2026-01-01T00:00:00.000z"],
     ["a numeric offset written without its colon", "2026-01-01T00:00+0200"],
-    // Unambiguous, but outside the subset by decision rather than by accident: `new Date`
-    // reads a comma separator as NaN, and admitting an end-of-day hour would mean an
-    // alternation that still has to keep 24:30 out for one spelling nothing emits.
+    // RFC 3339 uses a dot for fractions and restricts the hour to 00–23.
     ["a comma decimal separator", "2026-01-01T00:00:00,5Z"],
     ["an end-of-day hour", "2026-01-01T24:00:00Z"],
   ] as const;
@@ -450,8 +447,9 @@ describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
     expect(store.cohortReadCount).toBe(0);
   });
 
-  // `new Date` rolls an impossible day into the following month rather than reporting NaN,
-  // so a shape check alone would silently audit a window nobody asked for.
+  // After a pattern match, `new Date` rolls these days into the following month.
+  // Calendar failures here get the valid-timestamp message; a month of 00 or day of 32
+  // fails the pattern earlier and gets the explicit-offset message instead.
   it.each([
     ["a day past the end of February", "2026-02-31T00:00:00Z"],
     ["a leap day in a common year", "2026-02-29T00:00:00Z"],
@@ -475,6 +473,10 @@ describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
   });
 
   it.each([
+    ["a lowercase UTC designator", "2026-01-01T00:00:00.000z", "2026-01-01T00:00:00.000Z"],
+    ["a long fraction", "2026-01-01T00:00:00.123456789123456789Z", "2026-01-01T00:00:00.123Z"],
+    ["a positive expanded year", "+010000-01-01T04:59:00.000Z", "+010000-01-01T04:59:00.000Z"],
+    ["a negative expanded year", "-000001-01-01T00:00:00.000Z", "-000001-01-01T00:00:00.000Z"],
     ["a minute-precision UTC designator", "2026-01-01T00:00Z", "2026-01-01T00:00:00.000Z"],
     ["a second-precision UTC designator", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000Z"],
     ["a millisecond-precision UTC designator", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
@@ -482,10 +484,7 @@ describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
     ["a negative numeric offset", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.000Z"],
     ["a negative zero offset", "2026-01-01T00:00-00:00", "2026-01-01T00:00:00.000Z"],
     ["a leap day in a leap year", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
-    // Producers other than `toISOString` write a different number of fractional digits:
-    // Python's `datetime.isoformat` writes six, Go's RFC3339Nano writes as many as it needs,
-    // and a hand-written bound may carry one. Each names exactly one instant, so each is
-    // accepted; `Date` truncates below milliseconds, which loses precision but not meaning.
+    // RFC 3339 allows one or more fractional digits. Date truncates below milliseconds.
     ["a single fractional digit", "2026-01-01T00:00:00.5Z", "2026-01-01T00:00:00.500Z"],
     ["microsecond precision", "2026-01-01T00:00:00.123456Z", "2026-01-01T00:00:00.123Z"],
     ["nanosecond precision", "2026-01-01T00:00:00.123456789Z", "2026-01-01T00:00:00.123Z"],
@@ -496,48 +495,78 @@ describe("sample-window bounds outside the accepted ISO 8601 subset", () => {
     const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
       ...previewInput(),
       sampleStartedAt: bound,
+      sampleEndedAt: "9999-12-31T23:59:59-23:59",
     });
 
     expect(preview.sampleStartedAt).toBe(instant);
     expect(store.lastCohortInput?.sampleStartedAt).toBe(instant);
   });
 
-  // The bug this pins: before the offset requirement, one request body recorded a different
-  // instant on a Europe/Prague host than on a UTC one, with nothing in the response to say so.
-  it("normalizes an offset-bearing bound identically in every server timezone", async () => {
-    const zones = ["UTC", "America/New_York", "Asia/Tokyo"] as const;
-    const normalized: string[] = [];
+  it("refuses a negative-zero expanded year before serializing an invalid Date", async () => {
+    const store = eligibleStore();
 
-    for (const zone of zones) {
-      process.env.TZ = zone;
-      const store = eligibleStore();
-
-      const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
         ...previewInput(),
-        sampleStartedAt: "2026-01-01T02:00:00+02:00",
-      });
-
-      normalized.push(preview.sampleStartedAt);
-    }
-
-    expect(normalized).toEqual(zones.map(() => "2026-01-01T00:00:00.000Z"));
+        sampleStartedAt: "-000000-01-01T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: "Sample start must be a valid timestamp.",
+    });
+    expect(store.cohortReadCount).toBe(0);
   });
 
-  it.each(["UTC", "America/New_York", "Asia/Tokyo"])(
-    "refuses an offset-less bound on a server running in %s",
-    async (zone) => {
-      process.env.TZ = zone;
-      const store = eligibleStore();
+  // Accepted bounds carry their own offset and the normalizer never reads process.env.TZ.
+  // Repeating the plain offset-less refusal and offset normalization cases by zone pins
+  // nothing. These low-year cases instead exercise calendar construction and comparisons.
+  it.each([
+    ["UTC", 0],
+    ["America/New_York", 300],
+    ["Asia/Tokyo", -540],
+  ] as const)("accepts low four-digit years with the calendar probe running in %s", async (zone, offset) => {
+    process.env.TZ = zone;
+    // Verify the test actually selected its zone before exercising the service.
+    expect(new Date(0).getTimezoneOffset()).toBe(offset);
 
-      await expect(
-        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
-          ...previewInput(),
-          sampleStartedAt: "2026-01-01T00:00",
-        }),
-      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
-      expect(store.cohortReadCount).toBe(0);
-    },
-  );
+    for (const bound of ["0001-01-01T00:00:00.000Z", "0099-01-01T00:00:00.000Z"]) {
+      const store = eligibleStore();
+      const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        sampleStartedAt: bound,
+      });
+
+      expect(preview.sampleStartedAt).toBe(bound);
+      expect(store.lastCohortInput?.sampleStartedAt).toBe(bound);
+    }
+  });
+
+  it.each([
+    "2026-01-01T00:00Z",
+    "2026-01-01T00:00:00Z",
+    "2026-01-01T00:00:00.000z",
+    "2026-01-01T02:00:00+02:00",
+    "2026-01-01T00:00:00.5Z",
+    "2026-01-01T00:00:00.123456789123456789Z",
+    "0001-01-01T00:00:00.000Z",
+    "0099-01-01T00:00:00.000Z",
+    "9999-12-31T23:59:00-05:00",
+    "+010000-01-01T04:59:00.000Z",
+    "-000001-01-01T00:00:00.000Z",
+  ])("normalizes its own output for %s", async (bound) => {
+    const service = new AccountModerationService(eligibleStore());
+    const normalize = async (sampleStartedAt: string) => {
+      const preview = await service.previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        sampleStartedAt,
+        sampleEndedAt: "9999-12-31T23:59:59-23:59",
+      });
+      return preview.sampleStartedAt;
+    };
+
+    const normalized = await normalize(bound);
+    expect(await normalize(normalized)).toBe(normalized);
+  });
 });
 
 type LoadedCohortRequest = {
