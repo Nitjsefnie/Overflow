@@ -4,6 +4,7 @@ import type {
   SelfWorkCalibrationOverrideEvidence,
   SettlementOverrideEvidence,
 } from "@/lib/overrides/service";
+import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 
 type SettlementOverrideQueueProps = {
   requests: readonly OpenSettlementOverrideRequest[];
@@ -51,15 +52,6 @@ export function SettlementOverrideQueue({ requests }: SettlementOverrideQueuePro
   );
 }
 
-/**
- * How a figure reads when the ledger holds points no GitHub label backs.
- *
- * Both outcomes reach that state the same way: a granted correction writes the
- * points while the issue's `settled_label` stays null, so saying "no label"
- * beside a figure a moderator did record would name the wrong thing as missing.
- */
-const unlabelledPoints = "no label recorded";
-
 /** What the ledger settled between two accounts, and the credits it moved. */
 function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvidence }) {
   return (
@@ -83,7 +75,7 @@ function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvid
           <dd>
             {settlement.settledPoints === null
               ? "Unsettled"
-              : `${settlement.settledLabel ?? unlabelledPoints} · ${settlement.settledPoints}`}
+              : `${settlement.settledLabel ?? UNLABELLED_POINTS} · ${settlement.settledPoints}`}
           </dd>
         </div>
         <div>
@@ -107,7 +99,7 @@ function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvid
  * `actual_points` from one resolved settled difficulty in the same pass, and
  * writes both inside the materializer's transaction. Only the reverse is
  * reachable — a granted correction sets the points and leaves the label null —
- * which is the state `unlabelledPoints` names.
+ * which is the state `UNLABELLED_POINTS` names.
  */
 function CalibrationEvidence({ calibration }: { calibration: SelfWorkCalibrationOverrideEvidence }) {
   return (
@@ -131,7 +123,7 @@ function CalibrationEvidence({ calibration }: { calibration: SelfWorkCalibration
           <dd>
             {calibration.actualPoints === null
               ? "Never recorded"
-              : `${calibration.actualLabel ?? unlabelledPoints} · ${calibration.actualPoints}`}
+              : `${calibration.actualLabel ?? UNLABELLED_POINTS} · ${calibration.actualPoints}`}
           </dd>
         </div>
       </dl>
