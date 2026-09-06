@@ -11,6 +11,14 @@ const calibrationId = "00000000-0000-4000-8000-000000000005";
 const settlementTarget = { kind: "settlement", settlementId } as const;
 const calibrationTarget = { kind: "calibration", calibrationId } as const;
 
+it.each([settlementTarget, calibrationTarget])("names unreadable $kind history and keeps recourse offered", (target) => {
+  render(<SettlementCorrections target={target} requests={null} />);
+
+  expect.soft(screen.queryByText(`The correction history for this ${target.kind} could not be loaded.`)).toBeVisible();
+  expect.soft(screen.queryByText(`No correction has been requested for this ${target.kind}.`)).toBeNull();
+  expect.soft(screen.queryByRole("button", { name: `Report this ${target.kind} as incorrect` })).toBeVisible();
+});
+
 function request(overrides: Partial<SettlementOverrideRequest> = {}): SettlementOverrideRequest {
   return {
     id: "00000000-0000-4000-8000-000000000002",

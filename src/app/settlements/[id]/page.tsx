@@ -106,20 +106,20 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
 /**
  * The correction requests already raised against this settlement.
  *
- * A failure here loses the correction history, not the proof, so the page still
- * renders its evidence rather than falling back to the error state.
+ * Null means the correction history could not be read. The page still renders
+ * its proof and names the history failure in the corrections section.
  */
 async function listCorrections(
   viewerId: string,
   settlementId: string,
-): Promise<SettlementOverrideRequest[]> {
+): Promise<SettlementOverrideRequest[] | null> {
   try {
     const { PostgresSettlementOverrideStore } = await import("@/lib/overrides/postgres-store");
     const { SettlementOverrideService } = await import("@/lib/overrides/service");
     const service = new SettlementOverrideService(new PostgresSettlementOverrideStore());
     return await service.listRequestsForSettlement({ id: viewerId }, settlementId);
   } catch {
-    return [];
+    return null;
   }
 }
 
