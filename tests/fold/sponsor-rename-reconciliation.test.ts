@@ -213,8 +213,11 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
 
     await expect(runStatus(second.runId)).resolves.toBe("COMPLETED");
     await expect(materializedIssueIds(repositoryId)).resolves.toEqual([]);
-    const removals = await removalChanges(second.runId);
-    expect(removals).toEqual([{
+    // The removal AND the reason for it: the `POLICY_VIOLATION` row is the only
+    // record telling a moderator WHY this issue left, and pinning the removal
+    // alone would stay green if it stopped being written.
+    const changes = await removalAndReasonChanges(second.runId);
+    expect(changes).toEqual([{
       entity_kind: "ISSUE",
       change_kind: "REMOVE",
       pull_request_id: null,
@@ -225,6 +228,15 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
         openingReservePoints: 5,
       },
       after_state: null,
+    }, {
+      entity_kind: "POLICY_VIOLATION",
+      change_kind: "POLICY_VIOLATION",
+      pull_request_id: null,
+      before_state: null,
+      after_state: {
+        code: "OPENING_LABEL_MISSING",
+        githubIssueId: impostorIssueGitHubId,
+      },
     }]);
     // Pinned to the literal, not to `removals.length`: a defect that recorded
     // one spurious removal AND counted it moves both sides of that comparison
@@ -263,6 +275,23 @@ async function removalChanges(runId: string): Promise<ChangeRow[]> {
     select entity_kind, change_kind, pull_request_id, before_state, after_state
     from reconciliation_changes
     where reconciliation_run_id = ${runId} and change_kind = ${"REMOVE"}
+    order by entity_kind::text asc
+  `;
+}
+
+/**
+ * The same read widened to the explanation beside the removal. Ordering by
+ * `entity_kind` stays total over what this selects: the fixture removes one
+ * issue and records one violation, and `reconciliation_changes` gives a
+ * `POLICY_VIOLATION` change the matching `POLICY_VIOLATION` entity kind
+ * (migration 005), so the two rows carry distinct kinds and neither ties.
+ */
+async function removalAndReasonChanges(runId: string): Promise<ChangeRow[]> {
+  return sql<ChangeRow[]>`
+    select entity_kind, change_kind, pull_request_id, before_state, after_state
+    from reconciliation_changes
+    where reconciliation_run_id = ${runId}
+      and change_kind in (${"REMOVE"}, ${"POLICY_VIOLATION"})
     order by entity_kind::text asc
   `;
 }

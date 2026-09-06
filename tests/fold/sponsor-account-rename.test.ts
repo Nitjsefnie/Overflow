@@ -231,6 +231,84 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
     }]);
   });
 
+  it("names the sponsor's stored login when GitHub reports the account id and no login", () => {
+    // Every display column below is written from an actor the ACCOUNT ID
+    // identified, so the login beside that id is never read to decide whose
+    // evidence this is. Nothing GitHub serves today pairs a non-null id with a
+    // null login, but the type allows it, and the columns these values land in
+    // reject blank text — so the fold has to name someone from what it holds.
+    const idOnly: FixtureActor = { login: null, githubUserId: SPONSOR_GITHUB_USER_ID };
+    const result = foldRepository(fixture({
+      opening: idOnly,
+      settledLabel: idOnly,
+      rationale: idOnly,
+    }));
+
+    expect(result.policyViolations).toEqual([]);
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      githubIssueId: 101,
+      openingSourceEventId: "opening-1",
+      openingSourceActorLogin: STORED_SPONSOR_LOGIN,
+    })]);
+    expect(result.settlements).toEqual([expect.objectContaining({
+      githubIssueId: 101,
+      status: "SETTLED",
+      settledLabelActorLogin: STORED_SPONSOR_LOGIN,
+      settledRationaleActorLogin: STORED_SPONSOR_LOGIN,
+    })]);
+  });
+
+  it("names the sponsor's stored login when GitHub reports a whitespace-only login", () => {
+    // The same hole, one step quieter: a whitespace-only login survives every
+    // non-null test and `.trim()` turns it into the empty string, which the
+    // `length(trim(...)) > 0` checks on these columns (migrations 007 and 010)
+    // refuse — failing the whole materialization transaction rather than one
+    // row.
+    const whitespaceLogin: FixtureActor = { login: "\t ", githubUserId: SPONSOR_GITHUB_USER_ID };
+    const result = foldRepository(fixture({
+      opening: whitespaceLogin,
+      settledLabel: whitespaceLogin,
+      rationale: whitespaceLogin,
+    }));
+
+    expect(result.policyViolations).toEqual([]);
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      openingSourceActorLogin: STORED_SPONSOR_LOGIN,
+    })]);
+    expect(result.settlements).toEqual([expect.objectContaining({
+      status: "SETTLED",
+      settledLabelActorLogin: STORED_SPONSOR_LOGIN,
+      settledRationaleActorLogin: STORED_SPONSOR_LOGIN,
+    })]);
+  });
+
+  it("still names someone when neither the payload nor the stored record has a login", () => {
+    // Both sides blank at once: the account id identified the sponsor, the
+    // payload named no login, and the stored login is the tab migration 001
+    // accepts and the fold reads as blank (issue 141). There is no true login
+    // to write and the columns still refuse blank text, so the fold writes the
+    // same placeholder its refusal sentences already use rather than a value
+    // that fails the transaction.
+    const idOnly: FixtureActor = { login: null, githubUserId: SPONSOR_GITHUB_USER_ID };
+    const result = foldRepository(fixture({
+      storedSponsorLogin: "\t",
+      opening: idOnly,
+      settledLabel: idOnly,
+      rationale: idOnly,
+    }));
+
+    expect(result.issues).toEqual([expect.objectContaining({
+      openingSourceActorLogin: "unknown",
+    })]);
+    expect(result.settlements).toEqual([expect.objectContaining({
+      status: "SETTLED",
+      settledLabelActorLogin: "unknown",
+      settledRationaleActorLogin: "unknown",
+    })]);
+  });
+
   it("refuses an idless actor whose login is not the sponsor's stored login", () => {
     // Without an id there is nothing but the login, so the renamed sponsor's
     // CURRENT login is not evidence: the stored login is the only claim.

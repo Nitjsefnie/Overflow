@@ -522,7 +522,7 @@ function resolveOpening(
     openingComparisonPoints: configured.comparisonPoints,
     openingReservePoints: configured.reservePoints,
     openingSourceEventId: source.id,
-    openingSourceActorLogin: source.actorLogin!.trim(),
+    openingSourceActorLogin: sponsorDisplayLogin(source.actorLogin, sponsor),
     openingSourceAt: new Date(source.createdAt).toISOString(),
     mutated,
   };
@@ -753,10 +753,10 @@ function resolveSettledDifficulty(
       label: configured.label,
       points: configured.points,
       labelEventId: source.id,
-      labelActorLogin: source.actorLogin!.trim(),
+      labelActorLogin: sponsorDisplayLogin(source.actorLogin, sponsor),
       labelAppliedAt: new Date(source.createdAt).toISOString(),
       rationaleCommentId: rationale.id,
-      rationaleActorLogin: rationale.authorLogin!.trim(),
+      rationaleActorLogin: sponsorDisplayLogin(rationale.authorLogin, sponsor),
       rationaleCommentedAt: new Date(rationale.createdAt).toISOString(),
     },
   };
@@ -961,6 +961,34 @@ function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boole
   }
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
   return sponsorLogin !== null && normalizedNonblankLogin(actor.login) === sponsorLogin;
+}
+
+/**
+ * The login a display column shows for an actor `isRepositorySponsor` has
+ * already accepted as the repository sponsor.
+ *
+ * The identification is made by the numeric account id wherever GitHub reports
+ * one, and that route never reads the login — so nothing at these call sites
+ * proves the payload named a usable one. The type allows `githubUserId` beside
+ * a null or whitespace-only `actorLogin`, and both spellings are destructive
+ * further down: a null throws where the login is trimmed and fails the whole
+ * reconciliation run, and a whitespace-only login trims to the empty string,
+ * which the `length(trim(...)) > 0` checks on these columns (migrations 007 and
+ * 010) refuse — failing the whole materialization transaction. Falling back
+ * here keeps the proof local to the value being written, rather than resting it
+ * on what the one producer in `src/lib/github/client.ts` happens to derive.
+ *
+ * The payload's own text is preferred and kept verbatim, because a login is
+ * display text whose case GitHub preserves and this is where the rename becomes
+ * visible. The sponsor's stored login is the fallback, non-blank by
+ * `users.github_login`'s own check (migration 001). That check spells `trim()`
+ * with one argument and so strips spaces only, while `.trim()` here strips all
+ * whitespace, leaving a stored tab that the database accepts and this reads as
+ * blank (issue 141) — hence the placeholder last, the same one a refusal
+ * sentence already uses for an actor it cannot name.
+ */
+function sponsorDisplayLogin(actorLogin: string | null, sponsor: FoldUser): string {
+  return actorLogin?.trim() || sponsor.githubLogin.trim() || "unknown";
 }
 
 /**
