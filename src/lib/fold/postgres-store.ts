@@ -21,6 +21,10 @@ import type {
   ReconciliationStore,
   RepositoryUnavailableReason,
 } from "@/lib/fold/reconcile";
+import type {
+  ClaimedReconciliationJob,
+  ReconciliationJobReason,
+} from "@/lib/fold/reconciliation-jobs";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import {
   applyGrantedSelfWorkCalibrationOverride,
@@ -119,6 +123,14 @@ type IdentityClaimSettlementRow = Pick<
 
 type WebhookDeliveryLeaseRow = {
   processing_lease_token: string;
+};
+
+type ReconciliationJobLeaseRow = {
+  id: string;
+  repository_id: string;
+  reason: ReconciliationJobReason;
+  attempt_count: number;
+  lease_token: string;
 };
 
 type SelfWorkCalibrationRow = {
@@ -709,6 +721,149 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       where github_delivery_id = ${deliveryId}
         and processing_state = ${"PENDING"}
         and processing_lease_token = ${leaseToken}
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
+  public async enqueueReconciliationJob(
+    repositoryId: string,
+    reason: ReconciliationJobReason,
+  ): Promise<void> {
+    // The conflict target is the partial outstanding index, so a burst of events
+    // for one repository collapses onto the single waiting-or-failed row rather
+    // than queueing one fold per event. A job that is merely backing off keeps
+    // its `run_after`, while a FAILED job is revived as due now with its attempts
+    // reset — that revival is what makes the sweep an autonomous repair path.
+    // `last_failure_at` deliberately survives it, as the visible evidence that
+    // this repository has been failing.
+    await this.sql`
+      insert into repository_reconciliation_jobs (repository_id, reason)
+      values (${repositoryId}, ${reason})
+      on conflict (repository_id) where state in ('PENDING', 'FAILED') do update
+      set state = 'PENDING',
+          attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
+          run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end
+    `;
+  }
+
+  public async claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null> {
+    const leaseToken = randomUUID();
+    // The claim increments `attempt_count` so that a worker which dies mid-fold
+    // still burns an attempt and the reclaim path cannot loop forever. The
+    // `not exists` limb is what keeps two workers off one repository: the
+    // outstanding index bounds only the waiting-or-failed row, so a repository
+    // being folded can also hold a due follow-up job, and taking that job would
+    // spend a second fold's worth of GitHub budget before the two met at the
+    // repository advisory lock.
+    const rows = await this.sql<ReconciliationJobLeaseRow[]>`
+      with due as (
+        select job.id
+        from repository_reconciliation_jobs as job
+        where (
+            (job.state = ${"PENDING"} and job.run_after <= now())
+            or (job.state = ${"RUNNING"} and job.lease_expires_at <= now())
+          )
+          and not exists (
+            select 1
+            from repository_reconciliation_jobs as busy
+            where busy.repository_id = job.repository_id
+              and busy.state = ${"RUNNING"}
+              and busy.lease_expires_at > now()
+          )
+        order by job.run_after, job.created_at
+        limit 1
+        for update skip locked
+      )
+      update repository_reconciliation_jobs
+      set state = ${"RUNNING"},
+          lease_token = ${leaseToken},
+          lease_expires_at = now() + interval '30 minutes',
+          attempt_count = repository_reconciliation_jobs.attempt_count + 1
+      from due
+      where repository_reconciliation_jobs.id = due.id
+      returning
+        repository_reconciliation_jobs.id::text as id,
+        repository_reconciliation_jobs.repository_id::text as repository_id,
+        repository_reconciliation_jobs.reason,
+        repository_reconciliation_jobs.attempt_count,
+        repository_reconciliation_jobs.lease_token::text as lease_token
+    `;
+    const [row] = rows;
+    return row === undefined
+      ? null
+      : {
+          id: row.id,
+          repositoryId: row.repository_id,
+          reason: row.reason,
+          attemptCount: row.attempt_count,
+          leaseToken: row.lease_token,
+        };
+  }
+
+  public async completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean> {
+    const rows = await this.sql<{ id: string }[]>`
+      delete from repository_reconciliation_jobs
+      where id = ${jobId}
+        and state = ${"RUNNING"}
+        and lease_token = ${leaseToken}
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
+  public async deferReconciliationJob(
+    jobId: string,
+    leaseToken: string,
+    runAfter: Date,
+  ): Promise<boolean> {
+    // The reconciliation cooldown declined to fold, so the claim's increment is
+    // given back: nothing was attempted and nothing failed.
+    const rows = await this.sql<{ id: string }[]>`
+      update repository_reconciliation_jobs
+      set state = ${"PENDING"},
+          run_after = ${runAfter},
+          attempt_count = greatest(attempt_count - 1, 0),
+          lease_token = null,
+          lease_expires_at = null
+      where id = ${jobId}
+        and state = ${"RUNNING"}
+        and lease_token = ${leaseToken}
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
+  public async retryReconciliationJob(
+    jobId: string,
+    leaseToken: string,
+    runAfter: Date,
+  ): Promise<boolean> {
+    const rows = await this.sql<{ id: string }[]>`
+      update repository_reconciliation_jobs
+      set state = ${"PENDING"},
+          run_after = ${runAfter},
+          last_failure_at = now(),
+          lease_token = null,
+          lease_expires_at = null
+      where id = ${jobId}
+        and state = ${"RUNNING"}
+        and lease_token = ${leaseToken}
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
+  public async failReconciliationJob(jobId: string, leaseToken: string): Promise<boolean> {
+    const rows = await this.sql<{ id: string }[]>`
+      update repository_reconciliation_jobs
+      set state = ${"FAILED"},
+          last_failure_at = now(),
+          lease_token = null,
+          lease_expires_at = null
+      where id = ${jobId}
+        and state = ${"RUNNING"}
+        and lease_token = ${leaseToken}
       returning id
     `;
     return rows.length === 1;
