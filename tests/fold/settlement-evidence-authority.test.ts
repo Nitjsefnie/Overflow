@@ -62,7 +62,7 @@ describe("same-instant settlement evidence ordering", () => {
     const snapshot = evidenceFixture();
     const accepted = snapshot.issues[0]!;
     accepted.history[0]!.id = "opening-2";
-    accepted.history.splice(1, 0, { ...accepted.history[0]!, id: "opening-10", label: "S" });
+    accepted.history.splice(1, 0, { ...accepted.history[0]!, kind: "LABELED", id: "opening-10", label: "S" });
     accepted.history.push(
       {
         kind: "UNLABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: 1001,
@@ -76,7 +76,7 @@ describe("same-instant settlement evidence ordering", () => {
     const refused = evidenceFixture({ opener: "contributor" }).issues[0]!;
     refused.id = 102;
     refused.history[0]!.id = "opening-10";
-    refused.history.push({ ...refused.history[0]!, id: "opening-2", label: "S", actorLogin: "maintainer" });
+    refused.history.push({ ...refused.history[0]!, kind: "LABELED", id: "opening-2", label: "S", actorLogin: "maintainer" });
     if (reverse) refused.history.reverse();
     snapshot.issues.push(refused);
 
