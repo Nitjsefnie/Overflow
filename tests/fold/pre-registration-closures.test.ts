@@ -100,6 +100,53 @@ describe("closures whose evidence window shut before the repository was register
   });
 });
 
+describe("rejected settlements whose settled label postdates registration", () => {
+  // Every one of these is the class the filing reserves: a settled label that
+  // exists, was applied outside the evidence window, and landed after Overflow
+  // began watching. The merge is twelve hours stale in each, so only the label
+  // can keep the closure, and every refusal below has to carry it.
+  it.each([
+    ["several actual-catalog labels stood in the window", (snapshot: RepositoryFoldSnapshot) => {
+      standingSettledLabel(snapshot, { label: "delivered/6", at: "2026-08-31T12:00:00.000Z" });
+      standingSettledLabel(snapshot, { label: "delivered/7", at: "2026-08-31T12:05:00.000Z" });
+    }],
+    ["the standing label was applied before the window opened", (snapshot: RepositoryFoldSnapshot) => {
+      standingSettledLabel(snapshot, { label: "delivered/6", at: "2026-08-31T09:00:00.000Z" });
+    }],
+    ["the standing label was applied by someone other than the sponsor", (snapshot: RepositoryFoldSnapshot) => {
+      standingSettledLabel(snapshot, { label: "delivered/6", at: "2026-08-31T12:00:00.000Z", actorLogin: "intruder" });
+    }],
+    ["no rationale comment named the standing label", (snapshot: RepositoryFoldSnapshot) => {
+      standingSettledLabel(snapshot, { label: "delivered/6", at: "2026-08-31T12:00:00.000Z" });
+    }],
+  ])("records the closure when %s", (_case, arrange) => {
+    const snapshot = rejectedEvidenceFixture();
+    mergeAt(snapshot, shift(registeredAt, -12 * HOUR));
+    arrange(snapshot);
+    applyRefusedSettledLabelAt(snapshot, shift(registeredAt, 37 * MINUTE));
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([
+      expect.objectContaining({ githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201 }),
+    ]);
+  });
+
+  it("records the closure an unauthorized settled label already reported as a policy violation", () => {
+    const snapshot = rejectedEvidenceFixture();
+    mergeAt(snapshot, shift(registeredAt, -12 * HOUR));
+    standingSettledLabel(snapshot, { label: "delivered/6", at: "2026-08-31T12:00:00.000Z", actorLogin: "intruder" });
+    applyRefusedSettledLabelAt(snapshot, shift(registeredAt, 37 * MINUTE));
+
+    const result = foldRepository(snapshot);
+
+    // Reporting the violation into the run log and then dropping the queue row
+    // a moderator would act on is the worst of both.
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
+    expect(result.unwritableClosures).toHaveLength(1);
+  });
+});
+
 describe("closures with no closing pull request, against the registration instant", () => {
   it("drops one whose issue closed before registration", () => {
     const snapshot = handClosedFixture(shift(registeredAt, -12 * HOUR));
@@ -307,6 +354,23 @@ function mergeAt(snapshot: RepositoryFoldSnapshot, mergedAt: string): void {
   pullRequest.mergedAt = mergedAt;
   pullRequest.finalCommitAt = shift(mergedAt, -2 * HOUR);
   issue.closedAt = shift(mergedAt, 3 * MINUTE);
+}
+
+/**
+ * Applies a settled label that stands inside the evidence window, so the fold
+ * reaches the refusals beyond the "no label at all" one.
+ */
+function standingSettledLabel(
+  snapshot: RepositoryFoldSnapshot,
+  input: { label: string; at: string; actorLogin?: string },
+): void {
+  snapshot.issues[0]!.history.push({
+    kind: "LABELED",
+    id: `standing-${input.label}`,
+    actorLogin: input.actorLogin ?? "sponsor",
+    label: input.label,
+    createdAt: input.at,
+  });
 }
 
 /**
