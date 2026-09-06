@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   MINIMUM_CALIBRATION_SAMPLE_SIZE,
   type CalibrationPair,
@@ -386,15 +386,6 @@ describe("sample-window bound normalization", () => {
     ["an end-of-day hour", "2026-01-01T24:00:00Z"],
   ] as const;
 
-  const originalTimeZone = process.env.TZ;
-  afterEach(() => {
-    if (originalTimeZone === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = originalTimeZone;
-    }
-  });
-
   it.each(refusedBounds)("refuses %s as an audit's sample start", async (_label, bound) => {
     const store = eligibleStore();
 
@@ -447,125 +438,211 @@ describe("sample-window bound normalization", () => {
     expect(store.cohortReadCount).toBe(0);
   });
 
-  // After a pattern match, `new Date` rolls these days into the following month.
-  // Calendar failures here get the valid-timestamp message; a month of 00 or day of 32
-  // fails the pattern earlier and gets the explicit-offset message instead.
-  it.each([
-    ["a day past the end of February", "2026-02-31T00:00:00Z"],
-    ["a leap day in a common year", "2026-02-29T00:00:00Z"],
-    ["a day past the end of April", "2026-04-31T00:00:00Z"],
-  ] as const)("refuses %s even though its shape is well formed", async (_label, bound) => {
-    const store = eligibleStore();
+  const enclosingWindow = {
+    sampleStartedAt: "-271821-04-20T00:00:00.000Z",
+    sampleEndedAt: "+275760-09-13T00:00:00.000Z",
+  };
 
-    await expect(
-      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
-        ...previewInput(),
-        sampleStartedAt: bound,
-        // Late enough that the rolled-over instant still opens a window, so the refusal
-        // cannot come from the end-after-start rule.
-        sampleEndedAt: "2027-01-01T00:00:00.000Z",
-      }),
-    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
-      code: "INVALID_INPUT",
-      message: "Sample start must be a valid timestamp.",
-    });
-    expect(store.cohortReadCount).toBe(0);
-  });
-
-  it.each([
-    ["a lowercase UTC designator", "2026-01-01T00:00:00.000z", "2026-01-01T00:00:00.000Z"],
-    ["a long fraction", "2026-01-01T00:00:00.123456789123456789Z", "2026-01-01T00:00:00.123Z"],
-    ["a positive expanded year", "+010000-01-01T04:59:00.000Z", "+010000-01-01T04:59:00.000Z"],
-    ["a negative expanded year", "-000001-01-01T00:00:00.000Z", "-000001-01-01T00:00:00.000Z"],
-    ["a minute-precision UTC designator", "2026-01-01T00:00Z", "2026-01-01T00:00:00.000Z"],
-    ["a second-precision UTC designator", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000Z"],
-    ["a millisecond-precision UTC designator", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
-    ["a positive numeric offset", "2026-01-01T02:00:00+02:00", "2026-01-01T00:00:00.000Z"],
-    ["a negative numeric offset", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.000Z"],
-    ["a negative zero offset", "2026-01-01T00:00-00:00", "2026-01-01T00:00:00.000Z"],
-    ["a leap day in a leap year", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
-    // RFC 3339 allows one or more fractional digits. Date truncates below milliseconds.
-    ["a single fractional digit", "2026-01-01T00:00:00.5Z", "2026-01-01T00:00:00.500Z"],
-    ["microsecond precision", "2026-01-01T00:00:00.123456Z", "2026-01-01T00:00:00.123Z"],
-    ["nanosecond precision", "2026-01-01T00:00:00.123456789Z", "2026-01-01T00:00:00.123Z"],
-    ["a fractional second on an offset-bearing bound", "2026-01-01T02:00:00.5+02:00", "2026-01-01T00:00:00.500Z"],
-  ] as const)("accepts %s and stores the instant it names", async (_label, bound, instant) => {
-    const store = eligibleStore();
-
-    const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
-      ...previewInput(),
-      sampleStartedAt: bound,
-      sampleEndedAt: "9999-12-31T23:59:59-23:59",
-    });
-
-    expect(preview.sampleStartedAt).toBe(instant);
-    expect(store.lastCohortInput?.sampleStartedAt).toBe(instant);
-  });
-
-  it("refuses a negative-zero expanded year before serializing an invalid Date", async () => {
-    const store = eligibleStore();
-
-    await expect(
-      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
-        ...previewInput(),
-        sampleStartedAt: "-000000-01-01T00:00:00.000Z",
-      }),
-    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
-      code: "INVALID_INPUT",
-      message: "Sample start must be a valid timestamp.",
-    });
-    expect(store.cohortReadCount).toBe(0);
-  });
-
-  // Accepted bounds carry their own offset and the normalizer never reads process.env.TZ.
-  // Repeating the plain offset-less refusal and offset normalization cases by zone pins
-  // nothing. These low-year cases instead exercise calendar construction and comparisons.
-  it.each([
-    ["UTC", 0],
-    ["America/New_York", 300],
-    ["Asia/Tokyo", -540],
-  ] as const)("accepts low four-digit years with the calendar probe running in %s", async (zone, offset) => {
-    process.env.TZ = zone;
-    // Verify the test actually selected its zone before exercising the service.
-    expect(new Date(0).getTimezoneOffset()).toBe(offset);
-
-    for (const bound of ["0001-01-01T00:00:00.000Z", "0099-01-01T00:00:00.000Z"]) {
+  describe.each([
+    ["sampleStartedAt", "Sample start"],
+    ["sampleEndedAt", "Sample end"],
+  ] as const)("%s", (field, label) => {
+    it.each([
+      ["leading contamination", "x2026-01-01T00:00Z"],
+      ["trailing contamination", "2026-01-01T00:00Zx"],
+    ])("refuses %s with the grammar error", async (_description, bound) => {
       const store = eligibleStore();
+      await expect(
+        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: bound,
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "INVALID_INPUT",
+        message: `${label} must be an ISO 8601 timestamp with an explicit UTC offset.`,
+      });
+      expect(store.cohortReadCount).toBe(0);
+    });
+
+    it("refuses a real Gregorian date below Date's minimum before any store read", async () => {
+      const store = eligibleStore();
+      await expect(
+        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: "-271821-04-19T00:00:00Z",
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "INVALID_INPUT",
+        message: `${label} must be a valid timestamp.`,
+      });
+      expect(store.cohortReadCount).toBe(0);
+    });
+
+    // After a pattern match, `new Date` rolls these days into the following month.
+    // Calendar failures here get the valid-timestamp message; a month of 00 or day of 32
+    // fails the pattern earlier and gets the explicit-offset message instead.
+    it.each([
+      ["a day past the end of February", "2026-02-31T00:00:00Z"],
+      ["a leap day in a common year", "2026-02-29T00:00:00Z"],
+      ["a day past the end of April", "2026-04-31T00:00:00Z"],
+      ["a leap day in year -1", "-000001-02-29T00:00:00Z"],
+      ["a leap day in year -100", "-000100-02-29T00:00:00Z"],
+    ] as const)("refuses %s even though its shape is well formed", async (_label, bound) => {
+      const store = eligibleStore();
+
+      await expect(
+        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: bound,
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "INVALID_INPUT",
+        message: `${label} must be a valid timestamp.`,
+      });
+      expect(store.cohortReadCount).toBe(0);
+    });
+
+    it.each([
+      ["a lowercase UTC designator", "2026-01-01T00:00:00.000z", "2026-01-01T00:00:00.000Z"],
+      ["a long fraction", "2026-01-01T00:00:00.123456789123456789Z", "2026-01-01T00:00:00.123Z"],
+      ["a positive expanded year", "+010000-01-01T04:59:00.000Z", "+010000-01-01T04:59:00.000Z"],
+      ["a negative expanded year", "-000001-01-01T00:00:00.000Z", "-000001-01-01T00:00:00.000Z"],
+      ["a minute-precision UTC designator", "2026-01-01T00:00Z", "2026-01-01T00:00:00.000Z"],
+      ["a second-precision UTC designator", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000Z"],
+      ["a millisecond-precision UTC designator", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+      ["a positive numeric offset", "2026-01-01T02:00:00+02:00", "2026-01-01T00:00:00.000Z"],
+      ["a negative numeric offset", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.000Z"],
+      ["a negative zero offset", "2026-01-01T00:00-00:00", "2026-01-01T00:00:00.000Z"],
+      ["a leap day in a leap year", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
+      ["a leap day in year 0", "0000-02-29T00:00:00Z", "0000-02-29T00:00:00.000Z"],
+      ["a leap day in year -400", "-000400-02-29T00:00:00Z", "-000400-02-29T00:00:00.000Z"],
+      ["February's last day in year -1", "-000001-02-28T00:00:00Z", "-000001-02-28T00:00:00.000Z"],
+      ["February's last day in year -100", "-000100-02-28T00:00:00Z", "-000100-02-28T00:00:00.000Z"],
+      // RFC 3339 allows one or more fractional digits. Date truncates below milliseconds.
+      ["a single fractional digit", "2026-01-01T00:00:00.5Z", "2026-01-01T00:00:00.500Z"],
+      ["microsecond precision", "2026-01-01T00:00:00.123456Z", "2026-01-01T00:00:00.123Z"],
+      ["nanosecond precision", "2026-01-01T00:00:00.123456789Z", "2026-01-01T00:00:00.123Z"],
+      ["a fractional second on an offset-bearing bound", "2026-01-01T02:00:00.5+02:00", "2026-01-01T00:00:00.500Z"],
+    ] as const)("accepts %s and stores the instant it names", async (_label, bound, instant) => {
+      const store = eligibleStore();
+
       const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
         ...previewInput(),
-        sampleStartedAt: bound,
+        ...enclosingWindow,
+        [field]: bound,
       });
 
-      expect(preview.sampleStartedAt).toBe(bound);
-      expect(store.lastCohortInput?.sampleStartedAt).toBe(bound);
-    }
+      expect(preview[field]).toBe(instant);
+      expect(store.lastCohortInput?.[field]).toBe(instant);
+    });
+
+    it("refuses a negative-zero expanded year before serializing an invalid Date", async () => {
+      const store = eligibleStore();
+
+      await expect(
+        new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: "-000000-01-01T00:00:00.000Z",
+        }),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "INVALID_INPUT",
+        message: `${label} must be a valid timestamp.`,
+      });
+      expect(store.cohortReadCount).toBe(0);
+    });
+
+    // The grammar, Gregorian arithmetic, offset-bearing Date parsing and toISOString
+    // have no ambient-zone dependence. A timezone loop would test no remaining behavior.
+    it.each(["0001-01-01T00:00:00.000Z", "0099-01-01T00:00:00.000Z"])(
+      "accepts the low four-digit year in %s",
+      async (bound) => {
+        const store = eligibleStore();
+        const preview = await new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: bound,
+        });
+
+        expect(preview[field]).toBe(bound);
+        expect(store.lastCohortInput?.[field]).toBe(bound);
+      },
+    );
+
+    it.each([
+      "2026-01-01T00:00Z",
+      "2026-01-01T00:00:00Z",
+      "2026-01-01T00:00:00.000z",
+      "2026-01-01T02:00:00+02:00",
+      "2026-01-01T00:00:00.5Z",
+      "2026-01-01T00:00:00.123456789123456789Z",
+      "0001-01-01T00:00:00.000Z",
+      "0099-01-01T00:00:00.000Z",
+      "9999-12-31T23:59:00-05:00",
+      "+010000-01-01T04:59:00.000Z",
+      "-000001-01-01T00:00:00.000Z",
+    ])("normalizes its own output for %s", async (bound) => {
+      const service = new AccountModerationService(eligibleStore());
+      const normalize = async (value: string) => {
+        const preview = await service.previewCalibrationCohort(moderator(), {
+          ...previewInput(),
+          ...enclosingWindow,
+          [field]: value,
+        });
+        return preview[field];
+      };
+
+      const normalized = await normalize(bound);
+      expect(await normalize(normalized)).toBe(normalized);
+    });
   });
 
   it.each([
-    "2026-01-01T00:00Z",
-    "2026-01-01T00:00:00Z",
-    "2026-01-01T00:00:00.000z",
-    "2026-01-01T02:00:00+02:00",
-    "2026-01-01T00:00:00.5Z",
-    "2026-01-01T00:00:00.123456789123456789Z",
-    "0001-01-01T00:00:00.000Z",
-    "0099-01-01T00:00:00.000Z",
-    "9999-12-31T23:59:00-05:00",
-    "+010000-01-01T04:59:00.000Z",
-    "-000001-01-01T00:00:00.000Z",
-  ])("normalizes its own output for %s", async (bound) => {
-    const service = new AccountModerationService(eligibleStore());
-    const normalize = async (sampleStartedAt: string) => {
-      const preview = await service.previewCalibrationCohort(moderator(), {
-        ...previewInput(),
-        sampleStartedAt,
-        sampleEndedAt: "9999-12-31T23:59:59-23:59",
-      });
-      return preview.sampleStartedAt;
-    };
+    ["sampleStartedAt", "-271821-04-19T23:00:00-01:00", "-271821-04-20T00:00:00.000Z"],
+    ["sampleStartedAt", "-271821-04-20T00:00:00.000Z", "-271821-04-20T00:00:00.000Z"],
+    ["sampleEndedAt", "+275760-09-13T00:00:00.000Z", "+275760-09-13T00:00:00.000Z"],
+  ] as const)("round-trips the Date limit in %s: %s", async (field, bound, instant) => {
+    const store = eligibleStore();
+    const service = new AccountModerationService(store);
+    const preview = await service.previewCalibrationCohort(moderator(), {
+      ...previewInput(),
+      ...enclosingWindow,
+      [field]: bound,
+    });
+    expect(preview[field]).toBe(instant);
+    expect(store.lastCohortInput?.[field]).toBe(instant);
 
-    const normalized = await normalize(bound);
-    expect(await normalize(normalized)).toBe(normalized);
+    const repeated = await service.previewCalibrationCohort(moderator(), {
+      ...previewInput(),
+      ...enclosingWindow,
+      [field]: preview[field],
+    });
+    expect(repeated[field]).toBe(instant);
+    expect(store.lastCohortInput?.[field]).toBe(instant);
+  });
+
+  // No representable instant precedes the minimum or follows the maximum. In these
+  // positions normalization must succeed and leave refusal to the window-ordering rule.
+  it.each([
+    ["sampleEndedAt", "-271821-04-19T23:00:00-01:00"],
+    ["sampleEndedAt", "-271821-04-20T00:00:00.000Z"],
+    ["sampleStartedAt", "+275760-09-13T00:00:00.000Z"],
+  ] as const)("normalizes the Date limit before checking window order in %s: %s", async (field, bound) => {
+    const store = eligibleStore();
+    await expect(
+      new AccountModerationService(store).previewCalibrationCohort(moderator(), {
+        ...previewInput(),
+        ...enclosingWindow,
+        [field]: bound,
+      }),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+      code: "INVALID_INPUT",
+      message: "The sample end must be after the sample start.",
+    });
+    expect(store.cohortReadCount).toBe(0);
   });
 });
 
