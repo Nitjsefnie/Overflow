@@ -75,6 +75,31 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
+  it("refuses an in-window application that was later removed again", () => {
+    // The refusal is about an APPLICATION, not about what is on the issue now:
+    // the accepting predicate reads `LABELED` events too, so an outsider whose
+    // label was taken off again must not read as an opening nobody ever priced.
+    const snapshot = openingFixture({ opening: outsider });
+    snapshot.issues[0]!.labels = [];
+    snapshot.issues[0]!.history.push({
+      kind: "UNLABELED",
+      id: "opening-1-removed",
+      actorLogin: SPONSOR_LOGIN,
+      actorGitHubUserId: SPONSOR_GITHUB_USER_ID,
+      label: "M",
+      createdAt: "2026-08-30T11:00:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+    }]);
+  });
+
   it("names `unknown` rather than the sponsor when the payload carries no usable actor login", () => {
     const snapshot = openingFixture({ opening: { login: "   ", githubUserId: OUTSIDER_GITHUB_USER_ID } });
 
