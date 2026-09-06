@@ -6,8 +6,9 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Two defects, six hunks. The first is a shutdown that never settles; the second
-is a `reserve()` that never settles. They are unrelated, and each has its own
+Three defects, seven hunks. The first is a shutdown that never settles; the
+second is a `reserve()` that never settles; the third answers a dead backend's
+error to the query that replaces it. They are unrelated, and each has its own
 section below.
 
 ### A connection that loses its backend leaves `sql.end()` waiting
@@ -290,6 +291,51 @@ pre-existing rather than introduced here and is filed as Overflow issue 160: a
 database restart outlasting one reconnect attempt with a reservation queued left
 the coordination pool serving no further reservations for the life of the
 process, on `main` as well as on this patch before this hunk.
+
+### A dead backend's error is answered to the query that replaces it
+
+One hunk, in the package's own `src/connection.js`.
+
+`ErrorResponse` does not reject the query it arrives for. While a query is in
+flight it only *stores* the error in `errorResponse`, because a postgres error
+is not final until the `ReadyForQuery` that ends the query decides what to do
+with it — a prepared statement whose plan has gone stale is retried there rather
+than failed. A backend that dies mid-query sends its `FATAL` and then goes away
+without ever sending that `ReadyForQuery`, so the stored error is neither read
+nor cleared.
+
+`closed()` resets the rest of the per-socket parse state — `incoming`,
+`remaining`, `incomings` — and leaves that one set, and the connection is
+reused. The pool's `onclose` hands it the oldest queued query as its `initial`
+and reconnects it, so the handshake's own `ReadyForQuery` is the first to arrive
+on the *new* socket. With no query in flight it takes that function's other arm,
+`else if (errorResponse)`, and fails `initial` through `errored()`. The pool's
+oldest queued work is then refused with the error of a backend it never reached,
+by a connection that is up and answering. Overflow's shape of it is `57P01`,
+`terminating connection due to administrator command`, returned to a caller
+whose query was merely queued at the moment somebody else's connection died.
+
+The hunk resets `errorResponse` at the top of `closed()`, beside the parse state
+the function already clears. **Not** lower down beside this patch's other
+`closed()` line: `closed()` returns early for a connection still in its connect
+phase (`if (initial) return reconnect()`), and that connection is reused by the
+very same route, so a reset below the early return would miss it. Not in
+`ReadyForQuery` either — clearing it there is what already happens, and it is
+the *read* that is too late rather than the write.
+
+`tests/db/reserve-contract.test.ts` holds it, with a query queued behind a
+reserved connection whose backend is terminated while that reservation has a
+query of its own in flight. The in-flight query is the point: it is what makes
+`ErrorResponse` store rather than fail. Terminate an *idle* reserved connection
+and nothing is stored — `ErrorResponse` takes its no-query arm and calls
+`errored()` immediately — which is why the neighbouring case that queues work
+behind an idle reserved connection passes without this hunk and says nothing
+about it.
+
+#### What it does not cover
+
+Only `errorResponse`. The stored error is one of several pieces of state that
+`closed()` leaves behind, and the reset says nothing about the others.
 
 ### Housekeeping
 
