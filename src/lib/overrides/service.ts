@@ -123,6 +123,7 @@ export class SettlementOverrideService {
         target: normalizeTarget(input.target),
         reason: normalizeReason(input.reason),
       }),
+      alreadyRequestedMessage,
     );
   }
 
@@ -169,6 +170,7 @@ export class SettlementOverrideService {
           decision: "DECLINE",
           reason,
         }),
+        alreadyDecidedMessage,
       );
     }
 
@@ -180,6 +182,7 @@ export class SettlementOverrideService {
         settledPoints: normalizeSettledPoints(decision.settledPoints),
         reason,
       }),
+      alreadyDecidedMessage,
     );
   }
 }
@@ -231,7 +234,18 @@ function normalizeSettledPoints(value: unknown): number {
   return value;
 }
 
-function unwrap<T>(result: SettlementOverrideStoreResult<T>): T {
+const alreadyRequestedMessage = "This issue already has a correction request awaiting a moderator.";
+const alreadyDecidedMessage = "This correction request has already been decided.";
+
+/**
+ * Turns a store result into a value or the error a caller should see.
+ *
+ * The conflict message is the caller's because the two paths that can reach
+ * `conflict` mean opposite things: creating hits it when a request is still
+ * open, deciding when it no longer is. One wording for both would tell the
+ * moderator who just lost the race that the request still awaits them.
+ */
+function unwrap<T>(result: SettlementOverrideStoreResult<T>, conflictMessage: string): T {
   switch (result.kind) {
     case "ok":
       return result.value;
@@ -246,9 +260,6 @@ function unwrap<T>(result: SettlementOverrideStoreResult<T>): T {
         "Only the creditor or the debtor of a settlement, or the account a self-work calibration belongs to, can report it as incorrect.",
       );
     case "conflict":
-      throw new SettlementOverrideError(
-        "CONFLICT",
-        "This issue already has a correction request awaiting a moderator.",
-      );
+      throw new SettlementOverrideError("CONFLICT", conflictMessage);
   }
 }
