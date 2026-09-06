@@ -90,6 +90,9 @@ describe("closures whose evidence window shut before the repository was register
     mergeAt(snapshot, beforeRegistration);
     snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
     snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = "other/fork";
+    // The issue was closed out by hand long afterwards; the evidence window
+    // still shut at the foreign merge, which is the instant that decides.
+    snapshot.issues[0]!.closedAt = afterRegistration;
 
     const result = foldRepository(snapshot);
 
