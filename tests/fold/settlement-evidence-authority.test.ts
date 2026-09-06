@@ -765,6 +765,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
       githubRepositoryId: 5001,
       ownerName: "octo/example",
       active: true,
+      registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
       difficultyScheme: {
         openingName: "Size",
@@ -791,6 +792,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
         createdAt: "2026-08-30T09:00:00.000Z",
+        closedAt: "2026-09-01T12:00:00.000Z",
         authorLogin: logins.issueAuthor,
         labels: ["M", "delivered/6"],
         claimAssigneeGitHubLogin: null,

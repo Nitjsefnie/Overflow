@@ -33,6 +33,8 @@ export type RepositoryFoldSnapshot = {
     githubRepositoryId: number;
     ownerName: string;
     active: boolean;
+    /** registered_repositories.created_at as ISO-8601 — the moment Overflow began watching. */
+    registeredAt: string;
     sponsor: FoldUser;
     difficultyScheme: DifficultyScheme;
   };
@@ -48,6 +50,8 @@ export type RepositoryFoldIssue = {
   url: string;
   state: IssueState;
   createdAt: string;
+  /** GraphQL `Issue.closedAt`; null while the issue is open. */
+  closedAt: string | null;
   authorLogin: string | null;
   labels: string[];
   claimAssigneeGitHubLogin?: string | null;
