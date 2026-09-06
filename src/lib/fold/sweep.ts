@@ -160,20 +160,18 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
  * than leave a sweep failing forever with no signal.
  *
  * What stays fatal, deliberately: a console broken at both arities, for the
- * reason given on logSweepFailure, and a hook that abandons a rejected promise
- * it never returns — that promise is Node's to report, and nothing here ever
- * holds it.
+ * reason given on logSweepFailure, and any rejection this module cannot attach a
+ * handler to — one is only containable while it can be reached, and a rejection
+ * out of reach is Node's to report.
  *
- * Not written as an async function awaiting the hook, and the compiler is not
- * the reason: TypeScript keeps a local's narrowing inside a closure after the
- * local's last assignment, so both async spellings do compile — measured, not
- * assumed. The reason is the trade. Making this function async puts a second
- * floating promise into the module whose whole defect was a floating promise,
- * and that one can reject on a broken console, so the fatality above would
- * arrive as a discarded rejection instead of a plain throw. Awaiting in a
- * closure keeps that part honest but hides the synchronous case, which survives
- * only because an async body runs eagerly up to its first await; settling the
- * result and catching separately shows both failure modes where they happen.
+ * Not written as an async function awaiting the hook. Making this function async
+ * puts a second floating promise into the module whose whole defect was a
+ * floating promise, and that one can reject on a broken console, so the fatality
+ * above would arrive as a discarded rejection instead of a plain throw. Awaiting
+ * in a closure keeps that part honest but hides the synchronous case, which
+ * survives only because an async body runs eagerly up to its first await;
+ * settling the result and catching separately shows both failure modes where
+ * they happen.
  */
 function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknown): void {
   let hook: ReconciliationSweepSchedule["onSweepFailure"];
@@ -198,7 +196,8 @@ function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknow
     // the property access did: the type declares a method, and the sibling
     // per-repository hook is invoked with its receiver too, so a bare `hook(…)`
     // would leave `this` undefined and turn the hook itself into the
-    // process-killing throw this guard exists to prevent.
+    // process-killing throw this guard exists to prevent. A hook that cannot be
+    // invoked this way falls into the guard below like any other failing hook.
     void Promise.resolve(hook.call(schedule, error)).catch(() => {
       logSweepFailure(error);
     });
