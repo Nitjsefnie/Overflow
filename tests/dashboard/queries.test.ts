@@ -80,7 +80,7 @@ describe("unwritable closures", () => {
 
     const closures = await listUnwritableClosures({ sql });
 
-    expect(closures).toEqual([
+    expect(closures.queue).toEqual([
       {
         id: "closure-1",
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
@@ -125,6 +125,7 @@ describe("unwritable closures", () => {
         settlementParties: { creditorLogin: null, debtorLogin: "quinn" },
       }),
     ]);
+    expect(closures.history).toEqual([]);
     const query = captures[0]?.text ?? "";
     const projection = query.match(/^\s*select\s+([\s\S]*?)\s+from\s+unwritable_closures\b/i)?.[1] ?? "";
     expect(projection).toMatch(/(?:^|,)\s*unwritable_closures\.reason(?:\s+as\s+reason)?\s*(?:,|$)/i);
@@ -156,7 +157,7 @@ describe("unwritable closures", () => {
 
     const closures = await listUnwritableClosures({ sql });
 
-    expect(closures[0]).toMatchObject({
+    expect(closures.queue[0]).toMatchObject({
       settlementId: null,
       settlementParties: null,
       calibrationId: "calibration-1",
@@ -181,13 +182,56 @@ describe("unwritable closures", () => {
 
     const closures = await listUnwritableClosures({ sql });
 
-    expect(closures[0]?.latestCorrection).toEqual({
+    expect(closures.history[0]?.latestCorrection).toEqual({
       state: "GRANTED",
       requestedAt: "2026-09-05T12:00:00.000Z",
     });
+    expect(closures.queue).toEqual([]);
+    expect(captures).toHaveLength(1);
     const query = captures[0]?.text ?? "";
     expect(query).toMatch(/left join lateral\s*\([\s\S]*from settlement_override_requests\s+where settlement_override_requests\.issue_id = issues\.id\s+order by settlement_override_requests\.created_at desc, settlement_override_requests\.id desc\s+limit 1\s*\) as latest_correction on true/i);
     expect(query).not.toMatch(/state\s*=\s*'OPEN'/i);
+  });
+
+  it("partitions only latest grants into history while preserving each list's SQL order", async () => {
+    const requestedAt = new Date("2026-09-05T12:00:00.000Z");
+    const { sql, captures } = sqlHarness([[
+      { ...rejected, id: "granted-settlement", correction_state: "GRANTED", correction_requested_at: requestedAt },
+      { ...rejected, id: "no-request" },
+      { ...rejected, id: "declined", correction_state: "DECLINED", correction_requested_at: requestedAt },
+      {
+        ...rejected,
+        id: "granted-calibration",
+        settlement_id: null,
+        creditor_login: null,
+        debtor_login: null,
+        calibration_id: "calibration-1",
+        calibration_owner_login: "grace",
+        correction_state: "GRANTED",
+        correction_requested_at: requestedAt,
+      },
+      { ...rejected, id: "open", correction_state: "OPEN", correction_requested_at: requestedAt },
+    ]]);
+
+    const closures = await listUnwritableClosures({ sql });
+
+    expect(closures.queue?.map(({ id }) => id)).toEqual(["no-request", "declined", "open"]);
+    expect(closures.history?.map(({ id }) => id)).toEqual(["granted-settlement", "granted-calibration"]);
+    expect(closures.history[1]).toMatchObject({
+      settlementId: null,
+      settlementParties: null,
+      calibrationId: "calibration-1",
+      calibrationOwnerLogin: "grace",
+      latestCorrection: { state: "GRANTED", requestedAt: "2026-09-05T12:00:00.000Z" },
+    });
+    expect(captures).toHaveLength(1);
+  });
+
+  it("returns two empty lists when there are no closures", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    expect(await listUnwritableClosures({ sql })).toEqual({ queue: [], history: [] });
+    expect(captures).toHaveLength(1);
   });
 });
 
