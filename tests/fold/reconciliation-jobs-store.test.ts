@@ -135,6 +135,27 @@ async function expireLease(jobId: string): Promise<void> {
   `;
 }
 
+/** Claim shape shipped by the build before lease-duration tracking. */
+async function claimAsOldBuild(): Promise<{ id: string; lease_token: string; attempt_count: number } | undefined> {
+  const [row] = await sql<{ id: string; lease_token: string; attempt_count: number }[]>`
+    with due as (
+      select id from repository_reconciliation_jobs
+      where (state = 'PENDING' and run_after <= now())
+         or (state = 'RUNNING' and lease_expires_at <= now())
+      order by run_after, created_at
+      limit 1
+      for update skip locked
+    )
+    update repository_reconciliation_jobs as job
+    set state = 'RUNNING', lease_token = gen_random_uuid(),
+        lease_expires_at = now() + interval '30 minutes',
+        attempt_count = job.attempt_count + 1
+    from due where job.id = due.id
+    returning job.id, job.lease_token, job.attempt_count
+  `;
+  return row;
+}
+
 describe("PostgreSQL reconciliation job queue", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -163,6 +184,33 @@ describe("PostgreSQL reconciliation job queue", () => {
     // Claims read the whole queue, so a job left behind by an earlier case would
     // be picked up by a later one and decide its verdict.
     await sql`delete from repository_reconciliation_jobs`;
+  });
+
+  it("allows an old build to claim a pending job after migration 021", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimAsOldBuild();
+    expect(claimed).toBeDefined();
+    const row = await onlyJobFor(repositoryId);
+    expect(row.state).toBe("RUNNING");
+    expect(row.lease_duration_ms).toBeNull();
+  });
+
+  it("recognizes an old build taking over an expired current lease", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const current = await claimOrFail();
+    expect((await onlyJobFor(repositoryId)).lease_duration_ms).toBe(20_000);
+    await expireLease(current.id);
+    const legacy = await claimAsOldBuild();
+    expect(legacy?.id).toBe(current.id);
+    expect(legacy?.lease_token).not.toBe(current.leaseToken);
+    expect((await onlyJobFor(repositoryId)).lease_duration_ms).toBeNull();
+    const reclaimed = await claimOrFail();
+    expect(reclaimed.id).toBe(current.id);
+    expect(reclaimed.leaseToken).not.toBe(legacy?.lease_token);
+    expect(reclaimed.attemptCount).toBe(3);
+    expect((await onlyJobFor(repositoryId)).lease_duration_ms).toBe(20_000);
   });
 
   it("collapses a burst of enqueues for one repository onto a single job", async () => {
@@ -590,6 +638,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.follow_up_requested).toBe(false);
     expect(job.lease_token).toBeNull();
     expect(job.lease_expires_at).toBeNull();
+    expect(job.lease_duration_ms).toBeNull();
     expect((await claimOrFail()).id).toBe(job.id);
   });
 
@@ -607,6 +656,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.attempt_count).toBe(0);
     expect(job.lease_token).toBeNull();
     expect(job.lease_expires_at).toBeNull();
+    expect(job.lease_duration_ms).toBeNull();
     expect(job.last_failure_at).toBeNull();
   });
 
@@ -624,6 +674,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.attempt_count).toBe(1);
     expect(job.lease_token).toBeNull();
     expect(job.lease_expires_at).toBeNull();
+    expect(job.lease_duration_ms).toBeNull();
     expect(job.last_failure_at).not.toBeNull();
   });
 
@@ -639,6 +690,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.attempt_count).toBe(1);
     expect(job.lease_token).toBeNull();
     expect(job.lease_expires_at).toBeNull();
+    expect(job.lease_duration_ms).toBeNull();
     expect(job.last_failure_at).not.toBeNull();
     expect(await store.claimNextReconciliationJob()).toBeNull();
   });
