@@ -221,8 +221,15 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       entity_kind: "ISSUE",
       change_kind: "REMOVE",
       pull_request_id: null,
+      // `ownerGitHubLogin` is the login the deleted row carried, not the account
+      // holding it now: the snapshot is the record of the row that existed.
       before_state: {
         githubIssueId: impostorIssueGitHubId,
+        issueNumber: 1,
+        title: "An issue the sponsor opened and priced 1",
+        url: "https://github.com/example/impostor-opening/issues/1",
+        state: "OPEN",
+        ownerGitHubLogin: "owner-old",
         openingLabel: "M",
         openingComparisonPoints: 5,
         openingReservePoints: 5,
