@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { JSONValue } from "postgres";
-import { getSql } from "@/lib/db/client";
+import { getCoordinationSql, getSql } from "@/lib/db/client";
 import {
   type EnforcementState,
   type SqlClient,
@@ -179,7 +179,42 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public constructor(
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
+    private readonly coordinationSql: SqlClient = getCoordinationSql(),
   ) {}
+
+  /**
+   * Takes a coordination connection, giving up once the caller's deadline has
+   * passed.
+   *
+   * An exhausted pool queues a reservation indefinitely, which would silently
+   * defeat the lock-wait deadline, so the wait is bounded by whatever time the
+   * caller has left. An abandoned reservation still settles later; releasing it
+   * then is what keeps a timeout from leaking a connection.
+   */
+  private async reserveCoordinationConnection(
+    remainingMs: number,
+  ): Promise<Awaited<ReturnType<SqlClient["reserve"]>>> {
+    const reservation = this.coordinationSql.reserve();
+    let expiry: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reservation,
+        new Promise<never>((_resolve, reject) => {
+          expiry = setTimeout(() => reject(new Error(repositoryCoordinationFailure)), remainingMs);
+        }),
+      ]);
+    } catch (error) {
+      reservation.then(
+        (connection) => connection.release(),
+        () => undefined,
+      );
+      throw error;
+    } finally {
+      if (expiry !== undefined) {
+        clearTimeout(expiry);
+      }
+    }
+  }
 
   public async withRepositoryReconciliation<T>(
     repositoryId: string,
@@ -194,7 +229,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       }
       let connection: Awaited<ReturnType<SqlClient["reserve"]>>;
       try {
-        connection = await this.sql.reserve();
+        const reservationBudgetMs = deadline - Date.now();
+        if (reservationBudgetMs <= 0) {
+          throw new Error(repositoryCoordinationFailure);
+        }
+        connection = await this.reserveCoordinationConnection(reservationBudgetMs);
       } catch {
         throw new Error(repositoryCoordinationFailure);
       }
