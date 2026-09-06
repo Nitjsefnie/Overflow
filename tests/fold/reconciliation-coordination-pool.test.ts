@@ -73,7 +73,37 @@ describe("reconciliation coordination pool", () => {
     }
   });
 
-  it("keeps an abandoned reservation's own failure from escaping unhandled", async () => {
+  it("keeps a failing release of an abandoned reservation from escaping unhandled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { coordinationSql, reservations } = exhaustedCoordinationPool();
+      const coordinated = storeOverPool(coordinationSql)
+        .withRepositoryReconciliation("repository-whose-release-fails", async () => undefined);
+      const refusal = expect(coordinated).rejects.toThrow(coordinationFailure);
+      await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
+      await refusal;
+
+      // Releasing hands the connection back to a pool that may dispatch a queued
+      // query synchronously, so the release itself can throw. The recorded
+      // attempt proves the abandoned reservation was still released; an
+      // unhandled rejection fails the whole vitest run, so a clean run is what
+      // proves that throw did not escape.
+      const releaseAttempts: string[] = [];
+      reservations[0].arrive({
+        release: () => {
+          releaseAttempts.push("release-attempted");
+          throw new Error("coordination connection release failed");
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(releaseAttempts).toEqual(["release-attempted"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a reservation that fails after the deadline from escaping unhandled", async () => {
     vi.useFakeTimers();
     try {
       const { coordinationSql, reservations } = exhaustedCoordinationPool();
@@ -83,8 +113,8 @@ describe("reconciliation coordination pool", () => {
       await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
       await refusal;
 
-      // An unhandled rejection fails the whole vitest run, so a green suite is
-      // the assertion: the abandoned reservation's failure was consumed.
+      // An unhandled rejection fails the whole vitest run, so a clean run is the
+      // assertion: the abandoned reservation's failure was consumed.
       reservations[0].fail(new Error("coordination pool connection refused"));
       await vi.advanceTimersByTimeAsync(0);
     } finally {
