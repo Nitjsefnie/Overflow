@@ -158,6 +158,37 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
+  // Each of these is `openingFixture({ opening: outsider })` — the fixture the
+  // first case in this file proves records `OPENING_LABEL_UNAUTHORIZED` — with
+  // one field of the issue itself spoiled. So they pin the two early returns and
+  // not some absence of a candidate: the accusation is available and declined.
+  it.each([
+    { name: "a deleted author account GitHub reports as null", authorLogin: null },
+    { name: "an author login that is only whitespace", authorLogin: "   " },
+  ])("reports a missing opening for $name", ({ authorLogin }) => {
+    const snapshot = openingFixture({ opening: outsider });
+    snapshot.issues[0]!.authorLogin = authorLogin;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([
+      { code: "OPENING_LABEL_MISSING", githubIssueId: 101 },
+    ]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("reports a missing opening when the issue's own creation instant is unreadable", () => {
+    const snapshot = openingFixture({ opening: outsider });
+    snapshot.issues[0]!.createdAt = "last Tuesday";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([
+      { code: "OPENING_LABEL_MISSING", githubIssueId: 101 },
+    ]);
+    expect(result.issues).toEqual([]);
+  });
+
   it("reports a missing opening for a non-sponsor label applied after the opening deadline", () => {
     const snapshot = openingFixture({ opening: outsider });
     snapshot.issues[0]!.history.push({
