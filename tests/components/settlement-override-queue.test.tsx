@@ -92,11 +92,11 @@ describe("moderator settlement correction queue", () => {
       "href",
       "https://github.com/co-op/harbour/pull/51",
     );
-    expect(entry).toHaveTextContent("Settled points");
-    expect(entry).toHaveTextContent("Unsettled");
-    expect(entry).toHaveTextContent("Review rounds");
-    expect(entry).toHaveTextContent("2");
-    expect(entry).toHaveTextContent("Credits moved");
+    expect(evidenceValue(entry, "Status")).toBe("UNSETTLED");
+    expect(evidenceValue(entry, "Opening comparison")).toBe("5");
+    expect(evidenceValue(entry, "Settled points")).toBe("Unsettled");
+    expect(evidenceValue(entry, "Review rounds")).toBe("2");
+    expect(evidenceValue(entry, "Credits moved")).toBe("0");
   });
 
   it("shows the settled label and points of a settlement that did settle, at the wrong figure", () => {
@@ -117,8 +117,25 @@ describe("moderator settlement correction queue", () => {
     );
 
     const entry = screen.getByRole("listitem");
-    expect(entry).toHaveTextContent("delivered/2");
-    expect(entry).toHaveTextContent("SETTLED");
+    expect(evidenceValue(entry, "Status")).toBe("SETTLED");
+    expect(evidenceValue(entry, "Settled points")).toBe("delivered/2 · 2");
+  });
+
+  // A granted correction writes the settled points while the issue's label
+  // stays null, so a settlement reaches this state the same way a calibration
+  // does and has to read the same way.
+  it("shows settled points that no label backed, in the wording the calibration uses", () => {
+    render(
+      <SettlementOverrideQueue
+        requests={[
+          queued({
+            settlement: { ...queued().settlement!, status: "SETTLED", settledLabel: null, settledPoints: 2 },
+          }),
+        ]}
+      />,
+    );
+
+    expect(evidenceValue(screen.getByRole("listitem"), "Settled points")).toBe("no label recorded · 2");
   });
 
   it("shows the calibration figures and the closing pull request of a self-worked closure", () => {
