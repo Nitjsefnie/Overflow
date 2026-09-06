@@ -28,8 +28,8 @@ describe("GitHub webhook route", () => {
   });
 
   it("verifies raw bytes before parsing JSON and dispatches a supported delivery", async () => {
-    const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
-    const route = createGitHubWebhookPostHandler({ secret, processWebhook });
+    const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
 
     const response = await route(
       request(rawPayload, {
@@ -39,7 +39,7 @@ describe("GitHub webhook route", () => {
     );
 
     expect(response.status).toBe(202);
-    expect(processWebhook).toHaveBeenCalledWith({
+    expect(processWebhookMock).toHaveBeenCalledWith({
       action: "closed",
       deliveryId: "delivery-1",
       event: "pull_request",
@@ -86,9 +86,45 @@ describe("GitHub webhook route", () => {
     expect({ enqueued, reconciled }).toEqual({ enqueued: ["repository-1"], reconciled: [] });
   });
 
+  it("answers 503 and records the failure when the fold cannot be scheduled", async () => {
+    // The two halves of this path are pinned separately elsewhere; composed here
+    // because what matters is what GitHub sees. A delivery Overflow did not
+    // record must come back as an error, or GitHub never redelivers it and the
+    // repository is left unreconciled with nothing queued to repair it.
+    const markedFailed: { deliveryId: string; leaseToken: string }[] = [];
+    const dependencies: WebhookProcessorDependencies = {
+      store: {
+        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        markProcessed: async () => true,
+        markFailed: async (deliveryId, leaseToken) => {
+          markedFailed.push({ deliveryId, leaseToken });
+          return true;
+        },
+      },
+      enqueueReconciliation: async () => {
+        throw new Error("PostgreSQL is unreachable");
+      },
+    };
+    const route = createGitHubWebhookPostHandler({
+      secret,
+      processWebhook: (delivery) => processWebhook(dependencies, delivery),
+    });
+
+    const response = await route(
+      request(rawPayload, {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-unqueued",
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(markedFailed).toEqual([{ deliveryId: "delivery-unqueued", leaseToken: "lease-1" }]);
+  });
+
   it("rejects an invalid signature before attempting to parse malformed JSON", async () => {
-    const processWebhook = vi.fn();
-    const route = createGitHubWebhookPostHandler({ secret, processWebhook });
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
 
     const response = await route(
       new Request("https://overflow.test/api/github/webhooks", {
@@ -104,12 +140,12 @@ describe("GitHub webhook route", () => {
     );
 
     expect(response.status).toBe(401);
-    expect(processWebhook).not.toHaveBeenCalled();
+    expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
   it("requires GitHub delivery headers and a supported event action", async () => {
-    const processWebhook = vi.fn();
-    const route = createGitHubWebhookPostHandler({ secret, processWebhook });
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
 
     const missingDelivery = await route(
       request(rawPayload, { "x-github-event": "pull_request" }),
@@ -123,7 +159,7 @@ describe("GitHub webhook route", () => {
 
     expect(missingDelivery.status).toBe(400);
     expect(unsupportedAction.status).toBe(400);
-    expect(processWebhook).not.toHaveBeenCalled();
+    expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
   it("returns retryable 503 when delivery processing fails", async () => {
