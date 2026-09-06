@@ -3091,6 +3091,54 @@ describe("initial PostgreSQL materialization", () => {
     ]);
   });
 
+  it("clears a stored closure whose evidence window shut before the repository was registered", async () => {
+    const sponsorLogin = `late-registration-sponsor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, `late-registration-contributor-${nextExternalId()}`);
+    const tokenEncryptionKey = Buffer.alloc(32, 19).toString("base64url");
+    await sql`
+      update users
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("late-registration-token", tokenEncryptionKey), "utf8")}
+      where id = ${sponsorId}
+    `;
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
+    `;
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      sponsorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    // The rationale lands after the window, so this closure is real work while
+    // the window is reachable — which is what makes its later removal a
+    // decision about registration rather than about the evidence.
+    snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T13:00:00.000Z";
+    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const seedRun = await store.beginRun(repositoryId);
+    await store.materialize({ repositoryId, runId: seedRun, fold: foldRepository(snapshot) });
+    expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toHaveLength(1);
+
+    // Registration after the merge is the production shape: a repository added
+    // to Overflow long after the issues it already closed.
+    await sql`
+      update registered_repositories set created_at = ${"2026-09-05T00:00:00.000Z"} where id = ${repositoryId}
+    `;
+
+    await expect(reconcileRepository({ store, github: gatewayForSnapshot(snapshot) }, repositoryId))
+      .resolves.toMatchObject({ removals: 1 });
+    expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toEqual([]);
+  });
+
   it("records deterministic add, change, and removal provenance for self-work and hand closures", async () => {
     const selfWorkSponsorLogin = `self-work-sponsor-${nextExternalId()}`;
     const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
