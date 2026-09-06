@@ -3,6 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
+import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 
@@ -115,6 +116,7 @@ describe("member dashboard", () => {
             active: true,
             openingName: "Offer band",
             actualName: "Delivered band",
+            unavailableReason: null,
           }],
           enforcementNotices: [{
             id: "notice-1",
@@ -135,6 +137,62 @@ describe("member dashboard", () => {
     expect(screen.getByRole("heading", { name: "Registered repositories" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Enforcement notices" })).toBeVisible();
     expect(screen.getByText(/UNDER_AUDIT → WARNED/)).toBeVisible();
+  });
+
+  it("names why each unavailable repository went dark and says nothing extra for an available one", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            { ...registered("repo-1", "co-op/harbour"), unavailableReason: "NOT_FOUND" },
+            { ...registered("repo-2", "co-op/lighthouse"), unavailableReason: "NOT_PUBLIC" },
+            { ...registered("repo-3", "co-op/breakwater"), unavailableReason: "IDENTITY_MISMATCH" },
+            registered("repo-4", "co-op/seawall"),
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/co-op\/harbour.*unavailable: not found on GitHub/)).toBeVisible();
+    expect(screen.getByText(/co-op\/lighthouse.*unavailable: no longer public/)).toBeVisible();
+    expect(screen.getByText(/co-op\/breakwater.*unavailable: identity mismatch/)).toBeVisible();
+    expect(screen.getByText(/co-op\/seawall/)).not.toHaveTextContent(/unavailable/i);
+    expect(screen.queryByText(/NOT_FOUND|NOT_PUBLIC|IDENTITY_MISMATCH/)).not.toBeInTheDocument();
+  });
+
+  it("keeps an unrecognized unavailability reason from reaching the sponsor as a raw value", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            { ...registered("repo-1", "co-op/harbour"), unavailableReason: "ARCHIVED_UPSTREAM" },
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/co-op\/harbour.*· unavailable$/)).toBeVisible();
+    expect(screen.queryByText(/ARCHIVED_UPSTREAM/)).not.toBeInTheDocument();
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {
@@ -196,3 +254,15 @@ describe("member dashboard", () => {
     expect(screen.getByRole("link", { name: "Moderation" })).toHaveAttribute("href", "/moderation");
   });
 });
+
+function registered(id: string, ownerName: string): RegisteredRepositoryProjection {
+  return {
+    id,
+    ownerName,
+    visibility: "PUBLIC",
+    active: true,
+    openingName: "Offer band",
+    actualName: "Delivered band",
+    unavailableReason: null,
+  };
+}

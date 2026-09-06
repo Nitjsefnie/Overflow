@@ -86,6 +86,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
               <li key={repository.id}>
                 {repository.ownerName} · {repository.visibility} · {repository.active ? "active" : "inactive"}
                 {" · "}{repository.openingName} / {repository.actualName}
+                {repository.unavailableReason === null ? null : ` · ${unavailabilityPhrase(repository.unavailableReason)}`}
               </li>
             ))}
           </ul>
@@ -103,6 +104,20 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
       </section>
     </AppShell>
   );
+}
+
+/** The reason is a stored enum; the sponsor is owed the plain reading of it, whatever the schema later admits. */
+function unavailabilityPhrase(reason: string): string {
+  switch (reason) {
+    case "NOT_FOUND":
+      return "unavailable: not found on GitHub";
+    case "NOT_PUBLIC":
+      return "unavailable: no longer public";
+    case "IDENTITY_MISMATCH":
+      return "unavailable: identity mismatch";
+    default:
+      return "unavailable";
+  }
 }
 
 export default async function DashboardPage() {
