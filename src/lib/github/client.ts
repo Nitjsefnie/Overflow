@@ -475,7 +475,7 @@ type GitHubGraphqlPullRequestNode = {
   mergeCommit: { oid: string } | null;
   commits: { nodes: Array<{ commit: { committedDate: string } }> };
   author: { login: string; databaseId?: number | null } | null;
-  repository: { nameWithOwner: unknown } | null;
+  repository: { databaseId: unknown; nameWithOwner: unknown } | null;
 };
 
 type GitHubGraphqlIssueTimelineNode =
@@ -550,7 +550,7 @@ const issuesQuery = `
                 nodes { commit { committedDate } }
               }
               author { login ... on User { databaseId } }
-              repository { nameWithOwner }
+              repository { databaseId nameWithOwner }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -596,7 +596,7 @@ const closingPullRequestsQuery = `
               nodes { commit { committedDate } }
             }
             author { login ... on User { databaseId } }
-            repository { nameWithOwner }
+            repository { databaseId nameWithOwner }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -736,8 +736,22 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     finalCommitAt: node.commits.nodes.at(-1)?.commit.committedDate ?? null,
     authorLogin: node.author?.login ?? null,
     authorGitHubUserId: authorGitHubUserId(node.author),
+    repositoryGitHubId: repositoryGitHubId(node),
     repositoryNameWithOwner: repositoryNameWithOwner(node),
   };
+}
+
+/**
+ * The owning repository's stable identity. Absent or unusable, the pull request
+ * cannot be attributed to a repository at all, which is the same standing a null
+ * `databaseId` has for the pull request itself.
+ */
+function repositoryGitHubId(node: GitHubGraphqlPullRequestNode): number {
+  const databaseId = node.repository?.databaseId;
+  if (typeof databaseId !== "number" || !Number.isSafeInteger(databaseId) || databaseId <= 0) {
+    throw new Error("GitHub GraphQL response was invalid.");
+  }
+  return databaseId;
 }
 
 /**

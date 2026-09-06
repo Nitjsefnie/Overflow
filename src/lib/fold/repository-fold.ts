@@ -28,6 +28,8 @@ export type FoldUser = {
 export type RepositoryFoldSnapshot = {
   repository: {
     id: string;
+    /** registered_repositories.github_repository_id — the identity a rename cannot move. */
+    githubRepositoryId: number;
     ownerName: string;
     active: boolean;
     sponsor: FoldUser;
@@ -67,11 +69,9 @@ export type RepositoryFoldPullRequest = {
   finalCommitAt: string | null;
   authorLogin: string | null;
   authorGitHubUserId: number | null;
-  /**
-   * GraphQL `Repository.nameWithOwner` of the repository this pull request
-   * lives in, which a closing reference may report as one Overflow does not
-   * govern.
-   */
+  /** GitHub's stable numeric id of the repository this pull request lives in. */
+  repositoryGitHubId: number;
+  /** The same repository's current `owner/name`, for what a person reads. */
   repositoryNameWithOwner: string;
   reviews: GitHubPullRequestReview[];
   rawDiff: string;

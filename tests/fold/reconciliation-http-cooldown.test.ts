@@ -242,7 +242,7 @@ function issueNode(fixture: RepositoryFixture, number: number, changed: boolean)
       mergeCommit: { oid: id.toString(16).padStart(40, "0") } as { oid: string } | null,
       commits: { nodes: [{ commit: { committedDate: "2026-09-01T10:00:00.000Z" } }] },
       author: { login: fixture.contributorLogin, databaseId: fixture.contributorGitHubId },
-      repository: { nameWithOwner: fixture.ownerName },
+      repository: { databaseId: fixture.githubRepositoryId, nameWithOwner: fixture.ownerName },
     }] : [], pageInfo },
   };
 }

@@ -1961,9 +1961,10 @@ describe("initial PostgreSQL materialization", () => {
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
+    const repositoryGitHubId = Number(repository.github_repository_id);
     const changedIssueId = nextExternalId();
     const changedPullRequestId = nextExternalId();
     const obsoleteIssueId = nextExternalId();
@@ -2026,6 +2027,7 @@ describe("initial PostgreSQL materialization", () => {
             number: 11,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryGitHubId,
             repositoryNameWithOwner: repository.owner_name,
           })]],
           [3, [authoritativePullRequest({
@@ -2033,6 +2035,7 @@ describe("initial PostgreSQL materialization", () => {
             number: 13,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryGitHubId,
             repositoryNameWithOwner: repository.owner_name,
           })]],
         ]),
@@ -2048,6 +2051,7 @@ describe("initial PostgreSQL materialization", () => {
             number: 13,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryGitHubId,
             repositoryNameWithOwner: repository.owner_name,
           })]],
           [1, [authoritativePullRequest({
@@ -2055,6 +2059,7 @@ describe("initial PostgreSQL materialization", () => {
             number: 11,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryGitHubId,
             repositoryNameWithOwner: repository.owner_name,
           })]],
         ]),
@@ -3351,6 +3356,9 @@ async function githubUserIdOf(client: QueryableSql, userId: string): Promise<num
   return Number(row.github_user_id);
 }
 
+/** The GitHub repository id every materialization fixture is folded against. */
+const materializedRepositoryGitHubId = 9_100_000;
+
 function materializationSnapshot(input: {
   repositoryId: string;
   ownerName: string;
@@ -3372,6 +3380,7 @@ function materializationSnapshot(input: {
   return {
     repository: {
       id: input.repositoryId,
+      githubRepositoryId: materializedRepositoryGitHubId,
       ownerName: input.ownerName,
       active: true,
       sponsor: { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
@@ -3437,6 +3446,7 @@ function materializationSnapshot(input: {
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: contributorLogin,
             authorGitHubUserId: input.contributorGitHubUserId,
+            repositoryGitHubId: materializedRepositoryGitHubId,
             repositoryNameWithOwner: input.ownerName,
             reviews: [],
             rawDiff: "materialized diff",
@@ -3485,6 +3495,7 @@ function authoritativePullRequest(input: {
   number: number;
   authorLogin: string;
   authorGitHubUserId?: number;
+  repositoryGitHubId: number;
   repositoryNameWithOwner: string;
 }): GitHubPullRequest {
   return {
@@ -3499,6 +3510,7 @@ function authoritativePullRequest(input: {
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
     authorGitHubUserId: input.authorGitHubUserId ?? null,
+    repositoryGitHubId: input.repositoryGitHubId,
     repositoryNameWithOwner: input.repositoryNameWithOwner,
   };
 }
@@ -3634,6 +3646,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       finalCommitAt: pullRequest.finalCommitAt,
       authorLogin: pullRequest.authorLogin,
       authorGitHubUserId: pullRequest.authorGitHubUserId,
+      repositoryGitHubId: pullRequest.repositoryGitHubId,
       repositoryNameWithOwner: pullRequest.repositoryNameWithOwner,
     })),
   }));
