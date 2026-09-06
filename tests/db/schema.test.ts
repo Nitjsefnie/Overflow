@@ -1833,9 +1833,14 @@ describe("initial PostgreSQL materialization", () => {
     }]);
   });
 
-  it("refreshes both display logins when the account behind unchanged opening evidence is renamed", async () => {
+  // The issue's author and the sponsor who priced it are different accounts, so
+  // `owner_github_login` and `opening_source_actor_login` hold different text and a
+  // materialization writing either column from the other's value is visible here.
+  it("refreshes both display logins when the accounts behind unchanged opening evidence are renamed", async () => {
     const sponsorLogin = `rename-owner-old-${nextExternalId()}`;
     const renamedSponsorLogin = `rename-owner-new-${nextExternalId()}`;
+    const authorLogin = `rename-author-old-${nextExternalId()}`;
+    const renamedAuthorLogin = `rename-author-new-${nextExternalId()}`;
     const contributorLogin = `rename-worker-${nextExternalId()}`;
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
@@ -1847,14 +1852,15 @@ describe("initial PostgreSQL materialization", () => {
     const githubPullRequestId = nextExternalId();
     const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
     const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
-    const snapshotAs = (ownerLogin: string) => materializationSnapshot({
+    const snapshotAs = (logins: { author: string; sponsor: string }) => materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
       sponsorGitHubUserId,
       contributorGitHubUserId,
-      sponsorLogin: ownerLogin,
+      sponsorLogin: logins.sponsor,
+      authorLogin: logins.author,
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
@@ -1865,13 +1871,14 @@ describe("initial PostgreSQL materialization", () => {
     await store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
-      fold: foldRepository(snapshotAs(sponsorLogin)),
+      fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
     });
 
-    // GitHub renames the account: the snapshot's issue author and opening label
-    // actor report the new login while the labelling event itself is untouched.
-    // What the rename does to the rest of the product is a reconciliation
-    // concern, covered by tests/fold/renamed-owner-reconciliation.test.ts.
+    // GitHub renames both accounts: the snapshot's issue author and its opening
+    // label actor each report their own new login while the labelling event
+    // itself is untouched. What the rename does to the rest of the product is a
+    // reconciliation concern, covered by
+    // tests/fold/renamed-owner-reconciliation.test.ts.
     const renameRun = await store.beginRun(repositoryId);
     // A rename neither creates nor retires anything. What it does change is the
     // settled evidence's display text, which is the single recorded settlement
@@ -1879,7 +1886,7 @@ describe("initial PostgreSQL materialization", () => {
     await expect(store.materialize({
       repositoryId,
       runId: renameRun,
-      fold: foldRepository(snapshotAs(renamedSponsorLogin)),
+      fold: foldRepository(snapshotAs({ author: renamedAuthorLogin, sponsor: renamedSponsorLogin })),
     })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
     await expect(sql`
       select before_state, after_state from reconciliation_changes
@@ -1900,7 +1907,7 @@ describe("initial PostgreSQL materialization", () => {
              opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
       from issues where github_issue_id = ${githubIssueId}
     `).resolves.toEqual([{
-      owner_github_login: renamedSponsorLogin,
+      owner_github_login: renamedAuthorLogin,
       opening_source_actor_login: renamedSponsorLogin,
       opening_source_event_id: `opening-${githubIssueId}`,
       opening_source_at: new Date("2026-09-01T08:01:00.000Z"),
@@ -1913,6 +1920,8 @@ describe("initial PostgreSQL materialization", () => {
   it("refuses a materialization carrying a different opening event for an already proven issue", async () => {
     const sponsorLogin = `rewritten-owner-${nextExternalId()}`;
     const renamedSponsorLogin = `rewritten-owner-renamed-${nextExternalId()}`;
+    const authorLogin = `rewritten-author-${nextExternalId()}`;
+    const renamedAuthorLogin = `rewritten-author-renamed-${nextExternalId()}`;
     const contributorLogin = `rewritten-worker-${nextExternalId()}`;
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
@@ -1924,14 +1933,15 @@ describe("initial PostgreSQL materialization", () => {
     const githubPullRequestId = nextExternalId();
     const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
     const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
-    const snapshotAs = (ownerLogin: string) => materializationSnapshot({
+    const snapshotAs = (logins: { author: string; sponsor: string }) => materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
       sponsorGitHubUserId,
       contributorGitHubUserId,
-      sponsorLogin: ownerLogin,
+      sponsorLogin: logins.sponsor,
+      authorLogin: logins.author,
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
@@ -1942,7 +1952,7 @@ describe("initial PostgreSQL materialization", () => {
     await store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
-      fold: foldRepository(snapshotAs(sponsorLogin)),
+      fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
     });
     const storedIssue = async () => sql`
       select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
@@ -1952,15 +1962,16 @@ describe("initial PostgreSQL materialization", () => {
     const before = await storedIssue();
 
     // The refused payload also carries edits the store writes willingly — a
-    // renamed account and a retitled issue — so a store that wrote the row and
-    // skipped the rollback would leave a visibly different row behind.
-    const rewrittenSnapshot = snapshotAs(renamedSponsorLogin);
+    // renamed author, a renamed sponsor and a retitled issue — so a store that
+    // wrote the row and skipped the rollback would leave a visibly different row
+    // behind.
+    const rewrittenSnapshot = snapshotAs({ author: renamedAuthorLogin, sponsor: renamedSponsorLogin });
     rewrittenSnapshot.issues[0]!.title = "A retitled materialized issue";
     rewrittenSnapshot.issues[0]!.history[0]!.id = `opening-rewritten-${githubIssueId}`;
     const rewritten = foldRepository(rewrittenSnapshot);
     expect(rewritten.issues[0]).toMatchObject({
       title: "A retitled materialized issue",
-      ownerGitHubLogin: renamedSponsorLogin,
+      ownerGitHubLogin: renamedAuthorLogin,
       openingSourceActorLogin: renamedSponsorLogin,
       openingSourceEventId: `opening-rewritten-${githubIssueId}`,
     });
@@ -1973,7 +1984,7 @@ describe("initial PostgreSQL materialization", () => {
     await expect(storedIssue()).resolves.toEqual(before);
     expect(before).toEqual([expect.objectContaining({
       title: "A materialized issue",
-      owner_github_login: sponsorLogin,
+      owner_github_login: authorLogin,
       opening_source_actor_login: sponsorLogin,
       opening_source_event_id: `opening-${githubIssueId}`,
     })]);
@@ -1982,6 +1993,8 @@ describe("initial PostgreSQL materialization", () => {
   it("refuses a materialization redating the same opening event for an already proven issue", async () => {
     const sponsorLogin = `redated-owner-${nextExternalId()}`;
     const renamedSponsorLogin = `redated-owner-renamed-${nextExternalId()}`;
+    const authorLogin = `redated-author-${nextExternalId()}`;
+    const renamedAuthorLogin = `redated-author-renamed-${nextExternalId()}`;
     const contributorLogin = `redated-worker-${nextExternalId()}`;
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
@@ -1993,14 +2006,15 @@ describe("initial PostgreSQL materialization", () => {
     const githubPullRequestId = nextExternalId();
     const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
     const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
-    const snapshotAs = (ownerLogin: string) => materializationSnapshot({
+    const snapshotAs = (logins: { author: string; sponsor: string }) => materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
       sponsorId,
       contributorId,
       sponsorGitHubUserId,
       contributorGitHubUserId,
-      sponsorLogin: ownerLogin,
+      sponsorLogin: logins.sponsor,
+      authorLogin: logins.author,
       contributorLogin,
       issueLabels: ["M"],
       actualLabel: "delivered/6",
@@ -2011,7 +2025,7 @@ describe("initial PostgreSQL materialization", () => {
     await store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
-      fold: foldRepository(snapshotAs(sponsorLogin)),
+      fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
     });
     const storedIssue = async () => sql`
       select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
@@ -2022,16 +2036,16 @@ describe("initial PostgreSQL materialization", () => {
 
     // The opening event keeps its node id and only its timestamp moves, so the
     // event-id comparison alone cannot see this rewritten history. The refused
-    // payload also carries edits the store writes willingly — a renamed account
-    // and a retitled issue — so a store that wrote the row and skipped the
-    // rollback would leave a visibly different row behind.
-    const redatedSnapshot = snapshotAs(renamedSponsorLogin);
+    // payload also carries edits the store writes willingly — a renamed author, a
+    // renamed sponsor and a retitled issue — so a store that wrote the row and
+    // skipped the rollback would leave a visibly different row behind.
+    const redatedSnapshot = snapshotAs({ author: renamedAuthorLogin, sponsor: renamedSponsorLogin });
     redatedSnapshot.issues[0]!.title = "A retitled materialized issue";
     redatedSnapshot.issues[0]!.history[0]!.createdAt = "2026-09-01T08:02:00.000Z";
     const redated = foldRepository(redatedSnapshot);
     expect(redated.issues[0]).toMatchObject({
       title: "A retitled materialized issue",
-      ownerGitHubLogin: renamedSponsorLogin,
+      ownerGitHubLogin: renamedAuthorLogin,
       openingSourceActorLogin: renamedSponsorLogin,
       openingSourceEventId: `opening-${githubIssueId}`,
       openingSourceAt: "2026-09-01T08:02:00.000Z",
@@ -2045,7 +2059,7 @@ describe("initial PostgreSQL materialization", () => {
     await expect(storedIssue()).resolves.toEqual(before);
     expect(before).toEqual([expect.objectContaining({
       title: "A materialized issue",
-      owner_github_login: sponsorLogin,
+      owner_github_login: authorLogin,
       opening_source_actor_login: sponsorLogin,
       opening_source_event_id: `opening-${githubIssueId}`,
       opening_source_at: new Date("2026-09-01T08:01:00.000Z"),
@@ -3940,6 +3954,14 @@ function materializationSnapshot(input: {
   contributorGitHubUserId: number;
   sponsorLogin?: string;
   contributorLogin?: string;
+  /**
+   * The issue's author, defaulting to the sponsor. An opening label counts only from the
+   * repository sponsor while anyone may open the issue, so the two are ordinarily different
+   * accounts. A test asserting both `owner_github_login` and `opening_source_actor_login` must
+   * pass a distinct login here: sharing one leaves the columns holding identical text, and a
+   * store writing either column from the other's value still looks correct.
+   */
+  authorLogin?: string;
   issueLabels: string[];
   actualLabel: string;
   githubIssueId?: number;
@@ -3947,6 +3969,7 @@ function materializationSnapshot(input: {
 }): RepositoryFoldSnapshot {
   const sponsorLogin = input.sponsorLogin ?? "materialization-sponsor";
   const contributorLogin = input.contributorLogin ?? "materialization-contributor";
+  const authorLogin = input.authorLogin ?? sponsorLogin;
   const githubIssueId = input.githubIssueId ?? 9_000_000;
   const githubPullRequestId = input.githubPullRequestId ?? 9_000_001;
   return {
@@ -3971,7 +3994,7 @@ function materializationSnapshot(input: {
         url: "https://github.com/example/materialized/issues/1",
         state: "CLOSED",
         createdAt: "2026-09-01T08:00:00.000Z",
-        authorLogin: sponsorLogin,
+        authorLogin,
         labels: [...input.issueLabels, input.actualLabel],
         claimAssigneeGitHubLogin: contributorLogin,
         history: [
