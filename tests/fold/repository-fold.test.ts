@@ -100,11 +100,14 @@ describe("foldRepository", () => {
 
     expect(result.settlements).toEqual([]);
     expect(result.pullRequests).toEqual([]);
+    // Naming both repositories here would read "belongs to octo/example, not
+    // the registered repository octo/example", which tells a moderator nothing.
     expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101,
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
       githubPullRequestId: null,
-      reason: expect.stringContaining("octo/example"),
+      reason: "Closing pull request 11 does not belong to the registered repository: "
+        + "another repository now carries the name octo/example (GitHub repository 5002, not 5001).",
     }]);
   });
 
@@ -133,25 +136,6 @@ describe("foldRepository", () => {
     expect(result.pullRequests.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
     expect(result.unwritableClosures).toEqual([]);
   });
-
-  it.each([
-    { registered: "OCTO/EXAMPLE", owning: "octo/example" },
-    { registered: "octo/example", owning: "Octo/Example" },
-  ])(
-    "settles when the registered $registered and owning $owning names differ only in case",
-    ({ registered, owning }) => {
-      const snapshot = outsiderFixture();
-      snapshot.repository.ownerName = registered;
-      snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = owning;
-
-      const result = foldRepository(snapshot);
-
-      expect(result.unwritableClosures).toEqual([]);
-      expect(result.settlements).toEqual([
-        expect.objectContaining({ githubIssueId: 101, githubPullRequestId: 201, status: "SETTLED" }),
-      ]);
-    },
-  );
 
   it("subtracts each unique formal changes-requested review submitted before merge", () => {
     const result = foldRepository(twoReviewRoundsFixture());
