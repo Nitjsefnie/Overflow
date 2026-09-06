@@ -540,7 +540,10 @@ describe("scheduled reconciliation sweep", () => {
       expect(unhandled).toHaveLength(1);
       expect(unhandled[0]).toBeInstanceOf(TypeError);
 
-      // It keeps ticking through a broken console.
+      // It ticks again here because the listener installed above suppresses
+      // Node's default for an unhandled rejection. Nothing in the module
+      // survives a console broken at every arity: in production that throw ends
+      // the process, and the second tick is this test's doing, not the module's.
       await timer.tick();
       expect(sweeps).toBe(2);
     } finally {
@@ -1099,12 +1102,15 @@ describe("scheduled reconciliation sweep", () => {
     const intervals = captureIntervals();
     let sweeps = 0;
     // An untyped caller — a config object, parsed JSON, a JavaScript consumer —
-    // can hand over something that is neither nullish nor callable.
+    // can hand over something that is neither nullish nor callable. Zero rather
+    // than any other unusable value: falsy but not nullish is the boundary
+    // between the member the default stands in for and the member that is
+    // broken, so `??` arms nothing here where `||` would arm the default.
     const schedule = {
       runSweep: async () => {
         sweeps += 1;
       },
-      schedule: 6 * 60 * 60 * 1000,
+      schedule: 0,
     } as unknown as ReconciliationSweepSchedule;
 
     try {
@@ -1154,6 +1160,50 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
+    }
+  });
+
+  it("reports a scheduler that throws in the caller's own stack", async () => {
+    // A failing report is what makes the synchronous case visible. Guarded
+    // synchronously, a scheduler that throws and a console broken at every arity
+    // put the failure in startReconciliationSweep's own stack. Reached through a
+    // promise instead — Promise.resolve().then(call) — the same pair leaves one
+    // unhandled rejection and lets startReconciliationSweep return as though it
+    // had armed something, which is the shape this module exists to avoid.
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+    const intervals = captureIntervals();
+    let sweeps = 0;
+
+    try {
+      expect(() => {
+        startReconciliationSweep({
+          runSweep: async () => {
+            sweeps += 1;
+          },
+          schedule: () => {
+            throw new Error("The tick could not be registered");
+          },
+        });
+      }).toThrow(TypeError);
+      // One drain is already enough for Node to report a rejection it is going
+      // to report; the second only widens the window the listener had to fire in.
+      await drain();
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
     }
   });
 
