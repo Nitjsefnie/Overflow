@@ -18,12 +18,17 @@ const minimumSettledPoints = 1;
 const maximumSettledPoints = 10;
 
 /**
- * A moderator's decision on a settlement correction request.
+ * A moderator's decision on a correction request.
  *
- * Granting takes the corrected settled points; credits are never entered here,
- * because they are recomputed from those points and the review rounds the fold
+ * Granting takes the corrected points, which the fold applies as the
+ * settlement's settled points or as the calibration's actual points depending
+ * on how the issue was priced. Credits are never entered here: where they move
+ * at all, they are recomputed from those points and the review rounds the fold
  * counted. Both decisions require a reason, so the ledger records the argument
  * as well as the outcome.
+ *
+ * One control serves both outcomes, so its wording names neither: a moderator
+ * deciding a sponsor's own closure would find no settled points to correct.
  */
 export function SettlementOverrideDecision({ requestId, issueNumber }: SettlementOverrideDecisionProps) {
   const [settledPoints, setSettledPoints] = useState("");
@@ -49,7 +54,7 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
     ) {
       setFeedback({
         kind: "error",
-        message: `Enter the corrected settled points, a whole number between ${minimumSettledPoints} and ${maximumSettledPoints}.`,
+        message: `Enter the corrected points, a whole number between ${minimumSettledPoints} and ${maximumSettledPoints}.`,
       });
       return;
     }
@@ -78,8 +83,8 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
         kind: "success",
         message:
           decision === "grant"
-            ? `Issue #${issueNumber} is corrected to ${points} settled points.`
-            : `Issue #${issueNumber} keeps its settlement.`,
+            ? `Issue #${issueNumber} is corrected to ${points} points.`
+            : `Issue #${issueNumber} keeps the outcome the fold recorded.`,
       });
     } catch {
       setFeedback({
@@ -94,7 +99,7 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
   return (
     <section className="override-decision" aria-label={`Correction decision for issue #${issueNumber}`}>
       <label className="field" htmlFor={`override-points-${requestId}`}>
-        <span>Corrected settled points</span>
+        <span>Corrected points</span>
         <input
           id={`override-points-${requestId}`}
           name="settledPoints"

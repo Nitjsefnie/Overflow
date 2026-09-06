@@ -18,12 +18,12 @@ afterEach(() => {
 });
 
 describe("settlement correction decision controls", () => {
-  it("grants a correction with the settled points and the reason", async () => {
+  it("grants a correction with the corrected points and the reason", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal("fetch", fetchMock);
     render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
 
-    fireEvent.change(screen.getByLabelText("Corrected settled points"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "6" } });
     fireEvent.change(screen.getByLabelText("Reason for the decision"), {
       target: { value: "The delivered label was applied by the issue owner." },
     });
@@ -38,7 +38,7 @@ describe("settlement correction decision controls", () => {
       reason: "The delivered label was applied by the issue owner.",
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Issue #44 is corrected to 6 settled points.",
+      "Issue #44 is corrected to 6 points.",
     );
   });
 
@@ -57,7 +57,7 @@ describe("settlement correction decision controls", () => {
       action: "decline",
       reason: "The evidence window closed before the label was applied.",
     });
-    expect(await screen.findByRole("status")).toHaveTextContent("Issue #44 keeps its settlement.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Issue #44 keeps the outcome the fold recorded.");
   });
 
   it("requires a reason for either decision", async () => {
@@ -73,7 +73,7 @@ describe("settlement correction decision controls", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("requires settled points within the catalog before granting", async () => {
+  it("requires corrected points within the catalog before granting", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
@@ -84,14 +84,14 @@ describe("settlement correction decision controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Enter the corrected settled points, a whole number between 1 and 10.",
+      "Enter the corrected points, a whole number between 1 and 10.",
     );
 
-    fireEvent.change(screen.getByLabelText("Corrected settled points"), { target: { value: "11" } });
+    fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "11" } });
     fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Enter the corrected settled points, a whole number between 1 and 10.",
+      "Enter the corrected points, a whole number between 1 and 10.",
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -114,5 +114,14 @@ describe("settlement correction decision controls", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "No settlement, calibration or correction request was found under that identifier.",
     );
+  });
+});
+
+describe("a decision on a self-worked closure", () => {
+  it("asks for the corrected figure without calling it a settled one", () => {
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    expect(screen.getByLabelText("Corrected points")).toBeVisible();
+    expect(screen.queryByLabelText(/settled/i)).toBeNull();
   });
 });
