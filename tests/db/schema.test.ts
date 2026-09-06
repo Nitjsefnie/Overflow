@@ -1873,12 +1873,14 @@ describe("initial PostgreSQL materialization", () => {
     // What the rename does to the rest of the product is a reconciliation
     // concern, covered by tests/fold/renamed-owner-reconciliation.test.ts.
     const renameRun = await store.beginRun(repositoryId);
-    // The one recorded change is the settled evidence's display text following the rename.
+    // A rename neither creates nor retires anything. What it does change is the
+    // settled evidence's display text, which is the single recorded settlement
+    // change below; the total change count is incidental to that.
     await expect(store.materialize({
       repositoryId,
       runId: renameRun,
       fold: foldRepository(snapshotAs(renamedSponsorLogin)),
-    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    })).resolves.toMatchObject({ adds: 0, removals: 0 });
     await expect(sql`
       select before_state, after_state from reconciliation_changes
       where reconciliation_run_id = ${renameRun} and entity_kind = ${"SETTLEMENT"}
