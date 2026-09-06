@@ -78,8 +78,16 @@ describe("a reconciliation that deletes materialized rows says so", () => {
         entity_kind: "ISSUE",
         change_kind: "REMOVE",
         pull_request_id: null,
+        // The row is gone, so this object is the whole remaining record of it:
+        // it has to name the issue well enough to reach it on GitHub without a
+        // further API call, not just carry its pricing.
         before_state: {
           githubIssueId: abandonedIssueGitHubId,
+          issueNumber: 1,
+          title: "An issue whose materialization can be removed 1",
+          url: "https://github.com/example/abandoned-issue/issues/1",
+          state: "OPEN",
+          ownerGitHubLogin: "removal-sponsor-one",
           openingLabel: "M",
           openingComparisonPoints: 5,
           openingReservePoints: 5,
@@ -140,7 +148,18 @@ describe("a reconciliation that deletes materialized rows says so", () => {
         // Migration 004 nulls this reference when the row it names is deleted,
         // so the removed pull request is only legible in before_state.
         pull_request_id: null,
-        before_state: { githubPullRequestId: withdrawnPullRequestGitHubId },
+        // So the snapshot has to identify the pull request on its own, and keep
+        // the merge proof the deleted row carried.
+        before_state: {
+          githubPullRequestId: withdrawnPullRequestGitHubId,
+          pullRequestNumber: 11,
+          title: "A merged pull request 11",
+          url: "https://github.com/example/withdrawn-pull-request/pull/11",
+          state: "MERGED",
+          authorGitHubLogin: contributorLogin,
+          mergeCommitOid: "00000000000000000000000000000000008adae3",
+          mergedAt: "2026-09-01T12:00:00.000Z",
+        },
         after_state: null,
       },
       {
