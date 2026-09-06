@@ -23,8 +23,8 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
           <>
             <h1 id="session-recovery-title">The ledger could not be reached.</h1>
             <p>
-              Your sign-in is still valid. Overflow could not read your member record, so no protected page can
-              load until the ledger answers again.
+              If you were signed in, that sign-in is still valid. Overflow could not read your member record,
+              so no protected page can load until the ledger answers again.
             </p>
             <Link className="text-link" href="/dashboard">
               Try the ledger again
