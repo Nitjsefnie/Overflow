@@ -312,6 +312,9 @@ async function calibrationIdFor(githubIssueId: number): Promise<string> {
     join issues on issues.id = self_work_calibrations.issue_id
     where issues.github_issue_id = ${githubIssueId}
   `;
+  if (row === undefined) {
+    throw new Error(`No self-work calibration was materialized for issue ${githubIssueId}.`);
+  }
   return row.id;
 }
 
