@@ -67,6 +67,12 @@ export type RepositoryFoldPullRequest = {
   finalCommitAt: string | null;
   authorLogin: string | null;
   authorGitHubUserId: number | null;
+  /**
+   * GraphQL `Repository.nameWithOwner` of the repository this pull request
+   * lives in, which a closing reference may report as one Overflow does not
+   * govern.
+   */
+  repositoryNameWithOwner: string;
   reviews: GitHubPullRequestReview[];
   rawDiff: string;
 };

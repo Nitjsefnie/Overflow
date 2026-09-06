@@ -142,6 +142,7 @@ function issueNode(number: number) {
       mergeCommit: { oid: number.toString(16).padStart(40, "0") },
       commits: { nodes: [{ commit: { committedDate: "2026-09-01T10:00:00.000Z" } }] },
       author: { login: "contributor", databaseId: 2001 },
+      repository: { nameWithOwner: "sponsor/repository" },
     }], pageInfo },
   };
 }

@@ -492,6 +492,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: "contributor",
             authorGitHubUserId: 2001,
+            repositoryNameWithOwner: "octo/example",
             reviews: [],
             rawDiff: "diff",
           },
