@@ -212,6 +212,25 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
     ]);
   });
 
+  it("names the sponsor's account, and no login, when the stored login is blank", () => {
+    // The other half of the same rendering: with the sponsor identified by id
+    // alone there is no stored login to put in the sentence, and a refusal
+    // still has to say whose account the missing comment had to come from.
+    const result = foldRepository(fixture({
+      storedSponsorLogin: "\t",
+      rationale: { login: "someone-else", githubUserId: 3001 },
+    }));
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No rationale comment by the repository sponsor's account naming `delivered/6` was posted "
+        + "between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after "
+        + "the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+  });
+
   it("refuses an idless actor whose login is not the sponsor's stored login", () => {
     // Without an id there is nothing but the login, so the renamed sponsor's
     // CURRENT login is not evidence: the stored login is the only claim.
