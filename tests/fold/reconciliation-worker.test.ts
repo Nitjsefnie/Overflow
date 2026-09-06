@@ -536,7 +536,7 @@ describe("the scheduled reconciliation worker", () => {
       const timer = { unrefed: false };
       timers.push(timer);
       return { unref: () => { timer.unrefed = true; } } as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval);
+    }) as unknown as typeof setInterval);
 
     try {
       startReconciliationWorker({
