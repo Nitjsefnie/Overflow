@@ -255,10 +255,11 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
-  // Each of these is `openingFixture({ opening: outsider })` — the fixture the
-  // first case in this file proves records `OPENING_LABEL_UNAUTHORIZED` — with
-  // one field of the issue itself spoiled. So they pin the two early returns and
-  // not some absence of a candidate: the accusation is available and declined.
+  // Each author-login case uses `openingFixture({ opening: outsider })`, which
+  // the first case proves records `OPENING_LABEL_UNAUTHORIZED`, with only the
+  // author login spoiled. These pin the author guard with a candidate still
+  // available. The unreadable-createdAt case below also yields no candidates,
+  // so it pins the refusal but cannot distinguish the early-return route.
   it.each([
     { name: "a deleted author account GitHub reports as null", authorLogin: null },
     { name: "an author login that is only whitespace", authorLogin: "   " },
