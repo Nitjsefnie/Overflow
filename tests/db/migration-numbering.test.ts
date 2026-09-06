@@ -50,6 +50,7 @@ function rejectionMessage(check: () => void): string {
 
 describe("migration numbering", () => {
   beforeEach(() => {
+    migrationsOnDisk.entries = [];
     databaseClient.withTransaction.mockClear();
   });
 
@@ -126,6 +127,14 @@ describe("migration numbering", () => {
     });
 
     expect(message).toContain("numbered 14: 014_a.sql, 014_b.sql; 15: 015_c.sql, 015_d.sql");
+  });
+
+  it("reports colliding numbers in numeric order, not in filename order", () => {
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers(["001_a.sql", "001_b.sql", "0003_c.sql", "0003_d.sql"]);
+    });
+
+    expect(message).toContain("numbered 1: 001_a.sql, 001_b.sql; 3: 0003_c.sql, 0003_d.sql");
   });
 
   it("rejects a third migration numbered 013 alongside the historical pair", () => {
