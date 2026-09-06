@@ -242,11 +242,11 @@ async function insertJobFor(
   const running = job.state === "RUNNING";
   await sql`
     insert into repository_reconciliation_jobs (
-      repository_id, reason, state, last_failure_at, lease_token, lease_expires_at
+      repository_id, reason, state, last_failure_at, lease_token, lease_expires_at, lease_duration_ms
     )
     select
       repositories.id, ${"SWEEP"}, ${job.state}::repository_reconciliation_job_state, ${job.lastFailureAt},
-      ${running ? "11111111-1111-4111-8111-111111111111" : null}, ${running ? "2026-09-04T12:00:00.000Z" : null}
+      ${running ? "11111111-1111-4111-8111-111111111111" : null}, ${running ? "2026-09-04T12:00:00.000Z" : null}, ${running ? 20_000 : null}
     from registered_repositories as repositories
     where repositories.owner_name = ${ownerName}
   `;

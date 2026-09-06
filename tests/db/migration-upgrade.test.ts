@@ -8,6 +8,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -90,6 +91,32 @@ afterAll(async () => {
 });
 
 describe("upgrading an already-deployed database", () => {
+  it.each([1800, 39])("reclaims an unmarked legacy lease with %s seconds left after upgrade", async (seconds) => {
+    await onNewDatabase(`legacy_lease_${seconds}`, async (sql) => {
+      await runMigrations({ upTo: "020_repository_reconciliation_jobs.sql" });
+      const sponsor = await insertAccount(sql, "legacy-lease", "ACTIVE");
+      const repository = await insertRepository(sql, sponsor);
+      const [legacy] = await sql<{ id: string; lease_token: string }[]>`
+        insert into repository_reconciliation_jobs
+          (repository_id, reason, state, attempt_count, lease_token, lease_expires_at)
+        values (${repository.id}, 'WEBHOOK', 'RUNNING', 1, gen_random_uuid(),
+          now() + make_interval(secs => ${seconds}))
+        returning id, lease_token
+      `;
+      await runMigrations();
+      const queue = new PostgresFoldStore(sql);
+      const reclaimed = await queue.claimNextReconciliationJob();
+      expect(reclaimed?.id).toBe(legacy.id);
+      expect(reclaimed?.leaseToken).not.toBe(legacy.lease_token);
+      expect(reclaimed?.attemptCount).toBe(2);
+      const [row] = await sql<{ lease_duration_ms: number }[]>`
+        select lease_duration_ms from repository_reconciliation_jobs where id = ${legacy.id}
+      `;
+      expect(row.lease_duration_ms).toBe(20_000);
+      expect(await queue.claimNextReconciliationJob()).toBeNull();
+    });
+  });
+
   it("ends a fresh install on the check the original 003 installed", () => {
     // Not a rendering comparison: deployedStatusCheck comes from applying the pre-branch 003
     // constraint text, which nothing in this branch writes. A 015 that changes the rule — a

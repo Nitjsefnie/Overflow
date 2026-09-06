@@ -38,11 +38,11 @@
 -- seconds); actual pickup additionally needs a free worker, since a drain busy
 -- folding another repository delays it (issue 202). The advisory-lock safety
 -- net still applies if a busy event loop starves renewal, with the deadline and
--- backoff costs above. Claims also recognize leases beyond the current rollout
--- margin, so an old build's thirty-minute lease need not expire before recovery.
+-- backoff costs above. Migration 021 records the claiming build's lease window;
+-- claims reclaim unmarked legacy leases regardless of their remaining duration.
 --
 -- The lease check keeps `state` and the lease columns from drifting apart. A
--- claim sets all three together and a release clears them together, so a
+-- claim sets the state and lease columns together and a release clears the lease, so a
 -- crashed worker leaves a row whose expiry says it is reclaimable rather than a
 -- RUNNING row with no lease at all.
 --
