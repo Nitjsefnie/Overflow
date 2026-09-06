@@ -320,7 +320,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const enqueued = signal();
     const release = signal();
     const enqueueing = other.begin(async (transaction) => {
-      await new PostgresFoldStore(transaction).enqueueReconciliationJob(repositoryId, "WEBHOOK");
+      await new PostgresFoldStore(transaction as unknown as Sql).enqueueReconciliationJob(repositoryId, "WEBHOOK");
       enqueued.resolve();
       await release.promise;
     });
