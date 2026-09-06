@@ -1,3 +1,4 @@
+import { callGuarded } from "@/lib/fold/guarded-callback";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 
 export type ReconciliationWorkerStore = {
@@ -13,7 +14,19 @@ export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
   reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
   now?: () => Date;
-  onFailure?(repositoryId: string, error: unknown): void;
+  /**
+   * Reports one repository this worker could not fold, as distinct from the
+   * whole-drain hook on the schedule. A hook that fails costs neither the
+   * report nor the job's outcome, whichever way it fails: reading the member
+   * can throw, since it may be an accessor wired lazily; the call can throw;
+   * and an async hook can reject. Each of the three ends with the repository
+   * failure on console.error instead, and the job is still retried or failed on
+   * its own row. Omit the hook to report there in the first place.
+   *
+   * A console that fails too is the exception, and logJobFailure says what it
+   * costs.
+   */
+  onFailure?(repositoryId: string, error: unknown): void | PromiseLike<unknown>;
 };
 
 /**
@@ -43,7 +56,15 @@ export type ReconciliationWorkerSchedule = {
   drain(): Promise<unknown>;
   schedule?(callback: () => void, everyMs: number): void;
   intervalMs?: number;
-  onFailure?(error: unknown): void;
+  /**
+   * Reports a drain that failed as a whole, as distinct from the
+   * per-repository hook on the dependencies. A hook that fails costs neither
+   * the process nor the report, whichever way it fails: reading the member can
+   * throw, since it may be an accessor wired lazily; the call can throw; and an
+   * async hook can reject. Each of the three ends with the drain failure on
+   * console.error instead. Omit the hook to report there in the first place.
+   */
+  onFailure?(error: unknown): void | PromiseLike<unknown>;
 };
 
 export type ReconciliationJobOutcome =
@@ -77,7 +98,7 @@ export async function runNextReconciliationJob(
   } catch (error) {
     // One unreachable repository must not stop the worker draining the rest, so
     // the failure is recorded on its own job and never propagated to the drain.
-    reportQuietly(() => dependencies.onFailure?.(job.repositoryId, error));
+    reportJobFailure(dependencies, job.repositoryId, error);
     const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
     if (delayMs === undefined) {
       await store.failReconciliationJob(job.id, job.leaseToken);
@@ -185,7 +206,7 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
       try {
         await schedule.drain();
       } catch (error) {
-        reportQuietly(() => schedule.onFailure?.(error));
+        reportDrainFailure(schedule, error);
       } finally {
         running = false;
       }
@@ -197,20 +218,97 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
 }
 
 /**
- * Reports a failure without letting the reporter become a failure of its own.
+ * Reports one repository's failure, on the console when the caller has no hook
+ * of its own.
  *
- * Both call sites already sit on a path whose whole purpose is to survive a
- * failure, and both are reached from a detached async call. A reporter that
- * throws there would reject that call with nothing attached, which is exactly
- * the crash the surrounding handler exists to prevent — so the reporter's own
- * error goes no further than here.
+ * Guarded the three ways callGuarded describes, so a hook that fails costs
+ * neither the report nor the job's outcome: the retry or the failure is written
+ * to the job's row after this returns, and a throw here would leave that unsaid
+ * and the lease to expire instead.
+ *
+ * Settling the hook rather than awaiting it matters for the same reason it does
+ * in the sweep: the worker takes one job at a time, so awaiting would put the
+ * next job behind a diagnostic and let a hook that never settles stall the
+ * drain rather than one report.
  */
-function reportQuietly(report: () => void): void {
+function reportJobFailure(
+  dependencies: ReconciliationWorkerDependencies,
+  repositoryId: string,
+  error: unknown,
+): void {
+  callGuarded(
+    dependencies,
+    () => dependencies.onFailure,
+    [repositoryId, error],
+    // The reason the hook failed is not the subject: the report is about the
+    // repository, and the hook failing is only why it is being made here.
+    () => {
+      logJobFailure(repositoryId, error);
+    },
+  );
+}
+
+/**
+ * Logs a repository's fold failure, keeping the line even when the reason is
+ * what breaks.
+ *
+ * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
+ * getter with a side effect — and losing the whole line to that would hide the
+ * failure entirely. The repository id is passed as its own argument rather than
+ * built into the message, so the line that survives still says which repository
+ * it was about.
+ *
+ * A console broken at both arities stays uncontained, as callGuarded describes.
+ * Reached from the catch block, its throw leaves runNextReconciliationJob before
+ * the job's outcome is written, so the drain ends there and the lease expires
+ * rather than the job being retried; the scheduler reports that as a drain
+ * failure. Reached from the rejection handler on an async hook, the outcome is
+ * already recorded and the throw becomes an unhandled rejection instead.
+ */
+function logJobFailure(repositoryId: string, error: unknown): void {
+  const message = "Reconciliation failed for repository";
   try {
-    report();
+    console.error(message, repositoryId, error);
   } catch {
-    // There is no second reporter to tell, and the job outcome still has to be
-    // recorded.
+    console.error(message, repositoryId);
+  }
+}
+
+/**
+ * Reports a drain that failed as a whole, on the console when the caller has no
+ * hook of its own.
+ *
+ * Guarded the three ways callGuarded describes, so a hook that fails costs
+ * neither the process nor the report.
+ */
+function reportDrainFailure(schedule: ReconciliationWorkerSchedule, error: unknown): void {
+  callGuarded(
+    schedule,
+    () => schedule.onFailure,
+    [error],
+    // The reason the hook failed is not the subject: the report is about the
+    // drain, and the hook failing is only why it is being made here.
+    () => {
+      logDrainFailure(error);
+    },
+  );
+}
+
+/**
+ * Logs a drain failure, keeping the line even when the reason is what breaks.
+ *
+ * The line survives a reason that refuses to be printed, for the reason
+ * logJobFailure gives. A console broken at both arities stays fatal, as
+ * callGuarded describes: reached either way from inside the tick's own floating
+ * promise, its throw arrives as an unhandled rejection, which ends the process
+ * under Node's default.
+ */
+function logDrainFailure(error: unknown): void {
+  const message = "Reconciliation worker could not drain the job queue";
+  try {
+    console.error(message, error);
+  } catch {
+    console.error(message);
   }
 }
 
