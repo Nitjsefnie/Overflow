@@ -894,10 +894,28 @@ describe("initial PostgreSQL materialization", () => {
     `).rejects.toThrow("Issue opening rating is immutable");
     await expect(updateOriginalOpeningDifficulty(sql, issue.id))
       .rejects.toThrow("Issue opening rating is immutable");
-    // A login still cannot be blanked away while opening evidence remains attached.
+    // A login still cannot be blanked away while opening evidence remains
+    // attached. The trigger refuses the null transition; the completeness check
+    // refuses the empty and whitespace spellings of the same blanking.
+    await expect(sql`
+      update issues set owner_github_login = ${null} where id = ${issue.id}
+    `).rejects.toThrow("Issue opening rating is immutable");
+    await expect(sql`
+      update issues set opening_source_actor_login = ${null} where id = ${issue.id}
+    `).rejects.toThrow("Issue opening rating is immutable");
     await expect(sql`
       update issues set opening_source_actor_login = ${"   "} where id = ${issue.id}
     `).rejects.toThrow("issues_opening_source_complete_check");
+    await expect(sql`
+      update issues set owner_github_login = ${""} where id = ${issue.id}
+    `).rejects.toThrow("issues_opening_source_complete_check");
+    await expect(sql`
+      select owner_github_login, opening_source_actor_login
+      from issues where id = ${issue.id}
+    `).resolves.toEqual([{
+      owner_github_login: "login-after-rename",
+      opening_source_actor_login: "login-after-rename",
+    }]);
   });
 
   it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
