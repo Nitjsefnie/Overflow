@@ -57,9 +57,16 @@ export type SelfWorkCalibrationOverrideEvidence = {
 /**
  * A queued request with whichever outcome its issue was priced into.
  *
- * At most one of the two is present: an issue is materialized as a settlement
- * or as a self-work calibration, never both. Both being null means the outcome
- * was rebuilt away under the request rather than never having existed.
+ * In practice at most one of the two is present, and both being null means the
+ * outcome was rebuilt away under the request rather than never having existed.
+ * That is a derived property of how the fold writes, not a schema guarantee:
+ * `settlements` carries `settlements_issue_unique`, `self_work_calibrations`
+ * only `unique (pull_request_id, issue_id)`, and nothing forbids a settlement
+ * and a calibration on one issue. What actually holds it is the `continue`
+ * after the calibration push in `src/lib/fold/repository-fold.ts` and the
+ * materializer's removal loop, which deletes every calibration absent from the
+ * desired set. Check both before relying on it: the queue's left joins would
+ * silently duplicate an entry rather than fail if a second row ever appeared.
  */
 export type OpenSettlementOverrideRequest = {
   id: string;
