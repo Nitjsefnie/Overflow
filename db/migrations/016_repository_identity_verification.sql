@@ -11,6 +11,7 @@
 
 alter table registered_repositories
 add column unavailable_reason text
+  constraint registered_repositories_unavailable_reason_check
   check (unavailable_reason is null or unavailable_reason in ('NOT_FOUND', 'NOT_PUBLIC', 'IDENTITY_MISMATCH')),
 add column unavailable_since timestamp with time zone;
 

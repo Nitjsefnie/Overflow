@@ -603,20 +603,23 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ reconciliation_not_before: null }]);
   });
 
+  it("carries unavailability as a nullable reason beside a nullable first observation", async () => {
+    await expect(sql`
+      select column_name, data_type, is_nullable from information_schema.columns
+      where table_name = 'registered_repositories'
+        and column_name in ('unavailable_reason', 'unavailable_since')
+      order by column_name
+    `).resolves.toEqual([
+      { column_name: "unavailable_reason", data_type: "text", is_nullable: "YES" },
+      { column_name: "unavailable_since", data_type: "timestamp with time zone", is_nullable: "YES" },
+    ]);
+  });
+
   it.each(["NOT_FOUND", "NOT_PUBLIC", "IDENTITY_MISMATCH"])(
     "records %s unavailability with the moment it was first observed",
     async (reason) => {
       const sponsorId = await insertUser(sql);
       const repositoryId = await insertRepository(sql, sponsorId);
-      await expect(sql`
-        select column_name, data_type, is_nullable from information_schema.columns
-        where table_name = 'registered_repositories'
-          and column_name in ('unavailable_reason', 'unavailable_since')
-        order by column_name
-      `).resolves.toEqual([
-        { column_name: "unavailable_reason", data_type: "text", is_nullable: "YES" },
-        { column_name: "unavailable_since", data_type: "timestamp with time zone", is_nullable: "YES" },
-      ]);
       await expect(sql`
         select unavailable_reason, unavailable_since from registered_repositories where id = ${repositoryId}
       `).resolves.toEqual([{ unavailable_reason: null, unavailable_since: null }]);
