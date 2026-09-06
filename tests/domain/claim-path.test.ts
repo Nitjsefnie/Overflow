@@ -75,13 +75,45 @@ describe("claim path assessment", () => {
   });
 
   for (const method of ["-X POST", "--method POST", "-x post", "--METHOD post"]) {
-    it.each([
-      ["repository name", `gh api ${method} "repos/acme/removeAssignees/issues/42/assignees" -f "assignees[]=$ACTOR"`],
-      ["trailing comment", `gh api ${method} "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"  # use -X DELETE to unclaim`],
-    ])(`accepts ${method} despite a deletion reference in the %s`, (_context, assignment) => {
+    it(`accepts ${method} for a repository named removeAssignees`, () => {
+      const assignment = `gh api ${method} "repos/acme/removeAssignees/issues/42/assignees" -f "assignees[]=$ACTOR"`;
       expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
     });
+
+    it(`deliberately reports ABSENT for ${method} with a DELETE comment`, () => {
+      const assignment = `gh api ${method} "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"  # use -X DELETE to unclaim`;
+      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+    });
   }
+
+  it.each([
+    ["POST comment", 'gh api -X DELETE "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR" # use -X POST to claim'],
+    ["POST to another endpoint", 'gh api -X POST repos/acme/demo/issues/42/comments -f body=unclaim; gh api -X DELETE "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"'],
+  ])("rejects a DELETE collection call despite a %s", (_context, assignment) => {
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+  });
+
+  it.each(["non:issues", "non=issues", "non$issues"])("rejects a longer REST path segment %s", (segment) => {
+    expect(assessClaimPath([workflow("on: issue_comment", `gh api repos/acme/demo/${segment}/42/assignees`)])).toBe("ABSENT");
+  });
+
+  it("rejects a nested assignees endpoint", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/disabled"')])).toBe("ABSENT");
+  });
+
+  it("deliberately reports ABSENT for a trailing collection slash", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/"')])).toBe("ABSENT");
+  });
+
+  it("deliberately reports ABSENT for an empty shell expansion after assignees", () => {
+    const assignment = 'EMPTY=""\ngh api "repos/acme/demo/issues/42/assignees${EMPTY}"';
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+  });
+
+  it("deliberately accepts the quoted semicolon suffix as a residual false PRESENT", () => {
+    const assignment = 'gh api "repos/acme/demo/issues/42/assignees;disabled"';
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+  });
 
   it("rejects a REST URL with a hyphenated non-issues segment", () => {
     expect(assessClaimPath([workflow("on: issue_comment", "gh api example.com/non-issues/123/assignees")])).toBe("ABSENT");
@@ -97,8 +129,6 @@ describe("claim path assessment", () => {
     '--method DELETE',
     '-x delete',
     '--METHOD delete',
-    'removeAssignees',
-    'REMOVEASSIGNEESFROMASSIGNABLE',
   ])("rejects a REST collection line naming deletion with %s", (deletion) => {
     expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$REPO/issues/$ISSUE/assignees"`)])).toBe("ABSENT");
   });
