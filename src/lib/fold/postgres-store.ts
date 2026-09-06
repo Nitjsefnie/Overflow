@@ -721,7 +721,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   ): Promise<void> {
     // A repository owns exactly one row, so a burst of events collapses onto it
     // rather than queueing one fold per event. A job that is merely backing off
-    // keeps its `run_after`; a FAILED job is revived as due now with its attempts
+    // keeps its `run_after`, which is what stops a webhook storm from walking a
+    // failing repository's backoff forward and hammering GitHub past it; a FAILED job is revived as due now with its attempts
     // reset, which is what makes the sweep an autonomous repair path, and
     // `last_failure_at` survives that revival as the visible evidence that this
     // repository has been failing. An event arriving mid-fold leaves the RUNNING
@@ -821,6 +822,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         delete from repository_reconciliation_jobs where id = ${jobId}
       `;
       return true;
+      // The driver types `begin` as returning its callback's result widened by the
+      // transaction's own row type, so the boolean needs saying again here.
     }) as Promise<boolean>;
   }
 
