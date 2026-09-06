@@ -163,6 +163,28 @@ describe("running the next reconciliation job", () => {
     ]);
   });
 
+  it("records the retry even when the failure reporter itself throws", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+
+    await expect(
+      runNextReconciliationJob({
+        store,
+        now: () => new Date("2030-01-02T03:04:05.678Z"),
+        reconcile: async () => {
+          throw new Error("GitHub is unreachable");
+        },
+        onFailure: () => {
+          throw new Error("the reporter is broken too");
+        },
+      }),
+    ).resolves.toBe("RETRY_SCHEDULED");
+
+    expect(calls.at(-1)).toEqual({
+      method: "retry",
+      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+    });
+  });
+
   it("survives a fold that throws with no failure reporter attached", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
 
@@ -329,9 +351,11 @@ describe("the scheduled reconciliation worker", () => {
     const rejections = watchUnhandledRejections();
     try {
       const timer = createTimer();
+      let drains = 0;
 
       startReconciliationWorker({
         drain: async () => {
+          drains += 1;
           throw new Error("PostgreSQL is unreachable");
         },
         schedule: timer.schedule,
@@ -339,6 +363,39 @@ describe("the scheduled reconciliation worker", () => {
       await timer.settle();
       await timer.settle();
 
+      // Counted so the empty rejection list stands for a drain that really ran
+      // and really rejected, rather than for a drain that never happened.
+      expect(drains).toBe(1);
+      expect(rejections.recorded).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
+  });
+
+  it("keeps a failure reporter that throws from escaping the drain", async () => {
+    const rejections = watchUnhandledRejections();
+    try {
+      const timer = createTimer();
+      const drains: string[] = [];
+
+      startReconciliationWorker({
+        drain: async () => {
+          drains.push("drained");
+          throw new Error("PostgreSQL is unreachable");
+        },
+        schedule: timer.schedule,
+        onFailure: () => {
+          throw new Error("the reporter is broken too");
+        },
+      });
+      await timer.settle();
+      await timer.settle();
+      expect(rejections.recorded).toEqual([]);
+
+      // A reporter that threw must still leave the worker able to drain again.
+      await timer.tick();
+      await timer.settle();
+      expect(drains).toEqual(["drained", "drained"]);
       expect(rejections.recorded).toEqual([]);
     } finally {
       rejections.stop();
