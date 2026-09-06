@@ -863,6 +863,98 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("abandons the repositories still queued when the console cannot report", async () => {
+    // Not the reason failing — the console itself, reached from inside the loop
+    // where nothing catches it. That it stays uncontained is deliberate: a sweep
+    // with no way to report anything at all must not carry on silently. What it
+    // costs is every repository behind the failing one, and both paths that
+    // report from inside the loop pay it.
+    const reconciled: string[] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+    const dependencies = () => ({
+      listActiveRepositoryIds: async () => ["broken", "repo-b", "repo-c"],
+      getReconciliationCooldown: async () => null,
+      reconcile: async (repositoryId: string) => {
+        if (repositoryId === "broken") {
+          throw new Error("GitHub reconciliation failed");
+        }
+        reconciled.push(repositoryId);
+      },
+    });
+
+    try {
+      // No hook at all, which is the path a caller that reports nowhere takes.
+      await expect(sweepReconciliations(dependencies())).rejects.toBeInstanceOf(TypeError);
+      expect(reconciled).toEqual([]);
+
+      // A hook that throws reaches the same line from the same place.
+      await expect(
+        sweepReconciliations({
+          ...dependencies(),
+          onFailure: () => {
+            throw new Error("The failure hook itself failed");
+          },
+        }),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(reconciled).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("finishes the sweep when a rejecting hook meets a console that cannot report", async () => {
+    const unreconciled = new Error("GitHub reconciliation failed");
+    const reconciled: string[] = [];
+    // The same broken console, reached from a handler the loop is no longer
+    // inside: there is nothing left to abort, so the throw escapes to Node
+    // instead and the sweep runs to its end. The listener resolves the wait
+    // below, so the escape is waited on rather than timed.
+    const unhandled: unknown[] = [];
+    const escaped = signal();
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+      escaped.resolve();
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+
+    try {
+      await expect(
+        sweepReconciliations({
+          listActiveRepositoryIds: async () => ["broken", "repo-b"],
+          getReconciliationCooldown: async () => null,
+          reconcile: async (repositoryId) => {
+            if (repositoryId === "broken") {
+              throw unreconciled;
+            }
+            reconciled.push(repositoryId);
+          },
+          onFailure: async () => {
+            throw new Error("Shipping the report failed");
+          },
+        }),
+      ).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 0 });
+
+      // The repository behind the failing one is reconciled, which is the whole
+      // difference between this path and the synchronous one above.
+      expect(reconciled).toEqual(["repo-b"]);
+      await escaped.promise;
+      // One drain is already enough for Node to report a rejection it is going
+      // to report; the second only widens the window a second one had to arrive in.
+      await drain();
+      await drain();
+      expect(unhandled).toHaveLength(1);
+      expect(unhandled[0]).toBeInstanceOf(TypeError);
+    } finally {
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
+  });
+
   it("contains a scheduler that rejects and still sweeps at startup", async () => {
     const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1135,6 +1227,37 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
+    }
+  });
+
+  it("reads intervalMs before the startup sweep, and does not guard that read", async () => {
+    // Not a property to preserve — a deficiency to pin. Every other member the
+    // caller supplies is treated as hostile, and this one is read first, so an
+    // accessor that throws here is fatal and takes the startup sweep with it.
+    // Issue 159 tracks closing that; until it does, this is what keeps the
+    // comment on startReconciliationSweep honest when the code around it moves.
+    const unwired = new Error("The interval is not configured yet");
+    const intervals = captureIntervals();
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get intervalMs(): number {
+        throw unwired;
+      },
+    };
+
+    try {
+      expect(() => {
+        startReconciliationSweep(schedule);
+      }).toThrow(unwired);
+      await drain();
+
+      expect(sweeps).toBe(0);
+      expect(intervals.armed).toEqual([]);
+    } finally {
+      intervals.restore();
     }
   });
 
