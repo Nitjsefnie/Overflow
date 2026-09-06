@@ -6,6 +6,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
+import { listUnwritableClosures } from "@/lib/dashboard/queries";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -2749,6 +2750,78 @@ describe("initial PostgreSQL materialization", () => {
         after_state: null,
       },
     ]);
+  });
+
+  it("materializes a cross-repository closure with no pull request row behind it", async () => {
+    const sponsorId = await insertUser(sql);
+    const contributorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const closingPullRequest = snapshot.issues[0]!.closingPullRequests[0]!;
+    closingPullRequest.repositoryGitHubId = materializedRepositoryGitHubId + 1;
+    closingPullRequest.repositoryNameWithOwner = "other/fork";
+
+    const store = new PostgresFoldStore(sql);
+    const runId = await store.beginRun(repositoryId);
+    await expect(store.materialize({
+      repositoryId,
+      runId,
+      fold: foldRepository(snapshot),
+    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+
+    // The foreign pull request is never materialized, so the closure has no row
+    // to point at and nothing may be credited from it.
+    const [closure] = await sql<{ id: string; kind: string; pull_request_id: string | null; reason: string }[]>`
+      select unwritable_closures.id, unwritable_closures.kind::text, unwritable_closures.pull_request_id,
+        unwritable_closures.reason
+      from unwritable_closures
+      join issues on issues.id = unwritable_closures.issue_id
+      where issues.github_issue_id = ${githubIssueId}
+    `;
+    expect(closure).toMatchObject({
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      pull_request_id: null,
+      reason: `Closing pull request 11 belongs to other/fork, not the registered repository ${repository.owner_name}.`,
+    });
+    await expect(sql`
+      select count(*)::integer as count from pull_requests
+      where github_pull_request_id = ${githubPullRequestId}
+    `).resolves.toEqual([{ count: 0 }]);
+    await expect(sql`
+      select count(*)::integer as count from settlements
+      join issues on issues.id = settlements.issue_id
+      where issues.github_issue_id = ${githubIssueId}
+    `).resolves.toEqual([{ count: 0 }]);
+    await expect(sql`
+      select count(*)::integer as count from ledger_entries
+      join settlements on settlements.id = ledger_entries.settlement_id
+      join issues on issues.id = settlements.issue_id
+      where issues.github_issue_id = ${githubIssueId}
+    `).resolves.toEqual([{ count: 0 }]);
+
+    const projected = (await listUnwritableClosures({ sql })).find(({ id }) => id === closure.id);
+    expect(projected).toMatchObject({
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      pullRequest: null,
+      settlementId: null,
+      repositoryName: repository.owner_name,
+    });
   });
 
   it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
