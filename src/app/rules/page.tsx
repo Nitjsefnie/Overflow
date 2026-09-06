@@ -18,22 +18,25 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <h2 id="rules-opening-heading">Before work starts</h2>
         <p>
           Claim an issue before work begins by commenting /claim on the open, unassigned issue. The comment
-          body must be exactly /claim; a sentence containing the command is not a claim.
+          body must be exactly /claim; a sentence containing the command is not a claim. Read the reply on
+          the issue and confirm that you are assigned before starting work.
         </p>
         <p>
           GitHub will not accept an assignee who has not interacted with the repository, so nobody can assign
           you in advance; the claim comment makes your account assignable. For contributors without write
-          access, that comment is the only claiming route.
+          access, that comment is the only self-service claiming route; someone with write access can
+          assign you after you have commented.
         </p>
         <p>
-          The command is provided by a workflow each repository ships, not by Overflow. Claiming works only
-          where the repository provides the command; a repository without it has no claiming route.
+          The command is provided by a workflow each repository ships, not by Overflow. Self-service claiming
+          works only where the repository provides the command; a repository without it has no self-service
+          claiming route.
         </p>
         <p>
           A claim creates the assignment used for the sponsor&apos;s point reservation described below.
-          /unclaim and /release are two names for the same command; comment either one to remove only your
-          own assignment. Release an issue you stop working on before the merge that would close it, because
-          the assignment holds reserve points until it is removed.
+          /unclaim and /release are two names for the same command; comment either one on an open issue to
+          remove only your own assignment. Release an issue you stop working on before the merge that would
+          close it; while you hold it, nobody else can claim it.
         </p>
         <p>
           Repositories choose their own difficulty labels, worth 1–10 points. The repository sponsor&apos;s
