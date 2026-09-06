@@ -130,7 +130,10 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     await expect(materializedPullRequestIds(repositoryId)).resolves.toEqual([]);
     await expect(materializedIssueIds(repositoryId)).resolves.toEqual([reopenedIssueGitHubId]);
     const removals = await removalChanges(second.runId);
-    expect(removals.filter((change) => change.entity_kind === "PULL_REQUEST")).toEqual([
+    // The whole ordered log, not the `PULL_REQUEST` rows alone: the settlement
+    // the pull request carried leaves the fold with it, and a subset assertion
+    // says nothing about what else was recorded beside it.
+    expect(removals).toEqual([
       {
         entity_kind: "PULL_REQUEST",
         change_kind: "REMOVE",
@@ -140,9 +143,21 @@ describe("a reconciliation that deletes materialized rows says so", () => {
         before_state: { githubPullRequestId: withdrawnPullRequestGitHubId },
         after_state: null,
       },
+      {
+        entity_kind: "SETTLEMENT",
+        change_kind: "REMOVE",
+        pull_request_id: null,
+        before_state: expect.objectContaining({
+          githubIssueId: reopenedIssueGitHubId,
+          githubPullRequestId: withdrawnPullRequestGitHubId,
+        }),
+        after_state: null,
+      },
     ]);
-    expect(second.removals).toBe(removals.length);
-    expect(second.removed).toBe(removals.length);
+    // Pinned to the literal, not to `removals.length`: a defect that recorded
+    // one spurious removal AND counted it moves both sides of that comparison
+    // together and passes it.
+    expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 2, removed: 2 });
   });
 
   it("records no removal for a reconciliation that removes nothing", async () => {
