@@ -210,6 +210,7 @@ describe("initial PostgreSQL materialization", () => {
       "016_repository_identity_verification.sql",
       "017_cross_repository_closures.sql",
       "018_refreshable_display_logins.sql",
+      "019_recorded_materialization_removals.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
