@@ -835,8 +835,10 @@ describe("initial PostgreSQL materialization", () => {
       update repository_reconciliation_jobs set attempt_count = ${-1} where id = ${jobId}
     `).rejects.toThrow(/repository_reconciliation_jobs_attempt_count_check/);
 
-    // The worker asks for the next due job on every tick, so the partial index it reads is
-    // load-bearing rather than an optimization anyone may drop.
+    // The worker asks for the next due job on every tick, and this index is what that
+    // scan reads for the PENDING limb of the claim's predicate. The RUNNING limb — a
+    // lapsed lease — is not covered by it, so the index earns its keep on the common
+    // path rather than being the whole of what the claim depends on.
     await expect(sql`
       select indexdef from pg_indexes
       where schemaname = 'public' and indexname = 'repository_reconciliation_jobs_due_key'

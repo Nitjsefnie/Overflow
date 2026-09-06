@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubGateway } from "@/lib/github/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
@@ -146,8 +147,7 @@ export const POST = createRepositoryPostHandler({
       webhook: requiredWebhookConfiguration(),
       // Existing issues predate the webhook this registration creates, so only a
       // reconciliation can bring them in. See scheduleInitialImport in register.ts.
-      async scheduleInitialImport(repositoryId) {
-        const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
+      scheduleInitialImport(repositoryId) {
         return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
     };
