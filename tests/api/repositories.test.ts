@@ -331,18 +331,18 @@ describe("POST /api/repositories", () => {
         visibility: "PUBLIC",
         githubWebhookId: 501,
       },
-      existingWorkIngested: true,
+      initialImportScheduled: true,
     });
   });
 
-  it("reports that existing work was not ingested when reconciliation fails", async () => {
+  it("reports an unscheduled initial import when the enqueue fails", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) => ({
         ...successfulDependencies(session.user),
-        reconcile: async () => {
-          throw new Error("GitHub reconciliation failed");
+        scheduleInitialImport: async () => {
+          throw new Error("the reconciliation job could not be enqueued");
         },
       }),
     });
@@ -352,7 +352,7 @@ describe("POST /api/repositories", () => {
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
       repository: { ownerName: "octo/overflow" },
-      existingWorkIngested: false,
+      initialImportScheduled: false,
     });
   });
 
@@ -503,7 +503,7 @@ describe("Overflow token registration", () => {
         visibility: "PUBLIC",
         githubWebhookId: 501,
       },
-      existingWorkIngested: true,
+      initialImportScheduled: true,
     });
     expect(JSON.stringify(body)).not.toContain(credential);
   });
@@ -874,8 +874,8 @@ function successfulDependencies(
       callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
     },
-    async reconcile() {
-      return { adds: 0, changes: 0, removals: 0 };
+    async scheduleInitialImport() {
+      return undefined;
     },
   };
 }

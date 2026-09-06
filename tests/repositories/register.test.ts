@@ -384,34 +384,34 @@ describe("explicit repository registration", () => {
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
 
-  it("ingests the repository's existing work once the registration is stored", async () => {
+  it("schedules the import of the repository's existing work once the registration is stored", async () => {
     const harness = createHarness();
 
     await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
       id: "registered-repository-id",
-      existingWorkIngested: true,
+      initialImportScheduled: true,
     });
 
-    expect(harness.reconciledRepositoryIds).toEqual(["registered-repository-id"]);
+    expect(harness.scheduledRepositoryIds).toEqual(["registered-repository-id"]);
   });
 
-  it("keeps the registration and reports uningested work when reconciliation fails", async () => {
-    const harness = createHarness({ reconciliationFailure: true });
+  it("keeps the registration and reports an unscheduled import when the enqueue fails", async () => {
+    const harness = createHarness({ scheduleFailure: true });
 
     await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
       id: "registered-repository-id",
-      existingWorkIngested: false,
+      initialImportScheduled: false,
     });
 
     expect(harness.createdRepositories).toHaveLength(1);
     expect(harness.deletedWebhookIds).toEqual([]);
   });
 
-  it("reports uningested work when no reconciliation is wired up", async () => {
-    const harness = createHarness({ withoutReconcile: true });
+  it("reports an unscheduled import when no scheduler is wired up", async () => {
+    const harness = createHarness({ withoutScheduleInitialImport: true });
 
     await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
-      existingWorkIngested: false,
+      initialImportScheduled: false,
     });
   });
 });
@@ -431,8 +431,8 @@ type HarnessOptions = {
   storeClaimedWebhookId?: number;
   storeRejectsSponsorAsIneligible?: boolean;
   storeRaisesRegistrationError?: boolean;
-  reconciliationFailure?: boolean;
-  withoutReconcile?: boolean;
+  scheduleFailure?: boolean;
+  withoutScheduleInitialImport?: boolean;
 };
 
 function createHarness(options: HarnessOptions = {}) {
@@ -440,7 +440,7 @@ function createHarness(options: HarnessOptions = {}) {
   const configuredLabels: string[] = [];
   const deletedWebhookIds: number[] = [];
   const duplicateLookupIds: number[] = [];
-  const reconciledRepositoryIds: string[] = [];
+  const scheduledRepositoryIds: string[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const actor = {
@@ -515,13 +515,13 @@ function createHarness(options: HarnessOptions = {}) {
       callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
     },
-    ...(options.withoutReconcile === true
+    ...(options.withoutScheduleInitialImport === true
       ? {}
       : {
-          async reconcile(repositoryId: string) {
-            reconciledRepositoryIds.push(repositoryId);
-            if (options.reconciliationFailure) {
-              throw new Error("GitHub reconciliation failed");
+          async scheduleInitialImport(repositoryId: string) {
+            scheduledRepositoryIds.push(repositoryId);
+            if (options.scheduleFailure) {
+              throw new Error("the reconciliation job could not be enqueued");
             }
           },
         }),
@@ -534,7 +534,7 @@ function createHarness(options: HarnessOptions = {}) {
     deletedWebhookIds,
     duplicateLookupIds,
     createdRepositories,
-    reconciledRepositoryIds,
+    scheduledRepositoryIds,
   };
 }
 

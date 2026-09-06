@@ -121,10 +121,10 @@ describe("repository registration form", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("co-op/harbour is registered.");
   });
 
-  it("says existing work was not imported when the registration could not ingest it", async () => {
+  it("says the initial import could not be scheduled when the registration failed to enqueue it", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, existingWorkIngested: false }),
+        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, initialImportScheduled: false }),
         { status: 201, headers: { "content-type": "application/json" } },
       ),
     );
@@ -135,14 +135,14 @@ describe("repository registration form", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "co-op/harbour is registered, but its existing issues could not be imported yet.",
+      "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.",
     );
   });
 
-  it("confirms existing work was imported when the registration ingested it", async () => {
+  it("says the existing issues are on their way when the registration scheduled the import", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, existingWorkIngested: true }),
+        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, initialImportScheduled: true }),
         { status: 201, headers: { "content-type": "application/json" } },
       ),
     );
@@ -153,7 +153,7 @@ describe("repository registration form", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "co-op/harbour is registered and its existing issues were imported.",
+      "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
     );
   });
 });
