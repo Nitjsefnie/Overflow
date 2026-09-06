@@ -35,7 +35,8 @@ describe("foldRepository", () => {
 
   it.each([
     "other/fork",
-    // Same owner, different repository: the whole name is what identifies it.
+    // Same owner, and a name a reader could mistake for the registered one:
+    // neither half of the name has any say, and the reason must still be legible.
     "octo/other-example",
   ])("refuses to settle a closing pull request that belongs to %s", (repositoryNameWithOwner) => {
     const snapshot = outsiderFixture();
