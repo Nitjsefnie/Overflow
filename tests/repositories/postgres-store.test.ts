@@ -114,7 +114,9 @@ describe("registering a repository against the real registered_repositories cons
   // Both conflict messages promise the sponsor that the submitted repository is not
   // registered. That holds only because PostgreSQL consults the on-conflict arbiter index
   // before the table's other unique indexes, so a submission that collides on the numeric
-  // identity as well resolves to an absent row instead of raising.
+  // identity as well resolves to an absent row instead of raising. Which index arbitrates is
+  // part of the property, not a detail of it: the two webhook-id cases submit an unclaimed
+  // path, so they answer an absent row only while github_repository_id is the arbiter.
   it("reports a submission whose numeric identity and path are both held by one registration as an absent row", async () => {
     const held = await registeredRepository();
     const submission = newRepository({
@@ -133,6 +135,29 @@ describe("registering a repository against the real registered_repositories cons
       sponsorId: await sponsor(),
       githubRepositoryId: holdsIdentity.githubRepositoryId,
       ownerName: holdsPath.ownerName,
+    });
+
+    await expect(store.createRepository(submission)).resolves.toBeNull();
+  });
+
+  it("reports a submission whose numeric identity and webhook id are both held by one registration as an absent row", async () => {
+    const held = await registeredRepository();
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubRepositoryId: held.githubRepositoryId,
+      githubWebhookId: held.githubWebhookId,
+    });
+
+    await expect(store.createRepository(submission)).resolves.toBeNull();
+  });
+
+  it("reports a submission whose numeric identity and webhook id are held by different registrations as an absent row", async () => {
+    const holdsIdentity = await registeredRepository();
+    const holdsWebhookId = await registeredRepository();
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubRepositoryId: holdsIdentity.githubRepositoryId,
+      githubWebhookId: holdsWebhookId.githubWebhookId,
     });
 
     await expect(store.createRepository(submission)).resolves.toBeNull();
