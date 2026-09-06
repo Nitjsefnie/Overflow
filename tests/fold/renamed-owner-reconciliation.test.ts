@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -44,12 +45,13 @@ describe("reconciliation after the opening account is renamed", () => {
     const raterLogin = `reconcile-rater-${externalId++}`;
     const authorLogin = `reconcile-author-old-${externalId++}`;
     const renamedAuthorLogin = `reconcile-author-new-${externalId++}`;
-    const { store, repositoryId, githubIssueId } = await registeredRepository(raterLogin);
+    const { store, repositoryId, githubIssueId, ownerName } = await registeredRepository(raterLogin);
     let issue = openedIssue({ githubIssueId, authorLogin, raterLogin, title: "An opened issue" });
     const github: ReconciliationGateway = {
       listIssues: async () => [issue],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
+      getRepositoryById: verifiedRepositoryAt(ownerName),
     };
 
     await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
@@ -85,12 +87,13 @@ describe("reconciliation after the opening account is renamed", () => {
     const raterLogin = `reconcile-rater-old-${externalId++}`;
     const renamedRaterLogin = `reconcile-rater-new-${externalId++}`;
     const authorLogin = `reconcile-author-${externalId++}`;
-    const { store, repositoryId, sponsorId, githubIssueId } = await registeredRepository(raterLogin);
+    const { store, repositoryId, sponsorId, githubIssueId, ownerName } = await registeredRepository(raterLogin);
     let issue = openedIssue({ githubIssueId, authorLogin, raterLogin, title: "An opened issue" });
     const github: ReconciliationGateway = {
       listIssues: async () => [issue],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
+      getRepositoryById: verifiedRepositoryAt(ownerName),
     };
 
     await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
@@ -175,6 +178,7 @@ function openedIssueRow(
 
 async function registeredRepository(ownerLogin: string) {
   const githubRepositoryId = externalId++;
+  const ownerName = `renamed/repo-${githubRepositoryId}`;
   const [{ id: sponsorId }] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login, encrypted_oauth_token)
     values (${externalId++}, ${ownerLogin},
@@ -190,7 +194,7 @@ async function registeredRepository(ownerLogin: string) {
   const [{ id: repositoryId }] = await sql<{ id: string }[]>`
     insert into registered_repositories
       (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
-    values (${githubRepositoryId}, ${`renamed/repo-${githubRepositoryId}`}, ${sponsorId}, 'PUBLIC',
+    values (${githubRepositoryId}, ${ownerName}, ${sponsorId}, 'PUBLIC',
       ${externalId++}, ${sql.json(difficultyScheme)})
     returning id
   `;
@@ -199,5 +203,6 @@ async function registeredRepository(ownerLogin: string) {
     repositoryId,
     sponsorId,
     githubIssueId: externalId++,
+    ownerName,
   };
 }
