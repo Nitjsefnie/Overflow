@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { SESSION_RECOVERY_REASONS } from "@/lib/auth/session-recovery-reasons";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
@@ -26,10 +27,10 @@ export async function requireMemberPageSession(): Promise<MemberPageSession> {
   try {
     currentRole = await getCurrentUserRole(user.id);
   } catch {
-    redirect("/session?reason=unavailable");
+    redirect(`/session?reason=${SESSION_RECOVERY_REASONS.unavailable}`);
   }
   if (currentRole === null) {
-    redirect("/session?reason=stale");
+    redirect(`/session?reason=${SESSION_RECOVERY_REASONS.stale}`);
   }
 
   return {

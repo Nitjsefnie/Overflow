@@ -1,3 +1,7 @@
+/** @vitest-environment jsdom */
+
+import { render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { RedirectSignal, mocks } = vi.hoisted(() => {
@@ -40,7 +44,13 @@ const routes: Record<string, (query: URLSearchParams) => Promise<unknown>> = {
 
 const walkCap = 8;
 
-async function walkFrom(start: string): Promise<string[]> {
+type Walk = {
+  trace: string[];
+  /** Whatever the route that stopped redirecting returned, so a caller can render it. */
+  page: unknown;
+};
+
+async function walkFrom(start: string): Promise<Walk> {
   const trace: string[] = [];
   let current = start;
   for (let hop = 0; hop < walkCap; hop += 1) {
@@ -51,8 +61,8 @@ async function walkFrom(start: string): Promise<string[]> {
       throw new Error(`the walk reached ${current}, which no route in this test can serve: ${trace.join(" -> ")}`);
     }
     try {
-      await route(new URLSearchParams(search));
-      return trace;
+      const page = await route(new URLSearchParams(search));
+      return { trace, page };
     } catch (error) {
       if (!(error instanceof RedirectSignal)) {
         throw error;
@@ -75,23 +85,32 @@ describe("redirect graph for a JWT the ledger cannot vouch for", () => {
     });
   });
 
+  // The heading is the assertion that spans the two modules: the helper writes the
+  // reason into the query string and the recovery page reads it back. Asserting the
+  // query string instead would pin the producer to itself and let the pair drift.
   it.each([
     {
       name: "the role lookup throws",
       arrange: () => mocks.currentRole.mockRejectedValue(new Error("the ledger is unreachable")),
+      heading: /ledger could not be reached/i,
     },
     {
       name: "the role lookup finds no member record",
       arrange: () => mocks.currentRole.mockResolvedValue(null),
+      heading: /clear this sign-in and start again/i,
     },
-  ])("settles on a page instead of bouncing when $name", async ({ arrange }) => {
+  ])("settles on the matching recovery copy instead of bouncing when $name", async ({ arrange, heading }) => {
     arrange();
 
-    const trace = await walkFrom("/");
+    const { trace, page } = await walkFrom("/");
 
     expect(trace[0]).toBe("/");
     expect(trace).toContain("/dashboard");
     expect(new Set(trace).size, `a target repeats, so the walk is a loop: ${trace.join(" -> ")}`).toBe(trace.length);
     expect(trace.at(-1)).not.toBe("/");
+
+    render(page as ReactElement);
+
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(heading);
   });
 });
