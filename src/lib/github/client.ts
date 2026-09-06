@@ -54,6 +54,12 @@ type GitHubRestWorkflowFile = {
   size: number;
 };
 
+type GitHubRestResponse = {
+  status: number;
+  headers: Headers;
+  body: string;
+};
+
 export class GitHubGateway {
   private readonly accessToken: string;
   private readonly apiUrl: string;
@@ -85,7 +91,7 @@ export class GitHubGateway {
       throw new Error("GitHub repository id must be a positive safe integer.");
     }
 
-    let response: Response;
+    let response: GitHubRestResponse;
     try {
       response = await this.request(`/repositories/${githubRepositoryId}`);
     } catch (error) {
@@ -224,7 +230,7 @@ export class GitHubGateway {
       `/repos/${segment(repository.owner)}/${segment(repository.name)}/pulls/${pullRequestNumber}`,
       { headers: { Accept: "application/vnd.github.v3.diff" } },
     );
-    return response.text();
+    return response.body;
   }
 
   // Sequential reads avoid request bursts; callers treat failures as "not checked".
@@ -235,9 +241,9 @@ export class GitHubGateway {
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
-    // Issue 203 tracks request()'s general response-body timeout defect. This
-    // workflow-specific fetch path keeps one abort signal alive through headers
-    // AND bodies; request() owns a separate signal and is deliberately unchanged.
+    // Like request(), this path keeps one abort signal alive through headers
+    // and bodies. Its deadline spans the entire workflow listing and file reads,
+    // while request() gives each REST request its own deadline.
     // One ten-second budget covers all reads, honoring a shorter configured timeout.
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -529,32 +535,44 @@ export class GitHubGateway {
     return labels;
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}): Promise<GitHubRestResponse> {
     const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, this.timeoutMs);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    // One absolute deadline covers headers and body: require progress within
+    // timeoutMs, not just liveness from trickling bytes. Never reset per chunk.
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        const error = new Error("GitHub request timed out.");
+        controller.abort(error);
+        reject(error);
+      }, this.timeoutMs);
+    });
+    // Injected transports can ignore abort, so race both headers and body reads.
+    const beforeDeadline = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline]);
 
     try {
-      const response = await this.fetchImplementation(`${this.apiUrl}${path}`, {
+      const response = await beforeDeadline(this.fetchImplementation(`${this.apiUrl}${path}`, {
         ...init,
         headers: githubHeaders(this.accessToken, init.headers),
         signal: controller.signal,
-      });
-
-      if (timedOut) {
-        throw new Error("GitHub request timed out.");
-      }
+      }).then((received) => {
+        // An abort-ignoring transport can still deliver a body after the deadline.
+        if (controller.signal.aborted) {
+          void received.body?.cancel().catch(() => undefined);
+          controller.signal.throwIfAborted();
+        }
+        return received;
+      }));
 
       if (!response.ok) {
-        const body = await response.text().catch(() => null);
+        const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
       }
 
-      return response;
+      // Drain successful bodies even when callers only need the status.
+      const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal));
+      return { status: response.status, headers: response.headers, body: body ?? "" };
     } catch (error) {
       if (error instanceof Error && error.message === "GitHub request timed out.") {
         throw error;
@@ -564,9 +582,7 @@ export class GitHubGateway {
         throw error;
       }
 
-      if (timedOut) {
-        throw new Error("GitHub request timed out.");
-      }
+      controller.signal.throwIfAborted();
 
       throw new Error("GitHub request failed.");
     } finally {
@@ -1042,9 +1058,9 @@ function githubHeaders(accessToken: string, additionalHeaders: HeadersInit | und
   return headers;
 }
 
-async function responseJson<T>(response: Response): Promise<T> {
+async function responseJson<T>(response: GitHubRestResponse): Promise<T> {
   try {
-    return (await response.json()) as T;
+    return JSON.parse(response.body) as T;
   } catch {
     throw new Error("GitHub API response was invalid.");
   }
