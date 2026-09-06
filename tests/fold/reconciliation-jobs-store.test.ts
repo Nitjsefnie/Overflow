@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -55,6 +55,39 @@ async function insertRepository(): Promise<string> {
     returning id
   `;
   return repository.id;
+}
+
+function signal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Waits until some transaction is queued behind a row lock in this database.
+ *
+ * Bound to a lock the database reports rather than to a stretch of clock, and it
+ * throws rather than spinning forever: a completion that never reaches the row
+ * is a defect this case has to name, not a wait to sit through.
+ */
+async function waitUntilBlockedOnJobRow(): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const [waiter] = await sql<{ waiting: boolean }[]>`
+      select exists (
+        select 1 from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and wait_event_type = 'Lock'
+      ) as waiting
+    `;
+    if (waiter.waiting) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("No transaction ever queued behind the reconciliation job row lock.");
 }
 
 async function jobsFor(repositoryId: string): Promise<JobSnapshot[]> {
@@ -270,6 +303,88 @@ describe("PostgreSQL reconciliation job queue", () => {
     `;
     expect(row.minutes).toBeGreaterThan(RECONCILIATION_LEASE_MINUTES - 1);
     expect(row.minutes).toBeLessThanOrEqual(RECONCILIATION_LEASE_MINUTES);
+  });
+
+  it("keeps a mid-fold event whose enqueue is still uncommitted when the fold completes", async () => {
+    // The interleaving this queue exists to survive: a delivery arrives while the
+    // fold is running and its enqueue has not committed yet when the worker asks
+    // whether a follow-up is needed. Reading the row without locking it answers
+    // from before the enqueue, and the delete that follows then drops the event.
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+
+    // A second connection, so the enqueue is genuinely concurrent rather than
+    // nested inside the completion's own transaction.
+    const other = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const enqueued = signal();
+    const release = signal();
+    const enqueueing = other.begin(async (transaction) => {
+      await new PostgresFoldStore(transaction).enqueueReconciliationJob(repositoryId, "WEBHOOK");
+      enqueued.resolve();
+      await release.promise;
+    });
+
+    try {
+      await enqueued.promise;
+      const completing = store.completeReconciliationJob(claimed.id, claimed.leaseToken);
+      // The completion must reach the row and wait there rather than decide from
+      // a snapshot taken before the enqueue. Waited on as a lock the database
+      // reports, not as an interval.
+      await waitUntilBlockedOnJobRow();
+      release.resolve();
+      await enqueueing;
+
+      await expect(completing).resolves.toBe(true);
+      const job = await onlyJobFor(repositoryId);
+      expect(job.state).toBe("PENDING");
+      expect(job.follow_up_requested).toBe(false);
+      expect(job.attempt_count).toBe(0);
+      expect(job.due_now).toBe(true);
+    } finally {
+      release.resolve();
+      await enqueueing.catch(() => undefined);
+      await other.end();
+    }
+  });
+
+  it("claims a job whose row another transaction holds by skipping over it", async () => {
+    // Two workers poll the same queue. The claim skips a row somebody else has
+    // locked instead of queueing behind it, so one slow claim cannot stall every
+    // other repository's fold.
+    const lockedRepositoryId = await insertRepository();
+    const freeRepositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(lockedRepositoryId, "WEBHOOK");
+    // Older, so an unskipped claim would take this row first and wait on it.
+    await sql`
+      update repository_reconciliation_jobs
+      set run_after = now() - interval '1 hour'
+      where repository_id = ${lockedRepositoryId}
+    `;
+    await store.enqueueReconciliationJob(freeRepositoryId, "WEBHOOK");
+
+    const other = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const locked = signal();
+    const release = signal();
+    const holding = other.begin(async (transaction) => {
+      await transaction`
+        select id from repository_reconciliation_jobs
+        where repository_id = ${lockedRepositoryId}
+        for update
+      `;
+      locked.resolve();
+      await release.promise;
+    });
+
+    try {
+      await locked.promise;
+      const claimed = await claimOrFail();
+      expect(claimed.repositoryId).toBe(freeRepositoryId);
+    } finally {
+      release.resolve();
+      await holding.catch(() => undefined);
+      await other.end();
+    }
   });
 
   it("breaks a run_after tie on the job that entered the queue first", async () => {
