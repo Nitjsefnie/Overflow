@@ -297,7 +297,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       // keep the crawl available and leave the display name to the row that owns it.
       console.warn(
         `Verified owner name ${input.ownerName} for repository ${input.repositoryId} is already registered `
-        + "to another repository; the stored path was left unchanged.",
+        + "to another repository. The stored path stays stale, so this recurs on every reconciliation "
+        + "until the other registration releases the path.",
       );
       await this.sql`
         update registered_repositories

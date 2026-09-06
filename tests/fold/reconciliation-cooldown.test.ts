@@ -60,8 +60,8 @@ describe("persisted reconciliation cooldown", () => {
 
   it.each([
     { offset: -1, attempted: 0, reconciled: 0, skipped: 1, gatewayCalls: [], runRows: [] },
-    { offset: 0, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["issues"], runRows: [{ status: "COMPLETED" }] },
-    { offset: 1, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["issues"], runRows: [{ status: "COMPLETED" }] },
+    { offset: 0, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }] },
+    { offset: 1, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }] },
   ])("checks the sweep expiry boundary at offset $offset ms", async ({ offset, attempted, reconciled, skipped, gatewayCalls, runRows }) => {
     const { store, repositoryId, github, calls } = await cooledRepository();
     const now = () => new Date(notBefore.getTime() + offset);
@@ -155,7 +155,7 @@ describe("persisted reconciliation cooldown", () => {
     await expect(processWebhook(dependencies, { ...delivery, deliveryId: `${delivery.deliveryId}-expired` }))
       .resolves.toEqual({ status: "PROCESSED" });
     expect(await runs(repositoryId)).toEqual([{ status: "COMPLETED" }]);
-    expect(calls).toEqual(["issues"]);
+    expect(calls).toEqual(["identity", "issues"]);
     await expect(sql`
       select reconciliation_not_before from registered_repositories where id = ${repositoryId}
     `).resolves.toEqual([{ reconciliation_not_before: null }]);
@@ -194,8 +194,14 @@ async function cooledRepository() {
   const store = new PostgresFoldStore(sql, tokenEncryptionKey);
   await store.setReconciliationCooldown(repositoryId, notBefore);
   const calls: string[] = [];
+  const verifyIdentity = verifiedRepositoryAt(ownerName);
   const github: ReconciliationGateway = {
-    getRepositoryById: verifiedRepositoryAt(ownerName),
+    // Counted like every other read, so an empty array proves no GitHub traffic at
+    // all under cooldown rather than only no crawl traffic.
+    getRepositoryById: async (githubRepositoryId) => {
+      calls.push("identity");
+      return verifyIdentity(githubRepositoryId);
+    },
     listIssues: async () => { calls.push("issues"); return []; },
     getPullRequestReviews: async () => { calls.push("reviews"); return []; },
     getPullRequestDiff: async () => { calls.push("diff"); return ""; },
