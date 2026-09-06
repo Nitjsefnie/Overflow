@@ -214,11 +214,7 @@ describe("scheduled reconciliation sweep", () => {
 
   it("leaves no unhandled rejection behind when a sweep rejects", async () => {
     const timer = createTimer();
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
 
     try {
       startReconciliationSweep({
@@ -235,7 +231,7 @@ describe("scheduled reconciliation sweep", () => {
 
       expect(unhandled).toEqual([]);
     } finally {
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -266,11 +262,7 @@ describe("scheduled reconciliation sweep", () => {
   it("costs neither the process nor the report when the failure hook throws", async () => {
     const timer = createTimer();
     const unreachable = new Error("Active repositories could not be listed");
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let sweeps = 0;
     let reports = 0;
@@ -306,18 +298,14 @@ describe("scheduled reconciliation sweep", () => {
       expect(logged).toHaveBeenCalledTimes(2);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
   it("costs neither the process nor the report when the failure hook rejects", async () => {
     const timer = createTimer();
     const unreachable = new Error("Active repositories could not be listed");
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let sweeps = 0;
     let reports = 0;
@@ -353,7 +341,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(logged).toHaveBeenCalledTimes(2);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -445,11 +433,7 @@ describe("scheduled reconciliation sweep", () => {
   it("treats a hook whose retrieval throws as no hook at all", async () => {
     const timer = createTimer();
     const unreachable = new Error("Active repositories could not be listed");
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let sweeps = 0;
     // A lazily wired reporter: the accessor throws until its collector is
@@ -480,7 +464,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(logged).toHaveBeenCalledTimes(2);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -514,11 +498,7 @@ describe("scheduled reconciliation sweep", () => {
 
   it("lets a console that cannot report at all surface instead of vanishing", async () => {
     const timer = createTimer();
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     // Not the reason failing — the console itself. The scheduler has no way left
     // to report anything, and swallowing that would leave it mute with no sign.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
@@ -549,7 +529,7 @@ describe("scheduled reconciliation sweep", () => {
       expect(sweeps).toBe(2);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -884,11 +864,7 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("contains a scheduler that rejects and still sweeps at startup", async () => {
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const unarmable = new Error("The tick could not be registered");
     let sweeps = 0;
@@ -911,23 +887,21 @@ describe("scheduled reconciliation sweep", () => {
       await drain();
       await drain();
 
-      // The startup pass that repairs missed deliveries runs before the tick is
-      // registered, so it survives a scheduler that cannot be armed.
+      // The rejection is contained: it reaches the console instead of Node, and
+      // the startup sweep that ran before it is untouched. Nothing here pins the
+      // order of the two — an async scheduler cannot disturb a sweep that has
+      // already run — which is what the ordering case below is for.
       expect(sweeps).toBe(1);
       expect(unhandled).toEqual([]);
       expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE, unarmable]]);
     } finally {
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
   it("contains a scheduler that throws without failing its caller", async () => {
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
     const unarmable = new Error("The tick could not be registered");
@@ -964,7 +938,7 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -1168,11 +1142,7 @@ describe("scheduled reconciliation sweep", () => {
     // The reasonless line is not exclusive to a member that was never callable:
     // `undefined` is the reason that carries nothing to print, so a scheduler
     // that fails with it — thrown or rejected — has to read exactly the same.
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
     const noReason = undefined;
@@ -1201,7 +1171,7 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -1212,11 +1182,7 @@ describe("scheduled reconciliation sweep", () => {
     // promise instead — Promise.resolve().then(call) — the same pair leaves one
     // unhandled rejection and lets startReconciliationSweep return as though it
     // had armed something, which is the shape this module exists to avoid.
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", listener);
+    const { seen: unhandled, restore } = captureUnhandledRejections();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       throw new TypeError("The console cannot report at all");
     });
@@ -1245,7 +1211,7 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
-      process.off("unhandledRejection", listener);
+      restore();
     }
   });
 
@@ -1318,6 +1284,25 @@ function signal() {
 // a drain depends on how long anything took.
 function drain() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// Captures what Node reports as an unhandled rejection during one test.
+// Installing a listener is also what keeps Node's default from ending the run,
+// so a case that drives a rejection on purpose needs this whether or not it
+// asserts on what was captured.
+function captureUnhandledRejections() {
+  const seen: unknown[] = [];
+  const listener = (reason: unknown) => {
+    seen.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+
+  return {
+    seen,
+    restore: () => {
+      process.off("unhandledRejection", listener);
+    },
+  };
 }
 
 // Replaces the global setInterval for one test, so a test can assert what the
