@@ -133,14 +133,17 @@ Success is HTTP `201`. Example body (identifiers vary):
     "visibility": "PUBLIC",
     "githubWebhookId": 987654321
   },
-  "existingWorkIngested": true
+  "initialImportScheduled": true
 }
 ```
 
-`existingWorkIngested` reports whether the initial reconciliation completed
-successfully, including when it finds no existing work. If it is `false`, the
-repository is still registered; arrange a [reconciliation](#reconciliation) to
-retry instead of registering it again.
+`initialImportScheduled` reports whether the import of the work that already
+exists in the repository was queued, not whether it has finished: the import
+runs after the response, and the issues appear once it does. If it is `false`,
+the repository is still registered but nothing is queued; the periodic repair
+sweep brings its existing work in later, or arrange a
+[reconciliation](#reconciliation) yourself. Registering the repository again is
+never the remedy.
 
 Errors have `{ "error": { "code": "...", "message": "..." } }`. Match the HTTP
 status and code, then use the message to distinguish causes:
