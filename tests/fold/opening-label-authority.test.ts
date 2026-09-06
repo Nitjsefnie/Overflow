@@ -169,7 +169,7 @@ describe("opening label authority", () => {
     }]);
   });
 
-  it.each([false, true])("uses event ids to break opening refusal ties (reversed: %s)", (reverse) => {
+  it.each([false, true])("chooses the same diagnostic representative for opening refusal ties (reversed: %s)", (reverse) => {
     const snapshot = openingFixture({ opening: outsider });
     applyOpeningLabel(snapshot, {
       id: "opening-2",
@@ -191,17 +191,20 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it.each([false, true])("uses event ids to break accepted opening ties (reversed: %s)", (reverse) => {
+  it.each([false, true])("preserves input order for accepted opening ties (reversed: %s)", (reverse) => {
     const snapshot = openingFixture();
+    snapshot.issues[0]!.history[0]!.id = "opening-z";
     applyOpeningLabel(snapshot, {
-      id: "opening-2", label: "S", actor: sponsor, createdAt: OPENING_LABELED_AT,
+      id: "opening-a", label: "S", actor: sponsor, createdAt: OPENING_LABELED_AT,
     });
     if (reverse) snapshot.issues[0]!.history.reverse();
 
     const result = foldRepository(snapshot);
 
     expect(result.issues).toEqual([expect.objectContaining({
-      openingLabel: "M", openingComparisonPoints: 5, openingSourceEventId: "opening-1",
+      openingLabel: reverse ? "S" : "M",
+      openingComparisonPoints: reverse ? 2 : 5,
+      openingSourceEventId: reverse ? "opening-a" : "opening-z",
     })]);
     expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_MUTATED", githubIssueId: 101 }]);
   });
