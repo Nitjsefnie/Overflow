@@ -578,6 +578,11 @@ button:disabled {
   color: var(--credit-ink);
 }
 
+.feedback.warning {
+  background: var(--debit);
+  color: var(--debit-ink);
+}
+
 .feedback.pending {
   background: var(--paper-deep);
   color: var(--ink);
