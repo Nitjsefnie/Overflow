@@ -758,6 +758,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         where (
             (job.state = ${"PENDING"} and job.run_after <= now())
             or (job.state = ${"RUNNING"} and job.lease_expires_at <= now())
+            -- Permanent rollout guard: leases beyond twice this build's window
+            -- are from an older build or an anomalous database clock. Both now()
+            -- values are PostgreSQL's, so no cross-host clock skew is involved;
+            -- the margin protects current leases during snapshot re-evaluation.
+            or (job.state = ${"RUNNING"} and job.lease_expires_at > now() + make_interval(secs => ${2 * RECONCILIATION_LEASE_MS / 1000}))
           )
         order by job.run_after, job.created_at
         limit 1
@@ -790,6 +795,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async renewReconciliationJobLease(jobId: string, leaseToken: string): Promise<boolean> {
+    // State is deliberate defence in depth: the lease check makes non-RUNNING
+    // tokens null, so removing only the state predicate is unobservable under
+    // the current schema; the token equality already excludes those rows.
     const rows = await this.sql<{ id: string }[]>`
       update repository_reconciliation_jobs
       set lease_expires_at = now() + make_interval(secs => ${RECONCILIATION_LEASE_MS / 1000})
