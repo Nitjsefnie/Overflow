@@ -27,8 +27,32 @@ function queued(overrides: Partial<OpenSettlementOverrideRequest> = {}): OpenSet
       pullRequestTitle: "Seal the lock",
       pullRequestUrl: "https://github.com/co-op/harbour/pull/51",
     },
+    calibration: null,
     ...overrides,
   };
+}
+
+/**
+ * A request against a self-worked closure: the fold recorded a calibration in
+ * place of a settlement, so there is no settlement row behind it.
+ */
+function selfWorked(
+  calibration: Partial<NonNullable<OpenSettlementOverrideRequest["calibration"]>> = {},
+): OpenSettlementOverrideRequest {
+  return queued({
+    settlement: null,
+    calibration: {
+      calibrationId: "00000000-0000-4000-8000-000000000004",
+      ownerLogin: "grace",
+      openingComparisonPoints: 5,
+      actualLabel: "delivered/4",
+      actualPoints: 4,
+      pullRequestNumber: 61,
+      pullRequestTitle: "Close the lock myself",
+      pullRequestUrl: "https://github.com/co-op/harbour/pull/61",
+      ...calibration,
+    },
+  });
 }
 
 describe("moderator settlement correction queue", () => {
@@ -82,11 +106,46 @@ describe("moderator settlement correction queue", () => {
     expect(entry).toHaveTextContent("SETTLED");
   });
 
-  it("says so rather than hiding a request whose settlement row has gone", () => {
-    render(<SettlementOverrideQueue requests={[queued({ settlement: null })]} />);
+  it("shows the calibration figures and the closing pull request of a self-worked closure", () => {
+    render(<SettlementOverrideQueue requests={[selfWorked()]} />);
+
+    const entry = screen.getByRole("listitem");
+    expect(screen.getByRole("link", { name: "#61 Close the lock myself" })).toHaveAttribute(
+      "href",
+      "https://github.com/co-op/harbour/pull/61",
+    );
+    expect(entry).toHaveTextContent("Opening comparison");
+    expect(entry).toHaveTextContent("5");
+    expect(entry).toHaveTextContent("Actual difficulty");
+    expect(entry).toHaveTextContent("delivered/4 · 4");
+    expect(entry).toHaveTextContent("Self-worked by");
+    expect(entry).toHaveTextContent("grace");
+    expect(entry).not.toHaveTextContent("The settled outcome for this issue is no longer materialized.");
+  });
+
+  it("says a self-worked closure moved no credits and that a correction changes the calibration", () => {
+    render(<SettlementOverrideQueue requests={[selfWorked()]} />);
 
     expect(screen.getByRole("listitem")).toHaveTextContent(
-      "The settlement for this issue is no longer materialized.",
+      "The sponsor closed this issue themselves, so the fold recorded a calibration and no credits moved. " +
+        "Granting a correction changes the calibration figure, not a balance.",
+    );
+    expect(screen.getByRole("button", { name: "Grant correction" })).toBeVisible();
+  });
+
+  it("says the actual difficulty is unrecorded when the closure's settled evidence was rejected", () => {
+    render(<SettlementOverrideQueue requests={[selfWorked({ actualLabel: null, actualPoints: null })]} />);
+
+    const entry = screen.getByRole("listitem");
+    expect(entry).toHaveTextContent("Actual difficulty");
+    expect(entry).toHaveTextContent("Never recorded");
+  });
+
+  it("says so rather than hiding a request whose settlement and calibration are both gone", () => {
+    render(<SettlementOverrideQueue requests={[queued({ settlement: null, calibration: null })]} />);
+
+    expect(screen.getByRole("listitem")).toHaveTextContent(
+      "The settled outcome for this issue is no longer materialized.",
     );
     expect(screen.getByRole("button", { name: "Grant correction" })).toBeVisible();
   });
