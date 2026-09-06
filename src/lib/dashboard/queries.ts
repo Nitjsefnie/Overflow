@@ -41,6 +41,7 @@ export type RegisteredRepositoryProjection = {
   active: boolean;
   openingName: string;
   actualName: string;
+  unavailableReason: string | null;
 };
 
 export type EnforcementNoticeProjection = {
@@ -240,6 +241,7 @@ type RegisteredRepositoryRow = {
   active: boolean;
   opening_name: string;
   actual_name: string;
+  unavailable_reason: string | null;
 };
 
 type EnforcementNoticeRow = {
@@ -487,7 +489,8 @@ export async function getDashboard(
       repositories.visibility::text,
       repositories.active,
       repositories.difficulty_scheme ->> 'openingName' as opening_name,
-      repositories.difficulty_scheme ->> 'actualName' as actual_name
+      repositories.difficulty_scheme ->> 'actualName' as actual_name,
+      repositories.unavailable_reason
     from registered_repositories as repositories
     where repositories.sponsor_id = ${accountId}
     order by repositories.owner_name, repositories.id
@@ -527,6 +530,9 @@ export async function getDashboard(
       active: repository.active,
       openingName: readText(repository.opening_name, "Repository opening catalog name"),
       actualName: readText(repository.actual_name, "Repository actual catalog name"),
+      unavailableReason: repository.unavailable_reason === null
+        ? null
+        : readText(repository.unavailable_reason, "Repository unavailability reason"),
     })),
     enforcementNotices: enforcementNoticeRows.map((notice) => ({
       id: readText(notice.id, "Enforcement notice identifier"),
