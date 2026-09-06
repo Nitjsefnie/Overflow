@@ -1383,6 +1383,37 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("arms an intervalMs of zero rather than standing the default in for it", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const armed: Array<{ callback: () => void; everyMs: number }> = [];
+    // The same boundary the uncallable scheduler above turns on, read from the
+    // other side: falsy but not nullish separates the member the default stands
+    // in for from the member the caller supplied. Zero is a cadence, so `??`
+    // arms it where `||` would replace it with this module's own default.
+    const schedule = {
+      runSweep: async () => {},
+      intervalMs: 0,
+      schedule: (callback: () => void, everyMs: number) => {
+        armed.push({ callback, everyMs });
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(armed).toHaveLength(1);
+      expect(armed[0]?.everyMs).toBe(0);
+      // Nothing failed, so nothing is reported and the default never runs.
+      expect(intervals.armed).toEqual([]);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
   it("reports the defaulted cadence and then the tick that was never armed", async () => {
     // Both seams broken at once is where the defaulted line overstates: it names
     // a tick armed at the default while arming is still ahead of it, and the
