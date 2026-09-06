@@ -340,16 +340,28 @@ function normalizeOpenInput(input: OpenAccountAuditInput): NormalizedAuditWindow
 
 /**
  * The ISO 8601 subset a sample-window bound may use: a full date-time closed by either the
- * UTC designator or a numeric offset, at minute, second or millisecond precision.
+ * UTC designator or a numeric offset, with optional seconds and optional fractional seconds.
  *
  * Anything looser is refused rather than resolved. ECMAScript resolves a date-time carrying
  * no offset in the timezone of the server process, so `2026-01-01T00:00` would name a
  * different instant on a Europe/Prague host than on a UTC one, and the bounds decide which
  * merged pairs enter an audit's calibration cohort. A date-only bound is refused for the
  * same reason: its UTC default is a spec quirk rather than something a caller stated.
+ *
+ * Fractional seconds run to nine digits because `toISOString` is not the only producer of a
+ * bound: Python's `datetime.isoformat` writes six digits and Go's RFC3339Nano writes as many
+ * as the value needs. Digits below millisecond precision are truncated by `Date`, which is
+ * a deliberate loss of precision rather than of meaning — such a bound still names exactly
+ * one instant, and refusing it would break an integrator over a spelling.
+ *
+ * Two spellings that name one instant are still refused, by decision rather than oversight.
+ * A comma decimal separator (`00:00:00,5Z`) is ISO 8601 but `new Date` reads it as NaN. An
+ * end-of-day hour (`24:00:00Z`) parses as midnight the next day, but no mainstream
+ * serializer emits it — JavaScript, Python and Go all write `00:00` of the following day —
+ * and admitting it would mean an alternation that still has to keep `24:30` out.
  */
 const SAMPLE_WINDOW_BOUND_PATTERN =
-  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
 function normalizeTimestamp(value: unknown, label: string): string {
   if (typeof value !== "string") {
