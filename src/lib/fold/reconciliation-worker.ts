@@ -46,7 +46,7 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
  * How often the worker looks for a job.
  *
  * A webhook's whole visible latency is now this poll, so it is short; the cost
- * is one indexed query against a table holding at most two rows per repository.
+ * is one indexed query against a table holding one row per repository.
  */
 export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
 
@@ -191,10 +191,17 @@ async function deferralTime(
  * transient database failure, which is far worse than the stale repository this
  * worker exists to repair. The running flag is cleared either way, so the next
  * tick drains again rather than finding the worker wedged.
+ *
+ * Every member the caller supplies is treated as hostile, and both of the ones
+ * read to arm the tick are read after the immediate drain: readDrainInterval
+ * contains a failing `intervalMs` and armDrainInterval a failing `schedule`. So
+ * neither the cadence nor the arming mechanism can cost the startup drain that
+ * picks up what was enqueued while the server was down, and the two differ only
+ * in what survives their own failure — the cadence falls back and the tick is
+ * armed anyway, while a broken mechanism is replaced by nothing and leaves
+ * nothing armed. The sweep next door reads the same way, for the same reasons.
  */
 export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule): void {
-  const everyMs = schedule.intervalMs ?? RECONCILIATION_WORKER_POLL_INTERVAL_MS;
-  const scheduleTick = schedule.schedule ?? defaultSchedule;
   let running = false;
 
   const drain = () => {
@@ -214,7 +221,123 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
   };
 
   drain();
-  scheduleTick(drain, everyMs);
+  armDrainInterval(schedule, drain, readDrainInterval(schedule));
+}
+
+/**
+ * Arms the recurring poll, reporting on the console when the caller's scheduler
+ * cannot be used.
+ *
+ * Guarded the three ways callGuarded describes, and for the same reason as the
+ * two hooks: the scheduler is an injection seam, so anything it does wrong is a
+ * caller defect and none of it may reach the process.
+ *
+ * Only a nullish member falls through to defaultSchedule. Anything else
+ * unusable — a member whose accessor throws, a member holding a value that is
+ * not callable — means the caller did supply a scheduler and it is broken, so
+ * nothing is armed: substituting the default there would arm a real poll nobody
+ * asked for and hide the defect.
+ *
+ * Arming nothing leaves a process that serves and never drains again, which is
+ * what logUnarmedPoll says. It is the better failure: the worker is started from
+ * the instrumentation hook at server start, so a scheduler that cannot be armed
+ * fails the same way on the next boot, and dying under a supervisor would give a
+ * server that is repeatedly down and still never draining. What it costs while
+ * it lasts is every job enqueued after the startup drain — a webhook's fold
+ * waits for a restart, which is exactly the staleness this queue exists to end.
+ */
+function armDrainInterval(
+  schedule: ReconciliationWorkerSchedule,
+  drain: () => void,
+  everyMs: number,
+): void {
+  callGuarded(
+    schedule,
+    () => schedule.schedule ?? defaultSchedule,
+    [drain, everyMs],
+    logUnarmedPoll,
+  );
+}
+
+/**
+ * Logs that the recurring poll was never armed, keeping the line even when the
+ * reason is what breaks.
+ *
+ * The message names the residual state rather than only the failure, because
+ * containing this one leaves a process alive and permanently not draining: the
+ * line is all an operator gets, so it has to say that a restart is what brings
+ * the worker back.
+ *
+ * There is a reason to print only when something failed: a member that merely
+ * held an uncallable value did not, so that line stands alone rather than
+ * carrying an `undefined` that suggests a reason went missing.
+ *
+ * A console broken at both arities stays fatal, as callGuarded describes. Its
+ * throw propagates out of startReconciliationWorker into the instrumentation
+ * hook that called it, and the startup drain has already run by then.
+ */
+function logUnarmedPoll(reason?: unknown): void {
+  const message =
+    "Reconciliation worker poll was not armed; no further drains will run until the process restarts";
+  if (reason === undefined) {
+    console.error(message);
+    return;
+  }
+
+  try {
+    console.error(message, reason);
+  } catch {
+    console.error(message);
+  }
+}
+
+/**
+ * Reads the caller's poll interval, standing the module's own default in when
+ * the read fails.
+ *
+ * `intervalMs` is an injection seam like the callables around it and can be an
+ * accessor wired lazily, so retrieving it can throw. callGuarded is not the
+ * guard for it: that helper contains the three ways a callable fails, and a data
+ * member has only the first of them.
+ *
+ * The fallback is reported rather than silent, and the tick is armed rather than
+ * abandoned. What failed is a tuning number and not the mechanism, so arming the
+ * caller's own scheduler at this module's documented cadence substitutes nothing
+ * for what the caller asked for; the wrong cadence is the whole of the cost, and
+ * it is far smaller than trading away every later drain in a process that stays
+ * up. armDrainInterval takes the opposite course on `schedule`, for the opposite
+ * reason.
+ */
+function readDrainInterval(schedule: ReconciliationWorkerSchedule): number {
+  try {
+    return schedule.intervalMs ?? RECONCILIATION_WORKER_POLL_INTERVAL_MS;
+  } catch (error) {
+    logDefaultedInterval(error);
+    return RECONCILIATION_WORKER_POLL_INTERVAL_MS;
+  }
+}
+
+/**
+ * Logs that the caller's poll interval could not be read, keeping the line even
+ * when the reason is what breaks.
+ *
+ * The message names the residual state as logUnarmedPoll's does: drains go on
+ * running, at a cadence the caller did not choose, and that difference is what
+ * an operator has to act on. It overstates wherever the arming that follows then
+ * fails, and logUnarmedPoll's line comes next and is the one that holds.
+ *
+ * Nothing reaches this but a read that threw, so there is always a failure to
+ * report and a reason that is itself `undefined` still goes to the two-argument
+ * line.
+ */
+function logDefaultedInterval(reason: unknown): void {
+  const message =
+    "Reconciliation worker poll interval could not be read; the recurring tick is armed at the default interval instead";
+  try {
+    console.error(message, reason);
+  } catch {
+    console.error(message);
+  }
 }
 
 /**

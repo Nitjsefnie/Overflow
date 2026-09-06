@@ -9,6 +9,14 @@ import {
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
 
+// The lines the worker prints when it could not arm the recurring tick, or could
+// not read the caller's interval. Asserted whole because each is reported
+// instead of being fatal, so the residual state it names is all an operator gets.
+const UNARMED_POLL_MESSAGE =
+  "Reconciliation worker poll was not armed; no further drains will run until the process restarts";
+const DEFAULTED_INTERVAL_MESSAGE =
+  "Reconciliation worker poll interval could not be read; the recurring tick is armed at the default interval instead";
+
 describe("running the next reconciliation job", () => {
   it("reports an idle queue without reconciling anything", async () => {
     const { store, calls } = createFakeStore();
@@ -412,6 +420,139 @@ describe("the scheduled reconciliation worker", () => {
 
     await timer.tick();
     expect(started).toBe(2);
+  });
+
+  it("contains an intervalMs accessor that throws and arms the default cadence", async () => {
+    // intervalMs is an injection seam like the callables around it, so reading it
+    // can throw where a lazily wired member is not ready yet. What failed is a
+    // tuning number, not the mechanism, so the tick is armed at this module's own
+    // cadence rather than abandoned.
+    const timer = createTimer();
+    const unreadable = new Error("the interval is not wired up yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let drains = 0;
+
+    try {
+      startReconciliationWorker({
+        drain: async () => {
+          drains += 1;
+        },
+        schedule: timer.schedule,
+        get intervalMs(): number {
+          throw unreadable;
+        },
+      });
+      await timer.settle();
+
+      expect(drains).toBe(1);
+      expect(timer.intervalMs).toBe(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
+      expect(logged.mock.calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, unreadable]]);
+
+      await timer.tick();
+      expect(drains).toBe(2);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("runs the startup drain before it reads intervalMs", async () => {
+    // The startup drain is what picks up the jobs enqueued while the server was
+    // down, so nothing read to arm the recurring tick may cost it.
+    const timer = createTimer();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const order: string[] = [];
+
+    try {
+      startReconciliationWorker({
+        drain: async () => {
+          order.push("drained");
+        },
+        schedule: timer.schedule,
+        get intervalMs(): number {
+          order.push("read interval");
+          throw new Error("the interval is not wired up yet");
+        },
+      });
+      await timer.settle();
+
+      expect(order).toEqual(["drained", "read interval"]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("treats a scheduler whose retrieval throws as unusable and arms nothing", async () => {
+    // A broken mechanism is not a tuning number: substituting the default here
+    // would arm a real poll nobody asked for and hide the defect, so nothing is
+    // armed and the line says the drains have stopped.
+    const unusable = new Error("the scheduler is not wired up yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let drains = 0;
+
+    try {
+      startReconciliationWorker({
+        drain: async () => {
+          drains += 1;
+        },
+        get schedule(): (callback: () => void, everyMs: number) => void {
+          throw unusable;
+        },
+      });
+      await settle();
+
+      // The startup drain still ran; only the recurring tick was lost.
+      expect(drains).toBe(1);
+      expect(logged.mock.calls).toEqual([[UNARMED_POLL_MESSAGE, unusable]]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("arms nothing and reports when the scheduler is not callable", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const schedule = {
+      drain: async () => {},
+      schedule: "every five seconds",
+    } as unknown as Parameters<typeof startReconciliationWorker>[0];
+
+    try {
+      startReconciliationWorker(schedule);
+      await settle();
+
+      // Nothing failed — the member simply held a value that cannot be called —
+      // so the line stands alone rather than carrying a reason.
+      expect(logged.mock.calls).toEqual([[UNARMED_POLL_MESSAGE]]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("installs the default poll when the scheduler is null", async () => {
+    // An untyped caller can hand over null where the optional member expresses
+    // only undefined; a nullish member is no scheduler at all, not a broken one.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const timers: Array<{ unrefed: boolean }> = [];
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      _callback: () => void,
+    ) => {
+      const timer = { unrefed: false };
+      timers.push(timer);
+      return { unref: () => { timer.unrefed = true; } } as unknown as ReturnType<typeof setInterval>;
+    }) as typeof setInterval);
+
+    try {
+      startReconciliationWorker({
+        drain: async () => {},
+        schedule: null,
+      } as unknown as Parameters<typeof startReconciliationWorker>[0]);
+      await settle();
+
+      expect(timers).toEqual([{ unrefed: true }]);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+      logged.mockRestore();
+    }
   });
 
   it("honours an interval the caller chooses", async () => {
