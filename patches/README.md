@@ -65,10 +65,13 @@ promise stays pending forever.
 `terminate` is also public on the connection object, and the pool has one
 escape hatch that reaches it with no backend at all: `sql.end({ timeout })`
 races the connections' own shutdown against a timer, and when the timer wins,
-`destroy()` calls `c.terminate()` on every connection (`src/index.js`). That is a deadline rather than a settle — it abandons the
-connections instead of waiting for them — and it exists only for a caller that
-asks for it. `closeSql()` calls `end()` with no timeout, so this repository's
-shutdown path never arms it, and no later call can: the pool's `end()` short-circuits on its own `ending` exactly as a connection's does. That is why the hunk below is what settles it.
+`destroy()` calls `c.terminate()` on every connection (`src/index.js`). That is
+a deadline rather than a settle — it abandons the connections instead of
+waiting for them — and only a caller that passes a timeout gets it.
+`closeSql()` calls `end()` with no timeout, so this repository's shutdown path
+never arms it, and no later call can: the pool's `end()` short-circuits on its
+own `ending` exactly as a connection's does. That is why the hunk below is what
+settles it.
 
 The second hunk settles it from `closed()`, adding
 `ended && (ended(), ending = ended = null)` after the line that fails the
@@ -286,18 +289,18 @@ process, on `main` as well as on this patch before this hunk.
 
 ### Housekeeping
 
-- **Only the ESM build is patched.** All six hunks land in `src/`. The
-  package also ships `cjs/src/` and `cf/src/` copies, and both still shift the
-  queue in `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`,
-  carry no `peek` in their `queue.js`, and leave `closed()` without the settle
-  — the same as on `main`, so this is a standing property of the patch rather
-  than something a release regressed. It
-  does not bite today: the package's `exports` map sends `import` to `src/`, and
-  `next build` bundles that build into every server chunk that reaches the
-  `postgres` client, the edge chunk included. Reaching `postgres` through
-  `require` (`default` → `cjs/src/index.js`) or under the `workerd` condition
-  (`cf/src/index.js`) would silently get the unpatched client, so re-check this
-  before moving anything that talks to the database onto either route.
+- **Only the ESM build is patched.** All six hunks land in `src/`. The package
+  also ships `cjs/src/` and `cf/src/` copies, and both still shift the queue in
+  `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, carry no
+  `peek` in their `queue.js`, and leave `closed()` without the settle — the
+  same as on `main`, so this is a standing property of the patch rather than
+  something a release regressed. It does not bite today: the package's
+  `exports` map sends `import` to `src/`, and `next build` bundles that build
+  into every server chunk that reaches the `postgres` client, the edge chunk
+  included. Reaching `postgres` through `require` (`default` →
+  `cjs/src/index.js`) or under the `workerd` condition (`cf/src/index.js`)
+  would silently get the unpatched client, so re-check this before moving
+  anything that talks to the database onto either route.
 - **The patch file and `pnpm-lock.yaml` move together.** The lockfile pins the
   patch by content hash, so hand-editing the patch without re-running
   `pnpm patch-commit` makes `pnpm install --frozen-lockfile` fail.
