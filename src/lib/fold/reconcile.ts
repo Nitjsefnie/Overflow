@@ -1,7 +1,13 @@
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
-import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview, GitHubRepositoryReference } from "@/lib/github/types";
+import type {
+  GitHubIssue,
+  GitHubPullRequest,
+  GitHubPullRequestReview,
+  GitHubRepository,
+  GitHubRepositoryReference,
+} from "@/lib/github/types";
 
 // Cap this reconciliation at four HTTP requests: each PR worker paginates
 // reviews, then dismissals, then fetches its diff, one request at a time.
@@ -11,9 +17,14 @@ const reconciliationConcurrency = 4;
 // allow a full hour for it to recover before spending points on another full fold.
 export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
 
-export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
+// The fold itself works from the stored path, but reconciliation must resolve the
+// registered repository by the identity GitHub cannot reassign.
+export type ReconciliationRepository = RepositoryFoldSnapshot["repository"] & { githubRepositoryId: number };
+
+export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
 
 export type ReconciliationGateway = {
+  getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference): Promise<GitHubIssue[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
@@ -39,6 +50,16 @@ export type ReconciliationStore = {
   completeRun(runId: string): Promise<void>;
   materialize(input: { repositoryId: string; runId: string; fold: FoldResult }): Promise<ReconciliationDeltas>;
   failRun(runId: string, errorMessage: string): Promise<void>;
+  recordVerifiedRepositoryIdentity(input: {
+    repositoryId: string;
+    ownerName: string;
+    visibility: "PUBLIC" | "PRIVATE";
+  }): Promise<void>;
+  markRepositoryUnavailable(input: {
+    repositoryId: string;
+    reason: RepositoryUnavailableReason;
+    at: Date;
+  }): Promise<void>;
 };
 
 export type ReconciliationDependencies = {
@@ -85,17 +106,7 @@ async function reconcileRepositoryWhileCoordinated(
     if (!repository.active) {
       await dependencies.store.completeRun(runId);
       await dependencies.store.setReconciliationCooldown(repositoryId, null);
-      return {
-        repositoryId,
-        runId,
-        skipped: false,
-        adds: 0,
-        changes: 0,
-        removals: 0,
-        added: 0,
-        changed: 0,
-        removed: 0,
-      };
+      return noDeltaSummary(repositoryId, runId);
     }
 
     const accessToken = await dependencies.store.getGitHubAccessToken(repository.sponsor.id);
@@ -103,7 +114,29 @@ async function reconcileRepositoryWhileCoordinated(
       throw new Error("GitHub access token was not available.");
     }
 
-    const reference = toRepositoryReference(repository.ownerName);
+    // The stored path is a display name GitHub reassigns to whoever takes it after a
+    // rename or transfer, so every read below is aimed by the numeric identity instead.
+    const verified = await dependencies.github.getRepositoryById(repository.githubRepositoryId);
+    if (verified === null) {
+      return declineCrawl(dependencies, repositoryId, runId, "NOT_FOUND", now());
+    }
+    // GitHub answering for an id other than the one asked for should be impossible;
+    // decline rather than materialize whatever it did answer with.
+    if (verified.id !== repository.githubRepositoryId) {
+      return declineCrawl(dependencies, repositoryId, runId, "IDENTITY_MISMATCH", now());
+    }
+    // Only public repositories can be registered, and one that stopped being public
+    // stops being crawled.
+    if (verified.visibility !== "PUBLIC") {
+      return declineCrawl(dependencies, repositoryId, runId, "NOT_PUBLIC", now());
+    }
+
+    await dependencies.store.recordVerifiedRepositoryIdentity({
+      repositoryId,
+      ownerName: verified.fullName,
+      visibility: verified.visibility,
+    });
+    const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
     const githubIssues = await dependencies.github.listIssues(reference);
     const pullRequestEvidence = await collectPullRequestEvidence(
       dependencies.github,
@@ -181,10 +214,30 @@ async function collectPullRequestEvidence(
   return new Map(evidence);
 }
 
-function toRepositoryReference(ownerName: string): GitHubRepositoryReference {
-  const parts = ownerName.split("/");
-  if (parts.length !== 2 || parts[0]?.length === 0 || parts[1]?.length === 0) {
-    throw new Error("Registered repository owner/name was invalid.");
-  }
-  return { owner: parts[0], name: parts[1] };
+async function declineCrawl(
+  dependencies: ReconciliationDependencies,
+  repositoryId: string,
+  runId: string,
+  reason: RepositoryUnavailableReason,
+  at: Date,
+): Promise<ReconciliationSummary> {
+  await dependencies.store.markRepositoryUnavailable({ repositoryId, reason, at });
+  // Nothing upstream failed: the crawl was declined, so the run completes.
+  await dependencies.store.completeRun(runId);
+  await dependencies.store.setReconciliationCooldown(repositoryId, null);
+  return noDeltaSummary(repositoryId, runId);
+}
+
+function noDeltaSummary(repositoryId: string, runId: string): ReconciliationSummary {
+  return {
+    repositoryId,
+    runId,
+    skipped: false,
+    adds: 0,
+    changes: 0,
+    removals: 0,
+    added: 0,
+    changed: 0,
+    removed: 0,
+  };
 }
