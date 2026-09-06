@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertUniformMigrationNumberWidth,
   assertUniqueMigrationNumbers,
@@ -10,14 +10,20 @@ import {
 } from "../../scripts/migrate";
 
 const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
+const databaseClient = vi.hoisted(() => ({
+  withTransaction: vi.fn(() => Promise.reject(new Error("a query was issued for a bad directory"))),
+  closeSql: vi.fn(() => Promise.resolve()),
+}));
 
-// Standing in for the directory is what lets the production entry point be driven without a
-// database: the numbering guards run before the first query, so `runMigrations` rejects while
-// `readFile` is still untouched — and a `readFile` that only rejects proves it stayed that way.
-vi.mock("node:fs/promises", () => ({
+// Standing in for the directory is what lets the production entry point be driven at all, and
+// standing in for the database is what makes the run hermetic: without it, the only thing keeping
+// these cases off whatever `DATABASE_URL` names is the guard they are testing.
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
   readdir: () => Promise.resolve(migrationsOnDisk.entries),
   readFile: () => Promise.reject(new Error("a migration was read despite unusable numbering")),
 }));
+vi.mock("../../src/lib/db/client.ts", () => databaseClient);
 
 // Read with the synchronous API on purpose: the promise-based one is mocked above, and this is
 // the one test that has to see the real directory.
@@ -26,7 +32,7 @@ const migrationsDirectory = path.resolve(
   "../../db/migrations",
 );
 
-/** The message, not the throw, is what tells whoever hit this which files to renumber. */
+/** The message, not the throw, is what tells whoever hit this which files are wrong. */
 function rejectionMessage(check: () => void): string {
   try {
     check();
@@ -37,6 +43,10 @@ function rejectionMessage(check: () => void): string {
 }
 
 describe("migration numbering", () => {
+  beforeEach(() => {
+    databaseClient.withTransaction.mockClear();
+  });
+
   it("accepts the migrations this repository ships", () => {
     const migrationNames = listMigrationNames(readdirSync(migrationsDirectory));
 
@@ -137,13 +147,32 @@ describe("migration numbering", () => {
     expect(message).toContain("013_Immutable_GitHub_Identity.sql");
   });
 
-  it("rejects a numeric prefix of an odd width, naming the width the rest uses", () => {
+  it("rejects a numeric prefix narrower than the rest", () => {
     const message = rejectionMessage(() => {
       assertUniformMigrationNumberWidth(["018_a.sql", "019_b.sql", "20_c.sql"]);
     });
 
-    expect(message).toContain("20_c.sql");
-    expect(message).toMatch(/otherwise uses 3\b/);
+    expect(message).toContain("2 digits (20_c.sql)");
+    expect(message).toContain("3 digits (018_a.sql, 019_b.sql)");
+  });
+
+  it("rejects a numeric prefix wider than the rest", () => {
+    const message = rejectionMessage(() => {
+      assertUniformMigrationNumberWidth(["001_a.sql", "002_b.sql", "0003_c.sql"]);
+    });
+
+    expect(message).toContain("3 digits (001_a.sql, 002_b.sql)");
+    expect(message).toContain("4 digits (0003_c.sql)");
+  });
+
+  it("reports every width when more than two are in use", () => {
+    const message = rejectionMessage(() => {
+      assertUniformMigrationNumberWidth(["0001_a.sql", "001_b.sql", "01_c.sql"]);
+    });
+
+    expect(message).toContain("2 digits (01_c.sql)");
+    expect(message).toContain("3 digits (001_b.sql)");
+    expect(message).toContain("4 digits (0001_a.sql)");
   });
 
   it("accepts a uniform width other than the one this repository writes", () => {
@@ -158,11 +187,31 @@ describe("migration numbering", () => {
     await expect(runMigrations()).rejects.toThrow(
       "More than one migration is numbered 2: 002_b.sql, 002_c.sql",
     );
+    expect(databaseClient.withTransaction).not.toHaveBeenCalled();
   });
 
   it("refuses to run a directory that mixes numeric prefix widths", async () => {
     migrationsOnDisk.entries = ["001_a.sql", "002_b.sql", "03_c.sql"];
 
-    await expect(runMigrations()).rejects.toThrow("Migration 03_c.sql is numbered with 2 digits");
+    await expect(runMigrations()).rejects.toThrow("db/migrations mixes numeric prefix widths");
+    expect(databaseClient.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a collision even when upTo stops short of it", async () => {
+    migrationsOnDisk.entries = ["001_a.sql", "002_b.sql", "002_c.sql"];
+
+    await expect(runMigrations({ upTo: "001_a.sql" })).rejects.toThrow(
+      "More than one migration is numbered 2: 002_b.sql, 002_c.sql",
+    );
+    expect(databaseClient.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a mixed prefix width even when upTo stops short of it", async () => {
+    migrationsOnDisk.entries = ["001_a.sql", "002_b.sql", "03_c.sql"];
+
+    await expect(runMigrations({ upTo: "001_a.sql" })).rejects.toThrow(
+      "db/migrations mixes numeric prefix widths",
+    );
+    expect(databaseClient.withTransaction).not.toHaveBeenCalled();
   });
 });
