@@ -43,6 +43,22 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
 ];
 
 /**
+ * How long a claimed job's lease runs before another worker may reclaim it.
+ *
+ * Long enough that an ordinary fold finishes inside it, and no longer: a worker
+ * that dies mid-fold strands its repository for exactly this window, since the
+ * job stays RUNNING until the lease lapses.
+ *
+ * A fold that overruns the lease is not a correctness problem, which is why
+ * there is no heartbeat renewing it. The reclaiming worker takes the repository
+ * advisory lock the fold already holds, so the two are serialized rather than
+ * concurrent, and the cost is one redundant fold that is idempotent by
+ * construction. A heartbeat would buy nothing for that, and a longer lease would
+ * pay for it by stranding a repository after a crash.
+ */
+export const RECONCILIATION_LEASE_MINUTES = 30;
+
+/**
  * How often the worker looks for a job.
  *
  * A webhook's whole visible latency is now this poll, so it is short; the cost
