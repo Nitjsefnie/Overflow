@@ -23,14 +23,13 @@ type SettlementCorrectionsProps = {
  */
 export function SettlementCorrections({ target, requests }: SettlementCorrectionsProps) {
   const open = requests.find((request) => request.state === "OPEN");
-  const settlement = target.kind === "settlement";
-  const outcome = settlement ? "settlement" : "calibration";
+  const outcome = target.kind === "settlement" ? "settlement" : "calibration";
 
   return (
     <section className="surface override-card" aria-labelledby="settlement-corrections-heading">
       <p className="eyebrow">Recourse</p>
       <h2 id="settlement-corrections-heading">Is this {outcome} wrong?</h2>
-      {settlement ? (
+      {target.kind === "settlement" ? (
         <p>
           A settlement is rebuilt from GitHub history on every reconciliation, so re-running it changes nothing.
           A moderator can record a corrected settled figure instead; credits are recomputed from it and the
@@ -49,7 +48,7 @@ export function SettlementCorrections({ target, requests }: SettlementCorrection
         <ol className="override-history">
           {requests.map((request) => (
             <li key={request.id}>
-              <p className="override-state">{stateSummary(request, settlement)}</p>
+              <p className="override-state">{stateSummary(request, target.kind)}</p>
               <p>Reported {request.createdAt}: “{request.reason}”</p>
               {request.decisionReason === null ? null : (
                 <p className="mono-meta">
@@ -76,12 +75,12 @@ export function SettlementCorrections({ target, requests }: SettlementCorrection
  * but a calibration has no settled points to speak of — the fold applies the
  * figure as that calibration's actual points, so that is what it is called here.
  */
-function stateSummary(request: SettlementOverrideRequest, settlement: boolean): string {
+function stateSummary(request: SettlementOverrideRequest, kind: SettlementOverrideTarget["kind"]): string {
   switch (request.state) {
     case "OPEN":
       return "Awaiting a moderator";
     case "GRANTED":
-      return `Granted at ${request.settledPoints ?? "unknown"} ${settlement ? "settled" : "actual"} points`;
+      return `Granted at ${request.settledPoints ?? "unknown"} ${kind === "settlement" ? "settled" : "actual"} points`;
     case "DECLINED":
       return "Declined";
   }
