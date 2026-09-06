@@ -200,6 +200,7 @@ describe("initial PostgreSQL materialization", () => {
       "014_opening_authority_precondition.sql",
       "015_normalize_settlement_status_check.sql",
       "016_repository_identity_verification.sql",
+      "017_cross_repository_closures.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -583,12 +584,61 @@ describe("initial PostgreSQL materialization", () => {
   it.each([
     { kind: "SETTLEMENT_EVIDENCE_REJECTED", hasPullRequest: false },
     { kind: "NO_CLOSING_PULL_REQUEST", hasPullRequest: true },
+    { kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST", hasPullRequest: true },
   ])("rejects $kind with hasPullRequest=$hasPullRequest", async ({ kind, hasPullRequest }) => {
     const pullRequest = await insertPullRequest(sql);
     await expect(sql`
       insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
       values (${pullRequest.issueId}, ${hasPullRequest ? pullRequest.id : null}, ${kind}, ${"Rejected evidence"})
     `).rejects.toThrow(/unwritable_closures_kind_pull_request_check/);
+  });
+
+  it("records a cross-repository closure that references no pull request row", async () => {
+    // A foreign closing pull request is never materialized, so the kind has to
+    // survive the check constraint tying a pull request to the rejected kind.
+    const issue = await insertIssue(sql);
+    const reason = "Closing pull request 11 belongs to other/fork, not the registered repository.";
+    const [closure] = await sql<{ id: string }[]>`
+      insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+      values (${issue.id}, ${null}, ${"CROSS_REPOSITORY_CLOSING_PULL_REQUEST"}, ${reason})
+      returning id
+    `;
+    await expect(sql`
+      select kind::text, pull_request_id, reason from unwritable_closures where id = ${closure.id}
+    `).resolves.toEqual([{ kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST", pull_request_id: null, reason }]);
+  });
+
+  it("adds the cross-repository closure kind to a database already migrated to 016", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `cross_repository_upgrade_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "016_repository_identity_verification.sql" });
+      await expect(upgradeSql`
+        select 'CROSS_REPOSITORY_CLOSING_PULL_REQUEST'::unwritable_closure_kind
+      `).rejects.toThrow(/invalid input value for enum unwritable_closure_kind/);
+
+      // Every migration runs inside one transaction, so the added enum value has
+      // to survive an ALTER TYPE against a type that predates that transaction.
+      await expect(runMigrations()).resolves.toBeUndefined();
+
+      const issue = await insertIssue(upgradeSql);
+      await expect(upgradeSql`
+        insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+        values (${issue.id}, ${null}, ${"CROSS_REPOSITORY_CLOSING_PULL_REQUEST"}, ${"Foreign closing pull request."})
+        returning kind::text
+      `).resolves.toEqual([{ kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST" }]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
   });
 
   it("defaults the reconciliation cooldown to null in a nullable timestamp column", async () => {
