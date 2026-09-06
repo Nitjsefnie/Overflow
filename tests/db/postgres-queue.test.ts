@@ -32,17 +32,23 @@ describe("the patched client queue's peek", () => {
     expect(record).toEqual(pushed.map((item) => ({ peeked: item, shifted: item })));
   });
 
-  it("names the head of a queue that was drained and filled again", () => {
+  it("names the head of a partly drained queue that was filled again", () => {
     const queue = Queue<{ id: string }>();
     queue.push({ id: "first" });
+    const second = queue.push({ id: "second" });
+    // A partial drain, so the read index stays nonzero and the consumed slot is blanked. A queue
+    // drained empty resets the index to 0, which is why a refill on its own says nothing about
+    // where `peek` reads from.
     queue.shift();
 
-    const refilled = queue.push({ id: "second" });
+    const refilled = queue.push({ id: "third" });
 
-    expect({ length: queue.length, peeked: queue.peek(), shifted: queue.shift() }).toEqual({
-      length: 1,
-      peeked: refilled,
-      shifted: refilled,
-    });
+    expect([
+      { length: queue.length, peeked: queue.peek(), shifted: queue.shift() },
+      { length: queue.length, peeked: queue.peek(), shifted: queue.shift() },
+    ]).toEqual([
+      { length: 2, peeked: second, shifted: second },
+      { length: 1, peeked: refilled, shifted: refilled },
+    ]);
   });
 });
