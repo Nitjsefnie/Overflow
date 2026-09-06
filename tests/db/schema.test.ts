@@ -3513,7 +3513,7 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ count: 0 }]);
 
     // Reads through getSql(), the same pool this suite holds.
-    const projected = (await listUnwritableClosures()).find(({ id }) => id === closure.id);
+    const projected = (await listUnwritableClosures()).queue.find(({ id }) => id === closure.id);
     expect(projected).toMatchObject({
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
       pullRequest: null,

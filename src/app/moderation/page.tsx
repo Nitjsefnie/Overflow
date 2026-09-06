@@ -6,7 +6,7 @@ import type {
   ModerationRepositoryProjection,
   OpenAuditProjection,
   RecalibratingAccountProjection,
-  UnwritableClosureProjection,
+  UnwritableClosureQueues,
 } from "@/lib/dashboard/queries";
 import {
   isModeratorSession,
@@ -26,6 +26,7 @@ export default async function ModerationPage() {
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { SettlementOverrideQueue } = await import("@/components/settlement-override-queue");
   const { UnwritableClosureQueue } = await import("@/components/unwritable-closure-queue");
+  const { UnwritableClosureHistory } = await import("@/components/unwritable-closure-history");
 
   let audits: OpenAuditProjection[] | null;
   let auditCandidates: AuditCandidateProjection[] | null;
@@ -146,7 +147,7 @@ export default async function ModerationPage() {
         {unwritableClosures === null ? (
           <p>The closure queue could not be loaded.</p>
         ) : (
-          <UnwritableClosureQueue closures={unwritableClosures} />
+          <UnwritableClosureQueue closures={unwritableClosures.queue} />
         )}
       </section>
       <section className="surface" aria-labelledby="recalibrating-heading">
@@ -178,6 +179,14 @@ export default async function ModerationPage() {
           <p>The moderators could not be loaded.</p>
         ) : (
           <ModeratorRoster moderators={moderators} currentAccountId={session.user.id} />
+        )}
+      </section>
+      <section className="surface" aria-labelledby="unwritable-closure-history-heading">
+        <h2 id="unwritable-closure-history-heading">Rejected evidence correction history</h2>
+        {unwritableClosures === null ? (
+          <p role="alert">The closure correction history could not be loaded.</p>
+        ) : (
+          <UnwritableClosureHistory closures={unwritableClosures.history} />
         )}
       </section>
       <section className="surface" aria-labelledby="enforcement-history-heading">
@@ -221,7 +230,7 @@ async function listSettlementCorrections(
   }
 }
 
-async function loadUnwritableClosures(): Promise<UnwritableClosureProjection[] | null> {
+async function loadUnwritableClosures(): Promise<UnwritableClosureQueues | null> {
   try {
     const { listUnwritableClosures } = await import("@/lib/dashboard/queries");
     return await listUnwritableClosures();

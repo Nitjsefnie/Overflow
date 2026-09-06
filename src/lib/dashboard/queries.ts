@@ -224,6 +224,11 @@ export type UnwritableClosureProjection = {
   latestCorrection: { state: "OPEN" | "GRANTED" | "DECLINED"; requestedAt: string } | null;
 };
 
+export type UnwritableClosureQueues = {
+  queue: UnwritableClosureProjection[];
+  history: UnwritableClosureProjection[];
+};
+
 export type EnforcementHistoryProjection = {
   id: string;
   targetAccountId: string;
@@ -1040,7 +1045,7 @@ export async function getCalibrationComparison(
 
 export async function listUnwritableClosures(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
-): Promise<UnwritableClosureProjection[]> {
+): Promise<UnwritableClosureQueues> {
   const sql = resolveSql(dependencies);
   const rows = await sql<UnwritableClosureRow[]>`
     select
@@ -1081,7 +1086,7 @@ export async function listUnwritableClosures(
     order by unwritable_closures.created_at desc, issues.github_issue_id asc
   `;
 
-  return rows.map((row) => ({
+  const closures: UnwritableClosureProjection[] = rows.map((row) => ({
     id: readText(row.id, "Closure identifier"),
     kind: row.kind,
     reason: readText(row.reason, "Closure reason"),
@@ -1110,6 +1115,16 @@ export async function listUnwritableClosures(
       requestedAt: readTimestamp(row.correction_requested_at!, "Correction request time"),
     },
   }));
+
+  const queues: UnwritableClosureQueues = { queue: [], history: [] };
+  for (const closure of closures) {
+    if (closure.latestCorrection?.state === "GRANTED") {
+      queues.history.push(closure);
+    } else {
+      queues.queue.push(closure);
+    }
+  }
+  return queues;
 }
 
 export async function listOpenAudits(
