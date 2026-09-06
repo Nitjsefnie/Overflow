@@ -228,6 +228,7 @@ describe("settlement override service", () => {
         issueTitle: "An unsettled issue",
         issueUrl: "https://github.com/example/overflow/issues/44",
         settlement: null,
+        calibration: null,
       },
     ];
     const { store } = fakeStore({

@@ -275,6 +275,7 @@ describe("PostgreSQL settlement override requests", () => {
       requesterLogin: settlement.creditorLogin,
       issueNumber: settlement.issueNumber,
       issueTitle: settlement.issueTitle,
+      calibration: null,
       settlement: {
         settlementId: settlement.settlementId,
         status: "UNSETTLED",
@@ -299,6 +300,68 @@ describe("PostgreSQL settlement override requests", () => {
     expect(afterDecision.some((request) => request.id === opened.value.id)).toBe(false);
   });
 
+  it("queues a calibration-targeted request with the calibration's evidence instead of a settlement's", async () => {
+    const store = new PostgresSettlementOverrideStore(sql);
+    const calibration = await insertCalibration({
+      actualPoints: 4,
+      settledEvidence: { label: "delivered/4", points: 4 },
+    });
+    const opened = await store.createRequest({
+      requesterId: calibration.sponsorId,
+      target: { kind: "calibration", calibrationId: calibration.calibrationId },
+      reason: "The delivered label undercounts my own work.",
+    });
+    if (opened.kind !== "ok") {
+      throw new Error("Expected the request to open.");
+    }
+
+    const queued = (await store.listOpenRequests()).find((request) => request.id === opened.value.id);
+
+    expect(queued).toMatchObject({
+      reason: "The delivered label undercounts my own work.",
+      settlement: null,
+      calibration: {
+        calibrationId: calibration.calibrationId,
+        ownerLogin: calibration.sponsorLogin,
+        openingComparisonPoints: 5,
+        actualLabel: "delivered/4",
+        actualPoints: 4,
+        pullRequestNumber: calibration.pullRequestNumber,
+        pullRequestTitle: calibration.pullRequestTitle,
+        pullRequestUrl: calibration.pullRequestUrl,
+      },
+    });
+  });
+
+  // The closure this correction loop exists for: the settled evidence was
+  // rejected, so the calibration carries no actual points and the issue carries
+  // no label. The moderator still gets the row, with both figures absent.
+  it("queues a calibration whose actual points were never recorded", async () => {
+    const store = new PostgresSettlementOverrideStore(sql);
+    const calibration = await insertCalibration({ actualPoints: null });
+    const opened = await store.createRequest({
+      requesterId: calibration.sponsorId,
+      target: { kind: "calibration", calibrationId: calibration.calibrationId },
+      reason: "My rationale comment was posted after the window closed.",
+    });
+    if (opened.kind !== "ok") {
+      throw new Error("Expected the request to open.");
+    }
+
+    const queued = (await store.listOpenRequests()).find((request) => request.id === opened.value.id);
+
+    expect(queued).toMatchObject({
+      settlement: null,
+      calibration: {
+        calibrationId: calibration.calibrationId,
+        openingComparisonPoints: 5,
+        actualLabel: null,
+        actualPoints: null,
+        pullRequestNumber: calibration.pullRequestNumber,
+      },
+    });
+  });
+
   it("keeps a request visible to the moderator when reconciliation removes the settlement row", async () => {
     const store = new PostgresSettlementOverrideStore(sql);
     const settlement = await insertSettlement();
@@ -314,7 +377,11 @@ describe("PostgreSQL settlement override requests", () => {
     await sql`delete from settlements where id = ${settlement.settlementId}`;
 
     const queued = (await store.listOpenRequests()).find((request) => request.id === opened.value.id);
-    expect(queued).toMatchObject({ issueNumber: settlement.issueNumber, settlement: null });
+    expect(queued).toMatchObject({
+      issueNumber: settlement.issueNumber,
+      settlement: null,
+      calibration: null,
+    });
   });
 
   it("shows a settlement's requests to its parties and to nobody else", async () => {
@@ -396,6 +463,8 @@ type Scaffold = {
   issueTitle: string;
   pullRequestId: string;
   pullRequestNumber: number;
+  pullRequestTitle: string;
+  pullRequestUrl: string;
 };
 
 async function insertSettlement(options: { reviewRounds?: number } = {}): Promise<{
@@ -448,10 +517,16 @@ async function insertSettlement(options: { reviewRounds?: number } = {}): Promis
  * A sponsor who closed their own issue: the fold records that outcome as a
  * calibration rather than a settlement, so there is no settlement row to name.
  */
-async function insertCalibration(): Promise<{
+async function insertCalibration(
+  options: { actualPoints?: number | null; settledEvidence?: { label: string; points: number } } = {},
+): Promise<{
   calibrationId: string;
   issueId: string;
   sponsorId: string;
+  sponsorLogin: string;
+  pullRequestNumber: number;
+  pullRequestTitle: string;
+  pullRequestUrl: string;
 }> {
   const sponsorId = await insertUser("self-worker");
   const [sponsor] = await sql<{ github_login: string }[]>`
@@ -461,23 +536,34 @@ async function insertCalibration(): Promise<{
     sponsorId,
     authorId: sponsorId,
     authorLogin: sponsor.github_login,
+    settledEvidence: options.settledEvidence,
   });
+  const actualPoints = options.actualPoints === undefined ? 4 : options.actualPoints;
   const [calibration] = await sql<{ id: string }[]>`
     insert into self_work_calibrations (
       pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
     )
-    values (${scaffold.pullRequestId}, ${scaffold.issueId}, ${sponsorId}, 5, 4)
+    values (${scaffold.pullRequestId}, ${scaffold.issueId}, ${sponsorId}, 5, ${actualPoints})
     returning id
   `;
-  return { calibrationId: calibration.id, issueId: scaffold.issueId, sponsorId };
+  return {
+    calibrationId: calibration.id,
+    issueId: scaffold.issueId,
+    sponsorId,
+    sponsorLogin: sponsor.github_login,
+    pullRequestNumber: scaffold.pullRequestNumber,
+    pullRequestTitle: scaffold.pullRequestTitle,
+    pullRequestUrl: scaffold.pullRequestUrl,
+  };
 }
 
 async function insertClosedIssue(input: {
   sponsorId: string;
   authorId: string;
   authorLogin: string;
+  settledEvidence?: { label: string; points: number };
 }): Promise<Scaffold> {
-  const { sponsorId, authorId, authorLogin } = input;
+  const { sponsorId, authorId, authorLogin, settledEvidence } = input;
   const githubRepositoryId = nextExternalId();
   const [repository] = await sql<{ id: string }[]>`
     insert into registered_repositories (
@@ -505,6 +591,23 @@ async function insertClosedIssue(input: {
   `;
   const githubPullRequestId = nextExternalId();
   const pullRequestNumber = nextExternalId();
+  if (settledEvidence !== undefined) {
+    // The settled columns are all-or-nothing under
+    // issues_settled_evidence_complete_check, so the provenance goes in with
+    // the label even though only the label and points are read back here.
+    await sql`
+      update issues
+      set settled_label = ${settledEvidence.label},
+          settled_points = ${settledEvidence.points},
+          settled_label_event_id = ${`label-event-${githubIssueId}`},
+          settled_label_actor_login = ${authorLogin},
+          settled_label_applied_at = ${"2026-09-01T12:30:00.000Z"},
+          settled_rationale_comment_id = ${`rationale-comment-${githubIssueId}`},
+          settled_rationale_actor_login = ${authorLogin},
+          settled_rationale_commented_at = ${"2026-09-01T12:45:00.000Z"}
+      where id = ${issue.id}
+    `;
+  }
   const [pullRequest] = await sql<{ id: string }[]>`
     insert into pull_requests (
       github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
@@ -529,5 +632,7 @@ async function insertClosedIssue(input: {
     issueTitle,
     pullRequestId: pullRequest.id,
     pullRequestNumber,
+    pullRequestTitle: `A merged pull request ${githubPullRequestId}`,
+    pullRequestUrl: `https://github.com/example/repository/pull/${pullRequestNumber}`,
   };
 }
