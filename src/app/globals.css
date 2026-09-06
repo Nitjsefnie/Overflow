@@ -158,6 +158,11 @@ a {
   font-weight: 800;
 }
 
+.session-controls {
+  display: grid;
+  justify-items: end;
+}
+
 .page-content {
   padding: clamp(2.25rem, 6vw, 5rem) 0;
 }

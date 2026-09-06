@@ -19,20 +19,30 @@ describe("application shell sign-out", () => {
   it.each([
     { session: "a member session", isModerator: false },
     { session: "a moderator session", isModerator: true },
-  ])("puts a sign-out submit button beside the member stamp for $session", ({ isModerator }) => {
-    render(
-      <AppShell memberName="Lin" isModerator={isModerator}>
-        <p>content</p>
-      </AppShell>,
-    );
+  ])(
+    "groups a sign-out submit button with the member stamp in one header cell for $session",
+    ({ isModerator }) => {
+      render(
+        <AppShell memberName="Lin" isModerator={isModerator}>
+          <p>content</p>
+        </AppShell>,
+      );
 
-    const header = screen.getByRole("banner");
-    const signOut = within(header).getByRole("button", { name: "Sign out" });
+      const header = screen.getByRole("banner");
+      const signOut = within(header).getByRole("button", { name: "Sign out" });
+      const stamp = within(header).getByText("Lin").closest("p");
 
-    expect(signOut).toHaveAttribute("type", "submit");
-    expect(signOut.closest("form")).not.toBeNull();
-    expect(within(header).getByText("Lin")).toBeVisible();
-  });
+      expect(signOut).toHaveAttribute("type", "submit");
+      expect(signOut.closest("form")).not.toBeNull();
+      expect(stamp).toBeVisible();
+
+      const cluster = signOut.closest(".session-controls");
+
+      expect(cluster).not.toBeNull();
+      expect(cluster?.parentElement).toBe(header);
+      expect(cluster).toContainElement(stamp);
+    },
+  );
 
   it("clears the session with a form the browser submits, not a link that only navigates", () => {
     render(
