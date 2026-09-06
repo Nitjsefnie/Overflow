@@ -73,8 +73,15 @@ export class RepositoryRegistrationError extends Error {
 
 export class RepositoryOwnerNameConflictError extends Error {
   public constructor(public readonly ownerName: string) {
-    super(`The GitHub path ${ownerName} is already claimed by a registered repository.`);
+    super(`The GitHub path ${ownerName} is already claimed by a registration.`);
     this.name = "RepositoryOwnerNameConflictError";
+  }
+}
+
+export class RepositoryWebhookIdConflictError extends Error {
+  public constructor(public readonly githubWebhookId: number) {
+    super(`The GitHub webhook id ${githubWebhookId} is already claimed by a registration.`);
+    this.name = "RepositoryWebhookIdConflictError";
   }
 }
 
@@ -177,14 +184,25 @@ export async function registerRepository(
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
 
     // The submitted repository is genuinely absent from the table: some other registration
-    // holds the owner/name path, so the insert failed on that unique constraint rather than
-    // on the numeric GitHub id. Saying "already registered" here would name the wrong row.
+    // holds the owner/name path or the webhook id, so the insert failed on that unique
+    // constraint rather than on the numeric GitHub id. Saying "already registered" here would
+    // name the wrong row, and answering an upstream failure would invite a retry that can only
+    // fail the same way.
     if (error instanceof RepositoryOwnerNameConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
-        `The GitHub path ${error.ownerName} is held by a different registered repository. `
-          + "The submitted repository is not registered, and it cannot be registered under a path "
-          + "another registration still claims.",
+        `The GitHub path ${error.ownerName} is claimed by a different registration. `
+          + "The submitted repository is not registered, and it cannot be registered while another "
+          + "registration holds that path.",
+      );
+    }
+
+    if (error instanceof RepositoryWebhookIdConflictError) {
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        "The GitHub webhook id for the submitted repository is claimed by a different registration. "
+          + "The submitted repository is not registered, and it cannot be registered while another "
+          + "registration holds that webhook id.",
       );
     }
 

@@ -12,6 +12,7 @@ import type {
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationEnforcementError,
+  RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { getSql } from "@/lib/db/client";
 import { decryptToken } from "@/lib/security/token-cipher";
@@ -104,8 +105,12 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       // it and the caller reads the missing row as "already registered". Every other unique
       // constraint on the table describes a different collision, so answering "already
       // registered" for one of those names a repository the sponsor did not submit.
-      if (uniqueViolationConstraint(error) === ownerNameConstraint) {
+      const constraint = uniqueViolationConstraint(error);
+      if (constraint === ownerNameConstraint) {
         throw new RepositoryOwnerNameConflictError(repository.ownerName);
+      }
+      if (constraint === webhookIdConstraint) {
+        throw new RepositoryWebhookIdConflictError(repository.githubWebhookId);
       }
       throw error;
     }
@@ -164,6 +169,7 @@ function toSafeInteger(value: number | string): number {
 // driver copies the server's error fields onto the thrown error verbatim, so the failing
 // constraint arrives as the snake_case `constraint_name`.
 const ownerNameConstraint = "registered_repositories_owner_name_key";
+const webhookIdConstraint = "registered_repositories_github_webhook_id_key";
 
 function uniqueViolationConstraint(error: unknown): string | null {
   if (typeof error !== "object" || error === null) {
