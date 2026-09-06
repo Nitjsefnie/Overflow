@@ -12,17 +12,13 @@ export type ReconciliationSweepDependencies = {
    * on console.error instead, and the sweep carries on to the next repository.
    * Omit the hook to report there in the first place.
    *
-   * A console that fails too is the exception, and only on the paths that report
-   * from inside the loop: with no hook, or with one that throws, the console's
-   * throw propagates out and the repositories still queued go unswept. An async
-   * hook's rejection is reported from a handler the loop is no longer inside, so
-   * there the sweep finishes with its full summary and the console's throw
-   * becomes an unhandled rejection instead. Both are on logRepositoryFailure.
-   *
-   * The return is declared, not left as `void`, because an async hook is
-   * supported rather than merely tolerated by TypeScript's void-return
-   * assignability: whatever the hook returns is settled and its rejection is
-   * handled.
+   * A console that fails too is the exception. Every path that reports from
+   * inside the loop leaves the console's throw to propagate out, and the
+   * repositories still queued go unswept — no hook, a hook that throws, and a
+   * hook whose retrieval throws all report from there. An async hook's rejection
+   * is reported from a handler the loop is no longer inside, so there the sweep
+   * finishes with its full summary and the console's throw becomes an unhandled
+   * rejection instead. Both are on logRepositoryFailure.
    */
   onFailure?(repositoryId: string, error: unknown): void | PromiseLike<unknown>;
 };
@@ -43,10 +39,6 @@ export type ReconciliationSweepSchedule = {
    * what production takes: nothing wires a scheduler, so this is an injection
    * seam and a failure here is a caller defect. armSweepInterval says what one
    * costs.
-   *
-   * The return is declared, not left as `void`, because an async scheduler is
-   * supported rather than merely tolerated by TypeScript's void-return
-   * assignability: whatever it returns is settled and its rejection is handled.
    */
   schedule?(callback: () => void, everyMs: number): void | PromiseLike<unknown>;
   intervalMs?: number;
@@ -57,11 +49,6 @@ export type ReconciliationSweepSchedule = {
    * it may be an accessor wired lazily; the call can throw; and an async hook
    * can reject. Each of the three ends with the sweep failure on console.error
    * instead. Omit the hook to report there in the first place.
-   *
-   * The return is declared, not left as `void`, because an async hook is
-   * supported rather than merely tolerated by TypeScript's void-return
-   * assignability: whatever the hook returns is settled and its rejection is
-   * handled.
    */
   onSweepFailure?(error: unknown): void | PromiseLike<unknown>;
 };
@@ -268,9 +255,8 @@ function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknow
 /**
  * Logs a sweep failure, keeping the line even when the reason is what breaks.
  *
- * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
- * getter with a side effect — and losing the whole line to that would hide the
- * sweep failure entirely. A console broken at both arities stays fatal, as
+ * The line survives a reason that refuses to be printed, for the reason
+ * logRepositoryFailure gives. A console broken at both arities stays fatal, as
  * callGuarded describes; reached either way from inside the tick's own floating
  * promise, its throw arrives as an unhandled rejection, which ends the process
  * under Node's default. Nothing in this module drops a later tick — the interval
@@ -330,18 +316,29 @@ function armSweepInterval(
  * The message names the residual state and not just the failure, because
  * containing this one is what leaves a process alive and permanently not
  * sweeping: the line is all an operator gets, so it has to say that a restart is
- * what brings the sweep back.
+ * what brings the sweep back. It overstates on one path — a scheduler that arms
+ * the tick and then rejects, awaiting a registry write after setInterval say,
+ * gets the same line while the interval really is armed. Every synchronous
+ * failure, and a scheduler that rejects before arming, it describes exactly.
  *
- * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
- * getter with a side effect — and losing the whole line to that would hide the
- * failure entirely. There is a reason to print only when something failed: a
- * member that merely held an uncallable value did not, so that line stands alone
- * rather than carrying an `undefined` that suggests a reason went missing.
+ * The line survives a reason that refuses to be printed, for the reason
+ * logRepositoryFailure gives. There is a reason to print only when something
+ * failed: a member that merely held an uncallable value did not, so that line
+ * stands alone rather than carrying an `undefined` that suggests a reason went
+ * missing. That split is not exact, and does not need to be — a callback that
+ * rejects with `undefined`, or throws it, did fail and still reaches the
+ * reasonless line, because `undefined` is precisely the reason that carries
+ * nothing to print.
  *
- * That split is not exact, and does not need to be. A callback that rejects with
- * `undefined`, or throws it, did fail and still reaches the reasonless line,
- * because `undefined` is precisely the reason that carries nothing to print. The
- * line survives either way, which is the whole point of it.
+ * A console broken at both arities stays fatal, as callGuarded describes, and it
+ * costs the most here. Reached synchronously — from the retrieval, from an
+ * uncallable member, or from a scheduler that throws — the throw propagates out
+ * of armSweepInterval and out of startReconciliationSweep, and neither this
+ * module nor the register() that calls it catches it, so it reaches Next.js's
+ * instrumentation boot rather than the console: the failure this containment
+ * exists to keep away from the server arrives there anyway. Reached from the
+ * rejection handler on an async scheduler, it becomes an unhandled rejection,
+ * which ends the process just as surely.
  */
 function logUnarmedInterval(reason?: unknown): void {
   const message =
@@ -388,6 +385,11 @@ type GuardedCallback<Arguments extends unknown[]> = (
  * runs with `this` bound to the caller's schedule where the bare call left it
  * undefined. That is the one observable change this guard makes on a path that
  * already worked, and it is safe because defaultSchedule never reads `this`.
+ *
+ * Every member this guards declares its return as `void | PromiseLike<unknown>`
+ * rather than `void`, because an async callback is supported rather than merely
+ * tolerated by TypeScript's void-return assignability: what one returns is
+ * settled here and its rejection is handled.
  *
  * The result is settled, not awaited: containing a rejection does not require
  * awaiting one, and awaiting would put whatever follows behind a callback that
