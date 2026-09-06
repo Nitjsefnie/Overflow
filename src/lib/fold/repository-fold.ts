@@ -476,11 +476,13 @@ function resolveOpening(
   sponsor: FoldUser,
 ): OpeningResolution | null {
   const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
-  // A guard on the sponsor's own record, not on the evidence: every opening
-  // resolved here is attributed to the sponsor, and a record carrying no login
-  // names nobody to attribute it to.
-  const raterLogin = normalizedNonblankLogin(sponsor.githubLogin);
-  if (ownerLogin === null || raterLogin === null || !validTimestamp(issue.createdAt)) {
+  // Deliberately no guard on the sponsor's own login. `isRepositorySponsor`
+  // decides who the rater is, and where GitHub named a numeric account id that
+  // decision is already made — a stored login that reads as blank must not
+  // overturn it, because refusing the opening here is exactly the loss this
+  // fold exists to stop. Where no id is reported on either side the predicate
+  // refuses on the blank login by itself.
+  if (ownerLogin === null || !validTimestamp(issue.createdAt)) {
     return null;
   }
   const openingByLabel = new Map(scheme.openingLabels.map((entry) => [entry.label, entry]));
@@ -627,23 +629,10 @@ function resolveSettledDifficulty(
   scheme: DifficultyScheme,
   sponsor: FoldUser,
 ): SettledDifficultyResolution {
-  // Kept as a guard on the sponsor's own record rather than on the evidence:
-  // every rejection below names the sponsor, and a record with no login has no
-  // name to give the moderator who reads it.
+  // Read for the rejection sentences below, not as a guard: a blank stored
+  // login is only fatal where the login is the only route left, which is
+  // decided at the identification itself.
   const raterLogin = normalizedNonblankLogin(sponsor.githubLogin);
-  if (raterLogin === null) {
-    // Unreachable while `resolveOpening` also refuses a null rater login: the
-    // loop prices no issue and continues before it ever gets here. Kept, and
-    // kept UNBOUNDED, because the reason it cannot fire lives in another
-    // function — decouple the two and this refusal becomes live, at which
-    // point it must not be gated. A sponsor's missing login is a fact about
-    // the account today, and no evidence window bounds fixing it.
-    return {
-      kind: "rejected",
-      reach: { kind: "UNBOUNDED" },
-      reason: "The repository sponsor has no login, so no settled label can be attributed to the sponsor.",
-    };
-  }
   const actualByLabel = new Map(scheme.actualLabels.map((entry) => [entry.label, entry]));
   const mergeTime = Date.parse(pullRequest.mergedAt);
   const finalCommitTime = Date.parse(pullRequest.finalCommitAt);
@@ -705,11 +694,22 @@ function resolveSettledDifficulty(
     };
   }
   if (!isRepositorySponsor({ login: source.actorLogin, githubUserId: source.actorGitHubUserId }, sponsor)) {
+    if (raterLogin === null && source.actorGitHubUserId === null) {
+      // GitHub named no account id, so the login was the only route left, and
+      // the sponsor's record carries no login to compare against. UNBOUNDED
+      // rather than bounded by the evidence window: a sponsor's missing login
+      // is a fact about the account today, and no window bounds fixing it.
+      return {
+        kind: "rejected",
+        reach: { kind: "UNBOUNDED" },
+        reason: "The repository sponsor has no login, so no settled label can be attributed to the sponsor.",
+      };
+    }
     return {
       kind: "rejected",
       reach: windowReach,
       violation: "SETTLED_LABEL_UNAUTHORIZED",
-      reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the repository sponsor \`${raterLogin}\`.`,
+      reason: settledLabelActorRejection(label, source.actorLogin, raterLogin),
     };
   }
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
@@ -742,8 +742,8 @@ function resolveSettledDifficulty(
       reach: windowReach,
       violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
       reason: candidates.length > 0
-        ? `Every qualifying rationale comment by \`${raterLogin}\` naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
-        : `No rationale comment by \`${raterLogin}\` naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+        ? `Every qualifying rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
+        : `No rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   const configured = actualByLabel.get(label)!;
@@ -961,6 +961,38 @@ function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boole
   }
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
   return sponsorLogin !== null && normalizedNonblankLogin(actor.login) === sponsorLogin;
+}
+
+/**
+ * How a refusal names the sponsor. The sponsor is an ACCOUNT; the stored login
+ * is only what our record of that account currently says, and it is precisely
+ * what anyone can take over once the sponsor renames — so a sentence that names
+ * the login alone tells a moderator nothing about what was refused.
+ *
+ * These strings are payload-derived display text a moderator reads, so no
+ * numeric account id belongs in one.
+ */
+function repositorySponsorPhrase(raterLogin: string | null): string {
+  return raterLogin === null
+    ? "the repository sponsor's account"
+    : `the repository sponsor's account (login \`${raterLogin}\`)`;
+}
+
+/**
+ * Why a settled label's actor was not the sponsor. Where the rejected actor
+ * carries the login the sponsor's record still stores — an account that took
+ * the freed login after a rename — naming both sides puts the same login either
+ * side of "rather than", which reads as a contradiction and names no
+ * discriminator. The discriminator is the account.
+ */
+function settledLabelActorRejection(label: string, actorLogin: string | null, raterLogin: string | null): string {
+  const actor = normalizedNonblankLogin(actorLogin);
+  if (actor !== null && actor === raterLogin) {
+    return `The settled label \`${label}\` was applied by a different GitHub account using the login `
+      + `\`${actorLogin!.trim()}\`, not by the repository sponsor.`;
+  }
+  const sponsor = raterLogin === null ? "the repository sponsor" : `the repository sponsor \`${raterLogin}\``;
+  return `The settled label \`${label}\` was applied by \`${actorLogin?.trim() || "unknown"}\` rather than ${sponsor}.`;
 }
 
 function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
