@@ -77,7 +77,7 @@ export async function runNextReconciliationJob(
   } catch (error) {
     // One unreachable repository must not stop the worker draining the rest, so
     // the failure is recorded on its own job and never propagated to the drain.
-    dependencies.onFailure?.(job.repositoryId, error);
+    reportQuietly(() => dependencies.onFailure?.(job.repositoryId, error));
     const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
     if (delayMs === undefined) {
       await store.failReconciliationJob(job.id, job.leaseToken);
@@ -185,7 +185,7 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
       try {
         await schedule.drain();
       } catch (error) {
-        schedule.onFailure?.(error);
+        reportQuietly(() => schedule.onFailure?.(error));
       } finally {
         running = false;
       }
@@ -194,6 +194,24 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
 
   drain();
   scheduleTick(drain, everyMs);
+}
+
+/**
+ * Reports a failure without letting the reporter become a failure of its own.
+ *
+ * Both call sites already sit on a path whose whole purpose is to survive a
+ * failure, and both are reached from a detached async call. A reporter that
+ * throws there would reject that call with nothing attached, which is exactly
+ * the crash the surrounding handler exists to prevent — so the reporter's own
+ * error goes no further than here.
+ */
+function reportQuietly(report: () => void): void {
+  try {
+    report();
+  } catch {
+    // There is no second reporter to tell, and the job outcome still has to be
+    // recorded.
+  }
 }
 
 function defaultSchedule(callback: () => void, everyMs: number): void {
