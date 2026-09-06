@@ -4,7 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { listAuditCandidates, listModerationRepositories } from "@/lib/dashboard/queries";
+import { getDashboard, listAuditCandidates, listModerationRepositories } from "@/lib/dashboard/queries";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -180,6 +180,28 @@ describe("audit targeting against PostgreSQL", () => {
       { id: seeded.activeRepositoryIds[1], ownerName: "example/harbour" },
     ]);
     expect(repositories.map((repository) => repository.id)).not.toContain(seeded.inactiveRepositoryId);
+  });
+
+  it("carries each registered repository's own unavailability into the member dashboard", async () => {
+    const sponsorId = await insertUser("frank");
+    // Registered inactive so the moderation repository listing above keeps its exact answer.
+    await insertRepository({ ownerName: "example/beacon", sponsorId, active: false });
+    await insertRepository({ ownerName: "example/lighthouse", sponsorId, active: false });
+    await sql`
+      update registered_repositories
+      set unavailable_reason = ${"NOT_PUBLIC"}, unavailable_since = ${"2026-09-01T10:00:00.000Z"}
+      where owner_name = ${"example/beacon"}
+    `;
+
+    const dashboard = await getDashboard(sponsorId);
+
+    expect(dashboard.registeredRepositories.map((repository) => ({
+      ownerName: repository.ownerName,
+      unavailableReason: repository.unavailableReason,
+    }))).toEqual([
+      { ownerName: "example/beacon", unavailableReason: "NOT_PUBLIC" },
+      { ownerName: "example/lighthouse", unavailableReason: null },
+    ]);
   });
 });
 
