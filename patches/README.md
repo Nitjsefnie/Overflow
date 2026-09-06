@@ -164,6 +164,22 @@ The reporter also notes that issue 751 — a first-ever connect with
 seen from the other side; the `src/connection.js` hunk is what covers that path,
 and `tests/db/reserve-contract.test.ts` exercises it.
 
+#### Why nothing is sent upstream
+
+Every `porsager/postgres` reference in this file — issues 1195, 751 and 1097, and
+pull request 1142 — is cited so that a future release can be judged against it.
+None of them is a promise that this repair will be submitted: the maintainer has
+decided not to submit it, and this patch is carried indefinitely by that choice
+rather than by an unfinished errand.
+
+The project is active — 54 open pull requests, the oldest opened in 2022, 241
+open issues, and a pull request merged as recently as 2026-09-02 — but it passes
+over this class of fix. Issue 1097 has been open since 2025-07-31, and pull
+request 1142, which fixes it, has sat unmerged since 2026-01-05 while other pull
+requests merged around it. Issue 751 has been open since 2023-12-05. So judge a
+release by the tests named in each section above, and do not wait on either
+tracker.
+
 #### What it fixes that stock did not
 
 A reserve that is a connection's startup query when that *connect* fails is
