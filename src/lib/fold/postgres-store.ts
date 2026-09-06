@@ -22,7 +22,10 @@ import type {
   RepositoryUnavailableReason,
 } from "@/lib/fold/reconcile";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
-import { applyGrantedSettlementOverride } from "@/lib/overrides/apply";
+import {
+  applyGrantedSelfWorkCalibrationOverride,
+  applyGrantedSettlementOverride,
+} from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { decryptToken } from "@/lib/security/token-cipher";
 
@@ -440,9 +443,14 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     fold: FoldResult;
   }): Promise<ReconciliationDeltas> {
     return this.sql.begin(async (transaction) => {
-      const [existingSettlements, existingSelfWorkCalibrations] = await Promise.all([
+      // One snapshot of the granted corrections for the whole run: settlements
+      // and calibrations are two ways of recording the same issue's outcome, so
+      // reading the table twice could price one against a grant the other never
+      // saw.
+      const [existingSettlements, existingSelfWorkCalibrations, grantedOverrides] = await Promise.all([
         loadExistingSettlements(transaction, input.repositoryId),
         loadExistingSelfWorkCalibrations(transaction, input.repositoryId),
+        loadGrantedSettlementOverrides(transaction, input.repositoryId),
       ]);
       const issueIds = await upsertIssues(transaction, input.repositoryId, input.fold);
       const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, input.fold, issueIds);
@@ -453,6 +461,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         issueIds,
         pullRequestIds,
         existingSettlements,
+        grantedOverrides,
       );
       const selfWorkDeltas = await materializeSelfWorkCalibrations(
         transaction,
@@ -460,6 +469,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         issueIds,
         pullRequestIds,
         existingSelfWorkCalibrations,
+        grantedOverrides,
       );
       const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds, pullRequestIds);
       await materializeReviewRounds(transaction, input.fold, pullRequestIds);
@@ -757,9 +767,9 @@ async function materializeSettlements(
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
   existingRows: readonly SettlementRow[],
+  grantedOverrides: ReadonlyMap<number, number>,
 ): Promise<ReconciliationDeltas> {
   const existingByIssue = new Map(existingRows.map((row) => [toSafeInteger(row.github_issue_id), row]));
-  const grantedOverrides = await loadGrantedSettlementOverrides(sql, input.repositoryId);
   let adds = 0;
   let changes = 0;
   let removals = 0;
@@ -803,13 +813,16 @@ async function materializeSettlements(
 }
 
 /**
- * The settled points a moderator granted for each of this repository's issues.
+ * The points a moderator granted for each of this repository's issues.
  *
- * A correction cannot live in `settlements`, which materialization deletes and
- * rewrites from immutable GitHub history on every run, so it is read back here
- * and applied to the fold's result before the row is written. Where an issue has
- * been corrected more than once the most recent grant wins, so the map is filled
- * in decision order and later grants overwrite earlier ones.
+ * Keyed on the issue, because a settlement and a self-work calibration are the
+ * two ways one issue's outcome is recorded and either can be corrected. A
+ * correction cannot live in the row it corrects: materialization deletes and
+ * rewrites both tables from immutable GitHub history on every run, so it is
+ * read back here and applied to the fold's result before the row is written.
+ * Where an issue has been corrected more than once the most recent grant wins,
+ * so the map is filled in decision order and later grants overwrite earlier
+ * ones.
  */
 async function loadGrantedSettlementOverrides(
   sql: TransactionClient,
@@ -839,6 +852,16 @@ function applyGrantedOverride(
   return settledPoints === undefined
     ? settlement
     : applyGrantedSettlementOverride(settlement, settledPoints);
+}
+
+function applyGrantedCalibrationOverride(
+  calibration: SelfWorkCalibration,
+  grantedOverrides: ReadonlyMap<number, number>,
+): SelfWorkCalibration {
+  const actualPoints = grantedOverrides.get(calibration.githubIssueId);
+  return actualPoints === undefined
+    ? calibration
+    : applyGrantedSelfWorkCalibrationOverride(calibration, actualPoints);
 }
 
 async function loadExistingSettlements(
@@ -906,6 +929,7 @@ async function materializeSelfWorkCalibrations(
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
   existingRows: readonly SelfWorkCalibrationRow[],
+  grantedOverrides: ReadonlyMap<number, number>,
 ): Promise<ReconciliationDeltas> {
   const existingByKey = new Map(
     existingRows.map((row) => [selfWorkCalibrationKeyFromRow(row), row]),
@@ -914,7 +938,10 @@ async function materializeSelfWorkCalibrations(
   let changes = 0;
   let removals = 0;
 
-  for (const calibration of input.fold.selfWorkCalibrations) {
+  for (const folded of input.fold.selfWorkCalibrations) {
+    // Corrected before the desired state is computed, so the reconciliation
+    // change this run records is the row it goes on to write.
+    const calibration = applyGrantedCalibrationOverride(folded, grantedOverrides);
     const pullRequestId = requiredId(pullRequestIds, calibration.githubPullRequestId, "Pull request");
     const issueId = requiredId(issueIds, calibration.githubIssueId, "Issue");
     const key = selfWorkCalibrationKey(calibration.githubPullRequestId, calibration.githubIssueId);
