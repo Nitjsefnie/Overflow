@@ -9,20 +9,12 @@ const repositoryLockNamespace = 684029183;
 const coordinationFailure = "Unable to coordinate repository reconciliation.";
 /** A non-superuser: a superuser bypasses the EXECUTE checks these fixtures revoke. */
 const restrictedRole = "reconciler";
-/** Its unlock fails, but the session can still be asked to drop every advisory lock it holds. */
-const recoverableRepositoryId = "repository-whose-unlock-fails";
-/** Nothing on its session will give the lock back, so the session itself has to end. */
-const doomedRepositoryId = "repository-whose-session-must-end";
-/** A repository the fixtures never touch, reconciled through the pool that lost a connection. */
+/** Its targeted unlock is denied, so the reclaim falls to `pg_advisory_unlock_all()`. */
+const unlockAllRepositoryId = "repository-reclaimed-by-unlock-all";
+/** Both unlock functions are denied, so the reclaim falls to `DISCARD ALL`. */
+const discardAllRepositoryId = "repository-reclaimed-by-discard-all";
+/** A repository the fixtures never touch, reconciled through a pool that has already reclaimed. */
 const untouchedRepositoryId = "repository-that-never-failed";
-/**
- * How long we are willing to watch a terminated backend finish releasing its locks. A backend
- * releases its session locks as it exits, which can land just after the client has seen the FATAL
- * that ended the statement asking for the termination, so a single read races that exit. This is
- * only a looking budget: the assertion is on the locks that remain, and a lock on a session handed
- * back to the pool is never given up however long we look.
- */
-const lockSettlingBudgetMs = 15_000;
 
 interface HeldAdvisoryLock {
   granted: boolean;
@@ -44,19 +36,19 @@ interface FailedUnlockRecord {
 
 interface ReconciliationRecord {
   interactions: string[];
-  recoverable: FailedUnlockRecord;
-  doomed: FailedUnlockRecord;
+  unlockAll: FailedUnlockRecord;
+  discardAll: FailedUnlockRecord;
   poolProbe: Outcome;
   untouchedRepository: Outcome;
-  reserveAfterTermination: Outcome;
+  reservationAfterDiscard: Outcome;
   laterCoordination: Outcome[];
 }
 
 let container: StartedTestContainer | undefined;
 let admin: Sql | undefined;
 let workSql: Sql | undefined;
-let coordinationSql: Sql | undefined;
-let terminatingCoordinationSql: Sql | undefined;
+let unlockAllSql: Sql | undefined;
+let discardAllSql: Sql | undefined;
 let laterCoordinationSql: Sql | undefined;
 let record: ReconciliationRecord;
 
@@ -74,11 +66,10 @@ describe("a reconciliation whose advisory unlock fails", () => {
 
     const restrictedUrl = asRestrictedRole(started.databaseUrl);
     workSql = postgres(restrictedUrl, { max: 10 });
-    coordinationSql = postgres(restrictedUrl, { max: 10 });
-    // The doomed repository's coordination connection gets terminated, which is why this scenario
-    // gets a client of its own: postgres.js will not settle an ordinary `end()` on it afterwards
-    // (see afterAll), and the other clients are closed the ordinary way.
-    terminatingCoordinationSql = postgres(restrictedUrl, { max: 10 });
+    // One coordination client per fixture, so each one's backend can be named on both sides of
+    // its failed call without the other fixture's traffic moving it.
+    unlockAllSql = postgres(restrictedUrl, { max: 10 });
+    discardAllSql = postgres(restrictedUrl, { max: 10 });
     // Later coordinators run on their own connections. A session advisory lock is re-entrant, so
     // a coordinator reserving the very session that leaked the lock would take it again and
     // report success while the lock is still held.
@@ -89,19 +80,20 @@ describe("a reconciliation whose advisory unlock fails", () => {
     // Fixture one: the statement `withRepositoryReconciliation` runs cannot execute, while the
     // session it runs on stays alive and can still be asked to drop its advisory locks.
     await admin.unsafe("revoke execute on function pg_catalog.pg_advisory_unlock(bigint) from public");
-    const recoverable = await reconcileThroughFailingUnlock(
-      coordinationSql,
+    const unlockAll = await reconcileThroughFailingUnlock(
+      unlockAllSql,
       workSql,
-      recoverableRepositoryId,
+      unlockAllRepositoryId,
       interactions,
     );
 
-    // Fixture two: nothing the session can run will give the lock back.
+    // Fixture two: no advisory-unlock function is callable at all. `DISCARD ALL` is a utility
+    // statement rather than a function call, so no revoked grant can reach it.
     await admin.unsafe("revoke execute on function pg_catalog.pg_advisory_unlock_all() from public");
-    const doomed = await reconcileThroughFailingUnlock(
-      terminatingCoordinationSql,
+    const discardAll = await reconcileThroughFailingUnlock(
+      discardAllSql,
       workSql,
-      doomedRepositoryId,
+      discardAllRepositoryId,
       interactions,
     );
 
@@ -110,73 +102,71 @@ describe("a reconciliation whose advisory unlock fails", () => {
     await admin.unsafe("grant execute on function pg_catalog.pg_advisory_unlock_all() to public");
 
     const poolProbe = await outcomeOf(
-      coordinationSql<{ ok: number }[]>`select 1::integer as ok`.then((rows) => [...rows]),
+      unlockAllSql<{ ok: number }[]>`select 1::integer as ok`.then((rows) => [...rows]),
     );
     const untouchedRepository = await outcomeOf(
-      new PostgresFoldStore(workSql, undefined, coordinationSql)
+      new PostgresFoldStore(workSql, undefined, unlockAllSql)
         .withRepositoryReconciliation(untouchedRepositoryId, async () => {
           interactions.push("untouched-work-ran");
           return "reconciled-elsewhere";
         }),
     );
-    const reserveAfterTermination = await outcomeOf(
-      terminatingCoordinationSql.reserve().then((reserved) => {
+    const reservationAfterDiscard = await outcomeOf(
+      discardAllSql.reserve().then((reserved) => {
         reserved.release();
         return "reserved";
       }),
     );
 
+    // Concurrently, so one refused coordinator cannot push this hook past its timeout by waiting
+    // out the 60-second lock deadline behind another. Resolution is the proof the lock is gone;
+    // each callback's return value is what the caller receives, so a resolved value is proof the
+    // callback ran.
     const laterStore = new PostgresFoldStore(workSql, undefined, laterCoordinationSql);
-    const laterCoordination: Outcome[] = [];
-    for (const id of [recoverableRepositoryId, doomedRepositoryId]) {
-      laterCoordination.push(await outcomeOf(
-        laterStore.withRepositoryReconciliation(id, async () => {
-          interactions.push(`later-work-ran-for-${id}`);
-          return `reconciled-again-${id}`;
-        }),
-      ));
-    }
+    const laterCoordination = await Promise.all(
+      [unlockAllRepositoryId, discardAllRepositoryId].map((id) => outcomeOf(
+        laterStore.withRepositoryReconciliation(id, async () => `reconciled-again-${id}`),
+      )),
+    );
 
     record = {
       interactions,
-      recoverable,
-      doomed,
+      unlockAll,
+      discardAll,
       poolProbe,
       untouchedRepository,
-      reserveAfterTermination,
+      reservationAfterDiscard,
       laterCoordination,
     };
-  }, 600_000);
+  });
 
   afterAll(async () => {
     await workSql?.end();
-    await coordinationSql?.end();
-    // Forced, because postgres.js (3.4.9) does not clear a connection's in-flight query when that
-    // query dies with the socket, and `Connection.end()` waits for a connection with a query still
-    // in flight, so an ordinary `end()` on this client never settles.
-    await terminatingCoordinationSql?.end({ timeout: 0 });
+    await unlockAllSql?.end();
+    await discardAllSql?.end();
     await laterCoordinationSql?.end();
     await admin?.end();
     await container?.stop();
   });
 
   it("still runs the caller's work and still rejects the call", () => {
-    expect(record.recoverable.outcome.rejection).toBe(coordinationFailure);
-    expect(record.doomed.outcome.rejection).toBe(coordinationFailure);
-    expect(record.interactions.slice(0, 2)).toEqual([
-      `work-ran-for-${recoverableRepositoryId}`,
-      `work-ran-for-${doomedRepositoryId}`,
+    expect(record.unlockAll.outcome.rejection).toBe(coordinationFailure);
+    expect(record.discardAll.outcome.rejection).toBe(coordinationFailure);
+    expect(record.interactions).toEqual([
+      `work-ran-for-${unlockAllRepositoryId}`,
+      `work-ran-for-${discardAllRepositoryId}`,
+      "untouched-work-ran",
     ]);
   });
 
-  it("gives the lock back on a session it keeps, when that session can still drop it", () => {
-    expect(record.recoverable.remainingLocks).toEqual([]);
-    expect(record.recoverable.backendPidAfter).toBe(record.recoverable.backendPidBefore);
+  it("gives the lock back through pg_advisory_unlock_all(), keeping the session", () => {
+    expect(record.unlockAll.remainingLocks).toEqual([]);
+    expect(record.unlockAll.backendPidAfter).toBe(record.unlockAll.backendPidBefore);
   });
 
-  it("ends the session when nothing on it will give the lock back", () => {
-    expect(record.doomed.remainingLocks).toEqual([]);
-    expect(record.doomed.backendPidAfter).not.toBe(record.doomed.backendPidBefore);
+  it("gives the lock back through DISCARD ALL when no unlock function is callable", () => {
+    expect(record.discardAll.remainingLocks).toEqual([]);
+    expect(record.discardAll.backendPidAfter).toBe(record.discardAll.backendPidBefore);
   });
 
   it("keeps both coordination pools serving queries and handing out reservations", () => {
@@ -184,8 +174,8 @@ describe("a reconciliation whose advisory unlock fails", () => {
     expect(record.poolProbe.resolved).toEqual([{ ok: 1 }]);
     expect(record.untouchedRepository.rejection).toBeUndefined();
     expect(record.untouchedRepository.resolved).toBe("reconciled-elsewhere");
-    expect(record.reserveAfterTermination.rejection).toBeUndefined();
-    expect(record.reserveAfterTermination.resolved).toBe("reserved");
+    expect(record.reservationAfterDiscard.rejection).toBeUndefined();
+    expect(record.reservationAfterDiscard.resolved).toBe("reserved");
   });
 
   it("lets a later coordinator for either repository run its work", () => {
@@ -194,15 +184,8 @@ describe("a reconciliation whose advisory unlock fails", () => {
       undefined,
     ]);
     expect(record.laterCoordination.map((outcome) => outcome.resolved)).toEqual([
-      `reconciled-again-${recoverableRepositoryId}`,
-      `reconciled-again-${doomedRepositoryId}`,
-    ]);
-    expect(record.interactions).toEqual([
-      `work-ran-for-${recoverableRepositoryId}`,
-      `work-ran-for-${doomedRepositoryId}`,
-      "untouched-work-ran",
-      `later-work-ran-for-${recoverableRepositoryId}`,
-      `later-work-ran-for-${doomedRepositoryId}`,
+      `reconciled-again-${unlockAllRepositoryId}`,
+      `reconciled-again-${discardAllRepositoryId}`,
     ]);
   });
 });
@@ -212,6 +195,10 @@ describe("a reconciliation whose advisory unlock fails", () => {
  * on either side of it. Asking for the pid first leaves exactly one connection open, which is the
  * one the reservation then takes, so the two reads name the same session unless it ended: a client
  * that answers from the same backend kept its session, and one that answers from another did not.
+ *
+ * The locks are read once rather than waited on. Both stages that reach a database here release
+ * the lock on a session that stays alive, so the release has happened by the time the statement
+ * that did it has answered.
  */
 async function reconcileThroughFailingUnlock(
   coordination: Sql,
@@ -225,7 +212,7 @@ async function reconcileThroughFailingUnlock(
     interactions.push(`work-ran-for-${id}`);
     return "reconciled";
   }));
-  const remainingLocks = await advisoryLocksSettlingFor(id, lockSettlingBudgetMs);
+  const remainingLocks = await advisoryLocksFor(id);
 
   return { outcome, remainingLocks, backendPidBefore, backendPidAfter: await backendPidOf(coordination) };
 }
@@ -271,17 +258,4 @@ async function advisoryLocksFor(id: string): Promise<HeldAdvisoryLock[]> {
   `;
 
   return [...rows];
-}
-
-/** The locks left on the key once they stop clearing, or the looking budget runs out. */
-async function advisoryLocksSettlingFor(id: string, budgetMs: number): Promise<HeldAdvisoryLock[]> {
-  const deadline = Date.now() + budgetMs;
-  let held = await advisoryLocksFor(id);
-
-  while (held.length > 0 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    held = await advisoryLocksFor(id);
-  }
-
-  return held;
 }
