@@ -75,9 +75,9 @@ describe("a reconciliation whose advisory unlock fails", () => {
     const restrictedUrl = asRestrictedRole(started.databaseUrl);
     workSql = postgres(restrictedUrl, { max: 10 });
     coordinationSql = postgres(restrictedUrl, { max: 10 });
-    // The doomed repository's coordination connection gets terminated, and postgres.js never
-    // settles `end()` for a connection whose in-flight query died with the socket, so that client
-    // is closed forcefully below and kept away from the assertions about an ordinary close.
+    // The doomed repository's coordination connection gets terminated, which is why this scenario
+    // gets a client of its own: postgres.js will not settle an ordinary `end()` on it afterwards
+    // (see afterAll), and the other clients are closed the ordinary way.
     terminatingCoordinationSql = postgres(restrictedUrl, { max: 10 });
     // Later coordinators run on their own connections. A session advisory lock is re-entrant, so
     // a coordinator reserving the very session that leaked the lock would take it again and
@@ -151,8 +151,9 @@ describe("a reconciliation whose advisory unlock fails", () => {
   afterAll(async () => {
     await workSql?.end();
     await coordinationSql?.end();
-    // Forced, because postgres.js leaves the terminated connection's failed query in flight and
-    // an ordinary `end()` on that client never settles. See the report on this branch.
+    // Forced, because postgres.js (3.4.9) does not clear a connection's in-flight query when that
+    // query dies with the socket, and `Connection.end()` waits for a connection with a query still
+    // in flight, so an ordinary `end()` on this client never settles.
     await terminatingCoordinationSql?.end({ timeout: 0 });
     await laterCoordinationSql?.end();
     await admin?.end();
