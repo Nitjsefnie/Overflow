@@ -1,6 +1,9 @@
 import postgres from "postgres";
 import type { SqlClient, TransactionCallback } from "@/lib/db/types";
 
+/** Connections available for ordinary application work. */
+export const WORK_POOL_MAX = 10;
+
 /**
  * Connections reserved for reconciliation coordination.
  *
@@ -11,8 +14,13 @@ import type { SqlClient, TransactionCallback } from "@/lib/db/types";
  * and no connection is left for the queries they exist to serialize. Keeping
  * coordination on its own bounded client makes lock holding cost the work pool
  * nothing, and the bound keeps coordination from monopolizing the server.
+ *
+ * The bound is the work pool's own capacity because that is the coordinator
+ * concurrency the shared pool already served: a coordinator that could once
+ * have taken a work connection must still get a coordination connection, or
+ * isolating coordination would trade starvation for a refusal at lower load.
  */
-export const RECONCILIATION_COORDINATION_POOL_MAX = 5;
+export const RECONCILIATION_COORDINATION_POOL_MAX = WORK_POOL_MAX;
 
 let client: SqlClient | undefined;
 let coordinationClient: SqlClient | undefined;
@@ -27,7 +35,7 @@ function requireDatabaseUrl(): string {
 
 export function getSql(): SqlClient {
   if (client === undefined) {
-    client = postgres(requireDatabaseUrl(), { max: 10 });
+    client = postgres(requireDatabaseUrl(), { max: WORK_POOL_MAX });
   }
 
   return client;
