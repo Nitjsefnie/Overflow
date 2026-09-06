@@ -207,6 +207,7 @@ describe("initial PostgreSQL materialization", () => {
       "013_reconciliation_cooldown.sql",
       "014_opening_authority_precondition.sql",
       "015_normalize_settlement_status_check.sql",
+      "015_refreshable_display_logins.sql",
       "016_repository_identity_verification.sql",
       "017_cross_repository_closures.sql",
     ].map((name) => ({ name, count: 1 })));
@@ -854,6 +855,49 @@ describe("initial PostgreSQL materialization", () => {
     const issue = await insertIssue(sql);
 
     await expect(updateOriginalOpeningDifficulty(sql, issue.id)).rejects.toThrow();
+  });
+
+  it("refreshes an issue's display logins while its opening event proof stays immutable", async () => {
+    const issue = await insertIssue(sql);
+    await sql`
+      update issues
+      set owner_github_login = ${"login-before-rename"},
+          opening_source_event_id = ${"opening-event-rename"},
+          opening_source_actor_login = ${"login-before-rename"},
+          opening_source_at = ${"2026-09-01T09:00:00.000Z"}
+      where id = ${issue.id}
+    `;
+
+    await sql`
+      update issues
+      set owner_github_login = ${"login-after-rename"},
+          opening_source_actor_login = ${"login-after-rename"}
+      where id = ${issue.id}
+    `;
+
+    await expect(sql`
+      select owner_github_login, opening_source_actor_login, opening_source_event_id, opening_source_at
+      from issues where id = ${issue.id}
+    `).resolves.toEqual([{
+      owner_github_login: "login-after-rename",
+      opening_source_actor_login: "login-after-rename",
+      opening_source_event_id: "opening-event-rename",
+      opening_source_at: new Date("2026-09-01T09:00:00.000Z"),
+    }]);
+
+    // The event proof itself, and the rating it justifies, stay immutable.
+    await expect(sql`
+      update issues set opening_source_event_id = ${"rewritten-opening-event"} where id = ${issue.id}
+    `).rejects.toThrow("Issue opening rating is immutable");
+    await expect(sql`
+      update issues set opening_source_at = ${"2026-09-02T09:00:00.000Z"} where id = ${issue.id}
+    `).rejects.toThrow("Issue opening rating is immutable");
+    await expect(updateOriginalOpeningDifficulty(sql, issue.id))
+      .rejects.toThrow("Issue opening rating is immutable");
+    // A login still cannot be blanked away while opening evidence remains attached.
+    await expect(sql`
+      update issues set opening_source_actor_login = ${"   "} where id = ${issue.id}
+    `).rejects.toThrow("issues_opening_source_complete_check");
   });
 
   it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
@@ -1707,6 +1751,136 @@ describe("initial PostgreSQL materialization", () => {
       opening_source_event_id: `opening-${githubIssueId}`,
       opening_source_actor_login: sponsorLogin,
     }]);
+  });
+
+  it("refreshes both display logins when the account behind unchanged opening evidence is renamed", async () => {
+    const sponsorLogin = `rename-owner-old-${nextExternalId()}`;
+    const renamedSponsorLogin = `rename-owner-new-${nextExternalId()}`;
+    const contributorLogin = `rename-worker-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const sponsorGitHubUserId = await githubUserIdOf(sql, sponsorId);
+    const contributorGitHubUserId = await githubUserIdOf(sql, contributorId);
+    const snapshotAs = (ownerLogin: string) => materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId,
+      contributorGitHubUserId,
+      sponsorLogin: ownerLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const store = new PostgresFoldStore(sql);
+    await store.materialize({
+      repositoryId,
+      runId: await store.beginRun(repositoryId),
+      fold: foldRepository(snapshotAs(sponsorLogin)),
+    });
+
+    // GitHub renames the account: the users row, the issue author and the opening
+    // label actor all report the new login while the labelling event is untouched.
+    await sql`update users set github_login = ${renamedSponsorLogin} where id = ${sponsorId}`;
+    const renameRun = await store.beginRun(repositoryId);
+    // The one recorded change is the settled evidence's display text following the rename.
+    await expect(store.materialize({
+      repositoryId,
+      runId: renameRun,
+      fold: foldRepository(snapshotAs(renamedSponsorLogin)),
+    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    await expect(sql`
+      select before_state, after_state from reconciliation_changes
+      where reconciliation_run_id = ${renameRun} and entity_kind = ${"SETTLEMENT"}
+    `).resolves.toEqual([{
+      before_state: expect.objectContaining({
+        settledLabelActorLogin: sponsorLogin,
+        settledRationaleActorLogin: sponsorLogin,
+      }),
+      after_state: expect.objectContaining({
+        settledLabelActorLogin: renamedSponsorLogin,
+        settledRationaleActorLogin: renamedSponsorLogin,
+      }),
+    }]);
+
+    await expect(sql`
+      select owner_github_login, opening_source_actor_login, opening_source_event_id,
+             opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
+      from issues where github_issue_id = ${githubIssueId}
+    `).resolves.toEqual([{
+      owner_github_login: renamedSponsorLogin,
+      opening_source_actor_login: renamedSponsorLogin,
+      opening_source_event_id: `opening-${githubIssueId}`,
+      opening_source_at: new Date("2026-09-01T08:01:00.000Z"),
+      opening_label: "M",
+      opening_comparison_points: 5,
+      opening_reserve_points: 5,
+    }]);
+  });
+
+  it("refuses a materialization carrying a different opening event for an already proven issue", async () => {
+    const sponsorLogin = `rewritten-owner-${nextExternalId()}`;
+    const contributorLogin = `rewritten-worker-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string }[]>`
+      select owner_name from registered_repositories where id = ${repositoryId}
+    `;
+    const githubIssueId = nextExternalId();
+    const githubPullRequestId = nextExternalId();
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId,
+      githubPullRequestId,
+    });
+    const store = new PostgresFoldStore(sql);
+    await store.materialize({
+      repositoryId,
+      runId: await store.beginRun(repositoryId),
+      fold: foldRepository(snapshot),
+    });
+    const storedIssue = async () => sql`
+      select owner_github_login, opening_source_actor_login, opening_source_event_id,
+             opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
+      from issues where github_issue_id = ${githubIssueId}
+    `;
+    const before = await storedIssue();
+
+    const rewrittenSnapshot = structuredClone(snapshot);
+    rewrittenSnapshot.issues[0]!.history[0]!.id = `opening-rewritten-${githubIssueId}`;
+    const rewritten = foldRepository(rewrittenSnapshot);
+    expect(rewritten.issues[0]).toMatchObject({
+      openingSourceEventId: `opening-rewritten-${githubIssueId}`,
+    });
+
+    await expect(store.materialize({
+      repositoryId,
+      runId: await store.beginRun(repositoryId),
+      fold: rewritten,
+    })).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
+    await expect(storedIssue()).resolves.toEqual(before);
+    expect(before).toEqual([expect.objectContaining({
+      opening_source_event_id: `opening-${githubIssueId}`,
+    })]);
   });
 
   it("establishes a legacy unclaimed settlement's creditor id on rebuild so the original account can claim it", async () => {

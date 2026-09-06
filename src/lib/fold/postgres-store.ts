@@ -715,9 +715,9 @@ async function upsertIssues(
             when issues.opening_source_event_id is null then excluded.opening_reserve_points
             else issues.opening_reserve_points
           end,
-          owner_github_login = coalesce(issues.owner_github_login, excluded.owner_github_login),
+          owner_github_login = excluded.owner_github_login,
           opening_source_event_id = coalesce(issues.opening_source_event_id, excluded.opening_source_event_id),
-          opening_source_actor_login = coalesce(issues.opening_source_actor_login, excluded.opening_source_actor_login),
+          opening_source_actor_login = excluded.opening_source_actor_login,
           opening_source_at = coalesce(issues.opening_source_at, excluded.opening_source_at),
           settled_label = excluded.settled_label,
           settled_points = excluded.settled_points,
@@ -743,9 +743,7 @@ async function upsertIssues(
       row.opening_label !== issue.openingLabel ||
       row.opening_comparison_points !== issue.openingComparisonPoints ||
       row.opening_reserve_points !== issue.openingReservePoints ||
-      row.owner_github_login !== issue.ownerGitHubLogin ||
       row.opening_source_event_id !== issue.openingSourceEventId ||
-      row.opening_source_actor_login !== issue.openingSourceActorLogin ||
       timestampToIso(row.opening_source_at) !== issue.openingSourceAt
     ) {
       throw new Error("Issue opening evidence did not match immutable GitHub history.");
