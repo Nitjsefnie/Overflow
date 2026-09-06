@@ -859,19 +859,22 @@ describe("initial PostgreSQL materialization", () => {
 
   it("refreshes an issue's display logins while its opening event proof stays immutable", async () => {
     const issue = await insertIssue(sql);
+    const loginBeforeRename = `login-before-rename-${nextExternalId()}`;
+    const loginAfterRename = `login-after-rename-${nextExternalId()}`;
+    const openingEventId = `opening-event-rename-${nextExternalId()}`;
     await sql`
       update issues
-      set owner_github_login = ${"login-before-rename"},
-          opening_source_event_id = ${"opening-event-rename"},
-          opening_source_actor_login = ${"login-before-rename"},
+      set owner_github_login = ${loginBeforeRename},
+          opening_source_event_id = ${openingEventId},
+          opening_source_actor_login = ${loginBeforeRename},
           opening_source_at = ${"2026-09-01T09:00:00.000Z"}
       where id = ${issue.id}
     `;
 
     await sql`
       update issues
-      set owner_github_login = ${"login-after-rename"},
-          opening_source_actor_login = ${"login-after-rename"}
+      set owner_github_login = ${loginAfterRename},
+          opening_source_actor_login = ${loginAfterRename}
       where id = ${issue.id}
     `;
 
@@ -879,9 +882,9 @@ describe("initial PostgreSQL materialization", () => {
       select owner_github_login, opening_source_actor_login, opening_source_event_id, opening_source_at
       from issues where id = ${issue.id}
     `).resolves.toEqual([{
-      owner_github_login: "login-after-rename",
-      opening_source_actor_login: "login-after-rename",
-      opening_source_event_id: "opening-event-rename",
+      owner_github_login: loginAfterRename,
+      opening_source_actor_login: loginAfterRename,
+      opening_source_event_id: openingEventId,
       opening_source_at: new Date("2026-09-01T09:00:00.000Z"),
     }]);
 
@@ -895,26 +898,58 @@ describe("initial PostgreSQL materialization", () => {
     await expect(updateOriginalOpeningDifficulty(sql, issue.id))
       .rejects.toThrow("Issue opening rating is immutable");
     // A login still cannot be blanked away while opening evidence remains
-    // attached. The trigger refuses the null transition; the completeness check
-    // refuses the empty and whitespace spellings of the same blanking.
-    await expect(sql`
-      update issues set owner_github_login = ${null} where id = ${issue.id}
-    `).rejects.toThrow("Issue opening rating is immutable");
-    await expect(sql`
-      update issues set opening_source_actor_login = ${null} where id = ${issue.id}
-    `).rejects.toThrow("Issue opening rating is immutable");
-    await expect(sql`
-      update issues set opening_source_actor_login = ${"   "} where id = ${issue.id}
-    `).rejects.toThrow("issues_opening_source_complete_check");
-    await expect(sql`
-      update issues set owner_github_login = ${""} where id = ${issue.id}
-    `).rejects.toThrow("issues_opening_source_complete_check");
+    // attached. The trigger refuses every blanking transition, including the
+    // whitespace spellings that the completeness check's space-only trim admits.
+    for (const blanked of [null, "", "   ", "\t", "\n", " \t\n "]) {
+      await expect(sql`
+        update issues set owner_github_login = ${blanked} where id = ${issue.id}
+      `).rejects.toThrow("Issue opening rating is immutable");
+      await expect(sql`
+        update issues set opening_source_actor_login = ${blanked} where id = ${issue.id}
+      `).rejects.toThrow("Issue opening rating is immutable");
+    }
     await expect(sql`
       select owner_github_login, opening_source_actor_login
       from issues where id = ${issue.id}
     `).resolves.toEqual([{
-      owner_github_login: "login-after-rename",
-      opening_source_actor_login: "login-after-rename",
+      owner_github_login: loginAfterRename,
+      opening_source_actor_login: loginAfterRename,
+    }]);
+  });
+
+  it("keeps a row that already holds a whitespace-only display login writable", async () => {
+    // `issues_opening_source_complete_check` trims spaces only, so a row written
+    // before the trigger carried a whitespace arm can already hold a tab. The arm
+    // is keyed on the transition rather than on the new value precisely so such a
+    // row stays writable: a clause reading only the new value would refuse every
+    // later update to its logins and wedge the row with no way back.
+    const issue = await insertIssue(sql);
+    const openingEventId = `opening-event-whitespace-${nextExternalId()}`;
+    const recoveredLogin = `login-recovered-${nextExternalId()}`;
+    await sql`
+      update issues
+      set owner_github_login = ${"\t"},
+          opening_source_event_id = ${openingEventId},
+          opening_source_actor_login = ${"\t"},
+          opening_source_at = ${"2026-09-01T09:00:00.000Z"}
+      where id = ${issue.id}
+    `;
+
+    // The owner login stays whitespace-only across this update, so a value-keyed
+    // arm would refuse it even though nothing is being blanked.
+    await sql`
+      update issues set opening_source_actor_login = ${recoveredLogin} where id = ${issue.id}
+    `;
+    await sql`
+      update issues set owner_github_login = ${recoveredLogin} where id = ${issue.id}
+    `;
+
+    await expect(sql`
+      select owner_github_login, opening_source_actor_login
+      from issues where id = ${issue.id}
+    `).resolves.toEqual([{
+      owner_github_login: recoveredLogin,
+      opening_source_actor_login: recoveredLogin,
     }]);
   });
 
