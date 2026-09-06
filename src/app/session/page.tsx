@@ -1,8 +1,13 @@
 import Link from "next/link";
 import { signOutAction } from "@/lib/auth/sign-out-action";
+import {
+  SESSION_RECOVERY_REASONS,
+  toSessionRecoveryReason,
+  type SessionRecoveryReason,
+} from "@/lib/auth/session-recovery-reasons";
 
 type SessionRecoveryProps = {
-  reason: string | undefined;
+  reason: SessionRecoveryReason | undefined;
 };
 
 type SessionPageProps = {
@@ -14,7 +19,7 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
     <main className="landing-page">
       <section className="empty-state" aria-labelledby="session-recovery-title">
         <p className="eyebrow">Session recovery</p>
-        {reason === "unavailable" ? (
+        {reason === SESSION_RECOVERY_REASONS.unavailable ? (
           <>
             <h1 id="session-recovery-title">The ledger could not be reached.</h1>
             <p>
@@ -46,6 +51,5 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
 
 export default async function SessionPage({ searchParams }: SessionPageProps) {
   const query = await searchParams;
-  const reason = query.reason;
-  return <SessionRecovery reason={typeof reason === "string" ? reason : undefined} />;
+  return <SessionRecovery reason={toSessionRecoveryReason(query.reason)} />;
 }

@@ -23,6 +23,7 @@ vi.mock("@/lib/db/client", () => ({ getSql: mocks.getSql }));
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: mocks.getCurrentUserRole }));
 
 import SessionPage, { SessionRecovery } from "@/app/session/page";
+import type { SessionRecoveryReason } from "@/lib/auth/session-recovery-reasons";
 
 describe("session recovery route", () => {
   afterEach(() => {
@@ -48,10 +49,21 @@ describe("session recovery route", () => {
 
   it.each([
     { name: "a missing reason", reason: undefined },
-    { name: "an unknown reason", reason: "banana" },
-    { name: "the reason repeated as an array value", reason: ["unavailable", "stale"] as unknown as string },
+    {
+      name: "the reason repeated as an array value",
+      reason: ["unavailable", "stale"] as unknown as SessionRecoveryReason,
+    },
   ])("treats $name as a stale session", ({ reason }) => {
     render(<SessionRecovery reason={reason} />);
+
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
+    expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
+  });
+
+  // The view's prop is one of the shared reasons, so an unknown word is a state only the
+  // route can be in: it arrives in the query string and the page decides what to do with it.
+  it("treats an unknown reason in the query string as a stale session", async () => {
+    render(await SessionPage({ searchParams: Promise.resolve({ reason: "banana" }) }));
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
