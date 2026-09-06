@@ -8,6 +8,12 @@ import {
   type ReconciliationSweepSchedule,
 } from "@/lib/fold/sweep";
 
+// The line the scheduler prints when it could not arm the recurring tick.
+// Asserted as a whole because it is reported instead of being fatal, so the
+// residual state it names is all an operator gets.
+const UNARMED_MESSAGE =
+  "Reconciliation sweep interval was not armed; no further sweeps will run until the process restarts";
+
 describe("scheduled reconciliation sweep", () => {
   it("counts reconciled, failed, and cooling repositories in one summary", async () => {
     const attempted: string[] = [];
@@ -872,6 +878,264 @@ describe("scheduled reconciliation sweep", () => {
       logged.mockRestore();
     }
   });
+
+  it("contains a scheduler that rejects and still sweeps at startup", async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unarmable = new Error("The tick could not be registered");
+    let sweeps = 0;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          sweeps += 1;
+        },
+        // The ordinary shape of a scheduler that registers the tick somewhere
+        // else: async, and able to reject. A `try` around the call cannot see
+        // that rejection, and the returned promise is not the caller's to
+        // discard — an abandoned one ends the process.
+        schedule: async () => {
+          throw unarmable;
+        },
+      });
+      // One drain is already enough for Node to report a rejection it is going
+      // to report; the second only widens the window the listener had to fire in.
+      await drain();
+      await drain();
+
+      // The startup pass that repairs missed deliveries runs before the tick is
+      // registered, so it survives a scheduler that cannot be armed.
+      expect(sweeps).toBe(1);
+      expect(unhandled).toEqual([]);
+      expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE, unarmable]]);
+    } finally {
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("contains a scheduler that throws without failing its caller", async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const unarmable = new Error("The tick could not be registered");
+    let sweeps = 0;
+
+    try {
+      // startReconciliationSweep is called from the instrumentation hook at
+      // server start, so a throw out of it is a server that does not boot.
+      expect(() => {
+        startReconciliationSweep({
+          runSweep: async () => {
+            sweeps += 1;
+          },
+          schedule: () => {
+            throw unarmable;
+          },
+        });
+      }).not.toThrow();
+      await drain();
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(unhandled).toEqual([]);
+      // A scheduler that failed is not replaced by the default one.
+      expect(intervals.armed).toEqual([]);
+      expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE, unarmable]]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("treats a scheduler whose retrieval throws as unusable and arms nothing", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const unwired = new Error("The scheduler is not wired up yet");
+    let sweeps = 0;
+    // A lazily wired scheduler: the accessor throws until whatever owns the
+    // timer is configured. Reading the member used to be the first thing the
+    // scheduler did, which cost the startup sweep as well as the interval.
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get schedule(): (callback: () => void, everyMs: number) => void {
+        throw unwired;
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(sweeps).toBe(1);
+      // The caller did supply a scheduler and it is broken, so the default
+      // six-hour setInterval must not quietly take its place.
+      expect(intervals.armed).toEqual([]);
+      expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE, unwired]]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("says the interval was not armed and that no further sweeps will run", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {},
+        schedule: () => {
+          throw new Error("The tick could not be registered");
+        },
+      });
+      await drain();
+
+      // Reported rather than fatal leaves a process that serves and never
+      // sweeps again, and the line is the whole mitigation for that: an
+      // operator has to be able to read both facts off it.
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [reported] = logged.mock.calls[0] as [string];
+      expect(reported).toContain("was not armed");
+      expect(reported).toContain("no further sweeps will run");
+      expect(reported).toContain("until the process restarts");
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("calls a method-form scheduler with its receiver intact", async () => {
+    // Nothing should reach the console here, but a scheduler called without its
+    // receiver throws and falls back to it, so the spy keeps that out of the run
+    // output and gives the failure a second thing to say.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let sweeps = 0;
+    // Declared as a method that reaches its own object through `this`, which is
+    // the form the type's method syntax invites and the receiver the property
+    // access used to supply for free.
+    const schedule = {
+      armed: [] as Array<{ callback: () => void; everyMs: number }>,
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      intervalMs: 1_234,
+      schedule(callback: () => void, everyMs: number) {
+        this.armed.push({ callback, everyMs });
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(schedule.armed).toHaveLength(1);
+      expect(schedule.armed[0]?.everyMs).toBe(1_234);
+      expect(logged).not.toHaveBeenCalled();
+
+      // The registered callback is the sweep itself, not some other function
+      // that happened to be handed over.
+      expect(sweeps).toBe(1);
+      schedule.armed[0]?.callback();
+      await drain();
+      expect(sweeps).toBe(2);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("arms nothing and reports when the scheduler is not callable", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    let sweeps = 0;
+    // An untyped caller — a config object, parsed JSON, a JavaScript consumer —
+    // can hand over something that is neither nullish nor callable.
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      schedule: 6 * 60 * 60 * 1000,
+    } as unknown as ReconciliationSweepSchedule;
+
+    try {
+      expect(() => {
+        startReconciliationSweep(schedule);
+      }).not.toThrow();
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toEqual([]);
+      // Nothing was called, so there is no reason to print beyond the line itself.
+      expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE]]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("installs an unrefed interval when no scheduler is supplied", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    let sweeps = 0;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          sweeps += 1;
+        },
+      });
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toHaveLength(1);
+      expect(intervals.armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+      // Unrefed, or the sweep alone would hold a process open that has nothing
+      // left to serve.
+      expect(intervals.armed[0]?.unrefs).toBe(1);
+      expect(logged).not.toHaveBeenCalled();
+
+      intervals.armed[0]?.callback();
+      await drain();
+      expect(sweeps).toBe(2);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("installs the default interval when the scheduler is null", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    // Null is the absent scheduler an untyped caller expresses, so it falls
+    // through to the default rather than counting as a broken one.
+    const schedule = {
+      runSweep: async () => {},
+      schedule: null,
+    } as unknown as ReconciliationSweepSchedule;
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(intervals.armed).toHaveLength(1);
+      expect(intervals.armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
 });
 
 function signal() {
@@ -882,10 +1146,39 @@ function signal() {
 
 // One macrotask turn: long enough for the queued work of a turn to run, and the
 // window in which Node reports a rejection nothing handled. Used to let such a
-// report arrive so a test can assert it did not, never as a margin something is
-// expected to finish inside.
+// report arrive so a test can assert it did not, and — through
+// createTimer().settle() — before positive assertions too. Neither is a margin
+// something is expected to finish inside: the chains these tests drive settle in
+// microtasks, which one macrotask turn drains in full, so nothing asserted after
+// a drain depends on how long anything took.
 function drain() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// Replaces the global setInterval for one test, so a test can assert what the
+// default scheduler armed — or that nothing armed anything — without installing
+// a real six-hour timer in the test process.
+function captureIntervals() {
+  const armed: Array<{ callback: () => void; everyMs: number; unrefs: number }> = [];
+  const spy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    everyMs: number,
+  ) => {
+    const entry = { callback, everyMs, unrefs: 0 };
+    armed.push(entry);
+    return {
+      unref: () => {
+        entry.unrefs += 1;
+      },
+    };
+  }) as unknown as typeof setInterval);
+
+  return {
+    armed,
+    restore: () => {
+      spy.mockRestore();
+    },
+  };
 }
 
 function createTimer() {
