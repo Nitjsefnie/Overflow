@@ -2254,16 +2254,25 @@ describe("initial PostgreSQL materialization", () => {
           issues: [],
         }),
       }),
-    ).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+      // Three rows leave: the settlement, and the issue and pull request whose
+      // materialization the emptied fold no longer holds.
+    ).resolves.toEqual({ adds: 0, changes: 0, removals: 3 });
     expect(await sql`select id from issues where repository_id = ${repositoryId}`).toEqual([]);
     expect(await sql`select id from pull_requests where repository_id = ${repositoryId}`).toEqual([]);
     expect(await sql`select id from settlements where debtor_id = ${sponsorId}`).toEqual([]);
-    const [removalChange] = await sql<{ change_kind: string; pull_request_id: string | null }[]>`
-      select change_kind, pull_request_id
+    const removalChanges = await sql<{ entity_kind: string; change_kind: string; pull_request_id: string | null }[]>`
+      select entity_kind, change_kind, pull_request_id
       from reconciliation_changes
       where reconciliation_run_id = ${removedRun} and change_kind = ${"REMOVE"}
+      order by entity_kind::text
     `;
-    expect(removalChange).toEqual({ change_kind: "REMOVE", pull_request_id: null });
+    // Every removal loses its pull request reference: the column is
+    // `on delete set null`, and the pull request row is one of the deletions.
+    expect(removalChanges).toEqual([
+      { entity_kind: "ISSUE", change_kind: "REMOVE", pull_request_id: null },
+      { entity_kind: "PULL_REQUEST", change_kind: "REMOVE", pull_request_id: null },
+      { entity_kind: "SETTLEMENT", change_kind: "REMOVE", pull_request_id: null },
+    ]);
   });
 
   it("records proof-only issue-history and merge-OID changes with the true prior canonical state", async () => {
@@ -2470,7 +2479,9 @@ describe("initial PostgreSQL materialization", () => {
     const canonicalStateAfterFirstRun = await reconciliationMaterializationState(repositoryId);
     const second = await reconcileRepository({ store, github }, repositoryId);
 
-    expect(first).toMatchObject({ adds: 1, changes: 1, removals: 1 });
+    // The obsolete issue leaves three rows behind: its settlement, its pull
+    // request and the issue itself.
+    expect(first).toMatchObject({ adds: 1, changes: 1, removals: 3 });
     expect(canonicalStateAfterFirstRun.issues.map((issue) => Number(issue.github_issue_id))).toEqual([
       changedIssueId,
       addedIssueId,
@@ -3198,7 +3209,8 @@ describe("initial PostgreSQL materialization", () => {
       repositoryId: selfWorkRepositoryId,
       runId: selfWorkRemoveRun,
       fold: foldRepository({ ...selfWorkChangedSnapshot, issues: [] }),
-    })).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+      // The calibration, and the issue and pull request the emptied fold drops.
+    })).resolves.toEqual({ adds: 0, changes: 0, removals: 3 });
 
     const selfWorkChanges = await sql<{
       entity_kind: string;
@@ -3209,7 +3221,10 @@ describe("initial PostgreSQL materialization", () => {
       select entity_kind, change_kind, before_state, after_state
       from reconciliation_changes
       where reconciliation_run_id in (${selfWorkAddRun}, ${selfWorkChangeRun}, ${selfWorkRemoveRun})
-      order by created_at, id
+      -- Every change of one run shares its transaction timestamp, and the id
+      -- tie-break is a random uuid, so the run that writes three of them needs
+      -- a second ordering key to read back in a fixed order.
+      order by created_at, entity_kind::text, id
     `;
     expect(selfWorkChanges).toEqual([
       {
@@ -3223,6 +3238,20 @@ describe("initial PostgreSQL materialization", () => {
         change_kind: "CHANGE",
         before_state: expect.objectContaining({ actualPoints: 6 }),
         after_state: expect.objectContaining({ actualPoints: 7 }),
+      },
+      // The materialization the calibration was drawn from goes with it, and
+      // says so.
+      {
+        entity_kind: "ISSUE",
+        change_kind: "REMOVE",
+        before_state: expect.objectContaining({ openingLabel: "M" }),
+        after_state: null,
+      },
+      {
+        entity_kind: "PULL_REQUEST",
+        change_kind: "REMOVE",
+        before_state: expect.objectContaining({ githubPullRequestId: expect.any(Number) }),
+        after_state: null,
       },
       {
         entity_kind: "SELF_WORK_CALIBRATION",
