@@ -34,7 +34,9 @@ describe("session recovery route", () => {
     render(<SessionRecovery reason="unavailable" />);
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/ledger could not be reached/i);
-    expect(screen.getByText(/sign-in is still valid/i)).toBeVisible();
+    // /session is public, so this page cannot know the reader is signed in: the copy
+    // is conditional for the same reason the stale branch's is.
+    expect(screen.getByText(/if you were signed in, that sign-in is still valid/i)).toBeVisible();
     expect(screen.getByRole("link", { name: "Try the ledger again" })).toHaveAttribute("href", "/dashboard");
   });
 
