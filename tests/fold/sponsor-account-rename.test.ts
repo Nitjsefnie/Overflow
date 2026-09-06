@@ -76,6 +76,12 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: STORED_SPONSOR_LOGIN,
+      // The impostor holds the login `users.github_login` still stores, so the
+      // ordinary sentence would name that login on both sides and discriminate
+      // nothing. What was refused is the ACCOUNT — the same sentence the settled
+      // side produces for the same account at the same issue.
+      reason: "The opening label `M` was applied by a different GitHub account using the login "
+        + "`sponsor-old`, not by the repository sponsor.",
     }]);
     expect(result.settlements).toEqual([]);
   });
@@ -330,6 +336,7 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: RENAMED_SPONSOR_LOGIN,
+      reason: "The opening label `M` was applied by `sponsor-new` rather than the repository sponsor `sponsor-old`.",
     }]);
   });
 });

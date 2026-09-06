@@ -90,6 +90,7 @@ describe("rating authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -111,6 +112,7 @@ describe("rating authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "maintainer",
+      reason: "The opening label `M` was applied by `maintainer` rather than the repository sponsor `sponsor`.",
     }]);
   });
 
