@@ -59,6 +59,11 @@ describe("closing the shared clients before the backend of an in-flight query di
     // A control query, so the pool is known to hold one live connection before it is shut down.
     await expect(sql`select 1 as value`).resolves.toEqual([{ value: 1 }]);
 
+    // What the two halves of the ordering assertion at the end record themselves in, in the
+    // order they actually happened. Nothing here is timed; each entry is appended by the
+    // settlement it names.
+    const observed: string[] = [];
+
     // Still running when the shutdown is registered below. Its handlers are attached in the
     // expression that creates it, so the rejection that arrives once the backend is killed is
     // never an unhandled one. That rejection is a fixture rather than the subject, but it is
@@ -67,8 +72,14 @@ describe("closing the shared clients before the backend of an in-flight query di
     // rather than as a value: a bound parameter would put `pg_sleep($1)` in `pg_stat_activity`,
     // which the pattern above would never match.
     const inFlight = sql`select pg_sleep(${sql.unsafe(String(inFlightSleepSeconds))})`.then(
-      () => "resolved",
-      () => "rejected",
+      () => {
+        observed.push("in-flight query resolved");
+        return "resolved";
+      },
+      () => {
+        observed.push("in-flight query rejected");
+        return "rejected";
+      },
     );
 
     // A second client the test owns, so the backend under test can be watched and then killed
@@ -100,6 +111,16 @@ describe("closing the shared clients before the backend of an in-flight query di
       const shutdown = closeSql();
       void shutdown.catch(() => undefined);
 
+      // The shutdown records itself the moment it settles, not after the awaits below. A
+      // `closeSql()` that stopped awaiting its clients settles here, while the backend is still
+      // running — but by the time the awaits below are done the kill has landed and the query's
+      // rejection is recorded either way, so a record taken down there would read the same for
+      // both. Attached rather than awaited, so it cannot reorder anything itself.
+      const shutdownRecorded = shutdown.then(
+        () => observed.push("shutdown settled"),
+        () => observed.push("shutdown settled"),
+      );
+
       // A completed round trip on the observer, so the shutdown is known to have reached every
       // connection before anything kills a backend. `sql.end()` yields once and then calls
       // `end()` on each connection synchronously, so a full round trip cannot have finished
@@ -114,8 +135,15 @@ describe("closing the shared clients before the backend of an in-flight query di
 
       // The assertion this test exists for, awaited unbounded.
       await expect(shutdown).resolves.toBeUndefined();
+      await shutdownRecorded;
 
       await expect(inFlight).resolves.toBe("rejected");
+
+      // Settling is not enough on its own: the shutdown also has to have waited for the death
+      // it was registered ahead of. One that hands back a promise it never joined its clients'
+      // shutdown to settles first, with the in-flight query still on the wire, and lands in
+      // this list the other way round.
+      expect(observed).toEqual(["in-flight query rejected", "shutdown settled"]);
     } finally {
       await observer.end({ timeout: cleanupTimeoutSeconds });
     }
