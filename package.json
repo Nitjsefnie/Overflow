@@ -25,6 +25,7 @@
     "postgres": "3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "yaml": "2.9.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -41,7 +42,6 @@
     "tailwindcss": "4.3.3",
     "testcontainers": "12.1.0",
     "typescript": "5.9.3",
-    "vitest": "5.0.0",
-    "yaml": "2.9.0"
+    "vitest": "5.0.0"
   }
 }
