@@ -3,20 +3,11 @@ import { AppShell } from "@/components/app-shell";
 import { SettlementCorrections } from "@/components/settlement-corrections";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
+import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 
 type CalibrationProofPageProps = {
   params: Promise<{ id: string }>;
 };
-
-/**
- * How a figure reads when the ledger holds points no GitHub label backs.
- *
- * The same words as the moderator's correction queue, deliberately: a granted
- * correction writes the points while the issue's settled label stays null, and
- * the sponsor reading this page and the moderator who decided it should be
- * looking at one state under one name.
- */
-const unlabelledPoints = "no label recorded";
 
 /**
  * The proof behind a closure the sponsor was calibrated on, and their recourse
@@ -78,7 +69,7 @@ export default async function CalibrationProofPage({ params }: CalibrationProofP
               <dd>
                 {calibration.actualPoints === null
                   ? "Never recorded"
-                  : `${calibration.actualLabel ?? unlabelledPoints} · ${calibration.actualPoints}`}
+                  : `${calibration.actualLabel ?? UNLABELLED_POINTS} · ${calibration.actualPoints}`}
               </dd>
             </div>
             <div>

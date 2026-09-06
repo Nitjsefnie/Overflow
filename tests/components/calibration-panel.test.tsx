@@ -1,11 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CalibrationProofPage from "@/app/calibration/[id]/page";
 import CalibrationPage from "@/app/calibration/page";
 import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
+import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 
 const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
 
@@ -175,6 +177,48 @@ describe("self-work calibration proof page", () => {
     render(await CalibrationProofPage(calibrationParams));
 
     expect(proofValue("Delivered band")).toBe("no label recorded · 6");
+  });
+
+  // The sponsor and the moderator deciding their request read the same state on
+  // two different surfaces, so the two are compared against each other rather
+  // than each against its own copy of the words: pinning them separately is what
+  // lets a rename pass green twice while the product says two things.
+  it("reads a corrected figure exactly as the moderator's queue reads it", async () => {
+    respondWith({ calibration: [{ ...calibrationRow, actual_label: null, actual_points: 6 }] });
+
+    render(await CalibrationProofPage(calibrationParams));
+    const sponsorReads = proofValue("Delivered band");
+
+    cleanup();
+    render(
+      <SettlementOverrideQueue
+        requests={[{
+          id: "request-1",
+          reason: "The rationale comment never landed.",
+          requestedAt: "2026-09-05T10:00:00.000Z",
+          requesterLogin: "grace",
+          repositoryName: "co-op/harbour",
+          issueNumber: 17,
+          issueTitle: "Repair the tide gate",
+          issueUrl: "https://github.com/co-op/harbour/issues/17",
+          settlement: null,
+          calibration: {
+            calibrationId: "calibration-1",
+            ownerLogin: "grace",
+            openingComparisonPoints: 7,
+            actualLabel: null,
+            actualPoints: 6,
+            pullRequestNumber: 18,
+            pullRequestTitle: "Repair the gate myself",
+            pullRequestUrl: "https://github.com/co-op/harbour/pull/18",
+          },
+        }]}
+      />,
+    );
+    const moderatorReads = screen.getByText("Actual difficulty").nextElementSibling?.textContent;
+
+    expect(sponsorReads).toBe(moderatorReads);
+    expect(sponsorReads).toBe(`${UNLABELLED_POINTS} · 6`);
   });
 
   it("withholds a calibration recorded against another account", async () => {
