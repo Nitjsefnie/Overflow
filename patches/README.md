@@ -6,10 +6,11 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Three defects, seven hunks. The first is a shutdown that never settles; the
+Four defects, eight hunks. The first is a shutdown that never settles; the
 second is a `reserve()` that never settles; the third answers a dead backend's
-error to the query that replaces it. They are unrelated, and each has its own
-section below.
+error to the query that replaces it; the fourth hands queued work to a
+connection the pool has already taken back. They are unrelated, and each has
+its own section below.
 
 ### A connection that loses its backend leaves `sql.end()` waiting
 
@@ -336,6 +337,94 @@ about it.
 
 Only `errorResponse`. The stored error is one of several pieces of state that
 `closed()` leaves behind, and the reset says nothing about the others.
+
+### Releasing a reservation the pool has already taken back
+
+One hunk, in the package's own `src/index.js`.
+
+`release()` hands a reserved connection back to the pool: it nulls
+`c.reserved` and calls the pool's `onopen()`, which dispatches queued work onto
+that connection. It does so unconditionally, and the pool takes reservations
+back on its own as well — its `onclose()` nulls `c.reserved` when the backend
+goes away, then moves the connection to `connecting` and schedules a reconnect.
+Between that and the reconnect there is no socket, and a `release()` landing in
+that window dispatches queued work onto a connection that has none.
+
+Both of what happens next are wrong, and which one a run gets is a race:
+
+- `execute()` buffers the bytes and arms `setImmediate(nextWrite)`, whose first
+  line is `socket.write(chunk, fn)`. With `socket` null that throws
+  `TypeError: Cannot read properties of null (reading 'write')` out of a timer
+  callback, where no caller can catch it, and node exits 1. This is the shape
+  Overflow issue 161 was filed for.
+- Where the flush is *not* armed, the query simply sits in the connection's
+  query slot unsent, and the first `ReadyForQuery` on the replacement socket —
+  the handshake's — resolves it with the empty result set collected so far. The
+  caller is told its query returned no rows.
+
+Overflow reaches this on every reconciliation: `withRepositoryReconciliation`
+releases its coordination connection in a `finally`, and that connection's
+backend dying mid-reconciliation is a case the coordination code otherwise
+handles.
+
+The hunk gives `release()` the connection's current reservation to compare
+against and makes it inert unless it still holds it.
+
+#### Why not at the write, which is where it throws
+
+A null check in `nextWrite` is the obvious repair and it is not enough. It stops
+the throw and leaves the pool wedged: `closed()` clears the pending flush with
+`clearImmediate` but leaves `nextWriteTimer` holding the spent handle, and
+`nextWrite` throws on its own first line before reaching the
+`chunk = nextWriteTimer = null` at its end, so both the buffered bytes and the
+non-null handle outlive the socket. `write()` arms a flush only while that
+handle is null, so nothing is ever scheduled again: the reconnect's
+`StartupMessage` is appended behind the dead query's bytes and never sent, the
+server answers a connection that never introduced itself, and `connect_timeout`
+refuses everything queued on the pool while the database is reachable
+throughout. That refusal is the issue's second reported symptom and it is this
+same defect, not a separate one.
+
+Guarding `release()` keeps the dispatch from happening at all, which is what
+leaves the reconnect free to introduce itself normally.
+
+#### Why identity and not truthiness
+
+`c.reserved` is not a flag that only this reservation writes. A later
+`reserve()` sets it to *its* own function, and so does `begin()` for a
+transaction. A spent `release()` that merely checked `c.reserved` for
+truthiness would see one of those, null it, and hand the connection to the pool
+while its new holder still believes the connection is exclusively theirs — one
+backend, two callers, and the newer one's queued work never drained. Comparing
+against the reservation this `sql` was built for is what distinguishes *still
+mine* from *reserved again by someone else*, and it is also what makes a second
+`release()` inert: the first one nulls `c.reserved`, and null is not the
+captured reservation either.
+
+`tests/db/reserve-contract.test.ts` holds both halves. The crash case enters the
+window by ordering rather than by racing for it: the pool's `onclose` calls the
+`onclose` *option* before it schedules the reconnect, and resuming from a
+promise resolved there is a microtask of that same turn, so no timer can have
+run in between. It asserts on what the code did — the queued queries' answers,
+and an `uncaught` list the case fills from an `uncaughtException` listener it
+installs and removes, because an exception thrown from a timer reaches no
+`await`. The second case releases a spent reservation after the pool has served
+a new one from the same connection, and requires that a third reservation still
+has nothing to be served with.
+
+#### What it does not cover
+
+A `release()` that arrives while the connection is still the caller's is
+unchanged, including one that arrives after the caller's own queries have
+failed: the reservation is still held, so the connection is still handed back.
+Nor does the guard settle anything the reservation was holding. A reservation
+has a queue of its own that `handler` fills while the connection is `full`, and
+`c.reserved` is the only thing that drains it, so ending a reservation with
+items still in it looks from the source like it leaves them unsettled — as true
+of an ordinary `release()` on a healthy connection as of a spent one here.
+Read off the package's source rather than run: nothing in this repository has
+reproduced it and no issue tracks it, so treat it differently from the claims
+above that a test stands behind.
 
 ### Housekeeping
 
