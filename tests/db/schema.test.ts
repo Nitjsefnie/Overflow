@@ -737,7 +737,7 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUser(sql);
     const repositoryId = await insertRepository(sql, sponsorId);
     const otherRepositoryId = await insertRepository(sql, sponsorId);
-    await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+    const firstJobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
 
     await expect(insertReconciliationJob(sql, repositoryId, "SWEEP"))
       .rejects.toThrow(/repository_reconciliation_jobs_outstanding_key/);
@@ -745,15 +745,14 @@ describe("initial PostgreSQL materialization", () => {
       .resolves.toEqual(expect.any(String));
 
     // The index is partial so that an event arriving mid-fold still gets a job of its own.
-    const [running] = await sql<{ id: string }[]>`
+    await expect(sql`
       update repository_reconciliation_jobs
       set state = 'RUNNING',
         lease_token = gen_random_uuid(),
         lease_expires_at = now() + interval '1 minute'
-      where repository_id = ${repositoryId}
+      where id = ${firstJobId}
       returning id
-    `;
-    expect(running.id).toEqual(expect.any(String));
+    `).resolves.toEqual([{ id: firstJobId }]);
     const followUpId = await insertReconciliationJob(sql, repositoryId, "SWEEP");
 
     // A job that gave up is still outstanding: it is the row a later event has to coalesce into.
@@ -805,6 +804,32 @@ describe("initial PostgreSQL materialization", () => {
       where id = ${jobId}
       returning id
     `).resolves.toEqual([{ id: jobId }]);
+  });
+
+  it("refuses a negative reconciliation attempt count and indexes the due jobs", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+
+    await expect(sql`
+      insert into repository_reconciliation_jobs (repository_id, reason, attempt_count)
+      values (${repositoryId}, ${"WEBHOOK"}, ${-1})
+    `).rejects.toThrow(/repository_reconciliation_jobs_attempt_count_check/);
+    const jobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+    await expect(sql`
+      update repository_reconciliation_jobs set attempt_count = ${-1} where id = ${jobId}
+    `).rejects.toThrow(/repository_reconciliation_jobs_attempt_count_check/);
+
+    // The worker asks for the next due job on every tick, so the partial index it reads is
+    // load-bearing rather than an optimization anyone may drop.
+    await expect(sql`
+      select indexdef from pg_indexes
+      where schemaname = 'public' and indexname = 'repository_reconciliation_jobs_due_key'
+    `).resolves.toEqual([{
+      indexdef:
+        "CREATE INDEX repository_reconciliation_jobs_due_key"
+        + " ON public.repository_reconciliation_jobs USING btree (run_after)"
+        + " WHERE (state = 'PENDING'::repository_reconciliation_job_state)",
+    }]);
   });
 
   it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
