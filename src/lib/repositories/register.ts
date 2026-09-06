@@ -164,15 +164,22 @@ export async function registerRepository(
       throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
     }
   } catch (error) {
+    // The registration failed to a RepositoryRegistrationError only on the path that already
+    // deleted the webhook before throwing, so this rethrow stays ahead of the cleanup below
+    // and no route deletes twice.
     if (error instanceof RepositoryRegistrationError) {
       throw error;
     }
+
+    // Every remaining route out of this catch abandons the registration, so the webhook this
+    // call created has no repository to deliver to. Deleting it once here keeps that true for
+    // any branch added later.
+    await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
 
     // The submitted repository is genuinely absent from the table: some other registration
     // holds the owner/name path, so the insert failed on that unique constraint rather than
     // on the numeric GitHub id. Saying "already registered" here would name the wrong row.
     if (error instanceof RepositoryOwnerNameConflictError) {
-      await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
       throw new RepositoryRegistrationError(
         "CONFLICT",
         `The GitHub path ${error.ownerName} is held by a different registered repository. `
@@ -182,14 +189,12 @@ export async function registerRepository(
     }
 
     if (error instanceof RepositoryRegistrationEnforcementError) {
-      await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
       throw new RepositoryRegistrationError(
         "FORBIDDEN",
         "The account is not eligible to register repositories.",
       );
     }
 
-    await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
 
