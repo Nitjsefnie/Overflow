@@ -571,7 +571,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
                       __typename: "AssignedEvent",
                       id: "assignment-event-1",
                       createdAt: "2026-08-31T09:00:00.000Z",
-                      actor: { login: "owner" },
+                      actor: { login: "owner", databaseId: 4242 },
                       assignee: { login: "contributor" },
                     },
                     {
@@ -610,6 +610,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
           kind: "ASSIGNED",
           id: "assignment-event-1",
           actorLogin: "owner",
+          // The account id has to survive the second request as well: this is
+          // the only end-to-end assertion for the paginated timeline path.
+          actorGitHubUserId: 4242,
           assigneeLogin: "contributor",
           createdAt: "2026-08-31T09:00:00.000Z",
         },
@@ -1642,7 +1645,13 @@ describe("GitHubGateway GraphQL account identities", () => {
 
     expect(queries.some((query) => query.includes("query RepositoryIssues"))).toBe(true);
     expect(queries.some((query) => query.includes("query IssueTimeline"))).toBe(true);
-    for (const query of queries) {
+    // Only these two documents carry a timeline. `issueLabelsQuery` and
+    // `closingPullRequestsQuery` have none, so an unfiltered loop passes only
+    // while the fixture keeps them unsent and would otherwise fail for a reason
+    // this test does not pin.
+    const timelineQueries = queries.filter((query) =>
+      query.includes("query RepositoryIssues") || query.includes("query IssueTimeline"));
+    for (const query of timelineQueries) {
       for (const event of ["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent"]) {
         expect(query).toMatch(
           new RegExp(

@@ -129,8 +129,12 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
     await reconcile(store, github, repositoryId);
     const materializedBefore = await materializedIssues(repositoryId);
     expect(materializedBefore).toEqual([expect.objectContaining({
-      github_issue_id: expect.anything(),
+      github_issue_id: String(renamedSponsorIssueGitHubId),
+      // Both display columns are pinned here, because the claim below is that
+      // they FOLLOWED the rename: an inferred starting value would let a row
+      // that always read `owner-new` pass as one that changed.
       owner_github_login: STORED_SPONSOR_LOGIN,
+      opening_source_actor_login: STORED_SPONSOR_LOGIN,
       opening_label: "M",
       opening_comparison_points: 5,
       opening_reserve_points: 5,
@@ -151,9 +155,10 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
 
     await expect(storedSponsorLogin()).resolves.toBe(STORED_SPONSOR_LOGIN);
     await expect(runStatus(second.runId)).resolves.toBe("COMPLETED");
-    expect(second.removals).toBe(0);
-    expect(second.removed).toBe(0);
-    await expect(removalChanges(second.runId)).resolves.toEqual([]);
+    // Asserted BEFORE the counters: this block carries what the case means —
+    // the same row, its opening evidence frozen, its display columns moved —
+    // and a counter assertion ahead of it would abort the test first, leaving
+    // it unwatched under any mutation that reinstates the login comparison.
     const materializedAfter = await materializedIssues(repositoryId);
     expect(materializedAfter).toEqual([{
       // The same row, not a deleted one replaced by an equal-looking insert.
@@ -168,6 +173,11 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       owner_github_login: RENAMED_SPONSOR_LOGIN,
       opening_source_actor_login: RENAMED_SPONSOR_LOGIN,
     }]);
+    // `removed` is this summary's alias for `removals`, so asserting one
+    // against the other proves nothing: both are pinned to the literal the
+    // removal log below pins.
+    expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 0, removed: 0 });
+    await expect(removalChanges(second.runId)).resolves.toEqual([]);
   });
 
   it("reports and records the removal when a different account takes the sponsor's freed login", async () => {
@@ -203,8 +213,6 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
 
     await expect(runStatus(second.runId)).resolves.toBe("COMPLETED");
     await expect(materializedIssueIds(repositoryId)).resolves.toEqual([]);
-    expect(second.removals).toBeGreaterThanOrEqual(1);
-    expect(second.removed).toBe(second.removals);
     const removals = await removalChanges(second.runId);
     expect(removals).toEqual([{
       entity_kind: "ISSUE",
@@ -218,7 +226,10 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       },
       after_state: null,
     }]);
-    expect(second.removals).toBe(removals.length);
+    // Pinned to the literal, not to `removals.length`: a defect that recorded
+    // one spurious removal AND counted it moves both sides of that comparison
+    // together and passes it.
+    expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 1, removed: 1 });
   });
 });
 
