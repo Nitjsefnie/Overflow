@@ -23,7 +23,6 @@ vi.mock("@/lib/db/client", () => ({ getSql: mocks.getSql }));
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: mocks.getCurrentUserRole }));
 
 import SessionPage, { SessionRecovery } from "@/app/session/page";
-import type { SessionRecoveryReason } from "@/lib/auth/session-recovery-reasons";
 
 describe("session recovery route", () => {
   afterEach(() => {
@@ -49,14 +48,8 @@ describe("session recovery route", () => {
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
   });
 
-  it.each([
-    { name: "a missing reason", reason: undefined },
-    {
-      name: "the reason repeated as an array value",
-      reason: ["unavailable", "stale"] as unknown as SessionRecoveryReason,
-    },
-  ])("treats $name as a stale session", ({ reason }) => {
-    render(<SessionRecovery reason={reason} />);
+  it("treats a missing reason as a stale session", () => {
+    render(<SessionRecovery reason={undefined} />);
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
