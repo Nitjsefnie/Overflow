@@ -154,7 +154,9 @@ type ReconciledEntityKind =
   | "SETTLEMENT"
   | "SELF_WORK_CALIBRATION"
   | "UNWRITABLE_CLOSURE"
-  | "POLICY_VIOLATION";
+  | "POLICY_VIOLATION"
+  | "ISSUE"
+  | "PULL_REQUEST";
 
 type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE" | "POLICY_VIOLATION";
 
@@ -614,14 +616,21 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       );
       const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds, pullRequestIds);
       await materializeReviewRounds(transaction, input.fold, pullRequestIds);
-      await deleteAbsentMaterialization(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
+      const removalDeltas = await deleteAbsentMaterialization(
+        transaction,
+        input.repositoryId,
+        input.fold,
+        issueIds,
+        pullRequestIds,
+        input.runId,
+      );
       await recordPolicyViolations(transaction, input.runId, input.fold);
       await transaction`
         update reconciliation_runs
         set status = ${"COMPLETED"}, completed_at = now(), error_message = null
         where id = ${input.runId}
       `;
-      return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas);
+      return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
     }) as Promise<ReconciliationDeltas>;
   }
 
@@ -1285,15 +1294,30 @@ async function replacePullRequestIssueLinks(
   }
 }
 
+/**
+ * Deletes the issues and pull requests the fold no longer contains, counting
+ * each one and recording it in the change log.
+ *
+ * A deletion here is the reconciliation's most consequential act — a fold that
+ * stops naming a repository's work erases every materialized row of it — so it
+ * is reported rather than performed in silence. The record is written before
+ * the delete, so the state it carries is read from the row that existed, and it
+ * carries no `pull_request_id`: migration 004 gives that column
+ * `on delete set null`, so a reference to the row being deleted is nulled by the
+ * delete that follows in the same transaction. `before_state` is therefore where
+ * a removal is legible.
+ */
 async function deleteAbsentMaterialization(
   sql: TransactionClient,
   repositoryId: string,
   fold: FoldResult,
   issueIds: Map<number, string>,
   pullRequestIds: Map<number, string>,
-): Promise<void> {
+  runId: string,
+): Promise<ReconciliationDeltas> {
   const desiredIssueIds = new Set(issueIds.values());
   const desiredPullRequestIds = new Set(pullRequestIds.values());
+  let removals = 0;
   const currentPullRequests = await sql<PullRequestRow[]>`
     select id, github_pull_request_id from pull_requests where repository_id = ${repositoryId}
   `;
@@ -1305,16 +1329,35 @@ async function deleteAbsentMaterialization(
   await deleteAbsentPullRequestIssueLinks(sql, repositoryId, fold);
   for (const pullRequest of currentPullRequests) {
     if (!desiredPullRequestIds.has(pullRequest.id)) {
+      await recordChange(sql, runId, null, "PULL_REQUEST", "REMOVE", removedPullRequestState(pullRequest), null);
       await sql`delete from review_rounds where pull_request_id = ${pullRequest.id}`;
       await sql`delete from pull_request_issues where pull_request_id = ${pullRequest.id}`;
       await sql`delete from pull_requests where id = ${pullRequest.id}`;
+      removals += 1;
     }
   }
   for (const issue of currentIssues) {
     if (!desiredIssueIds.has(issue.id)) {
+      await recordChange(sql, runId, null, "ISSUE", "REMOVE", removedIssueState(issue), null);
       await sql`delete from issues where id = ${issue.id}`;
+      removals += 1;
     }
   }
+
+  return { adds: 0, changes: 0, removals };
+}
+
+function removedIssueState(row: IssueRow): JSONValue {
+  return {
+    githubIssueId: toSafeInteger(row.github_issue_id),
+    openingLabel: row.opening_label,
+    openingComparisonPoints: row.opening_comparison_points,
+    openingReservePoints: row.opening_reserve_points,
+  };
+}
+
+function removedPullRequestState(row: PullRequestRow): JSONValue {
+  return { githubPullRequestId: toSafeInteger(row.github_pull_request_id) };
 }
 
 async function deleteAbsentPullRequestIssueLinks(
