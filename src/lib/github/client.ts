@@ -1,3 +1,4 @@
+import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 export { GitHubApiError } from "@/lib/github/errors";
@@ -216,6 +217,36 @@ export class GitHubGateway {
       { headers: { Accept: "application/vnd.github.v3.diff" } },
     );
     return response.text();
+  }
+
+  public async listWorkflowFiles(
+    repository: GitHubRepositoryReference,
+  ): Promise<ClaimPathEvidence[]> {
+    const contentsPath = `/repos/${segment(repository.owner)}/${segment(repository.name)}/contents`;
+    let response: Response;
+    try {
+      response = await this.request(`${contentsPath}/.github/workflows`);
+    } catch (error) {
+      if (error instanceof GitHubApiError && error.status === 404) {
+        return [];
+      }
+      throw error;
+    }
+
+    const entries = await responseJson<Array<{ type: string; name: string; path: string; size: number }>>(response);
+    const files = entries.filter((entry) =>
+      entry.type === "file" && /\.ya?ml$/i.test(entry.name) && entry.size <= 256 * 1024)
+      .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+      .slice(0, 50);
+    const workflows: ClaimPathEvidence[] = [];
+    for (const entry of files) {
+      const fileResponse = await this.request(
+        `${contentsPath}/${entry.path.split("/").map(segment).join("/")}`,
+        { headers: { Accept: "application/vnd.github.raw" } },
+      );
+      workflows.push({ path: entry.path, content: await fileResponse.text() });
+    }
+    return workflows;
   }
 
   private async getIssuesPage(
