@@ -251,6 +251,7 @@ describe("self-work calibration proof page", () => {
     respondWith({ corrections: [] });
     render(await CalibrationProofPage(calibrationParams));
     const emptyRecourse = screen.getByRole("region", { name: "Is this calibration wrong?" }).textContent;
+    const emptyHistoryProof = screen.getByRole("article", { name: "co-op/harbour calibration" }).outerHTML;
     expect(screen.getByText("No correction has been requested for this calibration.")).toBeVisible();
     expect(screen.getByRole("article", { name: "co-op/harbour calibration" })).toBeVisible();
 
@@ -262,8 +263,9 @@ describe("self-work calibration proof page", () => {
     expect.soft(failedRecourse.textContent).not.toBe(emptyRecourse);
     expect.soft(within(failedRecourse).queryByText(/correction history.*calibration.*could not be loaded/i)).toBeVisible();
     expect.soft(within(failedRecourse).queryByText(/No correction has been requested/)).toBeNull();
-    expect(screen.getByRole("article", { name: "co-op/harbour calibration" })).toBeVisible();
-    expect(proofValue("Delivered band")).toBe("landed/4 · 4");
+    const proof = screen.getByRole("article", { name: "co-op/harbour calibration" });
+    expect(proof).toBeVisible();
+    expect(proof.outerHTML).toBe(emptyHistoryProof);
     expect(screen.getByRole("button", { name: "Report this calibration as incorrect" })).toBeVisible();
   });
 

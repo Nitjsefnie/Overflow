@@ -85,6 +85,7 @@ describe("settlement proof page", () => {
     respondWith([]);
     render(await SettlementProofPage(settlementParams));
     const emptyRecourse = screen.getByRole("region", { name: "Is this settlement wrong?" }).textContent;
+    const emptyHistoryProof = screen.getByRole("article", { name: "co-op/harbour settlement" }).outerHTML;
     expect(screen.getByText("No correction has been requested for this settlement.")).toBeVisible();
     expect(screen.getByRole("article", { name: "co-op/harbour settlement" })).toBeVisible();
 
@@ -98,7 +99,7 @@ describe("settlement proof page", () => {
     expect.soft(within(failedRecourse).queryByText(/No correction has been requested/)).toBeNull();
     const proof = screen.getByRole("article", { name: "co-op/harbour settlement" });
     expect(proof).toBeVisible();
-    expect(within(proof).getByText("Delivered band").nextElementSibling).toHaveTextContent("landed/4 · 4");
+    expect(proof.outerHTML).toBe(emptyHistoryProof);
     expect(screen.getByRole("button", { name: "Report this settlement as incorrect" })).toBeVisible();
   });
 });
