@@ -306,6 +306,65 @@ describe("PostgreSQL reconciliation job queue", () => {
     });
   });
 
+  it("reclaims a legacy thirty-minute lease during rollout", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const first = await claimOrFail();
+    await sql`
+      update repository_reconciliation_jobs
+      set lease_expires_at = now() + interval '30 minutes'
+      where id = ${first.id}
+    `;
+
+    const reclaimed = await claimOrFail();
+    expect(reclaimed.id).toBe(first.id);
+    expect(reclaimed.leaseToken).not.toBe(first.leaseToken);
+    expect(reclaimed.attemptCount).toBe(first.attemptCount + 1);
+    expect(await store.completeReconciliationJob(first.id, first.leaseToken)).toBe(false);
+  });
+
+  it.each(["fresh", "inside rollout margin"])(
+    "preserves the %s lease while reclaiming an older-build lease",
+    async (kind) => {
+      const protectedRepositoryId = await insertRepository();
+      const legacyRepositoryId = await insertRepository();
+      await sql.begin(async (transaction) => {
+        const queue = new PostgresFoldStore(transaction as unknown as Sql);
+        await queue.enqueueReconciliationJob(protectedRepositoryId, "WEBHOOK");
+        const protectedJob = (await queue.claimNextReconciliationJob())!;
+        // Make this row first in queue order so an overbroad predicate takes it.
+        await transaction`
+          update repository_reconciliation_jobs set run_after = now() - interval '1 hour'
+          where id = ${protectedJob.id}
+        `;
+        if (kind === "inside rollout margin") {
+          await transaction`
+            update repository_reconciliation_jobs
+            set lease_expires_at = now() + make_interval(secs => ${(2 * RECONCILIATION_LEASE_MS - 1) / 1000})
+            where id = ${protectedJob.id}
+          `;
+        }
+        expect(await queue.claimNextReconciliationJob()).toBeNull();
+        await queue.enqueueReconciliationJob(legacyRepositoryId, "WEBHOOK");
+        const legacyJob = (await queue.claimNextReconciliationJob())!;
+        await transaction`
+          update repository_reconciliation_jobs
+          set lease_expires_at = now() + interval '30 minutes'
+          where id = ${legacyJob.id}
+        `;
+
+        const reclaimed = await queue.claimNextReconciliationJob();
+        expect(reclaimed?.id).toBe(legacyJob.id);
+        expect(reclaimed?.leaseToken).not.toBe(legacyJob.leaseToken);
+        expect(await queue.claimNextReconciliationJob()).toBeNull();
+        const [protectedRow] = await transaction<{ lease_token: string; attempt_count: number }[]>`
+          select lease_token, attempt_count from repository_reconciliation_jobs where id = ${protectedJob.id}
+        `;
+        expect(protectedRow).toEqual({ lease_token: protectedJob.leaseToken, attempt_count: 1 });
+      });
+    },
+  );
+
   it("renews the matching running lease for the documented window", async () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");

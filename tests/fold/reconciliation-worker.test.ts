@@ -330,7 +330,7 @@ describe("reconciliation lease heartbeat", () => {
       reconcile: () => fold.promise,
       ...timer.dependencies,
     });
-    await settle();
+    await timer.armed;
 
     try {
       expect(timer.intervalMs).toBe(5_000);
@@ -376,7 +376,7 @@ describe("reconciliation lease heartbeat", () => {
       },
     });
     try {
-      await settle();
+      await timer.armed;
       await timer.tick();
       expect(timer.cancellations).toBe(0);
       fold.resolve();
@@ -441,12 +441,14 @@ describe("reconciliation lease heartbeat", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
-      await settle();
+      await timer.armed;
       await timer.tick();
       await timer.tick();
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(2);
+      await surfaceUnhandledRejections();
       expect(rejections.recorded).toEqual([]);
-      expect(logged.mock.calls).toEqual([["Reconciliation lease heartbeat failed for job", "job-1", failure]]);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
       expect(timer.cancellations).toBe(0);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
@@ -470,7 +472,7 @@ describe("reconciliation lease heartbeat", () => {
     store.completeReconciliationJob = async (id, token) => { await complete(id, token); return false; };
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
-      await settle();
+      await timer.armed;
       await timer.tick();
       expect(timer.cancellations).toBe(1);
       await timer.tick();
@@ -485,62 +487,198 @@ describe("reconciliation lease heartbeat", () => {
     }
   });
 
-  it("unrefs the default renewal timer and clears the same timer on completion", async () => {
-    const { store } = createFakeStore({ jobs: [job()] });
+  it("wires the default renewal callback, unrefs its timer, and clears it on completion", async () => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const fold = signal();
+    const entered = signal();
+    let fire!: () => void;
     const unref = vi.fn();
     const timer = { unref } as unknown as ReturnType<typeof setInterval>;
-    const schedule = vi.spyOn(globalThis, "setInterval").mockReturnValue(timer);
+    const schedule = vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+      fire = callback;
+      return timer;
+    }) as typeof setInterval);
     const cancel = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    const running = runNextReconciliationJob({ store, reconcile: async () => { entered.resolve(); await fold.promise; } });
     try {
-      await expect(runNextReconciliationJob({ store, reconcile: async () => {} })).resolves.toBe("RECONCILED");
+      await entered.promise;
       expect(schedule).toHaveBeenCalledWith(expect.any(Function), 5_000);
       expect(unref).toHaveBeenCalledTimes(1);
+      fire();
+      expect(calls.filter(({ method }) => method === "renew")).toEqual([
+        { method: "renew", args: ["job-1", "lease-1"] },
+      ]);
+      fold.resolve();
+      await expect(running).resolves.toBe("RECONCILED");
       expect(cancel.mock.calls).toEqual([[timer]]);
     } finally {
+      fold.resolve();
+      await running;
       schedule.mockRestore();
       cancel.mockRestore();
     }
   });
 
-  it.each(["scheduleLeaseRenewal", "cancelLeaseRenewal"] as const)(
-    "contains failures from the injected %s member",
-    async (member) => {
-      for (const mode of ["accessor", "throw", "reject", "uncallable"] as const) {
-        const { store, calls } = createFakeStore({ jobs: [job()] });
-        const timer = createRenewalTimer();
-        const failure = new Error(`${member} ${mode}`);
-        const dependencies = { store, reconcile: async () => {}, ...timer.dependencies };
-        Object.defineProperty(dependencies, member, {
-          get() {
-            if (mode === "accessor") throw failure;
-            if (mode === "uncallable") return "broken timer";
-            return function (this: unknown) {
-              expect(this).toBe(dependencies);
-              if (mode === "reject") return Promise.reject(failure);
-              throw failure;
-            };
-          },
-        });
-        const rejections = watchUnhandledRejections();
-        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-        try {
-          await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
-          await settle();
-          expect(rejections.recorded, mode).toEqual([]);
-          expect(logged.mock.calls, mode).toEqual([
-            ["Reconciliation lease heartbeat failed for job", "job-1", mode === "uncallable" ? undefined : failure],
-          ]);
-          expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
-          const completedCalls = [...calls];
-          await timer.tick();
-          expect(calls).toEqual(completedCalls);
-        } finally {
-          logged.mockRestore();
-          rejections.stop();
-        }
+  it.each(["accessor", "throw", "reject", "uncallable"] as const)(
+    "contains a scheduler %s failure without changing the outcome",
+    async (mode) => {
+      const { store } = createFakeStore({ jobs: [job()] });
+      const failure = new Error("scheduler failed");
+      const dependencies = {
+        store, reconcile: async () => {},
+        get scheduleLeaseRenewal() {
+          if (mode === "accessor") throw failure;
+          if (mode === "uncallable") return "broken" as never;
+          return function (this: unknown) {
+            expect(this).toBe(dependencies);
+            if (mode === "reject") return Promise.reject(failure);
+            throw failure;
+          };
+        },
+      };
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      const rejections = watchUnhandledRejections();
+      try {
+        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+        await surfaceUnhandledRejections();
+        expect(rejections.recorded).toEqual([]);
+        expect(logged).toHaveBeenCalledTimes(1);
+        expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", mode === "uncallable" ? undefined : failure]);
+      } finally {
+        logged.mockRestore();
+        rejections.stop();
       }
     },
   );
+
+  it.each(["throw", "reject"] as const)("contains a cancellation %s failure", async (mode) => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const failure = new Error("cancellation failed");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rejections = watchUnhandledRejections();
+    try {
+      await expect(runNextReconciliationJob({
+        store, reconcile: async () => {},
+        scheduleLeaseRenewal: () => () => {
+          if (mode === "reject") return Promise.reject(failure);
+          throw failure;
+        },
+      })).resolves.toBe("RECONCILED");
+      await surfaceUnhandledRejections();
+      expect(rejections.recorded).toEqual([]);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
+    } finally {
+      logged.mockRestore();
+      rejections.stop();
+    }
+  });
+
+  it("cancels a custom scheduler's own timer without a separate cancellation injection", async () => {
+    vi.useFakeTimers();
+    const { store } = createFakeStore({ jobs: [job()] });
+    try {
+      await expect(runNextReconciliationJob({
+        store, reconcile: async () => {},
+        scheduleLeaseRenewal(callback, everyMs) {
+          const timer = setInterval(callback, everyMs);
+          return () => clearInterval(timer);
+        },
+      })).resolves.toBe("RECONCILED");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels asynchronous setup that produces a timer after the outcome write", async () => {
+    vi.useFakeTimers();
+    const { store } = createFakeStore({ jobs: [job()] });
+    const setup = signal();
+    const written = signal();
+    const complete = store.completeReconciliationJob.bind(store);
+    store.completeReconciliationJob = async (id, token) => {
+      const result = await complete(id, token);
+      written.resolve();
+      return result;
+    };
+    const running = runNextReconciliationJob({
+      store, reconcile: async () => {},
+      async scheduleLeaseRenewal(callback, everyMs) {
+        await setup.promise;
+        const timer = setInterval(callback, everyMs);
+        return () => clearInterval(timer);
+      },
+    });
+    try {
+      await written.promise;
+      setup.resolve();
+      await expect(running).resolves.toBe("RECONCILED");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      setup.resolve();
+      await running;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { rejects: false, stopFirst: false }, { rejects: true, stopFirst: false },
+    { rejects: false, stopFirst: true }, { rejects: true, stopFirst: true },
+  ])("bounds renewal concurrency (rejects=$rejects, stopFirst=$stopFirst)", async ({ rejects, stopFirst }) => {
+    const { store, calls } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const enteredFold = signal();
+    const enteredRenewal = signal();
+    const releaseRenewal = signal();
+    const renew = store.renewReconciliationJobLease.bind(store);
+    let attempts = 0;
+    const failure = new Error("held renewal failed");
+    store.renewReconciliationJobLease = async (id, token) => {
+      await renew(id, token);
+      attempts += 1;
+      enteredRenewal.resolve();
+      if (attempts === 1) {
+        await releaseRenewal.promise;
+        if (rejects) throw failure;
+      }
+      return true;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const running = runNextReconciliationJob({
+      store, ...timer.dependencies,
+      reconcile: async () => { enteredFold.resolve(); await fold.promise; },
+    });
+    let pendingTick: Promise<void> | undefined;
+    try {
+      await enteredFold.promise;
+      pendingTick = timer.tick();
+      await enteredRenewal.promise;
+      await timer.tick();
+      await timer.tick();
+      expect(calls.filter(({ method }) => method === "renew")).toHaveLength(1);
+      if (stopFirst) {
+        fold.resolve();
+        await running;
+        expect(timer.cancellations).toBe(1);
+      }
+      releaseRenewal.resolve();
+      await pendingTick;
+      await timer.tick();
+      expect(calls.filter(({ method }) => method === "renew")).toHaveLength(stopFirst ? 1 : 2);
+      expect(logged).toHaveBeenCalledTimes(rejects ? 1 : 0);
+      if (rejects) expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
+    } finally {
+      releaseRenewal.resolve();
+      fold.resolve();
+      await pendingTick;
+      await running;
+      logged.mockRestore();
+    }
+  });
 });
 
 describe("draining the reconciliation queue", () => {
@@ -1020,6 +1158,8 @@ function createFakeStore(
       record("claim", []);
       return pending.shift() ?? null;
     },
+    // Interaction recorder only: PostgreSQL tests prove ownership/state guards;
+    // this fake deliberately does not model lease ownership or row lifecycle.
     renewReconciliationJobLease: async (jobId, leaseToken) => {
       record("renew", [jobId, leaseToken]);
       return true;
@@ -1105,23 +1245,32 @@ function signal() {
 }
 
 function createRenewalTimer() {
-  let fire: (() => void) | undefined;
+  let fire: (() => Promise<void>) | undefined;
   let intervalMs: number | undefined;
   let cancellations = 0;
+  const armed = signal();
   return {
     dependencies: {
-      scheduleLeaseRenewal(callback: () => void, everyMs: number) {
+      scheduleLeaseRenewal(callback: () => Promise<void>, everyMs: number) {
         fire = callback;
         intervalMs = everyMs;
+        armed.resolve();
+        return () => { cancellations += 1; };
       },
-      cancelLeaseRenewal() { cancellations += 1; },
     },
+    armed: armed.promise,
     get intervalMs() { return intervalMs; },
     get cancellations() { return cancellations; },
     async tick() {
-      // Deliberately retain the callback, to simulate a queued tick after stop.
-      fire?.();
-      await settle();
+      // Retain the callback to simulate a queued tick after stop; await the real
+      // renewal operation rather than a timer delay that guesses when it settled.
+      if (fire === undefined) throw new Error("Renewal timer was not armed");
+      await fire();
     },
   };
+}
+
+/** Yield only when Node must get a turn to emit an unhandledRejection event. */
+async function surfaceUnhandledRejections(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
