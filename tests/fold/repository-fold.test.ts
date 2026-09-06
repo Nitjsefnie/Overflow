@@ -558,7 +558,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
         createdAt: "2026-08-30T09:00:00.000Z",
-        closedAt: "2026-09-01T12:00:00.000Z",
+        closedAt: "2026-09-01T12:05:00.000Z",
         authorLogin: "sponsor",
         labels: ["M", "delivered/6"],
         history: [
