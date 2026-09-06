@@ -68,7 +68,10 @@ The connection is still connecting there, so the pending work is `initial`
 rather than `query` — `connect()` assigns it at line 114, and `query` is taken
 only inside the types fetch — and a slot of either kind is enough to send
 `end()` down its slow path, so the hang survives. Unreachable here: this
-repository's `DATABASE_URL` names a single host.
+repository's `DATABASE_URL` names a single host. That also means this route is
+**unreproduced and unfiled** — it is read off the package's source, nobody here
+has run it, and no issue tracks it, so treat it differently from the claims in
+this file that a probe and a test stand behind.
 
 ### A queued `reserve()` is dropped when the connection it waits on dies
 
@@ -171,9 +174,11 @@ keeps it in, so on its own it would widen the path rather than leave it alone. A
 later `onopen` would then shift a rejected reserve, call `resolve` on it — a
 no-op — and return **without moving the connection out of `connecting`**, leaving
 the pool a slot down. That connection is alive and idle where nothing looks for
-it, so the only thing that ends it is its own `max_lifetime` timer, started when
-its socket connected and defaulted by `max_lifetime()` in `src/index.js` to a
-random 30 to 60 minutes; every caller in between finds the pool full.
+it, and with no `idle_timeout` configured — `src/lib/db/client.ts` passes only
+`max` for both pools, so the package's idle timer is a noop pair — the only thing
+that ends it is its own `max_lifetime` timer, started when its socket connected
+and defaulted by `max_lifetime()` in `src/index.js` to a random 30 to 60 minutes;
+every caller in between finds the pool full.
 
 The `reserve()` hunk closes it: the pseudo-query leaves `queries` at the moment it
 is rejected, so the connection that opens afterwards finds either the next queued
@@ -196,11 +201,11 @@ process, on `main` as well as on this patch before this hunk.
   carry no `peek` in their `queue.js` — the same as on `main`, so this is a
   standing property of the patch rather than something a release regressed. It
   does not bite today: the package's `exports` map sends `import` to `src/`, and
-  `next build` bundles that build into every server chunk that reaches the client,
-  the edge chunk included. Reaching `postgres` through `require` (`default` →
-  `cjs/src/index.js`) or under the `workerd` condition (`cf/src/index.js`) would
-  silently get the unpatched client, so re-check this before moving anything that
-  talks to the database onto either route.
+  `next build` bundles that build into every server chunk that reaches the
+  `postgres` client, the edge chunk included. Reaching `postgres` through
+  `require` (`default` → `cjs/src/index.js`) or under the `workerd` condition
+  (`cf/src/index.js`) would silently get the unpatched client, so re-check this
+  before moving anything that talks to the database onto either route.
 - **The patch file and `pnpm-lock.yaml` move together.** The lockfile pins the
   patch by content hash, so hand-editing the patch without re-running
   `pnpm patch-commit` makes `pnpm install --frozen-lockfile` fail.
