@@ -504,6 +504,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
       state: node.state, mergedAt: node.mergedAt, mergeCommitOid: node.mergeCommit.oid,
       finalCommitAt: node.commits.nodes[0]!.commit.committedDate, authorLogin: node.author!.login,
       authorGitHubUserId: node.author!.databaseId,
+      repositoryNameWithOwner: node.repository.nameWithOwner,
     })));
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
@@ -879,6 +880,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         finalCommitAt: "2026-09-04T10:00:00.000Z",
         authorLogin: "contributor",
         authorGitHubUserId: 7001,
+        repositoryNameWithOwner: "octo/overflow",
       },
     ]);
     expect(query).toMatch(/closedByPullRequestsReferences\(first:\s*100/);
@@ -971,6 +973,65 @@ describe("GitHubGateway GraphQL source adapter", () => {
       ]);
     },
   );
+
+  it("carries the owning repository of a closing pull request that lives elsewhere", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: {
+          repository: {
+            issue: {
+              closedByPullRequestsReferences: {
+                nodes: [
+                  pullRequestNode(201, 4),
+                  { ...pullRequestNode(202, 5), repository: { nameWithOwner: "other/fork" } },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(
+      gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 201, repositoryNameWithOwner: "octo/overflow" }),
+      expect.objectContaining({ id: 202, repositoryNameWithOwner: "other/fork" }),
+    ]);
+  });
+
+  it.each([
+    { name: "an absent repository", repository: undefined },
+    { name: "a null repository", repository: null },
+    { name: "a null nameWithOwner", repository: { nameWithOwner: null } },
+    { name: "a numeric nameWithOwner", repository: { nameWithOwner: 42 } },
+    { name: "a blank nameWithOwner", repository: { nameWithOwner: "   " } },
+    { name: "an empty nameWithOwner", repository: { nameWithOwner: "" } },
+    { name: "a bare owner", repository: { nameWithOwner: "octo" } },
+    { name: "a three-segment nameWithOwner", repository: { nameWithOwner: "octo/overflow/extra" } },
+    { name: "an owner with no name", repository: { nameWithOwner: "octo/" } },
+  ])("rejects a closing pull request with $name", async ({ repository }) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: {
+          repository: {
+            issue: {
+              closedByPullRequestsReferences: {
+                nodes: [{ ...pullRequestNode(201, 4), repository }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1))
+      .rejects.toThrow("GitHub GraphQL response was invalid.");
+  });
 
   it("carries the exact merge commit OID and final PR commit time from GraphQL", async () => {
     let query = "";
@@ -1319,6 +1380,7 @@ function pullRequestNode(
       nodes: [{ commit: { committedDate: "2026-09-04T10:00:00.000Z" } }],
     },
     author,
+    repository: { nameWithOwner: "octo/overflow" },
   };
 }
 

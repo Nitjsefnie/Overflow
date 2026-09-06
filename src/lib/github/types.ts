@@ -83,6 +83,13 @@ export type GitHubPullRequest = {
   authorLogin: string | null;
   /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin). */
   authorGitHubUserId: number | null;
+  /**
+   * GraphQL `Repository.nameWithOwner` (`"owner/name"`) of the repository this
+   * pull request lives in. A closing reference can name a pull request in a
+   * different repository, so its evidence must never be read from the
+   * registered one.
+   */
+  repositoryNameWithOwner: string;
 };
 
 export type GitHubWebhook = {

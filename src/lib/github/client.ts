@@ -475,6 +475,7 @@ type GitHubGraphqlPullRequestNode = {
   mergeCommit: { oid: string } | null;
   commits: { nodes: Array<{ commit: { committedDate: string } }> };
   author: { login: string; databaseId?: number | null } | null;
+  repository: { nameWithOwner: unknown } | null;
 };
 
 type GitHubGraphqlIssueTimelineNode =
@@ -549,6 +550,7 @@ const issuesQuery = `
                 nodes { commit { committedDate } }
               }
               author { login ... on User { databaseId } }
+              repository { nameWithOwner }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -594,6 +596,7 @@ const closingPullRequestsQuery = `
               nodes { commit { committedDate } }
             }
             author { login ... on User { databaseId } }
+            repository { nameWithOwner }
           }
           pageInfo { hasNextPage endCursor }
         }
@@ -733,7 +736,20 @@ function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequ
     finalCommitAt: node.commits.nodes.at(-1)?.commit.committedDate ?? null,
     authorLogin: node.author?.login ?? null,
     authorGitHubUserId: authorGitHubUserId(node.author),
+    repositoryNameWithOwner: repositoryNameWithOwner(node),
   };
+}
+
+/**
+ * A closing reference can name a pull request in another repository, so the
+ * owning repository is as load-bearing as the number and must be present.
+ */
+function repositoryNameWithOwner(node: GitHubGraphqlPullRequestNode): string {
+  const nameWithOwner = node.repository?.nameWithOwner;
+  if (typeof nameWithOwner !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(nameWithOwner)) {
+    throw new Error("GitHub GraphQL response was invalid.");
+  }
+  return nameWithOwner;
 }
 
 function authorGitHubUserId(author: GitHubGraphqlPullRequestNode["author"]): number | null {
