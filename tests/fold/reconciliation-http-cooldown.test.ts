@@ -99,8 +99,10 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
     let changed = false;
     const server = createServer(async (request, response) => {
       try {
-        // Identity verification precedes the crawl and is not one of the counted calls.
         if (request.url === `/repositories/${fixture.githubRepositoryId}`) {
+          // Counted like every other request: a cooled-down run must issue no GitHub
+          // traffic at all, identity verification included.
+          calls.push({ operation: "identity", cursor: null });
           response.writeHead(200, { "Content-Type": "application/json" });
           response.end(JSON.stringify(verifiedRepositoryPayload(fixture.githubRepositoryId, fixture.ownerName)));
           return;

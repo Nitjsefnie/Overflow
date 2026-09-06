@@ -506,6 +506,24 @@ describe("reconcileRepository", () => {
     expect(dependencies.github.listIssues).not.toHaveBeenCalled();
     expect(dependencies.store.materialize).not.toHaveBeenCalled();
     expect(dependencies.store.completeRun).toHaveBeenCalledWith("run-1");
+    // Moderation is not unavailability: a repository GitHub still serves must not be
+    // stamped unavailable, nor spend a request, because a moderator switched it off.
+    expect(dependencies.github.getRepositoryById).not.toHaveBeenCalled();
+    expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("spends nothing on a repository still inside its cooldown", async () => {
+    const dependencies = reconciliationDependencies();
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    vi.mocked(dependencies.store.getReconciliationCooldown)
+      .mockResolvedValue(new Date(now().getTime() + 1));
+
+    const summary = await reconcileRepository({ ...dependencies, now }, "repository");
+
+    expect(summary).toMatchObject({ skipped: true, runId: null, adds: 0, changes: 0, removals: 0 });
+    expect(dependencies.store.beginRun).not.toHaveBeenCalled();
+    expect(dependencies.github.getRepositoryById).not.toHaveBeenCalled();
+    expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
   });
 
   it.each(["BANNED", "RECALIBRATING"] as const)(
