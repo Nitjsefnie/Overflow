@@ -51,7 +51,8 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
 ];
 
 /**
- * A short lease renewed while the fold and its outcome write are in flight.
+ * A short lease renewed while the fold and its outcome write are in flight,
+ * up to RECONCILIATION_LEASE_MAX_RENEWAL_MS after the claim.
  *
  * Renewing every five seconds lets a live-but-slow fold keep ownership. A dead
  * worker stops renewing: expiry makes its job claimable within the twenty-second
@@ -67,6 +68,20 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
  */
 export const RECONCILIATION_LEASE_MS = 20_000;
 export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
+
+/**
+ * Heartbeats prove liveness, not progress: a fold awaiting hung I/O can renew
+ * forever. Ten minutes is roughly eleven times the observed fifty-two-second
+ * fold, allowing slow folds while bounding renewal at a third of the old
+ * thirty-minute lease. After the cap, the last twenty-second lease expires.
+ *
+ * This surrenders the job; it does not unwedge the fold or rescue its repository.
+ * A hung fold still holds the advisory lock. A reclaimer hits the sixty-second
+ * lock deadline and enters retry backoff, eventually reaching FAILED after
+ * enough attempts, with a visible last_failure_at. That is the same end state
+ * as under the old lease, reached sooner instead of renewing RUNNING forever.
+ */
+export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 
 /**
  * How often the worker looks for a job.
@@ -169,6 +184,8 @@ function startLeaseRenewal(
   dependencies: ReconciliationWorkerDependencies,
   job: ClaimedReconciliationJob,
 ): () => Promise<void> {
+  const now = dependencies.now ?? (() => new Date());
+  const claimedAt = now().getTime();
   let stopped = false;
   let renewing = false;
   let cancel: LeaseRenewalCancellation | undefined;
@@ -186,7 +203,12 @@ function startLeaseRenewal(
     })();
   };
   const renew = async () => {
-    if (stopped || renewing) return;
+    if (stopped) return;
+    if (now().getTime() - claimedAt >= RECONCILIATION_LEASE_MAX_RENEWAL_MS) {
+      void stop();
+      return;
+    }
+    if (renewing) return;
     renewing = true;
     try {
       const renewed = await dependencies.store.renewReconciliationJobLease(job.id, job.leaseToken);
