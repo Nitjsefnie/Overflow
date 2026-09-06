@@ -271,3 +271,128 @@ describe("GitHubGateway REST transport", () => {
     expect(request?.headers.get("accept")).toBe("application/vnd.github.v3.diff");
   });
 });
+
+describe("GitHubGateway repository resolution by id", () => {
+  it("reads the repository GitHub currently holds under a registered numeric id", async () => {
+    let capturedRequest: Request | undefined;
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input, init) => {
+        capturedRequest = new Request(input, init);
+        return Response.json({
+          id: 42,
+          name: "overflow",
+          full_name: "renamed-owner/overflow",
+          private: false,
+          html_url: "https://github.com/renamed-owner/overflow",
+          owner: { login: "renamed-owner", type: "Organization" },
+          permissions: { admin: true },
+        });
+      },
+    });
+
+    await expect(gateway.getRepositoryById(42)).resolves.toEqual({
+      id: 42,
+      owner: "renamed-owner",
+      ownerType: "ORGANIZATION",
+      name: "overflow",
+      fullName: "renamed-owner/overflow",
+      visibility: "PUBLIC",
+      url: "https://github.com/renamed-owner/overflow",
+      canAdminister: true,
+    });
+
+    expect(capturedRequest?.url).toBe("https://api.github.com/repositories/42");
+    expect(capturedRequest?.headers.get("accept")).toBe("application/vnd.github+json");
+    expect(capturedRequest?.headers.get("x-github-api-version")).toBe("2022-11-28");
+    expect(capturedRequest?.headers.get("authorization")).toBe("Bearer test-access-token");
+  });
+
+  it("reports a repository that has turned private", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        id: 42,
+        name: "overflow",
+        full_name: "octo/overflow",
+        private: true,
+        html_url: "https://github.com/octo/overflow",
+        owner: { login: "octo" },
+      }),
+    });
+
+    await expect(gateway.getRepositoryById(42)).resolves.toMatchObject({
+      visibility: "PRIVATE",
+      canAdminister: false,
+    });
+  });
+
+  it("answers null when GitHub no longer serves the numeric id", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response('{"message":"Not Found"}', { status: 404 }),
+    });
+
+    await expect(gateway.getRepositoryById(42)).resolves.toBeNull();
+  });
+
+  it.each([403, 429, 500, 502, 503])(
+    "propagates HTTP %s rather than reporting the repository as gone",
+    async (status) => {
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async () => new Response("private-body", { status }),
+      });
+
+      const error = await gateway.getRepositoryById(42).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(GitHubApiError);
+      expect(error).toMatchObject({ status, rateLimited: false });
+    },
+  );
+
+  it("propagates a throttled response as a rate-limited error", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response("private-body", {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0", "retry-after": "60" },
+      }),
+    });
+
+    const error = await gateway.getRepositoryById(42).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toMatchObject({ status: 403, rateLimited: true, retryAfterSeconds: 60 });
+  });
+
+  it("propagates a timeout rather than reporting the repository as gone", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      timeoutMs: 1,
+      fetch: async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    });
+
+    await expect(gateway.getRepositoryById(42)).rejects.toThrow("GitHub request timed out.");
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2])(
+    "refuses to place %s in the request path",
+    async (githubRepositoryId) => {
+      const requestedUrls: string[] = [];
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async (input) => {
+          requestedUrls.push(String(input));
+          return Response.json({});
+        },
+      });
+
+      await expect(gateway.getRepositoryById(githubRepositoryId)).rejects.toThrow(
+        "GitHub repository id must be a positive safe integer.",
+      );
+      expect(requestedUrls).toEqual([]);
+    },
+  );
+});
