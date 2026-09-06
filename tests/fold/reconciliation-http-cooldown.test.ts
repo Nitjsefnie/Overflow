@@ -4,6 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeSql, getSql } from "@/lib/db/client";
 import { GitHubGateway } from "@/lib/github/client";
+import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
 import { sweepReconciliations } from "@/lib/fold/sweep";
@@ -98,6 +99,12 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
     let changed = false;
     const server = createServer(async (request, response) => {
       try {
+        // Identity verification precedes the crawl and is not one of the counted calls.
+        if (request.url === `/repositories/${fixture.githubRepositoryId}`) {
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(verifiedRepositoryPayload(fixture.githubRepositoryId, fixture.ownerName)));
+          return;
+        }
         if (request.method === "GET") {
           calls.push({ operation: "diff", cursor: null });
           response.end(changed ? "changed diff" : "original diff");

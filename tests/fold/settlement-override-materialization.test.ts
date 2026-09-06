@@ -9,12 +9,14 @@ import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reco
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview } from "@/lib/github/types";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import { encryptToken } from "@/lib/security/token-cipher";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 21).toString("base64url");
 
+const repositoryOwnerName = "example/overrides";
 const sponsorLogin = "override-sponsor";
 const contributorLogin = "override-contributor";
 const disputedIssueId = 8_100_001;
@@ -245,7 +247,7 @@ async function insertRepository(sponsorId: string): Promise<string> {
       github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme
     )
     values (
-      ${8_300_001}, ${"example/overrides"}, ${sponsorId}, ${"PUBLIC"}, ${8_300_002},
+      ${8_300_001}, ${repositoryOwnerName}, ${sponsorId}, ${"PUBLIC"}, ${8_300_002},
       ${sql.json(difficultyScheme())}::jsonb
     )
     returning id
@@ -286,6 +288,7 @@ function gateway(): ReconciliationGateway {
     { id: 8_400_001, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
   ];
   return {
+    getRepositoryById: verifiedRepositoryAt(repositoryOwnerName),
     listIssues: async () => issues.map((issue) => ({
       ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
     })),

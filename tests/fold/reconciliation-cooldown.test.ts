@@ -3,6 +3,7 @@ import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
+import { verifiedRepositoryAt } from "../support/verified-repository";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -194,6 +195,7 @@ async function cooledRepository() {
   await store.setReconciliationCooldown(repositoryId, notBefore);
   const calls: string[] = [];
   const github: ReconciliationGateway = {
+    getRepositoryById: verifiedRepositoryAt(ownerName),
     listIssues: async () => { calls.push("issues"); return []; },
     getPullRequestReviews: async () => { calls.push("reviews"); return []; },
     getPullRequestDiff: async () => { calls.push("diff"); return ""; },
