@@ -274,6 +274,169 @@ describe("GitHubGateway REST transport", () => {
 });
 
 describe("GitHubGateway workflow files", () => {
+  it("reads a zero-byte workflow as empty evidence text", async () => {
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return requestedUrls.length === 1
+          ? Response.json([{ type: "file", name: "empty.yml", path: ".github/workflows/empty.yml", size: 0 }])
+          : new Response(null);
+      },
+    });
+
+    await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).resolves.toEqual([
+      { path: ".github/workflows/empty.yml", content: "" },
+    ]);
+    expect(requestedUrls).toHaveLength(2);
+  });
+
+  it.each([
+    ["CRLF line endings", "on: issue_comment\r\njobs:\r\n  claim:\r\n"],
+    ["more than 1 KiB", `on: issue_comment\n# ${"x".repeat(2048)}\n`],
+  ])("returns raw text with %s unchanged", async (_label, content) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => String(input).endsWith("/workflows")
+        ? Response.json([{ type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: content.length }])
+        : new Response(content),
+    });
+
+    const workflows = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" });
+    expect(workflows[0]?.content).toBe(content);
+  });
+
+  it("selects the first 50 paths even when filename order disagrees", async () => {
+    const paths = Array.from({ length: 51 }, (_, index) => `.github/workflows/${String(index).padStart(2, "0")}.yml`);
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return requestedUrls.length === 1
+          ? Response.json(paths.map((path, index) => ({
+            type: "file", name: `${String(50 - index).padStart(2, "0")}.yml`, path, size: 10,
+          })))
+          : new Response("workflow text");
+      },
+    });
+
+    const workflows = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" });
+    expect(workflows.map(({ path }) => path)).toEqual(paths.slice(0, 50));
+    expect(requestedUrls).toEqual([
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows",
+      ...paths.slice(0, 50).map((path) => `https://api.github.com/repos/octo/overflow/contents/${path}`),
+    ]);
+  });
+
+  it("uses code-unit order to select A.yml over a.yml at the 50-file cutoff", async () => {
+    const names = Array.from({ length: 49 }, (_, index) => `${String(index).padStart(2, "0")}.yml`);
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return requestedUrls.length === 1
+          ? Response.json([...names, "a.yml", "A.yml"].map((name) => ({
+            type: "file", name, path: `.github/workflows/${name}`, size: 10,
+          })))
+          : new Response("workflow text");
+      },
+    });
+
+    const workflows = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" });
+    expect(workflows).toHaveLength(50);
+    expect(workflows[49]?.path).toBe(".github/workflows/A.yml");
+    expect(requestedUrls).not.toContain("https://api.github.com/repos/octo/overflow/contents/.github/workflows/a.yml");
+  });
+
+  it("cancels an oversized raw stream, skips it, and preserves a byte-boundary UTF-8 file", async () => {
+    const boundaryText = "🙂".repeat(65536);
+    const boundaryBytes = new TextEncoder().encode(boundaryText);
+    let oversizedPulls = 0;
+    let oversizedCancelled = false;
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (requestedUrls.length === 1) {
+          return Response.json([
+            { type: "file", name: "a.yml", path: ".github/workflows/a.yml", size: 1 },
+            { type: "file", name: "b.yml", path: ".github/workflows/b.yml", size: 1 },
+          ]);
+        }
+        if (url.endsWith("/a.yml")) {
+          return new Response(new ReadableStream<Uint8Array>({
+            pull(controller) {
+              oversizedPulls += 1;
+              if (oversizedPulls === 1) controller.enqueue(boundaryBytes);
+              else if (oversizedPulls === 2) controller.enqueue(new Uint8Array([120]));
+              else controller.close();
+            },
+            cancel() { oversizedCancelled = true; },
+          }, { highWaterMark: 0 }));
+        }
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            // Split a multibyte code point between chunks to exercise decoding.
+            controller.enqueue(boundaryBytes.slice(0, 131073));
+            controller.enqueue(boundaryBytes.slice(131073));
+            controller.close();
+          },
+        }));
+      },
+    });
+
+    const workflows = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" });
+    expect(oversizedCancelled).toBe(true);
+    expect(oversizedPulls).toBe(2);
+    expect(workflows).toEqual([{ path: ".github/workflows/b.yml", content: boundaryText }]);
+    expect(requestedUrls).toHaveLength(3);
+  });
+
+  it.each([null, {}, "not an array"])("treats a non-array listing %j as no evidence", async (listing) => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json(listing),
+    });
+
+    await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).resolves.toEqual([]);
+  });
+
+  it.each([
+    ["null entry", null],
+    ["missing path", { type: "file", name: "claim.yml", size: 20 }],
+    ["empty path", { type: "file", name: "claim.yml", path: "", size: 20 }],
+    ["null size", { type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: null }],
+    ["negative size", { type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: -1 }],
+    ["string size", { type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: "20" }],
+    ["fractional size", { type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: 1.5 }],
+    ["non-string name", { type: "file", name: ["claim.yml"], path: ".github/workflows/claim.yml", size: 20 }],
+  ])("skips a malformed %s and still reads valid entries", async (_label, entry) => {
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        if (requestedUrls.length === 1) {
+          return Response.json([entry, { type: "file", name: "valid.yml", path: ".github/workflows/valid.yml", size: 10 }]);
+        }
+        return new Response("workflow text");
+      },
+    });
+
+    await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).resolves.toEqual([
+      { path: ".github/workflows/valid.yml", content: "workflow text" },
+    ]);
+    expect(requestedUrls).toEqual([
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows",
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows/valid.yml",
+    ]);
+  });
+
   it.each(["ascending", "descending"])("reads only the first 50 eligible paths from an %s listing", async (order) => {
     const names = Array.from({ length: 52 }, (_, index) => `${String(index).padStart(2, "0")}.yml`);
     const entries = names.map((name) => ({ type: "file", name, path: `.github/workflows/${name}`, size: 10 }));
@@ -316,6 +479,7 @@ describe("GitHubGateway workflow files", () => {
     ["notes.txt", "file"],
     ["README.md", "file"],
     ["claim.yml.txt", "file"],
+    ["claim-yml", "file"],
     ["nested.yml", "dir"],
     ["linked.yaml", "symlink"],
   ])("does not read %s entries of type %s", async (name, type) => {
@@ -448,7 +612,7 @@ describe("GitHubGateway workflow files", () => {
     await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).rejects.toBe(upstreamError);
   });
 
-  it("propagates a file-read 404 instead of treating it as an absent directory", async () => {
+  it.each([404, 500])("propagates a file-read HTTP %s instead of skipping the file", async (status) => {
     const requestedUrls: string[] = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -459,11 +623,11 @@ describe("GitHubGateway workflow files", () => {
             { type: "file", name: "claim.yml", path: ".github/workflows/claim.yml", size: 20 },
           ]);
         }
-        return new Response("Not Found", { status: 404 });
+        return new Response("File read failed", { status });
       },
     });
 
-    await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).rejects.toMatchObject({ status: 404 });
+    await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).rejects.toMatchObject({ status });
     expect(requestedUrls).toHaveLength(2);
   });
 });
