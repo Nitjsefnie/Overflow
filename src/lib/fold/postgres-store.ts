@@ -165,35 +165,77 @@ const repositoryLockNamespace = 684029183;
 const repositoryCoordinationFailure = "Unable to coordinate repository reconciliation.";
 
 /**
+ * Reports a coordination statement that did not do its job.
+ *
+ * Every one of these is swallowed — the caller only ever sees `repositoryCoordinationFailure` —
+ * so without this line an operator sees a refused reconciliation with no reason for it, while the
+ * coordination pool quietly loses connections.
+ */
+function warnCoordinationStatementFailed(
+  repositoryId: string,
+  statement: string,
+  cause: unknown,
+): void {
+  console.warn(
+    `Reconciliation coordination for repository ${repositoryId}: ${statement} failed.`,
+    cause,
+  );
+}
+
+/**
  * Takes back every session-level lock a reserved coordination connection may still hold, and
  * answers whether the connection is fit to serve another caller.
  *
- * `pg_advisory_unlock_all()` goes first because a session that answers it holds no advisory lock
- * at all and stays usable. It is a different function from the targeted unlock that just failed,
- * so whatever stopped that one need not stop this one.
+ * Three stages, each reached only because the one before it did not answer:
  *
- * When even that does not answer, nothing on the session can be trusted to give the lock up and
- * the session itself has to end. A role may always signal its own backends, so terminating does
- * not depend on any grant. Self-termination makes the statement fail — the server sends a FATAL
- * and closes the socket — so that rejection is the success signal and is swallowed. The caller
- * must then never release the connection: postgres.js returns a closed connection to the pool on
- * its own and reconnects it on next use, whereas `release()` would push a session that may still
- * hold the lock back onto the pool's open queue for the next caller to reserve.
+ * 1. `pg_advisory_unlock_all()`, a different function from the targeted unlock that just failed,
+ *    so whatever stopped that one need not stop this one.
+ * 2. `DISCARD ALL`, which releases every session-level advisory lock as part of its definition.
+ *    It is a utility statement rather than a function call, so `REVOKE EXECUTE` cannot reach it.
+ *    It also resets the session's prepared statements; postgres.js re-prepares on
+ *    `FetchPreparedStatement`, so the connection keeps answering afterwards.
+ * 3. `pg_terminate_backend(pg_backend_pid())`, which drops the locks along with the session.
+ *    Terminating the session a statement runs on makes that statement fail — the server sends a
+ *    FATAL and closes the socket — so the rejection is the expected shape of success.
+ *
+ * A session that answers stage 1 or stage 2 holds no advisory lock and still works, so it is fit
+ * to release. After stage 3 it is not, and the caller must never release it: postgres.js returns a
+ * closed connection to the pool on its own and reconnects it on next use, whereas `release()`
+ * would push a session that may still hold the lock onto the pool's open queue.
+ *
+ * `EXECUTE` on `pg_terminate_backend` is revocable like any other function's, so stage 3 can be
+ * denied as well. Nothing is left to try then: the lock stays granted on a live session and the
+ * connection is retired unreleased, costing the coordination pool a connection until the process
+ * restarts. The warnings this function emits are the only trace of it.
  */
 async function reclaimCoordinationConnection(
   connection: Awaited<ReturnType<SqlClient["reserve"]>>,
+  repositoryId: string,
 ): Promise<boolean> {
   try {
     await connection`select pg_advisory_unlock_all()`;
     return true;
-  } catch {
-    // Nothing on this session can be trusted to give the lock up, so the session itself has to go.
+  } catch (cause) {
+    warnCoordinationStatementFailed(repositoryId, "pg_advisory_unlock_all", cause);
+  }
+
+  try {
+    await connection.unsafe("discard all");
+    return true;
+  } catch (cause) {
+    warnCoordinationStatementFailed(repositoryId, "DISCARD ALL", cause);
   }
 
   try {
     await connection`select pg_terminate_backend(pg_backend_pid())`;
-  } catch {
-    // The session is gone, which is the whole point of asking.
+  } catch (cause) {
+    // Success and denial look the same from here — both arrive as a rejection — so the cause is
+    // reported rather than judged.
+    console.warn(
+      `Reconciliation coordination for repository ${repositoryId}: asked the session still holding `
+      + "the repository lock to end, and retired the connection without releasing it.",
+      cause,
+    );
   }
 
   return false;
@@ -295,7 +337,15 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
                 ) as released
               `;
               released = unlock?.released === true;
-            } catch {
+              if (!released) {
+                warnCoordinationStatementFailed(
+                  repositoryId,
+                  "pg_advisory_unlock",
+                  { released: unlock?.released },
+                );
+              }
+            } catch (cause) {
+              warnCoordinationStatementFailed(repositoryId, "pg_advisory_unlock", cause);
               released = false;
             }
             if (!released) {
@@ -316,7 +366,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       } finally {
         // A connection whose session might still hold the repository's lock never goes back into
         // the pool; `reclaimCoordinationConnection` says whether this one is fit to.
-        if (!lockMayStillBeHeld || await reclaimCoordinationConnection(connection)) {
+        if (!lockMayStillBeHeld || await reclaimCoordinationConnection(connection, repositoryId)) {
           connection.release();
         }
       }
