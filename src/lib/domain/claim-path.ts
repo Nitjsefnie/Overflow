@@ -3,7 +3,11 @@ import { parse } from "yaml";
 export type ClaimPathEvidence = { path: string; content: string };
 export type ClaimPathAssessment = "PRESENT" | "ABSENT";
 
-const assignmentSurface = /\bissues\/[^/\r\n]+\/assignees(?=$|[/?#\s"'`])|\baddAssigneesToAssignable\b|\bissues\.addAssignees\b/;
+// PATCHing an issue with an assignees body is deliberately not evidence: matching
+// a bare issue URL and a nearby field would admit too many false positives.
+const assigneesCollection = /(?<![\w.~%+-])issues\/[^/\r\n]+\/assignees(?![\w.~%+-])/;
+const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
+const deletion = /(?:-X|--method)\s+DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
 
 export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
   for (const { content } of workflows) {
@@ -24,7 +28,12 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
       || (Array.isArray(trigger) && trigger.includes("issue_comment"))
       || (trigger instanceof Map && trigger.has("issue_comment"));
 
-    if (reactsToComments && assignmentSurface.test(content)) {
+    // The REST heuristic excludes deletion on the same line only. Named additive
+    // calls are independent of that exclusion and may span multiple lines.
+    const assigns = additiveCall.test(content) || content.split(/\r?\n/).some(
+      (line) => assigneesCollection.test(line) && !deletion.test(line),
+    );
+    if (reactsToComments && assigns) {
       return "PRESENT";
     }
   }

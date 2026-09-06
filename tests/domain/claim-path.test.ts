@@ -6,7 +6,7 @@ const restAssignment = 'gh api -X POST "repos/$REPO/issues/$ISSUE/assignees"';
 function workflow(trigger: string, assignment = restAssignment) {
   return {
     path: ".github/workflows/claim.yml",
-    content: `${trigger}\njobs:\n  claim:\n    steps:\n      - run: |\n          ${assignment}\n`,
+    content: `${trigger}\njobs:\n  claim:\n    steps:\n      - run: |\n          ${assignment.replaceAll("\n", "\n          ")}\n`,
   };
 }
 
@@ -60,6 +60,72 @@ describe("claim path assessment", () => {
       workflow("on: issue_comment", "echo hello"),
       workflow("on: issues"),
     ])).toBe("ABSENT");
+  });
+
+  it.each([
+    ["semicolon", 'gh api -X POST -f "assignees[]=$ACTOR" repos/$REPO/issues/$ISSUE/assignees; echo assigned'],
+    ["line continuation", 'gh api -X POST repos/$REPO/issues/$ISSUE/assignees\\\n  -f "assignees[]=$ACTOR"'],
+  ])("accepts a REST collection followed by a %s", (_terminator, assignment) => {
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+  });
+
+  it("rejects a REST URL with a hyphenated non-issues segment", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api example.com/non-issues/123/assignees")])).toBe("ABSENT");
+  });
+
+  it("accepts an Octokit member access split across lines", () => {
+    const assignment = "await github.rest.issues\n  . addAssignees({ owner, repo, issue_number, assignees });";
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+  });
+
+  it.each([
+    '-X DELETE',
+    '--method DELETE',
+    '-x delete',
+    '--METHOD delete',
+    'removeAssignees',
+    'REMOVEASSIGNEESFROMASSIGNABLE',
+  ])("rejects a REST collection line naming deletion with %s", (deletion) => {
+    expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$REPO/issues/$ISSUE/assignees"`)])).toBe("ABSENT");
+  });
+
+  it("rejects a REST collection with an empty issue identifier", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api issues//assignees")])).toBe("ABSENT");
+  });
+
+  it("rejects a REST collection with a nonissues prefix", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api nonissues/42/assignees")])).toBe("ABSENT");
+  });
+
+  it("rejects a GraphQL mutation name with an extra suffix", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "addAssigneesToAssignableDisabled")])).toBe("ABSENT");
+  });
+
+  it("rejects a slash instead of Octokit member access", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "issues/addAssignees")])).toBe("ABSENT");
+  });
+
+  it("rejects an Octokit method name with an extra suffix", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", "issues.addAssigneesDisabled")])).toBe("ABSENT");
+  });
+
+  it("rejects malformed YAML even when raw text contains both signals", () => {
+    expect(assessClaimPath([{
+      path: ".github/workflows/broken.yml",
+      content: "on: [issue_comment\n# issues.addAssignees",
+    }])).toBe("ABSENT");
+  });
+
+  it("continues past a valid non-qualifying workflow", () => {
+    expect(assessClaimPath([workflow("on: issues"), workflow("on: issue_comment")])).toBe("PRESENT");
+  });
+
+  it("rejects a sequence trigger containing only issues", () => {
+    expect(assessClaimPath([workflow("on: [issues]")])).toBe("ABSENT");
+  });
+
+  it("rejects a mapping trigger containing only issues", () => {
+    expect(assessClaimPath([workflow("on: { issues: { types: [opened] } }")])).toBe("ABSENT");
   });
 
   it.each([
