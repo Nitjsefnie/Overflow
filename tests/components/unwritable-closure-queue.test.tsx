@@ -35,9 +35,22 @@ function closure(overrides: Partial<UnwritableClosureProjection> = {}): Unwritab
     pullRequest: { number: 18, title: "Repair the gate", url: "https://github.com/co-op/harbour/pull/18" },
     settlementId: "settlement-1",
     settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
+    calibrationId: null,
+    calibrationOwnerLogin: null,
     latestCorrection: null,
     ...overrides,
   };
+}
+
+/** A closure the sponsor closed themselves: a calibration stands where the settlement would. */
+function selfWorked(overrides: Partial<UnwritableClosureProjection> = {}): UnwritableClosureProjection {
+  return closure({
+    settlementId: null,
+    settlementParties: null,
+    calibrationId: "calibration-1",
+    calibrationOwnerLogin: "grace",
+    ...overrides,
+  });
 }
 
 describe("unwritable closure queue", () => {
@@ -118,6 +131,31 @@ describe("unwritable closure queue", () => {
   });
 });
 
+describe("self-worked closure in the queue", () => {
+  it("links the calibration and names the sponsor as the only account that can correct it", () => {
+    render(<UnwritableClosureQueue closures={[selfWorked()]} />);
+
+    const entry = within(screen.getByRole("listitem"));
+    expect(entry.getByRole("link", { name: "Open the calibration to request a correction" })).toHaveAttribute(
+      "href",
+      "/calibration/calibration-1",
+    );
+    const explanation = entry.getByText(/Only the sponsor can request a correction:/);
+    expect(explanation).toHaveTextContent("Only the sponsor can request a correction: grace.");
+    expect(Array.from(explanation.querySelectorAll("code"), (code) => code.textContent)).toEqual(["grace"]);
+    expect(entry.queryByText(/No settlement is materialized for this closure/)).toBeNull();
+    expect(entry.queryByRole("link", { name: "Open the settlement to request a correction" })).toBeNull();
+  });
+
+  it("shows the latest correction against a self-worked closure", () => {
+    render(<UnwritableClosureQueue closures={[selfWorked({
+      latestCorrection: { state: "GRANTED", requestedAt: "2026-09-05T12:00:00.000Z" },
+    })]} />);
+
+    expect(screen.getByText("Correction granted · reported 2026-09-05T12:00:00.000Z")).toBeVisible();
+  });
+});
+
 describe("moderation closure section", () => {
   it("loads the closure queue between settlement corrections and recalibration", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
@@ -137,6 +175,8 @@ describe("moderation closure section", () => {
         settlement_id: "settlement-1",
         creditor_login: "mira",
         debtor_login: "quinn",
+        calibration_id: null,
+        calibration_owner_login: null,
         correction_state: null,
         correction_requested_at: null,
       }];
