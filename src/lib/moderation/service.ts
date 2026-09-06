@@ -338,8 +338,33 @@ function normalizeOpenInput(input: OpenAccountAuditInput): NormalizedAuditWindow
   return { ...normalizeAuditWindow(input), reason: normalizeReason(input.reason) };
 }
 
+/**
+ * The ISO 8601 subset a sample-window bound may use: a full date-time closed by either the
+ * UTC designator or a numeric offset, at minute, second or millisecond precision.
+ *
+ * Anything looser is refused rather than resolved. ECMAScript resolves a date-time carrying
+ * no offset in the timezone of the server process, so `2026-01-01T00:00` would name a
+ * different instant on a Europe/Prague host than on a UTC one, and the bounds decide which
+ * merged pairs enter an audit's calibration cohort. A date-only bound is refused for the
+ * same reason: its UTC default is a spec quirk rather than something a caller stated.
+ */
+const SAMPLE_WINDOW_BOUND_PATTERN =
+  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
 function normalizeTimestamp(value: unknown, label: string): string {
   if (typeof value !== "string") {
+    throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
+  }
+  const bound = SAMPLE_WINDOW_BOUND_PATTERN.exec(value);
+  if (bound === null) {
+    throw new ModerationServiceError(
+      "INVALID_INPUT",
+      `${label} must be an ISO 8601 timestamp with an explicit UTC offset.`,
+    );
+  }
+  // The pattern can only bound the day at 31, and `new Date` rolls a day past the end of its
+  // month into the next month instead of reporting NaN, so the calendar is checked here.
+  if (!namesARealDate(Number(bound[1]), Number(bound[2]), Number(bound[3]))) {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
   const timestamp = new Date(value);
@@ -347,6 +372,13 @@ function normalizeTimestamp(value: unknown, label: string): string {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
   return timestamp.toISOString();
+}
+
+function namesARealDate(year: number, month: number, day: number): boolean {
+  // setUTCFullYear rather than Date.UTC, which reads a year below 100 as 19xx.
+  const probe = new Date(0);
+  probe.setUTCFullYear(year, month - 1, day);
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
 }
 
 function normalizeIdentifier(value: unknown, label: string): string {

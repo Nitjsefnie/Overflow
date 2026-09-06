@@ -29,9 +29,11 @@ import {
   createModerationCohortGetHandler,
 } from "@/app/api/moderation/cohort/route";
 import {
+  AccountModerationService,
   ModerationServiceError,
   type AccountAudit,
   type CalibrationCohortPreview,
+  type ModerationStore,
   type ModeratorRoleChange,
   type RecalibrationClosure,
 } from "@/lib/moderation/service";
@@ -107,6 +109,27 @@ describe("account moderation API", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
     });
+  });
+
+  // The payload schema takes both bounds as bare strings, so an offset-less bound is a
+  // well-formed request: only the service's own normalization stands between it and a
+  // cohort chosen by the server's timezone. The real service is wired in here to prove
+  // that single enforcement point reaches this route.
+  it("returns 422 for an audit opening whose sample start carries no UTC offset", async () => {
+    const { store, loadCalibrationCohort } = unreachableCohortStore();
+    const handler = createModerationPostHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => new AccountModerationService(store),
+    });
+
+    const response = await handler(jsonRequest({ ...openPayload(), sampleStartedAt: "2026-01-01T00:00" }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_INPUT", message: "Unable to process moderation request." },
+    });
+    expect(loadCalibrationCohort).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -378,6 +401,26 @@ describe("calibration cohort preview API", () => {
     expect(previewCalibrationCohort).not.toHaveBeenCalled();
   });
 
+  // The cohort query schema takes both bounds as bare strings for the same reason, and a
+  // preview reads the cohort a later audit would be built on, so it must refuse the same
+  // ambiguous bound the audit route does.
+  it("returns 422 for a cohort preview whose sample start carries no UTC offset", async () => {
+    const { store, loadCalibrationCohort } = unreachableCohortStore();
+    const handler = createModerationCohortGetHandler({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => new AccountModerationService(store),
+    });
+
+    const response = await handler(cohortRequest({ ...cohortQuery(), sampleStartedAt: "2026-01-01T00:00" }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_INPUT", message: "Unable to process moderation request." },
+    });
+    expect(loadCalibrationCohort).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["NOT_FOUND", 404],
     ["INVALID_INPUT", 422],
@@ -644,6 +687,27 @@ function openPayload() {
     sampleEndedAt: "2026-02-01T00:00:00.000Z",
     reason: "A moderator identified a sustained account-level pattern.",
   };
+}
+
+/**
+ * A store whose every method fails the test if it is reached, so a route-level refusal is
+ * proved to happen before any database work rather than merely instead of a happy path.
+ */
+function unreachableCohortStore() {
+  const unreachable = (name: string) => async (): Promise<never> => {
+    throw new Error(`${name} must not be reached for an ambiguous sample window`);
+  };
+  const loadCalibrationCohort = vi.fn(unreachable("loadCalibrationCohort"));
+  const store: ModerationStore = {
+    loadCalibrationCohort,
+    openAccountAudit: unreachable("openAccountAudit"),
+    dismissAccountAudit: unreachable("dismissAccountAudit"),
+    substantiateAccountAudit: unreachable("substantiateAccountAudit"),
+    closeRecalibration: unreachable("closeRecalibration"),
+    listModerators: unreachable("listModerators"),
+    setModeratorRole: unreachable("setModeratorRole"),
+  };
+  return { store, loadCalibrationCohort };
 }
 
 function serviceHarness(overrides: Partial<{
