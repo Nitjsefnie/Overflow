@@ -285,7 +285,13 @@ The production deployment runs the application as a dedicated unprivileged syste
 
 ## Reconciliation
 
-Webhook processing updates repository state incrementally. Run reconciliation when GitHub history must be re-read:
+A repository is folded from a durable queue rather than inside the request that noticed it had fallen behind. A GitHub webhook delivery records a reconciliation job for the repository and answers immediately; an in-process worker claims that job within seconds, folds the repository, and clears the job. A fold that throws is retried on the job after a minute, five, fifteen and an hour, and a repository that exhausts those retries stays visibly failed rather than disappearing from the queue. Registering a repository records the same kind of job, because the work already in the repository predates the webhook.
+
+A sweep runs at startup and every six hours, and offers every active repository to that queue. A repository owns one job row, so a repository already queued keeps its place and its backoff, and one whose retries were exhausted is revived — a webhook delivery missed while the server was down, or a repository left failed by a GitHub outage, repairs itself within six hours with nobody touching it.
+
+Setting `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` to any non-empty value turns off the worker as well as the sweep, which is the whole of automatic reconciliation: jobs still accumulate, and nothing drains them.
+
+Run reconciliation explicitly when GitHub history must be re-read:
 
 ```bash
 # Reconcile one explicit registered repository by owner/name.
