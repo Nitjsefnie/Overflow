@@ -179,7 +179,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public constructor(
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
-    private readonly coordinationSql: SqlClient = getCoordinationSql(),
+    private readonly coordinationSql?: SqlClient,
   ) {}
 
   /**
@@ -194,7 +194,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   private async reserveCoordinationConnection(
     remainingMs: number,
   ): Promise<Awaited<ReturnType<SqlClient["reserve"]>>> {
-    const reservation = this.coordinationSql.reserve();
+    // Resolved here rather than defaulted at construction: a caller that
+    // injects its own client must not be made to configure the process-wide
+    // one, which building a coordination client would require.
+    const coordinationSql = this.coordinationSql ?? getCoordinationSql();
+    const reservation = coordinationSql.reserve();
     let expiry: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
