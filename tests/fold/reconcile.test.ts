@@ -596,7 +596,9 @@ describe("reconcileRepository", () => {
         changes: 0,
         removals: 0,
       });
-      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" });
+      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({
+        timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
+      }));
       expect(materialize).toHaveBeenCalledOnce();
     },
   );
@@ -616,7 +618,9 @@ describe("reconcileRepository", () => {
     await reconcileRepository(dependencies, "repository");
 
     const reference = { owner: "new-owner", name: "repo" };
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference);
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference, expect.objectContaining({
+      timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
+    }));
     expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getRepositoryById).toHaveBeenCalledWith(5001);
@@ -680,7 +684,9 @@ describe("reconcileRepository", () => {
       visibility: "PUBLIC",
     });
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" });
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({
+        timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
+      }));
     expect(dependencies.store.materialize).toHaveBeenCalledOnce();
   });
 

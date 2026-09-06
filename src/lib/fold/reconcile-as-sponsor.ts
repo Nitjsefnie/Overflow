@@ -68,7 +68,7 @@ function sponsorGateway(
 
   return {
     getRepositoryById: async (githubRepositoryId) => (await gateway()).getRepositoryById(githubRepositoryId),
-    listIssues: async (repository) => (await gateway()).listIssues(repository),
+    listIssues: async (repository, options) => (await gateway()).listIssues(repository, options),
     getPullRequestReviews: async (repository, pullRequestNumber) =>
       (await gateway()).getPullRequestReviews(repository, pullRequestNumber),
     getPullRequestDiff: async (repository, pullRequestNumber) =>
