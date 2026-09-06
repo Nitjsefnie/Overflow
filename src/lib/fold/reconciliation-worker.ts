@@ -3,7 +3,7 @@ import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 
 export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
-  renewReconciliationJobLease(jobId: string, leaseToken: string): Promise<boolean>;
+  renewReconciliationJobLease(jobId: string, leaseToken: string, renewalDeadline: Date): Promise<boolean>;
   completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
   deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   retryReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
@@ -73,7 +73,10 @@ export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
  * Heartbeats prove liveness, not progress: a fold awaiting hung I/O can renew
  * forever. Ten minutes is roughly eleven times the observed fifty-two-second
  * fold, allowing slow folds while bounding renewal at a third of the old
- * thirty-minute lease. After the cap, the last twenty-second lease expires.
+ * thirty-minute lease. SQL admits renewal only before the absolute deadline,
+ * including writes queued in the connection pool. The last lease can therefore
+ * expire at most one twenty-second lease window after the deadline; the deadline
+ * is an admission limit, not the instant the lease ends.
  *
  * This surrenders the job; it does not unwedge the fold or rescue its repository.
  * A hung fold still holds the advisory lock. A reclaimer hits the sixty-second
@@ -185,7 +188,7 @@ function startLeaseRenewal(
   job: ClaimedReconciliationJob,
 ): () => Promise<void> {
   const now = dependencies.now ?? (() => new Date());
-  const claimedAt = now().getTime();
+  const renewalDeadline = new Date(now().getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
   let stopped = false;
   let renewing = false;
   let cancel: LeaseRenewalCancellation | undefined;
@@ -204,14 +207,14 @@ function startLeaseRenewal(
   };
   const renew = async () => {
     if (stopped) return;
-    if (now().getTime() - claimedAt >= RECONCILIATION_LEASE_MAX_RENEWAL_MS) {
+    if (now().getTime() >= renewalDeadline.getTime()) {
       void stop();
       return;
     }
     if (renewing) return;
     renewing = true;
     try {
-      const renewed = await dependencies.store.renewReconciliationJobLease(job.id, job.leaseToken);
+      const renewed = await dependencies.store.renewReconciliationJobLease(job.id, job.leaseToken, renewalDeadline);
       if (!renewed) void stop();
     } catch (error) {
       logLeaseRenewalFailure(job.id, error);
@@ -219,7 +222,8 @@ function startLeaseRenewal(
       renewing = false;
     }
   };
-  const setup = (async () => {
+  // Initialize completion before external schedulers can deliver synchronously.
+  const setup = Promise.resolve().then(async () => {
     try {
       const schedule = dependencies.scheduleLeaseRenewal ?? defaultScheduleLeaseRenewal;
       if (typeof schedule !== "function") {
@@ -235,7 +239,7 @@ function startLeaseRenewal(
     } catch (error) {
       logLeaseRenewalFailure(job.id, error);
     }
-  })();
+  });
   return stop;
 }
 

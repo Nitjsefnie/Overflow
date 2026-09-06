@@ -153,6 +153,7 @@ db/*
 !db/migrations/
 db/migrations/*
 !db/migrations/*.sql
+!db/migrations/021_reconciliation_lease_duration.sql
 
 !deploy/
 deploy/*
