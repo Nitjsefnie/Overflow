@@ -5,7 +5,13 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
-import { closeSql, getSql, withTransaction } from "@/lib/db/client";
+import {
+  RECONCILIATION_COORDINATION_POOL_MAX,
+  closeSql,
+  getCoordinationSql,
+  getSql,
+  withTransaction,
+} from "@/lib/db/client";
 import { listUnwritableClosures } from "@/lib/dashboard/queries";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -2360,6 +2366,63 @@ describe("initial PostgreSQL materialization", () => {
     } finally {
       await workSql.end();
     }
+  });
+
+  it("bounds reconciliation coordination at no less than the work pool's capacity", () => {
+    const sharedPoolCapacity = sql.options.max;
+    // A coordinator used to hold one of the work pool's own connections, so the
+    // work pool's capacity is the coordinator concurrency the isolated client has
+    // to keep serving.
+    expect(RECONCILIATION_COORDINATION_POOL_MAX).toBeGreaterThanOrEqual(sharedPoolCapacity);
+    expect(getCoordinationSql().options.max).toBeGreaterThanOrEqual(sharedPoolCapacity);
+  });
+
+  it("holds locks for as many distinct repositories as the work pool could serve", async () => {
+    const sharedPoolCapacity = sql.options.max;
+    const sponsorId = await insertUser(sql);
+    const repositoryIds: string[] = [];
+    for (let index = 0; index < sharedPoolCapacity; index += 1) {
+      repositoryIds.push(await insertRepository(sql, sponsorId));
+    }
+    const entered: string[] = [];
+    let markEveryLockHeld!: () => void;
+    const everyLockHeld = new Promise<void>((resolve) => { markEveryLockHeld = resolve; });
+    let releaseHolders!: () => void;
+    const holdersReleased = new Promise<void>((resolve) => { releaseHolders = resolve; });
+
+    const coordinated = repositoryIds.map((repositoryId, index) => {
+      const store = new PostgresFoldStore(sql);
+      return store.withRepositoryReconciliation(repositoryId, async () => {
+        entered.push(`holder-${index}`);
+        if (entered.length === repositoryIds.length) {
+          markEveryLockHeld();
+        }
+        await holdersReleased;
+        return index;
+      });
+    });
+    // A coordinator that is refused a connection never enters, so waiting only on
+    // the barrier would report a refusal as a suite timeout. Racing the first
+    // refusal against it lets the refusal itself be the failure.
+    const firstRefusal = new Promise<void>((resolve) => {
+      for (const coordination of coordinated) {
+        coordination.catch(() => { resolve(); });
+      }
+    });
+
+    try {
+      await Promise.race([everyLockHeld, firstRefusal]);
+    } finally {
+      releaseHolders();
+    }
+
+    const outcomes = await Promise.allSettled(coordinated);
+    const refusals = outcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [(outcome.reason as Error).message] : []);
+    expect(refusals).toEqual([]);
+    expect(entered).toHaveLength(sharedPoolCapacity);
+    expect(outcomes.map((outcome) => outcome.status === "fulfilled" ? outcome.value : outcome.reason))
+      .toEqual(repositoryIds.map((_repositoryId, index) => index));
   });
 
   it("keeps a slow older reconciliation from overwriting the newer authoritative snapshot", async () => {
