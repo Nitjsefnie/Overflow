@@ -69,9 +69,11 @@ races the connections' own shutdown against a timer, and when the timer wins,
 a deadline rather than a settle — it abandons the connections instead of
 waiting for them — and only a caller that passes a timeout gets it.
 `closeSql()` calls `end()` with no timeout, so this repository's shutdown path
-never arms it, and no later call can: the pool's `end()` short-circuits on its
-own `ending` exactly as a connection's does. That is why the hunk below is what
-settles it.
+never arms it. Once the pool has assigned its own `ending`, later `end()` calls
+return that promise without arming a timeout. Calls made in the same turn can
+still pass the guard before the first call resumes from `await 1` and assigns
+`ending`, so a concurrent call with a timeout can still arm the deadline.
+Without that additional call, the hunk below settles the shutdown.
 
 The second hunk settles it from `closed()`, adding
 `ended && (ended(), ending = ended = null)` after the line that fails the
@@ -85,14 +87,10 @@ that runs however the socket goes away, error or none, and by the time it runs
 there is no protocol traffic left to hang on. `terminate()` is on no such path
 — nothing in `src/connection.js` calls it when a socket dies.
 
-The position **before** `onclose()` is the conservative order rather than a
-demonstrated necessity, and the difference is worth stating plainly.
-`onclose()` moves the connection to the closed queue and, if any query is
-waiting, immediately hands it one (`connect(c, queries.shift())`), so settling
-first keeps the settle off a connection that is already being reused. But
-moving the settle below `onclose()` leaves every suite here green, so treat the
-order as defensive: it is cheap, and nothing in the tests argues for the other
-side.
+The position **before** `onclose()` is conservative: settle the old shutdown
+before handing the connection back to the pool. `onclose()` moves it to the
+closed queue and can immediately start reconnecting it for queued work, so
+settling first keeps the settle off a connection that is already being reused.
 
 #### Where this diverges from upstream
 
@@ -119,9 +117,13 @@ A connection that dies while it is still in its **connect** phase takes
 in-flight failure and the settle, so a pending `end()` is not settled there.
 Whether that is safe depends entirely on how the reconnect attempts end:
 
-- An attempt that **completes** settles normally. `ReadyForQuery` clears
-  `initial`, the initial query runs, and its own `ReadyForQuery` reaches the
-  `ending ? terminate()` arm.
+- An attempt that **completes** with an ordinary initial query executes that
+  query and clears `initial`; the query's `ReadyForQuery` reaches the
+  `ending ? terminate()` arm once no query remains in flight. A reservation
+  is not executed as a query: with array-type fetching off, the startup arm
+  clears `initial` and terminates an already-ending connection directly.
+  With array-type fetching on, it clears the reservation from `initial`
+  before fetching types, whose `ReadyForQuery` reaches the ending arm.
 - An attempt that raises an error reaching `errored()` — a refused connect, a
   `CONNECT_TIMEOUT`, a startup `ErrorResponse` — nulls `initial`, so the
   **next** `closed()` falls past the early return and is settled by this
@@ -129,9 +131,11 @@ Whether that is safe depends entirely on how the reconnect attempts end:
 - An attempt that ends in a plain socket close, with no `error` event and no
   protocol message, does neither. That is what a pooler, a TCP load balancer or
   any non-postgres service on the port produces while the backend is gone: the
-  reconnect loop is unbounded, `closedTime` is assigned below the same early
-  return so every attempt is scheduled at delay zero, and the pending `end()`
-  is stranded.
+  reconnect loop is unbounded, and the pending `end()` is stranded.
+  `closedTime` is assigned below the same early return, so attempts are
+  scheduled at delay zero while it retains its initial zero. A reused
+  connection can retain a previous `closedTime`; reconnects then use the
+  remaining backoff computed from that value.
 
 That gap is Overflow issue 164, and it is why this patch must not be read as
 making `end()` always settle.
