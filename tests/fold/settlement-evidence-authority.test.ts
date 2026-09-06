@@ -205,6 +205,7 @@ describe("rationale comment edits", () => {
       id: "comment-2",
       databaseId: 402,
       authorLogin: "sponsor",
+      authorGitHubUserId: null,
       body: "Confirming delivered/6.",
       createdAt: "2026-09-01T11:45:00.000Z",
       lastEditedAt: null,
@@ -607,8 +608,8 @@ describe("rationale selection boundaries", () => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history.push(
-      { kind: "UNLABELED", id: "removed", actorLogin: "sponsor", label: "delivered/6", createdAt: "2026-09-01T11:35:00.000Z" },
-      { kind: "LABELED", id: "actual-2", actorLogin: "sponsor", label: "delivered/6", createdAt: "2026-09-01T11:40:00.000Z" },
+      { kind: "UNLABELED", id: "removed", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6", createdAt: "2026-09-01T11:35:00.000Z" },
+      { kind: "LABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6", createdAt: "2026-09-01T11:40:00.000Z" },
     );
     issue.comments.push({
       ...issue.comments[0]!,
@@ -797,14 +798,21 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
         labels: ["M", "delivered/6"],
         claimAssigneeGitHubLogin: null,
         history: [
-          { kind: "LABELED", id: "opening-1", actorLogin: logins.opener, label: "M", createdAt: "2026-08-30T10:00:00.000Z" },
-          { kind: "LABELED", id: "actual-1", actorLogin: logins.settler, label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z" },
+          {
+            kind: "LABELED", id: "opening-1", actorLogin: logins.opener, actorGitHubUserId: null,
+            label: "M", createdAt: "2026-08-30T10:00:00.000Z",
+          },
+          {
+            kind: "LABELED", id: "actual-1", actorLogin: logins.settler, actorGitHubUserId: null,
+            label: "delivered/6", createdAt: "2026-09-01T11:00:00.000Z",
+          },
         ],
         comments: [
           {
             id: "comment-1",
             databaseId: 401,
             authorLogin: logins.commenter,
+            authorGitHubUserId: null,
             body: "Settled as delivered/6 after reviewing the final diff.",
             createdAt: "2026-09-01T11:30:00.000Z",
             lastEditedAt: null,

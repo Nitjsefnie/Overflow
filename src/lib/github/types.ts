@@ -25,6 +25,8 @@ export type GitHubIssue = {
   /** GraphQL `Issue.closedAt`; null while the issue is open. */
   closedAt: string | null;
   authorLogin: string | null;
+  /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin, Organization). */
+  authorGitHubUserId: number | null;
   labels: string[];
   claimAssigneeGitHubLogin: string | null;
   history: GitHubIssueHistoryEvent[];
@@ -37,6 +39,8 @@ export type GitHubIssueHistoryEvent =
       kind: "LABELED";
       id: string;
       actorLogin: string | null;
+      /** GraphQL `User.databaseId` of the actor; null when the actor is absent or not a User (Bot, Mannequin, Organization). */
+      actorGitHubUserId: number | null;
       label: string;
       createdAt: string;
     }
@@ -44,6 +48,8 @@ export type GitHubIssueHistoryEvent =
       kind: "UNLABELED";
       id: string;
       actorLogin: string | null;
+      /** GraphQL `User.databaseId` of the actor; null when the actor is absent or not a User (Bot, Mannequin, Organization). */
+      actorGitHubUserId: number | null;
       label: string;
       createdAt: string;
     }
@@ -51,6 +57,8 @@ export type GitHubIssueHistoryEvent =
       kind: "ASSIGNED";
       id: string;
       actorLogin: string | null;
+      /** GraphQL `User.databaseId` of the actor; null when the actor is absent or not a User (Bot, Mannequin, Organization). */
+      actorGitHubUserId: number | null;
       assigneeLogin: string | null;
       createdAt: string;
     }
@@ -58,6 +66,8 @@ export type GitHubIssueHistoryEvent =
       kind: "UNASSIGNED";
       id: string;
       actorLogin: string | null;
+      /** GraphQL `User.databaseId` of the actor; null when the actor is absent or not a User (Bot, Mannequin, Organization). */
+      actorGitHubUserId: number | null;
       assigneeLogin: string | null;
       createdAt: string;
     };
@@ -66,6 +76,8 @@ export type GitHubIssueComment = {
   id: string;
   databaseId: number | null;
   authorLogin: string | null;
+  /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin, Organization). */
+  authorGitHubUserId: number | null;
   body: string;
   createdAt: string;
   /** GraphQL `IssueComment.lastEditedAt`; null when the body was never edited. */
@@ -83,7 +95,7 @@ export type GitHubPullRequest = {
   mergeCommitOid: string | null;
   finalCommitAt: string | null;
   authorLogin: string | null;
-  /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin). */
+  /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin, Organization). */
   authorGitHubUserId: number | null;
   /**
    * GraphQL `Repository.databaseId` of the repository this pull request lives
