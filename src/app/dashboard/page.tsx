@@ -108,6 +108,8 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
 
 /** The reason is a stored enum; the sponsor is owed the plain reading of it, whatever the schema later admits. */
 function unavailabilityPhrase(reason: string): string {
+  // The cases are the CHECK in db/migrations/016_repository_identity_verification.sql;
+  // a reason added there needs one here or it degrades to the bare default.
   switch (reason) {
     case "NOT_FOUND":
       return "unavailable: not found on GitHub";
