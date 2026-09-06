@@ -183,7 +183,7 @@ async function removalChanges(runId: string): Promise<ChangeRow[]> {
     select entity_kind, change_kind, pull_request_id, before_state, after_state
     from reconciliation_changes
     where reconciliation_run_id = ${runId} and change_kind = ${"REMOVE"}
-    order by entity_kind asc
+    order by entity_kind::text asc
   `;
 }
 
