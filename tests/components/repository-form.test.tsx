@@ -118,7 +118,7 @@ describe("repository registration form", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(initialValues);
-    expect(await screen.findByRole("status")).toHaveTextContent("co-op/harbour is registered.");
+    expect((await screen.findByRole("status")).textContent).toBe("co-op/harbour is registered.");
   });
 
   it("says the initial import could not be scheduled when the registration failed to enqueue it", async () => {
@@ -134,7 +134,7 @@ describe("repository registration form", () => {
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.",
     );
   });
@@ -152,7 +152,7 @@ describe("repository registration form", () => {
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
     );
   });
