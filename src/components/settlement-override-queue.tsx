@@ -51,6 +51,15 @@ export function SettlementOverrideQueue({ requests }: SettlementOverrideQueuePro
   );
 }
 
+/**
+ * How a figure reads when the ledger holds points no GitHub label backs.
+ *
+ * Both outcomes reach that state the same way: a granted correction writes the
+ * points while the issue's `settled_label` stays null, so saying "no label"
+ * beside a figure a moderator did record would name the wrong thing as missing.
+ */
+const unlabelledPoints = "no label recorded";
+
 /** What the ledger settled between two accounts, and the credits it moved. */
 function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvidence }) {
   return (
@@ -74,7 +83,7 @@ function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvid
           <dd>
             {settlement.settledPoints === null
               ? "Unsettled"
-              : `${settlement.settledLabel ?? "no label"} · ${settlement.settledPoints}`}
+              : `${settlement.settledLabel ?? unlabelledPoints} · ${settlement.settledPoints}`}
           </dd>
         </div>
         <div>
@@ -93,10 +102,12 @@ function SettlementEvidence({ settlement }: { settlement: SettlementOverrideEvid
 /**
  * What the sponsor's own closure was calibrated at.
  *
- * The actual figure has three states, and they are not the same news: never
- * recorded at all, recorded under a GitHub label, or points a moderator granted
- * on a closure whose label was rejected — that last one keeps the issue's label
- * null, so the value says the label is missing rather than naming one.
+ * The actual figure branches on the points alone, because absent points imply
+ * an absent label: the fold derives `issues.settled_label` and a calibration's
+ * `actual_points` from one resolved settled difficulty in the same pass, and
+ * writes both inside the materializer's transaction. Only the reverse is
+ * reachable — a granted correction sets the points and leaves the label null —
+ * which is the state `unlabelledPoints` names.
  */
 function CalibrationEvidence({ calibration }: { calibration: SelfWorkCalibrationOverrideEvidence }) {
   return (
@@ -120,7 +131,7 @@ function CalibrationEvidence({ calibration }: { calibration: SelfWorkCalibration
           <dd>
             {calibration.actualPoints === null
               ? "Never recorded"
-              : `${calibration.actualLabel ?? "no label recorded"} · ${calibration.actualPoints}`}
+              : `${calibration.actualLabel ?? unlabelledPoints} · ${calibration.actualPoints}`}
           </dd>
         </div>
       </dl>
