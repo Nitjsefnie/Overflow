@@ -1,16 +1,29 @@
+/*
+ * NO_EVIDENCE_FOUND is the reliable, actionable answer: no workflow both reacts
+ * to issue comments and references issue assignment. It is the warning signal.
+ * EVIDENCE_FOUND means only that a workflow mentions both, not that it assigns
+ * the commenter. It deliberately causes no warning: a wrong EVIDENCE_FOUND
+ * leaves the sponsor where they were before this check, while a wrong
+ * NO_EVIDENCE_FOUND warns about a fix they may already have.
+ *
+ * Interpreting shell, conditional job gating and GitHub Actions expressions is
+ * out of scope; the result names make that omission explicit. Known textual
+ * limits yielding EVIDENCE_FOUND include read-only GETs, commented-out commands,
+ * jobs gated on ${{ false }}, POSTs assigning a fixed login, quoted
+ * assignees&disabled or assignees;disabled suffixes, and "assignees"/disabled
+ * path concatenation. None guarantees runtime assignment of the commenter.
+ */
 import { parse } from "yaml";
 
 export type ClaimPathEvidence = { path: string; content: string };
-export type ClaimPathAssessment = "PRESENT" | "ABSENT";
+export type ClaimPathAssessment = "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND";
 
 // PATCHing an issue with an assignees body is deliberately not evidence: matching
 // a bare issue URL and a nearby field would admit too many false positives.
-// Shell expansions after assignees deliberately yield ABSENT, even when empty.
-// A quoted semicolon suffix remains an accepted residual false PRESENT: without
-// shell parsing it is indistinguishable from the separator real scripts use.
+// Shell expansions after assignees deliberately yield NO_EVIDENCE_FOUND, even when empty.
 const assigneesCollection = /(?<![\w.~%+:=$-])issues\/[^/\r\n]+\/assignees(?=$|[\s"'`;&|)<>?#\\])/;
 const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
-const deletion = /(?:-X|--method)\s+DELETE\b/i;
+const deletion = /(?:-X\s*|--method(?:\s+|=))["']?DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
 
 export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
   for (const { content } of workflows) {
@@ -31,15 +44,15 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
       || (Array.isArray(trigger) && trigger.includes("issue_comment"))
       || (trigger instanceof Map && trigger.has("issue_comment"));
 
-    // Any DELETE method on a REST line excludes it, even in a comment. Named
-    // additive calls are independent of that exclusion and may span lines.
-    const assigns = additiveCall.test(content) || content.split(/\r?\n/).some(
+    // Join shell continuations only for the REST deletion scan. Deletion tokens
+    // exclude even comments or repository names; additive calls stay independent.
+    const referencesAssignment = additiveCall.test(content) || content.replace(/\\\r?\n/g, "").split(/\r?\n/).some(
       (line) => assigneesCollection.test(line) && !deletion.test(line),
     );
-    if (reactsToComments && assigns) {
-      return "PRESENT";
+    if (reactsToComments && referencesAssignment) {
+      return "EVIDENCE_FOUND";
     }
   }
 
-  return "ABSENT";
+  return "NO_EVIDENCE_FOUND";
 }
