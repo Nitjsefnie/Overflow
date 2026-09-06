@@ -21,12 +21,18 @@ export type ReconciliationSweepSchedule = {
   intervalMs?: number;
   /**
    * Reports a sweep that failed as a whole, as distinct from the per-repository
-   * `onFailure` on the dependencies. A hook that fails — by throwing, or by
-   * rejecting if it is async — costs neither the process nor the report: the
-   * sweep failure reaches console.error instead. Omit the hook to report there
-   * in the first place.
+   * `onFailure` on the dependencies. A hook that fails costs neither the process
+   * nor the report, whichever way it fails: reading the member can throw, since
+   * it may be an accessor wired lazily; the call can throw; and an async hook
+   * can reject. Each of the three ends with the sweep failure on console.error
+   * instead. Omit the hook to report there in the first place.
+   *
+   * The return is declared, not left as `void`, because an async hook is
+   * supported rather than merely tolerated by TypeScript's void-return
+   * assignability: whatever the hook returns is settled and its rejection is
+   * handled.
    */
-  onSweepFailure?(error: unknown): void;
+  onSweepFailure?(error: unknown): void | PromiseLike<unknown>;
 };
 
 export const RECONCILIATION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -143,32 +149,58 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
  * Reports a sweep that failed as a whole, on the console when the caller has no
  * hook of its own.
  *
- * The hook is invoked through the schedule rather than through a reference
- * hoisted out of it, so one written in method form keeps its receiver: the type
- * declares it as a method and the sibling per-repository hook is called the same
- * way, so a detached call would leave `this` undefined and turn the hook into
- * exactly the process-killing throw the caller's catch exists to prevent.
+ * The split is finding the hook against calling it, guarded separately, because
+ * each fails on its own terms: the member may be an accessor, so reading it can
+ * throw before any hook exists — a reporter wired lazily throws until its
+ * collector does — while the call can throw or, if the hook is async, reject.
+ * All three are contained and all three still reach the console, so a failing
+ * hook costs neither the process nor the report.
  *
- * A hook that fails costs neither the process nor the report. A synchronous
- * throw is caught; a rejection is caught too, which takes settling whatever the
- * hook returned, because a `try` cannot see a rejected promise and an async
- * reporter shipping to a collector is the ordinary shape of this hook. Either
- * way the failure still reaches the console.
+ * The scheduler's own logging is in neither guard. That is the path production
+ * takes, since nothing wires a hook, so a defect there has to surface rather
+ * than leave a sweep failing forever with no signal.
  *
- * Only the hook is guarded. The scheduler's own logging sits outside, so a
- * defect there surfaces rather than being swallowed on the one path production
- * uses.
+ * What stays fatal, deliberately: a console broken at both arities, for the
+ * reason given on logSweepFailure, and a hook that abandons a rejected promise
+ * it never returns — that promise is Node's to report, and nothing here ever
+ * holds it.
+ *
+ * Not written as an async function awaiting the hook, and the compiler is not
+ * the reason: TypeScript keeps a local's narrowing inside a closure after the
+ * local's last assignment, so both async spellings do compile — measured, not
+ * assumed. The reason is the trade. Making this function async puts a second
+ * floating promise into the module whose whole defect was a floating promise,
+ * and that one can reject on a broken console, so the fatality above would
+ * arrive as a discarded rejection instead of a plain throw. Awaiting in a
+ * closure keeps that part honest but hides the synchronous case, which survives
+ * only because an async body runs eagerly up to its first await; settling the
+ * result and catching separately shows both failure modes where they happen.
  */
 function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknown): void {
-  // Anything uncallable — including the null an untyped caller can pass where
-  // the optional member expresses only undefined — counts as no hook at all.
-  if (typeof schedule.onSweepFailure !== "function") {
+  let hook: ReconciliationSweepSchedule["onSweepFailure"];
+  try {
+    // Read exactly once, and behind its own guard: an accessor can have a side
+    // effect, and it can throw instead of yielding a hook at all.
+    hook = schedule.onSweepFailure;
+  } catch {
+    hook = undefined;
+  }
+
+  // Anything uncallable — a hook that could not be retrieved, or the null an
+  // untyped caller can pass where the optional member expresses only undefined —
+  // counts as no hook at all.
+  if (typeof hook !== "function") {
     logSweepFailure(error);
     return;
   }
 
   try {
-    void Promise.resolve(schedule.onSweepFailure(error)).catch(() => {
+    // `hook.call(schedule, …)` because the local no longer supplies the receiver
+    // the property access did: the type declares a method, and the sibling
+    // per-repository hook is invoked with its receiver too, so a bare `hook(…)`
+    // would leave `this` undefined and turn the hook itself into the
+    // process-killing throw this guard exists to prevent.
+    void Promise.resolve(hook.call(schedule, error)).catch(() => {
       logSweepFailure(error);
     });
   } catch {
