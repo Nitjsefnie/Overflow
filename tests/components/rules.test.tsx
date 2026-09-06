@@ -11,6 +11,60 @@ vi.mock("@/lib/dashboard/session", () => ({
 import { RulesContent } from "@/app/rules/page";
 
 describe("rules page", () => {
+  it("tells contributors to claim before starting on an open, unassigned issue", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/claim an issue before work begins by commenting \/claim on the open, unassigned issue/i)).toBeVisible();
+  });
+
+  it("requires the whole claim comment to be exactly the command", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/the comment body must be exactly \/claim; a sentence containing the command is not a claim/i)).toBeVisible();
+  });
+
+  it("explains that the claim comment makes an account assignable and prevents advance assignment", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/github will not accept an assignee who has not interacted with the repository, so nobody can assign you in advance; the claim comment makes your account assignable/i)).toBeVisible();
+  });
+
+  it("identifies the claim comment as the only route without write access", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/for contributors without write access, that comment is the only claiming route/i)).toBeVisible();
+  });
+
+  it("attributes the claim command to each repository's workflow", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/the command is provided by a workflow each repository ships, not by overflow/i)).toBeVisible();
+  });
+
+  it("states that repositories without the command have no claiming route", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/claiming works only where the repository provides the command; a repository without it has no claiming route/i)).toBeVisible();
+  });
+
+  it("connects claiming to the assignment used for point reservations", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/a claim creates the assignment used for the sponsor's point reservation described below/i)).toBeVisible();
+  });
+
+  it("explains that unclaim and release are aliases removing only your own assignment", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/\/unclaim and \/release are two names for the same command; comment either one to remove only your own assignment/i)).toBeVisible();
+  });
+
+  it("requires releasing stopped work before the closing merge to remove reserved points", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    expect(screen.getByText(/release an issue you stop working on before the merge that would close it, because the assignment holds reserve points until it is removed/i)).toBeVisible();
+  });
+
   it("names the repository sponsor, not the issue owner, as the only rating authority", () => {
     render(<RulesContent memberName="Ada" isModerator={false} />);
 

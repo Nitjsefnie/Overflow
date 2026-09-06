@@ -17,6 +17,25 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
       <section className="surface rules-card" aria-labelledby="rules-opening-heading">
         <h2 id="rules-opening-heading">Before work starts</h2>
         <p>
+          Claim an issue before work begins by commenting /claim on the open, unassigned issue. The comment
+          body must be exactly /claim; a sentence containing the command is not a claim.
+        </p>
+        <p>
+          GitHub will not accept an assignee who has not interacted with the repository, so nobody can assign
+          you in advance; the claim comment makes your account assignable. For contributors without write
+          access, that comment is the only claiming route.
+        </p>
+        <p>
+          The command is provided by a workflow each repository ships, not by Overflow. Claiming works only
+          where the repository provides the command; a repository without it has no claiming route.
+        </p>
+        <p>
+          A claim creates the assignment used for the sponsor&apos;s point reservation described below.
+          /unclaim and /release are two names for the same command; comment either one to remove only your
+          own assignment. Release an issue you stop working on before the merge that would close it, because
+          the assignment holds reserve points until it is removed.
+        </p>
+        <p>
           Repositories choose their own difficulty labels, worth 1–10 points. The repository sponsor&apos;s
           earliest starting-difficulty label before the first assignment sets the opening estimate. Only the
           sponsor prices work: labels and comments from anyone else, including the person who filed the issue,
