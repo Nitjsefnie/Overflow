@@ -66,6 +66,18 @@ describe("registered repository identity verification", () => {
     expect(changed).toMatchObject({ unavailable_reason: "NOT_PUBLIC", unavailable_since: laterObservation });
   });
 
+  it("writes nothing when a later tick repeats an unchanged unavailability", async () => {
+    const { repositoryId } = await registeredRepository();
+    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: firstObservation });
+    await staleTimestamps(repositoryId);
+
+    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: laterObservation });
+
+    const row = await unavailability(repositoryId);
+    expect(row).toMatchObject({ unavailable_reason: "NOT_FOUND", unavailable_since: firstObservation });
+    expect(row.updated_at).toEqual(staleUpdate);
+  });
+
   it("clears an unavailability and writes the verified path and visibility", async () => {
     const { repositoryId } = await registeredRepository();
     await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_PUBLIC", at: firstObservation });
@@ -108,6 +120,9 @@ describe("registered repository identity verification", () => {
     const holder = await registeredRepository();
     const renamed = await registeredRepository();
     await store.markRepositoryUnavailable({ repositoryId: renamed.repositoryId, reason: "NOT_FOUND", at: firstObservation });
+    // Start the stored visibility disagreeing with GitHub, so the write the unique
+    // violation falls back to is observable in the column and not just in the reason.
+    await sql`update registered_repositories set visibility = 'PRIVATE' where id = ${renamed.repositoryId}`;
     const warnings: unknown[][] = [];
     const warn = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });
 
@@ -115,7 +130,7 @@ describe("registered repository identity verification", () => {
       await expect(store.recordVerifiedRepositoryIdentity({
         repositoryId: renamed.repositoryId,
         ownerName: holder.ownerName,
-        visibility: "PRIVATE",
+        visibility: "PUBLIC",
       })).resolves.toBeUndefined();
     } finally {
       warn.mockRestore();
@@ -128,7 +143,7 @@ describe("registered repository identity verification", () => {
 
     expect(await unavailability(renamed.repositoryId)).toMatchObject({
       owner_name: renamed.ownerName,
-      visibility: "PRIVATE",
+      visibility: "PUBLIC",
       unavailable_reason: null,
       unavailable_since: null,
     });

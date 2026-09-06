@@ -53,7 +53,7 @@ export type ReconciliationStore = {
   recordVerifiedRepositoryIdentity(input: {
     repositoryId: string;
     ownerName: string;
-    visibility: "PUBLIC" | "PRIVATE";
+    visibility: "PUBLIC";
   }): Promise<void>;
   markRepositoryUnavailable(input: {
     repositoryId: string;

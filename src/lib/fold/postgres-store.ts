@@ -273,7 +273,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public async recordVerifiedRepositoryIdentity(input: {
     repositoryId: string;
     ownerName: string;
-    visibility: "PUBLIC" | "PRIVATE";
+    visibility: "PUBLIC";
   }): Promise<void> {
     try {
       await this.sql`
@@ -312,6 +312,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     }
   }
 
+  // The sweep re-attempts a dark repository every few hours for as long as it stays
+  // dark, so a repeat of the reason already recorded must not touch the row at all.
   public async markRepositoryUnavailable(input: {
     repositoryId: string;
     reason: RepositoryUnavailableReason;
@@ -327,6 +329,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         end,
         updated_at = now()
       where id = ${input.repositoryId}
+        and unavailable_reason is distinct from ${input.reason}
     `;
   }
 
