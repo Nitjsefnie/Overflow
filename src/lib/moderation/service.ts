@@ -375,8 +375,8 @@ function normalizeTimestamp(value: unknown, label: string): string {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
   const timestamp = new Date(value);
-  // Backstop between the grammar and toISOString, which throws for an invalid Date
-  // (for example, the expanded-year shape -000000).
+  // A real Gregorian date can still name an instant outside Date's range. This guard
+  // owns representability (and rejects -000000) before toISOString can throw RangeError.
   if (Number.isNaN(timestamp.getTime())) {
     throw new ModerationServiceError("INVALID_INPUT", `${label} must be a valid timestamp.`);
   }
@@ -384,10 +384,10 @@ function normalizeTimestamp(value: unknown, label: string): string {
 }
 
 function namesARealDate(year: number, month: number, day: number): boolean {
-  // setUTCFullYear rather than Date.UTC, which interprets years 0–99 as 1900–1999.
-  const probe = new Date(0);
-  probe.setUTCFullYear(year, month - 1, day);
-  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
+  // The pattern bounds month and day; divisibility works unchanged for zero and negative years.
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= daysInMonth[month - 1];
 }
 
 function normalizeIdentifier(value: unknown, label: string): string {
