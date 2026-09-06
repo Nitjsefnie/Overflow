@@ -89,7 +89,7 @@ export class GitHubGateway {
     for (const node of nodes) {
       const [labels, timeline, closingPullRequests] = await Promise.all([
         this.getIssueLabels(repository, node.number, node.labels),
-        this.getIssueTimeline(repository, node.number, node.timelineItems),
+        this.getIssueTimeline(repository, node.number),
         this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
       ]);
       issues.push(toGitHubIssue(node, labels, timeline, closingPullRequests));
@@ -274,15 +274,21 @@ export class GitHubGateway {
     return page;
   }
 
+  /**
+   * Always read the timeline through the per-issue document, first page included.
+   * GitHub degrades a timeline nested under `issues(first: 100)`: it drops events
+   * and then reports the shortened connection as complete — `hasNextPage: false`
+   * beside a `totalCount` that agrees with what it sent — so no continuation
+   * fires and nothing in the response distinguishes the loss. Not selecting the
+   * nested connection at all is the only guard that does not depend on a
+   * threshold holding.
+   */
   private async getIssueTimeline(
     repository: GitHubRepositoryReference,
     issueNumber: number,
-    initialPage: GitHubGraphqlIssueTimelineConnection,
   ): Promise<{ history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] }> {
     const nodes = await collectCursorPages((cursor) =>
-      cursor === null
-        ? Promise.resolve(initialPage)
-        : this.getIssueTimelinePage(repository, issueNumber, cursor),
+      this.getIssueTimelinePage(repository, issueNumber, cursor),
     );
     const history: GitHubIssueHistoryEvent[] = [];
     const comments: GitHubIssueComment[] = [];
@@ -305,7 +311,7 @@ export class GitHubGateway {
   private async getIssueTimelinePage(
     repository: GitHubRepositoryReference,
     issueNumber: number,
-    cursor: string,
+    cursor: string | null,
   ): Promise<GitHubGraphqlIssueTimelineConnection> {
     const data = await this.graphql.query<{
       repository: { issue: { timelineItems: GitHubGraphqlIssueTimelineConnection } | null } | null;
@@ -462,7 +468,6 @@ type GitHubGraphqlIssueNode = {
   author: GitHubGraphqlAccount | null;
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
-  timelineItems: GitHubGraphqlIssueTimelineConnection;
   closedByPullRequestsReferences: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>;
 };
 
@@ -562,20 +567,6 @@ const issuesQuery = `
           assignees(first: 2) {
             nodes { login }
           }
-          timelineItems(
-            first: 50
-            itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
-          ) {
-            nodes {
-              __typename
-              ... on LabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
-              ... on UnlabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
-              ... on AssignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
-              ... on UnassignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
-              ... on IssueComment { id databaseId createdAt lastEditedAt author { login ... on User { databaseId } } body }
-            }
-            pageInfo { hasNextPage endCursor }
-          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -624,7 +615,7 @@ const issueLabelsQuery = `
 `;
 
 const issueTimelineQuery = `
-  query IssueTimeline($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String!) {
+  query IssueTimeline($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String) {
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         timelineItems(
