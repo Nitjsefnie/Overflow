@@ -204,10 +204,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         }),
       ]);
     } catch (error) {
-      reservation.then(
-        (connection) => connection.release(),
-        () => undefined,
-      );
+      // Both escape routes end on one handler: the reservation rejecting, and
+      // the release of a reservation that arrives too late throwing as it hands
+      // the connection back. Either one unhandled would end the process.
+      void reservation.then((connection) => { connection.release(); }).catch(() => undefined);
       throw error;
     } finally {
       if (expiry !== undefined) {
