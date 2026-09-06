@@ -2,6 +2,7 @@ import { getSql } from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
 import type {
   OpenSettlementOverrideRequest,
+  SelfWorkCalibrationOverrideEvidence,
   SettlementOverrideDecisionInput,
   SettlementOverrideEvidence,
   SettlementOverrideRequest,
@@ -40,6 +41,13 @@ type OpenRequestRow = RequestRow & {
   pull_request_number: number | string | null;
   pull_request_title: string | null;
   pull_request_url: string | null;
+  calibration_id: string | null;
+  calibration_owner_login: string | null;
+  calibration_opening_comparison_points: number | string | null;
+  calibration_actual_points: number | string | null;
+  calibration_pull_request_number: number | string | null;
+  calibration_pull_request_title: string | null;
+  calibration_pull_request_url: string | null;
 };
 
 /**
@@ -107,13 +115,24 @@ export class PostgresSettlementOverrideStore implements SettlementOverrideStore 
         settlements.credits,
         pull_requests.pull_request_number,
         pull_requests.title as pull_request_title,
-        pull_requests.url as pull_request_url
+        pull_requests.url as pull_request_url,
+        calibrations.id as calibration_id,
+        calibration_owners.github_login as calibration_owner_login,
+        calibrations.opening_comparison_points as calibration_opening_comparison_points,
+        calibrations.actual_points as calibration_actual_points,
+        calibration_pull_requests.pull_request_number as calibration_pull_request_number,
+        calibration_pull_requests.title as calibration_pull_request_title,
+        calibration_pull_requests.url as calibration_pull_request_url
       from settlement_override_requests as requests
       join users as requesters on requesters.id = requests.requester_id
       join issues on issues.id = requests.issue_id
       join registered_repositories as repositories on repositories.id = issues.repository_id
       left join settlements on settlements.issue_id = requests.issue_id
       left join pull_requests on pull_requests.id = settlements.pull_request_id
+      left join self_work_calibrations as calibrations on calibrations.issue_id = requests.issue_id
+      left join users as calibration_owners on calibration_owners.id = calibrations.user_id
+      left join pull_requests as calibration_pull_requests
+        on calibration_pull_requests.id = calibrations.pull_request_id
       where requests.state = 'OPEN'
       order by requests.created_at asc, requests.id asc
     `;
@@ -127,6 +146,7 @@ export class PostgresSettlementOverrideStore implements SettlementOverrideStore 
       issueTitle: row.issue_title,
       issueUrl: row.issue_url,
       settlement: toEvidence(row),
+      calibration: toCalibrationEvidence(row),
     }));
   }
 
@@ -275,6 +295,36 @@ function toEvidence(row: OpenRequestRow): SettlementOverrideEvidence | null {
     pullRequestNumber: toInteger(row.pull_request_number),
     pullRequestTitle: row.pull_request_title,
     pullRequestUrl: row.pull_request_url,
+  };
+}
+
+/**
+ * The calibration evidence, or null when the issue was not self-worked.
+ *
+ * `actual_points` and the issue's settled label are read separately because a
+ * calibration is recorded even when the closure's settled evidence was
+ * rejected: the figures are then absent, but the row a correction names is not.
+ */
+function toCalibrationEvidence(row: OpenRequestRow): SelfWorkCalibrationOverrideEvidence | null {
+  if (
+    row.calibration_id === null ||
+    row.calibration_owner_login === null ||
+    row.calibration_opening_comparison_points === null ||
+    row.calibration_pull_request_number === null ||
+    row.calibration_pull_request_title === null ||
+    row.calibration_pull_request_url === null
+  ) {
+    return null;
+  }
+  return {
+    calibrationId: row.calibration_id,
+    ownerLogin: row.calibration_owner_login,
+    openingComparisonPoints: toInteger(row.calibration_opening_comparison_points),
+    actualLabel: row.settled_label,
+    actualPoints: row.calibration_actual_points === null ? null : toInteger(row.calibration_actual_points),
+    pullRequestNumber: toInteger(row.calibration_pull_request_number),
+    pullRequestTitle: row.calibration_pull_request_title,
+    pullRequestUrl: row.calibration_pull_request_url,
   };
 }
 
