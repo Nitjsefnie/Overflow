@@ -1,0 +1,13 @@
+diff --git a/src/connection.js b/src/connection.js
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..69ac3527cb756747a292262fee84ab3da73236da 100644
+--- a/src/connection.js
++++ b/src/connection.js
+@@ -389,7 +389,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+ 
+   function errored(err) {
+     stream && (stream.destroy(err), stream = null)
+-    query && queryError(query, err)
++    query && (queryError(query, err), query = null)
+     initial && (queryError(initial, err), initial = null)
+   }
+ 
