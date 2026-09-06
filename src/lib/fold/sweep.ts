@@ -417,9 +417,11 @@ function readSweepInterval(schedule: ReconciliationSweepSchedule): number {
  * logUnarmedInterval's does: sweeps go on running here, at a cadence the caller
  * did not choose, and that difference is the whole of what an operator has to
  * act on. It claims a state the call has not reached, though, and overstates
- * wherever the caller's own scheduler then fails to arm: this line is printed
- * from the read, arming is the step after it, and a caller that broke both
- * members gets logUnarmedInterval's line next — that one is the one that holds.
+ * wherever the arming that follows then fails: this line is printed from the
+ * read, arming is the step after it, and a caller that broke both members — or
+ * one that supplied no scheduler and left defaultSchedule's own setInterval to
+ * throw — gets logUnarmedInterval's line next, and that one is the one that
+ * holds.
  * There is always a reason to print, since nothing reaches this but a read that
  * threw. So a reason that is itself `undefined` still goes to the two-argument
  * line here, where logUnarmedInterval folds the same input into its reasonless
