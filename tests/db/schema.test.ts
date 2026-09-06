@@ -16,6 +16,7 @@ import { listUnwritableClosures } from "@/lib/dashboard/queries";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
@@ -3953,7 +3954,7 @@ async function insertRepositoryWithDifficultyScheme(
 async function insertReconciliationJob(
   client: QueryableSql,
   repositoryId: string,
-  reason: string,
+  reason: ReconciliationJobReason,
 ): Promise<string> {
   const [job] = await client<{ id: string }[]>`
     insert into repository_reconciliation_jobs (repository_id, reason)
