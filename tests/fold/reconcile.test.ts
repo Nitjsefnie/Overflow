@@ -227,6 +227,7 @@ describe("reconcileRepository", () => {
               url: "https://github.com/other/fork/pull/12",
               repositoryGitHubId: 5002,
               repositoryNameWithOwner: "other/fork",
+              authorGitHubUserId: 4001,
               mergedAt: "2026-09-01T11:45:00.000Z",
             },
             reconciliationPullRequest({ id: 201, number: 11 }),
@@ -254,6 +255,8 @@ describe("reconcileRepository", () => {
       .toEqual([[101, 201]]);
     expect(fold.pullRequests.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
     expect(fold.unwritableClosures).toEqual([]);
+    // The foreign author is not looked up either: nothing here can credit them.
+    expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledExactlyOnceWith([2001]);
   });
 
   it("records a cross-repository closure without reading any evidence for a wholly foreign closure", async () => {
@@ -297,7 +300,9 @@ describe("reconcileRepository", () => {
     }]);
   });
 
-  it("reads evidence when the registered owner/name differs from GitHub's only in case", async () => {
+  it("proves a settlement with the diff it read rather than the empty one it did not", async () => {
+    // The registered name is varied only as a lever: it is what makes a
+    // reconciliation that decides by name skip the fetch the fold assumes ran.
     const calls: Array<{ operation: string; number: number }> = [];
     const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
     const dependencies = reconciliationDependencies({

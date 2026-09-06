@@ -149,9 +149,14 @@ async function reconcileRepositoryWhileCoordinated(
       repository,
       githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
     );
+    // The same boundary the evidence fetch draws: an author is looked up
+    // because their pull request might be credited here, and a pull request in
+    // another repository never can be.
     const authorGitHubUserIds = [...new Set(
       githubIssues
-        .flatMap(({ closingPullRequests }) => closingPullRequests.map((pullRequest) => pullRequest.authorGitHubUserId))
+        .flatMap(({ closingPullRequests }) => closingPullRequests)
+        .filter((pullRequest) => belongsToRegisteredRepository(repository, pullRequest))
+        .map((pullRequest) => pullRequest.authorGitHubUserId)
         .filter((githubUserId): githubUserId is number => githubUserId !== null),
     )];
     const users = await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
