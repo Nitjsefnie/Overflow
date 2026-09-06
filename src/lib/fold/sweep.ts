@@ -207,6 +207,12 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
  * them. An unhandled rejection terminates the process under Node's default, and
  * the first sweep runs at startup, so a database that cannot list the
  * repositories would kill the server as it boots.
+ *
+ * One read is not guarded, and it is the first: `intervalMs` is taken before the
+ * immediate sweep, so an accessor that throws there is fatal and costs the
+ * startup pass as well. armSweepInterval treats the scheduler member as hostile
+ * and the immediate sweep survives everything it can do; that does not extend
+ * to this line.
  */
 export function startReconciliationSweep(schedule: ReconciliationSweepSchedule): void {
   const everyMs = schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
@@ -264,10 +270,12 @@ function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknow
  *
  * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
  * getter with a side effect — and losing the whole line to that would hide the
- * sweep failure entirely. A console broken at both arities stays uncontained, as
+ * sweep failure entirely. A console broken at both arities stays fatal, as
  * callGuarded describes; reached either way from inside the tick's own floating
- * promise, its throw surfaces as an unhandled rejection and later ticks still
- * run.
+ * promise, its throw arrives as an unhandled rejection, which ends the process
+ * under Node's default. Nothing in this module drops a later tick — the interval
+ * stays armed and the running flag is already cleared — but that is as far as
+ * this module's reach goes, and there is no process left to run one.
  */
 function logSweepFailure(error: unknown): void {
   const message = "Reconciliation sweep aborted before it finished";
@@ -329,6 +337,11 @@ function armSweepInterval(
  * failure entirely. There is a reason to print only when something failed: a
  * member that merely held an uncallable value did not, so that line stands alone
  * rather than carrying an `undefined` that suggests a reason went missing.
+ *
+ * That split is not exact, and does not need to be. A callback that rejects with
+ * `undefined`, or throws it, did fail and still reaches the reasonless line,
+ * because `undefined` is precisely the reason that carries nothing to print. The
+ * line survives either way, which is the whole point of it.
  */
 function logUnarmedInterval(reason?: unknown): void {
   const message =
@@ -369,6 +382,12 @@ type GuardedCallback<Arguments extends unknown[]> = (
  * methods, so a bare call would leave `this` undefined and turn the callback
  * itself into the failure this guard exists to prevent. A callback that cannot
  * be invoked that way falls into the guard below like any other failing one.
+ *
+ * One caller hands over a callback that is not a member of its receiver at all:
+ * armSweepInterval falls back to this module's own defaultSchedule, which now
+ * runs with `this` bound to the caller's schedule where the bare call left it
+ * undefined. That is the one observable change this guard makes on a path that
+ * already worked, and it is safe because defaultSchedule never reads `this`.
  *
  * The result is settled, not awaited: containing a rejection does not require
  * awaiting one, and awaiting would put whatever follows behind a callback that
