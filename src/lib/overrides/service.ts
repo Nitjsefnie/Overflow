@@ -35,6 +35,32 @@ export type SettlementOverrideEvidence = {
   pullRequestUrl: string;
 };
 
+/**
+ * The self-work facts a moderator needs to judge a correction request.
+ *
+ * A sponsor who closes their own issue is both parties, so the fold records a
+ * calibration instead of a settlement and no credits move. The figures are the
+ * comparison the account is judged on, and the actual ones are absent whenever
+ * the closure's settled evidence was rejected — the case a correction repairs.
+ */
+export type SelfWorkCalibrationOverrideEvidence = {
+  calibrationId: string;
+  ownerLogin: string;
+  openingComparisonPoints: number;
+  actualLabel: string | null;
+  actualPoints: number | null;
+  pullRequestNumber: number;
+  pullRequestTitle: string;
+  pullRequestUrl: string;
+};
+
+/**
+ * A queued request with whichever outcome its issue was priced into.
+ *
+ * At most one of the two is present: an issue is materialized as a settlement
+ * or as a self-work calibration, never both. Both being null means the outcome
+ * was rebuilt away under the request rather than never having existed.
+ */
 export type OpenSettlementOverrideRequest = {
   id: string;
   reason: string;
@@ -45,6 +71,7 @@ export type OpenSettlementOverrideRequest = {
   issueTitle: string;
   issueUrl: string;
   settlement: SettlementOverrideEvidence | null;
+  calibration: SelfWorkCalibrationOverrideEvidence | null;
 };
 
 /**
