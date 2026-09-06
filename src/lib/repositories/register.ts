@@ -189,16 +189,17 @@ export async function registerRepository(
     }
 
     // The same collision on a different constraint, and the opposite advice: the colliding
-    // value is the id GitHub minted for the hook this call created, that hook was abandoned
-    // above, and the next attempt asks GitHub for a new one. So a retry submits a webhook id
-    // no registration holds, which makes retrying the first thing worth trying rather than the
-    // one action ruled out.
+    // value is the id GitHub returned for the hook this call created, that hook was abandoned
+    // above, and the next attempt asks GitHub for another one. What GitHub will return for that
+    // one is not this module's to know, so a retry is worth making before the collision is
+    // treated as durable, rather than being the one action ruled out.
     if (error instanceof RepositoryWebhookIdConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
         "The GitHub webhook created for the submitted repository collided with one a different "
-          + "registration already records. The submitted repository is not registered. GitHub "
-          + "assigns a new webhook id on each attempt, so registering again is the first thing to try.",
+          + "registration already records. The submitted repository is not registered. Registering "
+          + "again requests a new webhook from GitHub, so retry once before treating this as stored "
+          + "state that has to be resolved.",
       );
     }
 
