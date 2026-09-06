@@ -131,23 +131,32 @@ function unavailabilityPhrase(reason: string): string {
 /**
  * What the reconciliation queue currently owes this repository, or nothing when it owes it nothing.
  *
- * A failed job is not abandoned work waiting on the sponsor: the six-hourly sweep re-enqueues every
- * active repository and revives the row, so the copy says Overflow keeps trying rather than leaving
- * a member hunting for a button that does not exist. The queue holds no error message on purpose —
- * an upstream GitHub failure can carry the sponsor's token — so the date is all the detail there is.
+ * A failed job is not abandoned work waiting on the sponsor, but only while the repository is
+ * active: reviving a FAILED row is the sweep's job alone, and the sweep enqueues active
+ * repositories only. Nothing deletes the row when a repository is deactivated — the sole delete is
+ * the worker's own success path — so a deactivated repository keeps a FAILED row no sweep will ever
+ * pick up, and promising a retry there would be an untruth on a line that already reads "inactive".
+ * A PENDING or RUNNING job still drains either way, because claiming one does not consult `active`.
+ *
+ * The queue holds no error message on purpose — an upstream GitHub failure can carry the sponsor's
+ * token — so the date is all the detail there is, and it is the latest failure rather than the
+ * first: every retry and every fail rewrites `last_failure_at` to the moment it happened.
  */
 function reconciliationPhrase(repository: RegisteredRepositoryProjection): string | null {
   const failedAt = repository.reconciliationLastFailureAt;
   switch (repository.reconciliationState) {
-    case "FAILED":
-      // The schema admits a failed job with no recorded time; "since null" would be worse than silence.
-      return failedAt === null
-        ? "reconciliation is failing; Overflow keeps retrying"
-        : `reconciliation is failing (since ${failedAt.toISOString().slice(0, 10)}); Overflow keeps retrying`;
+    case "FAILED": {
+      // The schema admits a failed job with no recorded time; "last failed null" is worse than silence.
+      const when = failedAt === null ? "" : ` (last failed ${failedAt.toISOString().slice(0, 10)})`;
+      return repository.active
+        ? `reconciliation is failing${when}; Overflow keeps retrying`
+        : `reconciliation is failing${when}; it will not be retried while the repository is inactive`;
+    }
     case "PENDING":
     case "RUNNING":
       return failedAt === null ? "reconciliation queued" : "retrying reconciliation after a failure";
-    default:
+    case "IDLE":
+      // No default: a state added to ReconciliationJobState should fail this build, not go unsaid.
       return null;
   }
 }

@@ -1344,6 +1344,17 @@ function readNullableText(value: unknown, label: string): string | null {
 }
 
 /**
+ * Keyed by the shared union, so the compiler is what notices a state added to
+ * `ReconciliationJobState`: a missing key fails this build, where a hand-kept list would instead
+ * throw on the dashboard of every sponsor who owns a repository in that state.
+ */
+const reconciliationJobStates: { [State in ReconciliationJobState]: State } = {
+  PENDING: "PENDING",
+  RUNNING: "RUNNING",
+  FAILED: "FAILED",
+};
+
+/**
  * The queue's state for one repository, where no row at all is the settled answer.
  *
  * A job deletes its own row when it succeeds, so a missing row means the repository agrees with
@@ -1355,8 +1366,7 @@ function readReconciliationState(value: unknown, label: string): "IDLE" | Reconc
     return "IDLE";
   }
   const state = readText(value, label);
-  const known: readonly ReconciliationJobState[] = ["PENDING", "RUNNING", "FAILED"];
-  for (const candidate of known) {
+  for (const candidate of Object.values(reconciliationJobStates)) {
     if (state === candidate) {
       return candidate;
     }
