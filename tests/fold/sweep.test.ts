@@ -378,6 +378,7 @@ describe("scheduled reconciliation sweep", () => {
   it("still logs a sweep failure whose reason cannot be printed", async () => {
     const timer = createTimer();
     const unreachable = new Error("Active repositories could not be listed");
+    const message = "Reconciliation sweep aborted before it finished";
     const calls: unknown[][] = [];
     // Printing the reason is what fails here — a custom inspector that throws, a
     // proxy, a getter with a side effect. The line itself has to survive that,
@@ -399,8 +400,9 @@ describe("scheduled reconciliation sweep", () => {
       await timer.settle();
 
       expect(calls).toHaveLength(2);
-      expect(calls[0]).toContain(unreachable);
-      expect(calls[1]).toHaveLength(1);
+      expect(calls[0]).toEqual([message, unreachable]);
+      // The reason is what could not be printed, so the line survives without it.
+      expect(calls[1]).toEqual([message]);
     } finally {
       logged.mockRestore();
     }
@@ -431,6 +433,113 @@ describe("scheduled reconciliation sweep", () => {
     await timer.tick();
     expect(sweeps).toBe(2);
     expect(failures).toHaveLength(2);
+  });
+
+  it("treats a hook whose retrieval throws as no hook at all", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let sweeps = 0;
+    // A lazily wired reporter: the accessor throws until its collector is
+    // configured, and reading the property is the first thing the scheduler does.
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+        throw unreachable;
+      },
+      schedule: timer.schedule,
+      get onSweepFailure(): (error: unknown) => void {
+        throw new Error("The reporter is not wired up yet");
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await timer.settle();
+      await timer.settle();
+
+      expect(unhandled).toEqual([]);
+      expect(sweeps).toBe(1);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]).toContain(unreachable);
+
+      await timer.tick();
+      expect(sweeps).toBe(2);
+      expect(logged).toHaveBeenCalledTimes(2);
+    } finally {
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("reads the failure hook once per sweep failure", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const failures: unknown[] = [];
+    let reads = 0;
+    // A property, not a stored function: a getter with a side effect must see one
+    // read per failure, not one per use of the value.
+    const schedule = {
+      runSweep: async () => {
+        throw unreachable;
+      },
+      schedule: timer.schedule,
+      get onSweepFailure(): (error: unknown) => void {
+        reads += 1;
+        return (error: unknown) => {
+          failures.push(error);
+        };
+      },
+    };
+
+    startReconciliationSweep(schedule);
+    await timer.settle();
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBe(unreachable);
+    expect(reads).toBe(1);
+  });
+
+  it("lets a console that cannot report at all surface instead of vanishing", async () => {
+    const timer = createTimer();
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    // Not the reason failing — the console itself. The scheduler has no way left
+    // to report anything, and swallowing that would leave it mute with no sign.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+    let sweeps = 0;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          sweeps += 1;
+          throw new Error("Active repositories could not be listed");
+        },
+        schedule: timer.schedule,
+      });
+      await timer.settle();
+      await timer.settle();
+
+      expect(unhandled).toHaveLength(1);
+      expect(unhandled[0]).toBeInstanceOf(TypeError);
+
+      // It keeps ticking through a broken console.
+      await timer.tick();
+      expect(sweeps).toBe(2);
+    } finally {
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
   });
 
   it("sweeps every six hours", () => {
