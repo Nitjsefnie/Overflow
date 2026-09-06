@@ -89,7 +89,7 @@ describe("repository registration form", () => {
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter one owner/name or one GitHub repository URL.");
+    expect(screen.getByRole("alert").textContent).toBe("Enter one owner/name or one GitHub repository URL.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -100,7 +100,7 @@ describe("repository registration form", () => {
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter one owner/name or one GitHub repository URL.");
+    expect(screen.getByRole("alert").textContent).toBe("Enter one owner/name or one GitHub repository URL.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

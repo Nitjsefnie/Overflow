@@ -132,10 +132,10 @@ function unavailabilityPhrase(reason: string): string {
  * What the reconciliation queue currently owes this repository, or nothing when it owes it nothing.
  *
  * A failed job is not abandoned work waiting on the sponsor, but only while the repository is
- * active: reviving a FAILED row is the sweep's job alone, and the sweep enqueues active
- * repositories only. Nothing deletes the row when a repository is deactivated — the sole delete is
- * the worker's own success path — so a deactivated repository keeps a FAILED row no sweep will ever
- * pick up, and promising a retry there would be an untruth on a line that already reads "inactive".
+ * active: every enqueue path is gated on `active`, and the sweep is the only one that revisits a
+ * repository unprompted, so nothing revives a deactivated repository's FAILED row. Nothing deletes
+ * that row either — the sole delete is the worker's own success path — so a deactivated repository
+ * keeps it, and promising a retry there would be an untruth on a line that already reads "inactive".
  * A PENDING or RUNNING job still drains either way, because claiming one does not consult `active`.
  *
  * The queue holds no error message on purpose — an upstream GitHub failure can carry the sponsor's

@@ -83,10 +83,32 @@ describe("running the next reconciliation job", () => {
     });
   });
 
-  it("defers by the first retry delay when the reported cooldown has already lapsed", async () => {
+  it("defers by the first retry delay when the reported cooldown lapses exactly now", async () => {
     const { store, calls } = createFakeStore({
       jobs: [job()],
       cooldown: new Date("2030-01-02T03:04:05.678Z"),
+    });
+
+    await expect(
+      runNextReconciliationJob({
+        store,
+        now: () => new Date("2030-01-02T03:04:05.678Z"),
+        reconcile: async () => ({ skipped: true }),
+      }),
+    ).resolves.toBe("DEFERRED");
+
+    expect(calls.at(-1)).toEqual({
+      method: "defer",
+      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+    });
+  });
+
+  it("defers by the first retry delay when the reported cooldown lapsed before now", async () => {
+    // Deferring to a cooldown already behind the clock would make the job due
+    // the moment it was deferred, and the poll loop would spin on it.
+    const { store, calls } = createFakeStore({
+      jobs: [job()],
+      cooldown: new Date("2030-01-02T02:04:05.678Z"),
     });
 
     await expect(
