@@ -579,7 +579,7 @@ button:disabled {
 }
 
 .feedback.warning {
-  background: var(--debit);
+  background: #fff0c2;
   color: var(--debit-ink);
 }
 
