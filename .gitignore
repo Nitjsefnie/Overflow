@@ -162,6 +162,7 @@ deploy/*
 !patches/
 patches/*
 !patches/*.patch
+!patches/README.md
 
 !public/
 public/*
