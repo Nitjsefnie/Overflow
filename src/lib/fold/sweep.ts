@@ -9,9 +9,15 @@ export type ReconciliationSweepDependencies = {
    * neither the sweep nor the report, whichever way it fails: reading the member
    * can throw, since it may be an accessor wired lazily; the call can throw; and
    * an async hook can reject. Each of the three ends with the repository failure
-   * on console.error instead, and the sweep carries on to the next repository —
-   * as long as the console works, which is the one exception, described on
-   * logRepositoryFailure. Omit the hook to report there in the first place.
+   * on console.error instead, and the sweep carries on to the next repository.
+   * Omit the hook to report there in the first place.
+   *
+   * A console that fails too is the exception, and only on the paths that report
+   * from inside the loop: with no hook, or with one that throws, the console's
+   * throw propagates out and the repositories still queued go unswept. An async
+   * hook's rejection is reported from a handler the loop is no longer inside, so
+   * there the sweep finishes with its full summary and the console's throw
+   * becomes an unhandled rejection instead. Both are on logRepositoryFailure.
    *
    * The return is declared, not left as `void`, because an async hook is
    * supported rather than merely tolerated by TypeScript's void-return
@@ -32,7 +38,17 @@ export type ReconciliationSweepSummary = {
 
 export type ReconciliationSweepSchedule = {
   runSweep(): Promise<unknown>;
-  schedule?(callback: () => void, everyMs: number): void;
+  /**
+   * Registers the recurring tick. Omit it for an unrefed setInterval, which is
+   * what production takes: nothing wires a scheduler, so this is an injection
+   * seam and a failure here is a caller defect. armSweepInterval says what one
+   * costs.
+   *
+   * The return is declared, not left as `void`, because an async scheduler is
+   * supported rather than merely tolerated by TypeScript's void-return
+   * assignability: whatever it returns is settled and its rejection is handled.
+   */
+  schedule?(callback: () => void, everyMs: number): void | PromiseLike<unknown>;
   intervalMs?: number;
   /**
    * Reports a sweep that failed as a whole, as distinct from the per-repository
@@ -119,20 +135,17 @@ export async function sweepReconciliations(
  * Reports one repository's failure, on the console when the caller has no hook
  * of its own.
  *
- * Guarded the three ways the scheduler's reportSweepFailure is, and for the same
- * reasons: retrieving the member is its own failure — it may be an accessor
- * wired lazily, which throws before any hook exists — while the call can throw
- * or, if the hook is async, reject. All three are contained and all three still
- * reach the console, so a failing hook costs neither the report nor the sweep.
+ * Guarded the three ways callGuarded describes, so a hook that fails costs
+ * neither the report nor the sweep.
  *
- * Costing the sweep is what is new here. The counters are already settled when
- * this is reached, so they are untouched either way; what a throw used to cost
- * was every repository still queued behind the failing one, since it propagated
- * out of the loop and left them unreconciled. A diagnostic must not be able to
- * do that.
+ * Costing the sweep is what is specific here. The counters are already settled
+ * when this is reached, so they are untouched either way; what a throw used to
+ * cost was every repository still queued behind the failing one, since it
+ * propagated out of the loop and left them unreconciled. A diagnostic must not
+ * be able to do that.
  *
- * The hook is settled, not awaited. Containing a rejection does not require
- * awaiting one, and sweepReconciliations is serial, so awaiting would put every
+ * Settling the hook rather than awaiting it counts for more here than it does at
+ * the scheduler: sweepReconciliations is serial, so awaiting would put every
  * remaining repository behind a diagnostic and let a hook that never settles
  * stall the whole sweep rather than one report.
  */
@@ -141,35 +154,16 @@ function reportRepositoryFailure(
   repositoryId: string,
   error: unknown,
 ): void {
-  let hook: ReconciliationSweepDependencies["onFailure"];
-  try {
-    // Read exactly once, and behind its own guard: an accessor can have a side
-    // effect, and it can throw instead of yielding a hook at all.
-    hook = dependencies.onFailure;
-  } catch {
-    hook = undefined;
-  }
-
-  // Anything uncallable — a hook that could not be retrieved, or the null an
-  // untyped caller can pass where the optional member expresses only undefined —
-  // counts as no hook at all.
-  if (typeof hook !== "function") {
-    logRepositoryFailure(repositoryId, error);
-    return;
-  }
-
-  try {
-    // `hook.call(dependencies, …)` because the local no longer supplies the
-    // receiver the property access did: the type declares a method, so a bare
-    // `hook(…)` would leave `this` undefined and turn the hook itself into the
-    // throw this guard exists to prevent. A hook that cannot be invoked this way
-    // falls into the guard below like any other failing hook.
-    void Promise.resolve(hook.call(dependencies, repositoryId, error)).catch(() => {
+  callGuarded(
+    dependencies,
+    () => dependencies.onFailure,
+    [repositoryId, error],
+    // The reason the hook failed is not the subject: the report is about the
+    // repository, and the hook failing is only why it is being made here.
+    () => {
       logRepositoryFailure(repositoryId, error);
-    });
-  } catch {
-    logRepositoryFailure(repositoryId, error);
-  }
+    },
+  );
 }
 
 /**
@@ -182,13 +176,11 @@ function reportRepositoryFailure(
  * built into the message, so the line that survives still says which repository
  * it was about.
  *
- * A console broken at both arities is left to surface, as on logSweepFailure,
- * though it costs more here than it does there: reached from the sweep's catch
+ * A console broken at both arities stays uncontained, as callGuarded describes,
+ * and it costs more here than at the scheduler: reached from the sweep's catch
  * block, the throw leaves sweepReconciliations rejecting, so the repositories
- * after this one go unswept; reached from the rejection handler on an async
- * hook, it becomes an unhandled rejection instead. It stays uncontained
- * deliberately: catching it would leave the sweep unable to report anything at
- * all, with no sign of that.
+ * after this one go unswept. Reached from the rejection handler on an async
+ * hook, it becomes an unhandled rejection instead and the sweep finishes.
  */
 function logRepositoryFailure(repositoryId: string, error: unknown): void {
   const message = "Reconciliation failed for repository";
@@ -218,7 +210,6 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
  */
 export function startReconciliationSweep(schedule: ReconciliationSweepSchedule): void {
   const everyMs = schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
-  const scheduleTick = schedule.schedule ?? defaultSchedule;
   let running = false;
 
   const sweep = () => {
@@ -241,69 +232,31 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
   };
 
   sweep();
-  scheduleTick(sweep, everyMs);
+  armSweepInterval(schedule, sweep, everyMs);
 }
 
 /**
  * Reports a sweep that failed as a whole, on the console when the caller has no
  * hook of its own.
  *
- * The split is finding the hook against calling it, guarded separately, because
- * each fails on its own terms: the member may be an accessor, so reading it can
- * throw before any hook exists — a reporter wired lazily throws until its
- * collector does — while the call can throw or, if the hook is async, reject.
- * All three are contained and all three still reach the console, so a failing
- * hook costs neither the process nor the report.
+ * Guarded the three ways callGuarded describes, so a hook that fails costs
+ * neither the process nor the report.
  *
  * The scheduler's own logging is in neither guard. That is the path production
  * takes, since nothing wires a hook, so a defect there has to surface rather
  * than leave a sweep failing forever with no signal.
- *
- * What stays fatal, deliberately: a console broken at both arities, for the
- * reason given on logSweepFailure, and any rejection this module cannot attach a
- * handler to — one is only containable while it can be reached, and a rejection
- * out of reach is Node's to report.
- *
- * Not written as an async function awaiting the hook. Making this function async
- * puts a second floating promise into the module whose whole defect was a
- * floating promise, and that one can reject on a broken console, so the fatality
- * above would arrive as a discarded rejection instead of a plain throw. Awaiting
- * in a closure keeps that part honest but hides the synchronous case, which
- * survives only because an async body runs eagerly up to its first await;
- * settling the result and catching separately shows both failure modes where
- * they happen.
  */
 function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknown): void {
-  let hook: ReconciliationSweepSchedule["onSweepFailure"];
-  try {
-    // Read exactly once, and behind its own guard: an accessor can have a side
-    // effect, and it can throw instead of yielding a hook at all.
-    hook = schedule.onSweepFailure;
-  } catch {
-    hook = undefined;
-  }
-
-  // Anything uncallable — a hook that could not be retrieved, or the null an
-  // untyped caller can pass where the optional member expresses only undefined —
-  // counts as no hook at all.
-  if (typeof hook !== "function") {
-    logSweepFailure(error);
-    return;
-  }
-
-  try {
-    // `hook.call(schedule, …)` because the local no longer supplies the receiver
-    // the property access did: the type declares a method, and the sibling
-    // per-repository hook is invoked with its receiver too, so a bare `hook(…)`
-    // would leave `this` undefined and turn the hook itself into the
-    // process-killing throw this guard exists to prevent. A hook that cannot be
-    // invoked this way falls into the guard below like any other failing hook.
-    void Promise.resolve(hook.call(schedule, error)).catch(() => {
+  callGuarded(
+    schedule,
+    () => schedule.onSweepFailure,
+    [error],
+    // The reason the hook failed is not the subject: the report is about the
+    // sweep, and the hook failing is only why it is being made here.
+    () => {
       logSweepFailure(error);
-    });
-  } catch {
-    logSweepFailure(error);
-  }
+    },
+  );
 }
 
 /**
@@ -311,9 +264,10 @@ function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknow
  *
  * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
  * getter with a side effect — and losing the whole line to that would hide the
- * sweep failure entirely. A console broken outright is still fatal, deliberately:
- * hiding that behind another catch would leave the scheduler with no way to
- * report anything at all and no sign of it.
+ * sweep failure entirely. A console broken at both arities stays uncontained, as
+ * callGuarded describes; reached either way from inside the tick's own floating
+ * promise, its throw surfaces as an unhandled rejection and later ticks still
+ * run.
  */
 function logSweepFailure(error: unknown): void {
   const message = "Reconciliation sweep aborted before it finished";
@@ -321,6 +275,144 @@ function logSweepFailure(error: unknown): void {
     console.error(message, error);
   } catch {
     console.error(message);
+  }
+}
+
+/**
+ * Arms the recurring tick, reporting on the console when the caller's scheduler
+ * cannot be used.
+ *
+ * Guarded the three ways callGuarded describes, and for the same reason as the
+ * two hooks: the scheduler is an injection seam, so anything it does wrong is a
+ * caller defect and none of it may reach the process. It is called after the
+ * immediate sweep, so retrieving a scheduler that throws no longer costs the
+ * startup pass that repairs the deliveries missed while the server was down.
+ *
+ * Only a nullish member falls through to defaultSchedule, which is what the
+ * `?? defaultSchedule` this replaces did. Anything else unusable — a member
+ * whose accessor throws, a member holding a value that is not callable — means
+ * the caller did supply a scheduler and it is broken, so nothing is armed:
+ * substituting the default there would arm a real six-hour interval nobody asked
+ * for and hide the defect.
+ *
+ * Arming nothing leaves a process that serves and never sweeps again, which is
+ * why logUnarmedInterval says exactly that. It is still the better failure: the
+ * sweep is started from the instrumentation hook at server start, so a scheduler
+ * that cannot be armed fails the same way on the next boot, and dying under a
+ * supervisor would give a server that is repeatedly down and still never
+ * sweeping.
+ */
+function armSweepInterval(
+  schedule: ReconciliationSweepSchedule,
+  sweep: () => void,
+  everyMs: number,
+): void {
+  callGuarded(
+    schedule,
+    () => schedule.schedule ?? defaultSchedule,
+    [sweep, everyMs],
+    logUnarmedInterval,
+  );
+}
+
+/**
+ * Logs that the recurring tick was never armed, keeping the line even when the
+ * reason is what breaks.
+ *
+ * The message names the residual state and not just the failure, because
+ * containing this one is what leaves a process alive and permanently not
+ * sweeping: the line is all an operator gets, so it has to say that a restart is
+ * what brings the sweep back.
+ *
+ * A reason can refuse to be printed — a custom inspector that throws, a proxy, a
+ * getter with a side effect — and losing the whole line to that would hide the
+ * failure entirely. There is a reason to print only when something failed: a
+ * member that merely held an uncallable value did not, so that line stands alone
+ * rather than carrying an `undefined` that suggests a reason went missing.
+ */
+function logUnarmedInterval(reason?: unknown): void {
+  const message =
+    "Reconciliation sweep interval was not armed; no further sweeps will run until the process restarts";
+  if (reason === undefined) {
+    console.error(message);
+    return;
+  }
+
+  try {
+    console.error(message, reason);
+  } catch {
+    console.error(message);
+  }
+}
+
+type GuardedCallback<Arguments extends unknown[]> = (
+  ...args: Arguments
+) => void | PromiseLike<unknown>;
+
+/**
+ * Calls a callback the caller supplied, containing every way one can fail, and
+ * reports instead of failing.
+ *
+ * The three ways are guarded separately because each fails on its own terms:
+ * retrieving the member can throw before any callback exists, since it may be an
+ * accessor wired lazily; the call itself can throw; and an async callback can
+ * reject, which no `try` around the call can see. Each of the three ends at
+ * `report`, which is given the reason where there is one and nothing where the
+ * member simply held a value that is not callable, since nothing failed there.
+ * Anything uncallable — a member that could not be retrieved, or the null an
+ * untyped caller can pass where an optional member expresses only undefined —
+ * counts as no callback at all. The member is read once, through the thunk,
+ * because an accessor can have a side effect as well as a failure.
+ *
+ * The receiver is passed rather than left to the call, because the local no
+ * longer supplies the one the property access did: these members are declared as
+ * methods, so a bare call would leave `this` undefined and turn the callback
+ * itself into the failure this guard exists to prevent. A callback that cannot
+ * be invoked that way falls into the guard below like any other failing one.
+ *
+ * The result is settled, not awaited: containing a rejection does not require
+ * awaiting one, and awaiting would put whatever follows behind a callback that
+ * may never settle at all. For the same reason this is not written as an async
+ * function awaiting the callback — that puts a second floating promise into a
+ * module whose whole defect was a floating promise, and it hides the synchronous
+ * case, which survives only because an async body runs eagerly up to its first
+ * await. Settling the result and catching separately shows both failure modes
+ * where they happen.
+ *
+ * What stays fatal, deliberately: a console broken at every arity, since
+ * catching that would leave the module unable to report anything at all with no
+ * sign of it, and any rejection this module cannot attach a handler to — one is
+ * only containable while it can be reached, and a rejection out of reach is
+ * Node's to report. Where a `report` that throws lands depends on the path that
+ * reached it: from the retrieval, the uncallable check or a synchronous throw it
+ * propagates to this function's caller, while from the rejection handler it
+ * becomes an unhandled rejection. Each caller documents what that costs it.
+ */
+function callGuarded<Arguments extends unknown[]>(
+  receiver: object,
+  retrieve: () => GuardedCallback<Arguments> | undefined,
+  args: Arguments,
+  report: (reason?: unknown) => void,
+): void {
+  let callback: GuardedCallback<Arguments> | undefined;
+  try {
+    callback = retrieve();
+  } catch (error) {
+    report(error);
+    return;
+  }
+
+  if (typeof callback !== "function") {
+    report();
+    return;
+  }
+
+  try {
+    void Promise.resolve(callback.apply(receiver, args)).catch((reason: unknown) => {
+      report(reason);
+    });
+  } catch (error) {
+    report(error);
   }
 }
 
