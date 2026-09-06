@@ -28,7 +28,7 @@ describe("integrated rejected settlement closure reasons", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "Every qualifying rationale comment by `sponsor` naming `delivered/6` was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
+      reason: "Every qualifying rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
     }]);
     expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });

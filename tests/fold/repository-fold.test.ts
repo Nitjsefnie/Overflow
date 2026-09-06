@@ -753,7 +753,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
   });
 
@@ -774,7 +774,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({
       githubIssueId: 101, githubPullRequestId: 201, userId: "sponsor", actualPoints: null,
@@ -802,7 +802,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.pullRequests).toHaveLength(1);
     expect(result.settlements).toEqual([]);
@@ -829,7 +829,7 @@ describe("rejected settlement closure records", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "No rationale comment by `sponsor` naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+        reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
       },
     ]);
   });
