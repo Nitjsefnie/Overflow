@@ -95,14 +95,19 @@ side.
 
 Upstream tracks the first order as `porsager/postgres` issue 1097, and open
 pull request 1142 proposes a fix. **Ours is deliberately not the same change.**
-That pull request clears the slot inside `errored()` — the placement described
-above — so it carries the silent-wrong-answer defect; it is also unmerged and
-unreleased. Do not resync this patch with it.
+It makes two edits to `src/connection.js`. It clears the slot inside
+`errored()` — the placement described above, so it carries the
+silent-wrong-answer defect — and it splits `closed()`'s in-flight failure in
+two, giving the `hadError` close its own branch that rejects `query` and drains
+`sent` inline, clearing `query` there as well, and leaving the existing
+`error()` call to the errorless close. It is also unmerged and unreleased. Do
+not resync this patch with it.
 
-Upstream has nothing at all for the second order: issue 1097 describes only the
-death-then-`end()` interleaving, and pull request 1142 touches neither `end()`
-nor `terminate()`. When a release does land, judge it against the tests named
-here rather than against the pull request.
+Neither edit settles a pending `end()`, so upstream has nothing at all for the
+second order: issue 1097 describes only the death-then-`end()` interleaving,
+and pull request 1142 leaves `end()`, `terminate()` and `ending` alone. When a
+release does land, judge it against the tests named here rather than against
+the pull request.
 
 #### What it still does not cover
 
