@@ -1383,6 +1383,40 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("arms the caller's own scheduler at the interval it supplied", async () => {
+    // The readable interval as a subject rather than as scenery behind one: a
+    // number that is neither this module's default nor a failure has to be the
+    // number armed, and a read that worked has nothing to say on the console.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const armed: Array<{ callback: () => void; everyMs: number }> = [];
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      intervalMs: 90_000,
+      schedule: (callback: () => void, everyMs: number) => {
+        armed.push({ callback, everyMs });
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(sweeps).toBe(1);
+      expect(armed).toHaveLength(1);
+      expect(armed[0]?.everyMs).toBe(90_000);
+      // The caller's scheduler is the only one used; the default never runs.
+      expect(intervals.armed).toEqual([]);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
   it("arms an intervalMs of zero rather than standing the default in for it", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
