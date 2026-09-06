@@ -59,14 +59,19 @@ export type SelfWorkCalibrationOverrideEvidence = {
  *
  * In practice at most one of the two is present, and both being null means the
  * outcome was rebuilt away under the request rather than never having existed.
- * That is a derived property of how the fold writes, not a schema guarantee:
- * `settlements` carries `settlements_issue_unique`, `self_work_calibrations`
- * only `unique (pull_request_id, issue_id)`, and nothing forbids a settlement
- * and a calibration on one issue. What actually holds it is the `continue`
- * after the calibration push in `src/lib/fold/repository-fold.ts` and the
- * materializer's removal loop, which deletes every calibration absent from the
- * desired set. Check both before relying on it: the queue's left joins would
- * silently duplicate an entry rather than fail if a second row ever appeared.
+ * Only half of that is a schema guarantee, so the halves are worth separating.
+ * Migration 003 gives `settlements` both `settlements_issue_unique unique
+ * (issue_id)` and `settlements_pull_request_issue_unique`, so a second
+ * settlement on one issue cannot be written; it gives `self_work_calibrations`
+ * only `unique (pull_request_id, issue_id)`, replacing the `unique` on
+ * `pull_request_id` alone that migration 001 declared, so a second calibration
+ * on one issue through a second pull request can be. Nothing at all forbids a
+ * settlement and a calibration on the same issue. What holds those two open
+ * cases shut is the `continue` after the calibration push in
+ * `src/lib/fold/repository-fold.ts` and the materializer's removal loop, which
+ * deletes every calibration absent from the desired set. Check both before
+ * relying on it: the queue's left joins would silently duplicate an entry
+ * rather than fail if a second row ever appeared.
  */
 export type OpenSettlementOverrideRequest = {
   id: string;
