@@ -211,6 +211,11 @@ describe("the client's reserve contract", () => {
     // one the drain has already shifted; a positional removal would take the *next* item out
     // instead, and the drain would stop one short of it with its caller left waiting forever.
     await sql.end({ timeout: 0 });
+    // Every rejection has been issued by the time end() settles, but the handlers above record
+    // them a microtask later. A macrotask turn drains the whole microtask queue, so the record
+    // does not depend on how many ticks each reservation's settlement chain happens to take.
+    // setImmediate is a turn boundary rather than a duration, so this is not a wall-clock margin.
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(record).toEqual(["first: CONNECTION_DESTROYED", "second: CONNECTION_DESTROYED"]);
   });
