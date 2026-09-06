@@ -188,4 +188,30 @@ describe("the client's reserve contract", () => {
 
     expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("still queued");
   });
+
+  it("refuses every reservation queued behind a destroyed pool, not only the first", async () => {
+    const sql = postgres(databaseUrl, { max: 1, fetch_types: false });
+    const record: string[] = [];
+    const track = (name: string, reservation: Promise<unknown>): void => {
+      void reservation.then(
+        () => record.push(`${name}: served`),
+        (error: { code?: string }) => record.push(`${name}: ${error.code}`),
+      );
+    };
+
+    // The pool is at its bound and its only connection is reserved, so both reservations below
+    // are queued behind it.
+    await sql.reserve();
+    track("first", sql.reserve());
+    track("second", sql.reserve());
+
+    // A zero deadline destroys the pool: it terminates the connections and then drains `queries`,
+    // shifting each queued item out and rejecting it, all before end() settles. The rejection
+    // takes the reserve's own pseudo-query back out of `queries` by identity, which is a no-op on
+    // one the drain has already shifted; a positional removal would take the *next* item out
+    // instead, and the drain would stop one short of it with its caller left waiting forever.
+    await sql.end({ timeout: 0 });
+
+    expect(record).toEqual(["first: CONNECTION_DESTROYED", "second: CONNECTION_DESTROYED"]);
+  });
 });
