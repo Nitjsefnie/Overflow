@@ -86,6 +86,9 @@ src/app/settlements/[[]id[]]/*
 !src/app/calibration/
 src/app/calibration/*
 !src/app/calibration/*.tsx
+!src/app/calibration/[[]id[]]/
+src/app/calibration/[[]id[]]/*
+!src/app/calibration/[[]id[]]/*.tsx
 !src/app/moderation/
 src/app/moderation/*
 !src/app/moderation/*.tsx
