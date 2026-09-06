@@ -598,12 +598,15 @@ function resolveOpening(
  */
 function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusal {
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
-  // With a stored sponsor login, every candidate can be compared, so name the
-  // earliest. With no stored login, name the earliest candidate carrying an id;
-  // the idless candidates could not be compared and must not be named here.
-  const attributable = candidates.find(
-    (candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null,
-  );
+  // Only name candidates whose accounts could be compared. Among candidates
+  // at the earliest instant, order ids to choose a deterministic diagnostic
+  // representative: opaque GitHub ids do not establish which happened first.
+  // Keep this key out of the accepting path: its selected id is persisted as
+  // immutable evidence and re-derived on every reconciliation. Selecting a
+  // different accepted id would fail the run's immutable-evidence check.
+  const attributable = candidates
+    .filter((candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null)
+    .sort((left, right) => compareHistoryItems(left, right) || left.id.localeCompare(right.id))[0];
   if (attributable === undefined) {
     // TODO (issue 189): With a blank sponsor login and only idless candidates,
     // stay mute: OPENING_LABEL_UNAUTHORIZED would accuse an account never
@@ -1150,7 +1153,7 @@ function compareHistoryItems(
   left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
   right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
 ): number {
-  return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id);
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
 }
 
 function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
