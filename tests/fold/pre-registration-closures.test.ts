@@ -145,11 +145,33 @@ describe("rejected settlements whose settled label postdates registration", () =
     expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
     expect(result.unwritableClosures).toHaveLength(1);
   });
+
+  it("records the closure when the settled label was applied exactly at registration", () => {
+    const snapshot = rejectedEvidenceFixture();
+    mergeAt(snapshot, shift(registeredAt, -12 * HOUR));
+    applyRefusedSettledLabelAt(snapshot, registeredAt);
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([
+      expect.objectContaining({ githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED" }),
+    ]);
+  });
 });
 
 describe("closures with no closing pull request, against the registration instant", () => {
   it("drops one whose issue closed before registration", () => {
     const snapshot = handClosedFixture(shift(registeredAt, -12 * HOUR));
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([]);
+  });
+
+  it("drops one whose issue closed five minutes before registration", () => {
+    // No merge means no label-versus-merge ordering to forgive, so the
+    // evidence ordering grace has no business widening this instant.
+    const snapshot = handClosedFixture(shift(registeredAt, -5 * MINUTE));
 
     const result = foldRepository(snapshot);
 
