@@ -27,6 +27,28 @@ function exhaustedCoordinationPool(): {
   return { coordinationSql, reservations };
 }
 
+/**
+ * A coordination client that always hands back a connection whose advisory
+ * lock is refused, so every attempt has to be retried.
+ */
+function lockRefusingCoordinationPool(): {
+  coordinationSql: SqlClient;
+  lockAttempts: string[];
+  releases: string[];
+} {
+  const lockAttempts: string[] = [];
+  const releases: string[] = [];
+  const connection = (() => {
+    lockAttempts.push("try-lock");
+    return Promise.resolve([{ acquired: false }]);
+  }) as unknown as Awaited<ReturnType<SqlClient["reserve"]>>;
+  connection.release = () => { releases.push("released"); };
+  const coordinationSql = {
+    reserve: () => Promise.resolve(connection),
+  } as unknown as SqlClient;
+  return { coordinationSql, lockAttempts, releases };
+}
+
 function storeOverPool(coordinationSql: SqlClient): PostgresFoldStore {
   return new PostgresFoldStore({} as unknown as SqlClient, undefined, coordinationSql);
 }
@@ -64,6 +86,28 @@ describe("reconciliation coordination pool", () => {
       await refusal;
       expect(workStarted).toBe(false);
       expect(reservations).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying a lock it cannot take once the lock-wait deadline passes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { coordinationSql, lockAttempts, releases } = lockRefusingCoordinationPool();
+      let workStarted = false;
+      const coordinated = storeOverPool(coordinationSql)
+        .withRepositoryReconciliation("repository-locked-by-someone-else", async () => {
+          workStarted = true;
+        });
+      const refusal = expect(coordinated).rejects.toThrow(coordinationFailure);
+
+      await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
+
+      await refusal;
+      expect(workStarted).toBe(false);
+      expect(lockAttempts.length).toBeGreaterThan(1);
+      expect(releases).toHaveLength(lockAttempts.length);
     } finally {
       vi.useRealTimers();
     }
