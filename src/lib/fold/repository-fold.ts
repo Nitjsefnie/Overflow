@@ -605,8 +605,10 @@ function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): Ope
     (candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null,
   );
   if (attributable === undefined) {
-    // TODO: With a blank sponsor login and only idless candidates, opening stays
-    // deliberately mute; the settled side reports the missing sponsor login.
+    // TODO (issue 189): With a blank sponsor login and only idless candidates,
+    // stay mute: OPENING_LABEL_UNAUTHORIZED would accuse an account never
+    // compared against the sponsor. The settled window's explicit missing-login
+    // reason cannot cover this gap because it is downstream of this refusal.
     return { code: "OPENING_LABEL_MISSING" };
   }
   return {
