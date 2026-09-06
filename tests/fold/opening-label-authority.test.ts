@@ -85,6 +85,25 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
+  it.each([
+    { name: "case", login: "SPONSOR", displayedLogin: "SPONSOR" },
+    { name: "surrounding whitespace", login: "  sponsor  ", displayedLogin: "sponsor" },
+  ])("recognizes an impostor login differing only by $name", ({ login, displayedLogin }) => {
+    const snapshot = openingFixture({ opening: { login, githubUserId: OUTSIDER_GITHUB_USER_ID } });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: displayedLogin,
+      reason: "The opening label `M` was applied by a different GitHub account using the login "
+        + `\`${displayedLogin}\`, not by the repository sponsor.`,
+    }]);
+    expect(result.issues).toEqual([]);
+  });
+
   it("refuses an in-window application that was later removed again", () => {
     // The refusal is about an APPLICATION, not about what is on the issue now:
     // the accepting predicate reads `LABELED` events too, so an outsider whose
