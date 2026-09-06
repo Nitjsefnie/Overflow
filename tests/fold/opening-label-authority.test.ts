@@ -69,6 +69,11 @@ describe("opening label authority", () => {
     // login the impostor holds — which reads exactly like the sponsor's. The
     // sentence is what carries the discriminator: the ACCOUNT was refused, and
     // the login it holds is not evidence of who it is.
+    // The point of that branch: a moderator must not be able to read the row as
+    // the sponsor having applied the label. The ordinary sentence would print
+    // the sponsor's own login on both sides of "rather than". Asserted before
+    // the exact shape, so this property is what a regression reports.
+    expect(unauthorizedReason(result)).not.toContain(`applied by \`${SPONSOR_LOGIN}\``);
     expect(result.policyViolations).toEqual([{
       code: "OPENING_LABEL_UNAUTHORIZED",
       githubIssueId: 101,
@@ -77,10 +82,6 @@ describe("opening label authority", () => {
       reason: "The opening label `M` was applied by a different GitHub account using the login "
         + "`sponsor`, not by the repository sponsor.",
     }]);
-    // The point of that branch: a moderator must not be able to read the row as
-    // the sponsor having applied the label. The ordinary sentence would print
-    // the sponsor's own login on both sides of "rather than".
-    expect(unauthorizedReason(result)).not.toContain(`applied by \`${SPONSOR_LOGIN}\``);
     expect(result.issues).toEqual([]);
   });
 
