@@ -61,10 +61,6 @@ type UserRow = {
 type IssueRow = {
   id: string;
   github_issue_id: number | string;
-  issue_number: number;
-  title: string;
-  url: string;
-  state: IssueState;
   opening_label: string;
   opening_comparison_points: number;
   opening_reserve_points: number;
@@ -85,13 +81,8 @@ type IssueRow = {
 type PullRequestRow = {
   id: string;
   github_pull_request_id: number | string;
-  pull_request_number: number;
-  title: string;
-  url: string;
-  state: PullRequestState;
-  author_github_login: string | null;
-  merge_commit_oid: string | null;
-  merged_at: string | Date | null;
+  merge_commit_oid?: string | null;
+  merged_at?: string | Date | null;
 };
 
 type SettlementRow = {
@@ -1026,8 +1017,7 @@ async function upsertIssues(
           claim_assignee_github_login = excluded.claim_assignee_github_login,
           updated_at = now()
       returning
-        id, github_issue_id, issue_number, title, url, state,
-        opening_label, opening_comparison_points, opening_reserve_points,
+        id, github_issue_id, opening_label, opening_comparison_points, opening_reserve_points,
         owner_github_login, opening_source_event_id, opening_source_actor_login, opening_source_at,
         settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
         settled_label_applied_at, settled_rationale_comment_id, settled_rationale_actor_login,
@@ -1088,9 +1078,7 @@ async function upsertPullRequests(
           final_commit_at = excluded.final_commit_at,
           proof_sha256 = excluded.proof_sha256,
           updated_at = now()
-      returning
-        id, github_pull_request_id, pull_request_number, title, url, state,
-        author_github_login, merge_commit_oid, merged_at
+      returning id, github_pull_request_id
     `;
     if (row === undefined) {
       throw new Error("Pull request materialization returned no row.");
@@ -1486,6 +1474,37 @@ async function replacePullRequestIssueLinks(
 }
 
 /**
+ * Exactly the columns `deleteAbsentMaterialization` selects, and no others. The
+ * shared `IssueRow` and `PullRequestRow` describe what the upserts return, which
+ * is a wider set than either removal query fetches; typing these rows as those
+ * would let a snapshot read a column the query never asked for and record it as
+ * `undefined`, which `JSON.stringify` then drops from the stored payload without
+ * a word. Naming the narrow shape here makes that a compile error instead.
+ */
+type RemovedIssueRow = {
+  github_issue_id: number | string;
+  issue_number: number;
+  title: string;
+  url: string;
+  state: IssueState;
+  opening_label: string;
+  opening_comparison_points: number;
+  opening_reserve_points: number;
+  owner_github_login: string | null;
+};
+
+type RemovedPullRequestRow = {
+  github_pull_request_id: number | string;
+  pull_request_number: number;
+  title: string;
+  url: string;
+  state: PullRequestState;
+  author_github_login: string | null;
+  merge_commit_oid: string | null;
+  merged_at: string | Date | null;
+};
+
+/**
  * Deletes the issues and pull requests the fold no longer contains, counting
  * each one and recording it in the change log.
  *
@@ -1510,13 +1529,13 @@ async function deleteAbsentMaterialization(
   const desiredIssueIds = new Set(issueIds.values());
   const desiredPullRequestIds = new Set(pullRequestIds.values());
   let removals = 0;
-  const currentPullRequests = await sql<PullRequestRow[]>`
+  const currentPullRequests = await sql<({ id: string } & RemovedPullRequestRow)[]>`
     select
       id, github_pull_request_id, pull_request_number, title, url, state,
       author_github_login, merge_commit_oid, merged_at
     from pull_requests where repository_id = ${repositoryId}
   `;
-  const currentIssues = await sql<IssueRow[]>`
+  const currentIssues = await sql<({ id: string } & RemovedIssueRow)[]>`
     select
       id, github_issue_id, issue_number, title, url, state,
       opening_label, opening_comparison_points, opening_reserve_points, owner_github_login
@@ -1544,7 +1563,7 @@ async function deleteAbsentMaterialization(
   return { adds: 0, changes: 0, removals };
 }
 
-function removedIssueState(row: IssueRow): JSONValue {
+function removedIssueState(row: RemovedIssueRow): JSONValue {
   return {
     githubIssueId: toSafeInteger(row.github_issue_id),
     issueNumber: row.issue_number,
@@ -1558,7 +1577,7 @@ function removedIssueState(row: IssueRow): JSONValue {
   };
 }
 
-function removedPullRequestState(row: PullRequestRow): JSONValue {
+function removedPullRequestState(row: RemovedPullRequestRow): JSONValue {
   return {
     githubPullRequestId: toSafeInteger(row.github_pull_request_id),
     pullRequestNumber: row.pull_request_number,

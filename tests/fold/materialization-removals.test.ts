@@ -19,6 +19,8 @@ const abandonedIssueGitHubId = 9_100_001;
 const reopenedIssueGitHubId = 9_100_002;
 const withdrawnPullRequestGitHubId = 9_100_003;
 const survivingIssueGitHubId = 9_100_004;
+const retiredIssueGitHubId = 9_100_005;
+const retiredPullRequestGitHubId = 9_100_006;
 
 type ChangeRow = {
   entity_kind: string;
@@ -179,6 +181,110 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 2, removed: 2 });
   });
 
+  // A second removal fixture that shares no recorded value with the first apart
+  // from the pull request's `state`. A builder that returns a constant object,
+  // or hard-codes a number, a title, a login or a label, can satisfy one of the
+  // two cases but never both.
+  it("counts and records a closed issue and the pull request that closed it leaving together", async () => {
+    const sponsorLogin = "removal-sponsor-four";
+    const contributorLogin = "removal-contributor-four";
+    const contributorGitHubUserId = 9_300_006;
+    await insertUser(contributorLogin, contributorGitHubUserId);
+    const { repositoryId, store, ownerName } = await registerRepository({
+      githubRepositoryId: 9_200_007,
+      ownerName: "example/retired-closure",
+      githubWebhookId: 9_200_008,
+      sponsorLogin,
+      sponsorGitHubUserId: 9_300_005,
+    });
+    const closingPullRequest = mergedPullRequest({
+      id: retiredPullRequestGitHubId,
+      number: 23,
+      ownerName,
+      githubRepositoryId: 9_200_007,
+      authorLogin: contributorLogin,
+      authorGitHubUserId: contributorGitHubUserId,
+      mergedAt: "2026-09-02T15:30:00.000Z",
+      finalCommitAt: "2026-09-02T09:00:00.000Z",
+    });
+    let issues: GitHubIssue[] = [{
+      ...openIssue({
+        id: retiredIssueGitHubId,
+        number: 7,
+        ownerName,
+        ownerLogin: sponsorLogin,
+        openingLabel: "L",
+      }),
+      state: "CLOSED",
+      claimAssigneeGitHubLogin: contributorLogin,
+      closingPullRequests: [closingPullRequest],
+    }];
+    const github = gateway(ownerName, () => issues);
+
+    await reconcile(store, github, repositoryId);
+    await expect(materializedIssueIds(repositoryId)).resolves.toEqual([retiredIssueGitHubId]);
+    await expect(materializedPullRequestIds(repositoryId)).resolves.toEqual([retiredPullRequestGitHubId]);
+
+    // GitHub stops reporting the issue at all, so the closed issue, the pull
+    // request that closed it and the settlement between them all leave together.
+    issues = [];
+    const second = await reconcile(store, github, repositoryId);
+
+    await expect(materializedIssueIds(repositoryId)).resolves.toEqual([]);
+    await expect(materializedPullRequestIds(repositoryId)).resolves.toEqual([]);
+    const removals = await removalChanges(second.runId);
+    expect(removals).toEqual([
+      {
+        entity_kind: "ISSUE",
+        change_kind: "REMOVE",
+        pull_request_id: null,
+        before_state: {
+          githubIssueId: retiredIssueGitHubId,
+          issueNumber: 7,
+          title: "An issue whose materialization can be removed 7",
+          url: "https://github.com/example/retired-closure/issues/7",
+          state: "CLOSED",
+          ownerGitHubLogin: sponsorLogin,
+          openingLabel: "L",
+          openingComparisonPoints: 8,
+          openingReservePoints: 8,
+        },
+        after_state: null,
+      },
+      {
+        entity_kind: "PULL_REQUEST",
+        change_kind: "REMOVE",
+        pull_request_id: null,
+        before_state: {
+          githubPullRequestId: retiredPullRequestGitHubId,
+          pullRequestNumber: 23,
+          title: "A merged pull request 23",
+          url: "https://github.com/example/retired-closure/pull/23",
+          // The one recorded field the two pull-request cases share, because a
+          // materialized pull request can only be MERGED: `selectClosingPullRequest`
+          // in repository-fold.ts admits nothing else into the fold, so no fixture
+          // can vary this without stopping the row from existing at all.
+          state: "MERGED",
+          authorGitHubLogin: contributorLogin,
+          mergeCommitOid: "00000000000000000000000000000000008adae6",
+          mergedAt: "2026-09-02T15:30:00.000Z",
+        },
+        after_state: null,
+      },
+      {
+        entity_kind: "SETTLEMENT",
+        change_kind: "REMOVE",
+        pull_request_id: null,
+        before_state: expect.objectContaining({
+          githubIssueId: retiredIssueGitHubId,
+          githubPullRequestId: retiredPullRequestGitHubId,
+        }),
+        after_state: null,
+      },
+    ]);
+    expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 3, removed: 3 });
+  });
+
   it("records no removal for a reconciliation that removes nothing", async () => {
     const { repositoryId, store, ownerName } = await registerRepository({
       githubRepositoryId: 9_200_005,
@@ -300,7 +406,14 @@ function gateway(ownerName: string, issuesNow: () => readonly GitHubIssue[]): Re
   };
 }
 
-function openIssue(input: { id: number; number: number; ownerName: string; ownerLogin: string }): GitHubIssue {
+function openIssue(input: {
+  id: number;
+  number: number;
+  ownerName: string;
+  ownerLogin: string;
+  openingLabel?: string;
+}): GitHubIssue {
+  const openingLabel = input.openingLabel ?? "M";
   return {
     id: input.id,
     number: input.number,
@@ -312,7 +425,7 @@ function openIssue(input: { id: number; number: number; ownerName: string; owner
     closedAt: null,
     authorLogin: input.ownerLogin,
     authorGitHubUserId: null,
-    labels: ["M"],
+    labels: [openingLabel],
     claimAssigneeGitHubLogin: null,
     history: [
       {
@@ -320,7 +433,7 @@ function openIssue(input: { id: number; number: number; ownerName: string; owner
         id: `opening-${input.id}`,
         actorLogin: input.ownerLogin,
         actorGitHubUserId: null,
-        label: "M",
+        label: openingLabel,
         createdAt: "2026-09-01T08:01:00.000Z",
       },
     ],
@@ -336,6 +449,8 @@ function mergedPullRequest(input: {
   githubRepositoryId: number;
   authorLogin: string;
   authorGitHubUserId: number;
+  mergedAt?: string;
+  finalCommitAt?: string;
 }): GitHubPullRequest {
   return {
     id: input.id,
@@ -344,9 +459,9 @@ function mergedPullRequest(input: {
     body: "Pull request evidence",
     url: `https://github.com/${input.ownerName}/pull/${input.number}`,
     state: "MERGED",
-    mergedAt: "2026-09-01T12:00:00.000Z",
+    mergedAt: input.mergedAt ?? "2026-09-01T12:00:00.000Z",
     mergeCommitOid: input.id.toString(16).padStart(40, "0"),
-    finalCommitAt: "2026-09-01T10:00:00.000Z",
+    finalCommitAt: input.finalCommitAt ?? "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
     authorGitHubUserId: input.authorGitHubUserId,
     repositoryGitHubId: input.githubRepositoryId,
