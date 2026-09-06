@@ -4,6 +4,7 @@ import {
   shouldStartReconciliationSweep,
   startReconciliationSweep,
   sweepReconciliations,
+  type ReconciliationSweepSchedule,
 } from "@/lib/fold/sweep";
 
 describe("scheduled reconciliation sweep", () => {
@@ -255,13 +256,15 @@ describe("scheduled reconciliation sweep", () => {
     expect(schedule.failures[0]).toBe(unreachable);
   });
 
-  it("survives a failure hook that throws and sweeps again on the next interval", async () => {
+  it("costs neither the process nor the report when the failure hook throws", async () => {
     const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
     const unhandled: unknown[] = [];
     const listener = (reason: unknown) => {
       unhandled.push(reason);
     };
     process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let sweeps = 0;
     let reports = 0;
 
@@ -269,7 +272,7 @@ describe("scheduled reconciliation sweep", () => {
       startReconciliationSweep({
         runSweep: async () => {
           sweeps += 1;
-          throw new Error("Active repositories could not be listed");
+          throw unreachable;
         },
         schedule: timer.schedule,
         onSweepFailure: () => {
@@ -283,14 +286,123 @@ describe("scheduled reconciliation sweep", () => {
       expect(sweeps).toBe(1);
       expect(reports).toBe(1);
       expect(unhandled).toEqual([]);
+      // The hook failed, so the sweep failure falls back to the console instead
+      // of being lost.
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]).toContain(unreachable);
 
       // The running flag is cleared even when the hook threw.
       await timer.tick();
       expect(sweeps).toBe(2);
       expect(reports).toBe(2);
       expect(unhandled).toEqual([]);
+      expect(logged).toHaveBeenCalledTimes(2);
     } finally {
+      logged.mockRestore();
       process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("costs neither the process nor the report when the failure hook rejects", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let sweeps = 0;
+    let reports = 0;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          sweeps += 1;
+          throw unreachable;
+        },
+        schedule: timer.schedule,
+        // The ordinary shape of a reporter that ships the failure somewhere:
+        // async, and able to reject. A `try` around the call cannot see that
+        // rejection, and the returned promise is not the scheduler's to discard.
+        onSweepFailure: async () => {
+          reports += 1;
+          throw new Error("Shipping the report failed");
+        },
+      });
+      await timer.settle();
+      await timer.settle();
+
+      expect(unhandled).toEqual([]);
+      expect(sweeps).toBe(1);
+      expect(reports).toBe(1);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]).toContain(unreachable);
+
+      await timer.tick();
+      expect(sweeps).toBe(2);
+      expect(reports).toBe(2);
+      expect(unhandled).toEqual([]);
+      expect(logged).toHaveBeenCalledTimes(2);
+    } finally {
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("reports on the console when the failure hook is null", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // An untyped caller — a config object, parsed JSON, a JavaScript consumer —
+    // can hand over null where the optional member expresses only undefined.
+    const schedule = {
+      runSweep: async () => {
+        throw unreachable;
+      },
+      schedule: timer.schedule,
+      onSweepFailure: null,
+    } as unknown as ReconciliationSweepSchedule;
+
+    try {
+      startReconciliationSweep(schedule);
+      await timer.settle();
+
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]).toContain(unreachable);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("still logs a sweep failure whose reason cannot be printed", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const calls: unknown[][] = [];
+    // Printing the reason is what fails here — a custom inspector that throws, a
+    // proxy, a getter with a side effect. The line itself has to survive that,
+    // and this is the scheduler's own reporting path, not a caller's hook.
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+      if (args.length > 1) {
+        throw new TypeError("This reason cannot be printed");
+      }
+    });
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          throw unreachable;
+        },
+        schedule: timer.schedule,
+      });
+      await timer.settle();
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain(unreachable);
+      expect(calls[1]).toHaveLength(1);
+    } finally {
+      logged.mockRestore();
     }
   });
 
