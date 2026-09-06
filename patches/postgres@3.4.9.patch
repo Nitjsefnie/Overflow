@@ -1,13 +1,16 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..69ac3527cb756747a292262fee84ab3da73236da 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..2df5d8e90f8e9cbc82f9b184baa1ad3546dff995 100644
 --- a/src/connection.js
 +++ b/src/connection.js
-@@ -389,7 +389,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+       return
  
-   function errored(err) {
-     stream && (stream.destroy(err), stream = null)
--    query && queryError(query, err)
-+    query && (queryError(query, err), query = null)
-     initial && (queryError(initial, err), initial = null)
+     errored(err)
++    // Every route into error() is a dead or closing socket, so no ReadyForQuery is coming to
++    // clear the rejected query, and end() would wait on it forever. It has to be cleared here
++    // rather than in errored(), which is also reached with the connection alive — execute()'s
++    // catch recovers by writing a Sync, and that Sync's ReadyForQuery still has to find it.
++    query = null
+     while (sent.length)
+       queryError(sent.shift(), err)
    }
- 
