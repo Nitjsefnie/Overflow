@@ -351,6 +351,47 @@ describe("GitHubGateway workflow files", () => {
     expect(requestedUrls).not.toContain("https://api.github.com/repos/octo/overflow/contents/.github/workflows/a.yml");
   });
 
+  it("cancels a single oversized chunk immediately, skips the file, and returns later files", async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const requestedUrls: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (requestedUrls.length === 1) {
+          return Response.json([
+            { type: "file", name: "a.yml", path: ".github/workflows/a.yml", size: 1 },
+            { type: "file", name: "b.yml", path: ".github/workflows/b.yml", size: 10 },
+          ]);
+        }
+        if (url.endsWith("/a.yml")) {
+          return new Response(new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pulls += 1;
+              if (pulls === 1) controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+              else if (pulls === 2) controller.enqueue(new Uint8Array([120]));
+              else controller.close();
+            },
+            cancel() { cancelled = true; },
+          }, { highWaterMark: 0 }));
+        }
+        return new Response("on: issue_comment");
+      },
+    });
+
+    const workflows = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" });
+    expect(cancelled).toBe(true);
+    expect(pulls).toBe(1);
+    expect(workflows).toEqual([{ path: ".github/workflows/b.yml", content: "on: issue_comment" }]);
+    expect(requestedUrls).toEqual([
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows",
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows/a.yml",
+      "https://api.github.com/repos/octo/overflow/contents/.github/workflows/b.yml",
+    ]);
+  });
+
   it("cancels an oversized raw stream, skips it, and preserves a byte-boundary UTF-8 file", async () => {
     const boundaryText = "🙂".repeat(65536);
     const boundaryBytes = new TextEncoder().encode(boundaryText);
