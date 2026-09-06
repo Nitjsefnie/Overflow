@@ -83,6 +83,17 @@ describe("session recovery route", () => {
     expect(mocks.getCurrentUserRole).not.toHaveBeenCalled();
   });
 
+  // The same drive for the other reason: /session is where both exits land, so a
+  // redirect added to the route would strand either one of them.
+  it("renders the stale copy from the search param without redirecting or touching the ledger", async () => {
+    render(await SessionPage({ searchParams: Promise.resolve({ reason: "stale" }) }));
+
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/clear this sign-in and start again/i);
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(mocks.getSql).not.toHaveBeenCalled();
+    expect(mocks.getCurrentUserRole).not.toHaveBeenCalled();
+  });
+
   it("narrows a repeated reason search param instead of handing the array to the view", async () => {
     const page = (await SessionPage({
       searchParams: Promise.resolve({ reason: ["stale", "unavailable"] }),
