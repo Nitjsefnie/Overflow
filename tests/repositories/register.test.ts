@@ -9,6 +9,7 @@ import type {
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationEnforcementError,
+  RepositoryRegistrationError,
   RepositoryWebhookIdConflictError,
   parseGitHubRepository,
   registerRepository,
@@ -191,6 +192,16 @@ describe("explicit repository registration", () => {
     await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
       code: "FORBIDDEN",
       message: "The account is not eligible to register repositories.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
+  });
+
+  it("deletes the webhook and surfaces the saved-registration failure when the store raises a registration error itself", async () => {
+    const harness = createHarness({ storeRaisesRegistrationError: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message: "Unable to save the repository registration.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
@@ -418,6 +429,7 @@ type HarnessOptions = {
   storeClaimedOwnerName?: string;
   storeClaimedWebhookId?: number;
   storeRejectsSponsorAsIneligible?: boolean;
+  storeRaisesRegistrationError?: boolean;
   reconciliationFailure?: boolean;
   withoutReconcile?: boolean;
 };
@@ -486,6 +498,11 @@ function createHarness(options: HarnessOptions = {}) {
         }
         if (options.storeRejectsSponsorAsIneligible === true) {
           throw new RepositoryRegistrationEnforcementError();
+        }
+        if (options.storeRaisesRegistrationError === true) {
+          // A store, decorator or retry wrapper may raise the registration error type itself:
+          // the injected interface only promises a resolved value, never which errors it throws.
+          throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "database connectivity failure");
         }
         if (options.storeRejectsAsDuplicateId === true) {
           return null;

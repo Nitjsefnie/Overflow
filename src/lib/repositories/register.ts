@@ -166,21 +166,12 @@ export async function registerRepository(
       githubWebhookId: webhook.id,
       difficultyScheme,
     });
-    if (created === null) {
-      await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
-      throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
-    }
   } catch (error) {
-    // The registration failed to a RepositoryRegistrationError only on the path that already
-    // deleted the webhook before throwing, so this rethrow stays ahead of the cleanup below
-    // and no route deletes twice.
-    if (error instanceof RepositoryRegistrationError) {
-      throw error;
-    }
-
-    // Every remaining route out of this catch abandons the registration, so the webhook this
-    // call created has no repository to deliver to. Deleting it once here keeps that true for
-    // any branch added later.
+    // Every route out of this catch abandons the registration, so the webhook this call
+    // created has no repository to deliver to. The try holds only the store call, so deleting
+    // the webhook once here covers every failure it can raise, including one raised as a
+    // RepositoryRegistrationError by a store, decorator or retry wrapper the interface does
+    // not constrain.
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
 
     // The submitted repository is genuinely absent from the table: some other registration
@@ -214,6 +205,13 @@ export async function registerRepository(
     }
 
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
+  }
+
+  // An absent row means the numeric GitHub id the on-conflict arbiter watches was already
+  // taken, so the registration the sponsor submitted belongs to the row that holds it.
+  if (created === null) {
+    await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
+    throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
   // The registration is committed by this point. Work that already exists in the
