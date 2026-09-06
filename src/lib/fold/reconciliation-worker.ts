@@ -3,6 +3,7 @@ import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 
 export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
+  renewReconciliationJobLease(jobId: string, leaseToken: string): Promise<boolean>;
   completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
   deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   retryReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
@@ -14,6 +15,9 @@ export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
   reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
   now?: () => Date;
+  /** Paired timer seams; each job owns its scheduler and cancellation closure. */
+  scheduleLeaseRenewal?(callback: () => void, everyMs: number): void | PromiseLike<unknown>;
+  cancelLeaseRenewal?(): void | PromiseLike<unknown>;
   /**
    * Reports one repository this worker could not fold, as distinct from the
    * whole-drain hook on the schedule. A hook that fails costs neither the
@@ -43,20 +47,16 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
 ];
 
 /**
- * How long a claimed job's lease runs before another worker may reclaim it.
+ * A short lease renewed while the fold and its outcome write are in flight.
  *
- * Long enough that an ordinary fold finishes inside it, and no longer: a worker
- * that dies mid-fold strands its repository for exactly this window, since the
- * job stays RUNNING until the lease lapses.
- *
- * A fold that overruns the lease is not a correctness problem, which is why
- * there is no heartbeat renewing it. The reclaiming worker takes the repository
- * advisory lock the fold already holds, so the two are serialized rather than
- * concurrent, and the cost is one redundant fold that is idempotent by
- * construction. A heartbeat would buy nothing for that, and a longer lease would
- * pay for it by stranding a repository after a crash.
+ * Advisory locking makes reclaiming a slow fold safe, but cannot recover a dead
+ * worker's job before its lease expires. Renewing every five seconds lets slow
+ * folds keep ownership while a dead worker is reclaimed within twenty seconds
+ * plus one poll. If renewal is starved, the advisory lock still serializes the
+ * redundant idempotent fold, so an aggressive lease is safe.
  */
-export const RECONCILIATION_LEASE_MINUTES = 30;
+export const RECONCILIATION_LEASE_MS = 20_000;
+export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
 
 /**
  * How often the worker looks for a job.
@@ -106,39 +106,94 @@ export async function runNextReconciliationJob(
     return "IDLE";
   }
 
-  const now = dependencies.now ?? (() => new Date());
+  const stopRenewal = startLeaseRenewal(dependencies, job);
 
-  let result: { skipped?: boolean } | void;
   try {
-    result = await dependencies.reconcile(job.repositoryId);
-  } catch (error) {
-    // One unreachable repository must not stop the worker draining the rest, so
-    // the failure is recorded on its own job and never propagated to the drain.
-    reportJobFailure(dependencies, job.repositoryId, error);
-    const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
-    if (delayMs === undefined) {
-      await store.failReconciliationJob(job.id, job.leaseToken);
-      return "FAILED";
+    const now = dependencies.now ?? (() => new Date());
+
+    let result: { skipped?: boolean } | void;
+    try {
+      result = await dependencies.reconcile(job.repositoryId);
+    } catch (error) {
+      // One unreachable repository must not stop the worker draining the rest, so
+      // the failure is recorded on its own job and never propagated to the drain.
+      reportJobFailure(dependencies, job.repositoryId, error);
+      const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
+      if (delayMs === undefined) {
+        await store.failReconciliationJob(job.id, job.leaseToken);
+        return "FAILED";
+      }
+      await store.retryReconciliationJob(
+        job.id,
+        job.leaseToken,
+        new Date(now().getTime() + delayMs),
+      );
+      return "RETRY_SCHEDULED";
     }
-    await store.retryReconciliationJob(
-      job.id,
-      job.leaseToken,
-      new Date(now().getTime() + delayMs),
-    );
-    return "RETRY_SCHEDULED";
-  }
 
-  if (result?.skipped) {
-    await store.deferReconciliationJob(
-      job.id,
-      job.leaseToken,
-      await deferralTime(store, job.repositoryId, now()),
-    );
-    return "DEFERRED";
-  }
+    if (result?.skipped) {
+      await store.deferReconciliationJob(
+        job.id,
+        job.leaseToken,
+        await deferralTime(store, job.repositoryId, now()),
+      );
+      return "DEFERRED";
+    }
 
-  await store.completeReconciliationJob(job.id, job.leaseToken);
-  return "RECONCILED";
+    await store.completeReconciliationJob(job.id, job.leaseToken);
+    return "RECONCILED";
+  } finally {
+    stopRenewal();
+  }
+}
+
+/** Arms this job's heartbeat, with the same callback guards as the drain poll. */
+function startLeaseRenewal(
+  dependencies: ReconciliationWorkerDependencies,
+  job: ClaimedReconciliationJob,
+): () => void {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    callGuarded(
+      dependencies,
+      () => dependencies.cancelLeaseRenewal ?? (() => clearInterval(timer)),
+      [],
+      (error) => logLeaseRenewalFailure(job.id, error),
+    );
+  };
+  const renew = () => {
+    if (stopped) return;
+    void (async () => {
+      try {
+        const renewed = await dependencies.store.renewReconciliationJobLease(job.id, job.leaseToken);
+        if (!renewed) stop();
+      } catch (error) {
+        logLeaseRenewalFailure(job.id, error);
+      }
+    })();
+  };
+  callGuarded(
+    dependencies,
+    () => dependencies.scheduleLeaseRenewal ?? ((callback: () => void, everyMs: number) => {
+      timer = setInterval(callback, everyMs);
+      timer.unref?.();
+    }),
+    [renew, RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS],
+    (error) => logLeaseRenewalFailure(job.id, error),
+  );
+  return stop;
+}
+
+function logLeaseRenewalFailure(jobId: string, error: unknown): void {
+  const message = "Reconciliation lease heartbeat failed for job";
+  try {
+    console.error(message, jobId, error);
+  } catch {
+    console.error(message, jobId);
+  }
 }
 
 /**
