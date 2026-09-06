@@ -235,20 +235,55 @@ export class GitHubGateway {
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
-    // Issue 203 tracks request()'s general response-body timeout defect. Keep this
-    // advisory read bounded here: one ten-second budget covers all requests AND
-    // bodies, honoring a shorter configured timeout. Race each await so expiry
-    // abandons the read and cannot start another file after registration returns.
+    // Issue 203 tracks request()'s general response-body timeout defect. This
+    // workflow-specific fetch path keeps one abort signal alive through headers
+    // AND bodies; request() owns a separate signal and is deliberately unchanged.
+    // One ten-second budget covers all reads, honoring a shorter configured timeout.
+    const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
-      timeout = setTimeout(() => reject(new Error("GitHub workflow read timed out.")), Math.min(this.timeoutMs, 10_000));
+      timeout = setTimeout(() => {
+        const error = new Error("GitHub workflow read timed out.");
+        controller.abort(error);
+        reject(error);
+      }, Math.min(this.timeoutMs, 10_000));
     });
+    // Retain the race for injected transports that ignore abort. Body cleanup runs
+    // synchronously on abort, before the deadline can settle the caller's promise.
     const beforeDeadline = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline]);
+    const requestWorkflow = async (path: string, init: RequestInit = {}): Promise<Response> => {
+      let response: Response;
+      try {
+        response = await beforeDeadline(this.fetchImplementation(`${this.apiUrl}${path}`, {
+          ...init,
+          headers: githubHeaders(this.accessToken, init.headers),
+          signal: controller.signal,
+        }).then((received) => {
+          // A transport that ignores abort can deliver headers after the deadline.
+          if (controller.signal.aborted) {
+            void received.body?.cancel().catch(() => undefined);
+            controller.signal.throwIfAborted();
+          }
+          return received;
+        }));
+      } catch (error) {
+        controller.signal.throwIfAborted();
+        if (error instanceof GitHubApiError) throw error;
+        throw new Error("GitHub request failed.");
+      }
+      if (!response.ok) {
+        const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
+        controller.signal.throwIfAborted();
+        const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
+        throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);
+      }
+      return response;
+    };
     try {
       const contentsPath = `/repos/${segment(repository.owner)}/${segment(repository.name)}/contents`;
       let response: Response;
       try {
-        response = await beforeDeadline(this.request(`${contentsPath}/.github/workflows`));
+        response = await requestWorkflow(`${contentsPath}/.github/workflows`);
       } catch (error) {
         if (error instanceof GitHubApiError && error.status === 404) {
           return [];
@@ -256,7 +291,14 @@ export class GitHubGateway {
         throw error;
       }
 
-      const entries = await beforeDeadline(responseJson<unknown>(response));
+      let entries: unknown;
+      try {
+        const text = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal));
+        entries = JSON.parse(text ?? "");
+      } catch {
+        controller.signal.throwIfAborted();
+        throw new Error("GitHub API response was invalid.");
+      }
       if (!Array.isArray(entries)) {
         return [];
       }
@@ -271,11 +313,11 @@ export class GitHubGateway {
         .slice(0, 50);
       const workflows: ClaimPathEvidence[] = [];
       for (const entry of files) {
-        const fileResponse = await beforeDeadline(this.request(
+        const fileResponse = await requestWorkflow(
           `${contentsPath}/${entry.path.split("/").map(segment).join("/")}`,
           { headers: { Accept: "application/vnd.github.raw" } },
-        ));
-        const content = await beforeDeadline(boundedResponseText(fileResponse, maxWorkflowBytes));
+        );
+        const content = await beforeDeadline(boundedResponseText(fileResponse, maxWorkflowBytes, controller.signal));
         if (content !== null) {
           workflows.push({ path: entry.path, content });
         }
@@ -946,29 +988,43 @@ function toGitHubPullRequestReview(
   };
 }
 
-async function boundedResponseText(response: Response, maxBytes: number): Promise<string | null> {
+async function boundedResponseText(response: Response, maxBytes: number, signal: AbortSignal): Promise<string | null> {
   if (response.body === null) {
     return "";
   }
   const reader = response.body.getReader();
+  const cleanup = () => {
+    try {
+      // Cancellation may reject or never settle. Initiate it without awaiting it,
+      // then release the reader immediately, including when a read is pending.
+      void reader.cancel().catch(() => undefined);
+    } catch {
+      // Cleanup must not replace the read's result or error.
+    } finally {
+      reader.releaseLock();
+    }
+  };
+  signal.addEventListener("abort", cleanup, { once: true });
   const decoder = new TextDecoder();
   let bytes = 0;
   let content = "";
   try {
+    signal.throwIfAborted();
     while (true) {
       const { done, value } = await reader.read();
+      signal.throwIfAborted();
       if (done) {
         return content + decoder.decode();
       }
       bytes += value.byteLength;
       if (bytes > maxBytes) {
-        await reader.cancel();
         return null;
       }
       content += decoder.decode(value, { stream: true });
     }
   } finally {
-    reader.releaseLock();
+    signal.removeEventListener("abort", cleanup);
+    cleanup();
   }
 }
 
