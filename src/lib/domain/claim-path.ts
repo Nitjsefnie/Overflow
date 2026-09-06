@@ -8,7 +8,11 @@
  *
  * REST deletion exclusion applies per command segment, after joining shell
  * continuations. Segment splitting on &&, ||, ;, | and & is approximate,
- * including within quotes, and deliberately errs toward EVIDENCE_FOUND.
+ * including within quotes. A separator inside a quoted endpoint expression
+ * splits a real assignment and yields NO_EVIDENCE_FOUND: the warning direction,
+ * rather than a silent pass. Closing this limit would require splitting only
+ * on separators outside quotes and expansions — quote-aware parsing, which
+ * this module deliberately does not do.
  *
  * Interpreting shell, conditional job gating and GitHub Actions expressions is
  * out of scope; the result names make that omission explicit. Known textual
