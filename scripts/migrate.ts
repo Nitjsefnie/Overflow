@@ -103,7 +103,11 @@ export function assertUniqueMigrationNumbers(migrationNames: readonly string[]):
     }
   }
 
-  for (const [migrationNumber, collidingNames] of namesByNumber) {
+  const collisions: string[] = [];
+
+  for (const [migrationNumber, collidingNames] of [...namesByNumber.entries()].sort(
+    ([migrationNumber], [otherNumber]) => migrationNumber - otherNumber,
+  )) {
     if (collidingNames.length < 2) {
       continue;
     }
@@ -117,11 +121,19 @@ export function assertUniqueMigrationNumbers(migrationNames: readonly string[]):
       continue;
     }
 
-    throw new Error(
-      `More than one migration is numbered ${migrationNumber}: ${collidingNames.join(", ")}. ` +
-        "Renumber all but one of them to the next unused number.",
-    );
+    collisions.push(`${migrationNumber}: ${collidingNames.join(", ")}`);
   }
+
+  if (collisions.length === 0) {
+    return;
+  }
+
+  // Every colliding number in one throw, rather than the first one found: a merge that lands two
+  // collisions is otherwise two rounds of renumber-and-rerun to discover.
+  throw new Error(
+    `More than one migration is numbered ${collisions.join("; ")}. ` +
+      "Renumber all but one at each of those numbers to the next unused number.",
+  );
 }
 
 /**
@@ -132,10 +144,11 @@ export function assertUniqueMigrationNumbers(migrationNames: readonly string[]):
  * `001_a.sql`. Such a prefix usually carries a number nothing else uses, which is why the
  * collision check cannot see it.
  *
- * Every width is reported rather than one of them being named as the one to renumber to, because
- * at a boundary crossing there is no such width: `10_j.sql` joining `1_a.sql`-`9_i.sql` cannot be
- * written in one digit, and repadding the names already in `schema_migrations` is what the
- * exemption above exists to say nobody may do.
+ * No width is named as the one to renumber to, because at a boundary crossing there is none:
+ * `10_j.sql` joining `1_a.sql`-`9_i.sql` cannot be written in one digit, and repadding the names
+ * already in `schema_migrations` is what the exemption above exists to say nobody may do. What
+ * the message carries instead is the constraint that leaves — widen before the first migration at
+ * the new width is applied — because a failed `pnpm db:migrate` is all whoever hit this sees.
  */
 export function assertUniformMigrationNumberWidth(migrationNames: readonly string[]): void {
   const namesByWidth = new Map<number, string[]>();
@@ -155,11 +168,14 @@ export function assertUniformMigrationNumberWidth(migrationNames: readonly strin
 
   const widthGroups = [...namesByWidth.entries()]
     .sort(([width], [otherWidth]) => width - otherWidth)
-    .map(([width, names]) => `${width} digits (${names.join(", ")})`);
+    .map(([width, names]) => `${width} ${width === 1 ? "digit" : "digits"} (${names.join(", ")})`);
 
   throw new Error(
     `db/migrations mixes numeric prefix widths: ${widthGroups.join(", ")}. Migrations are ` +
-      "applied in filename order, so a prefix of another width is applied out of turn.",
+      "applied in filename order, so a prefix of another width is applied out of turn: every " +
+      "migration has to carry the same width. A name schema_migrations already records must not " +
+      "be renamed, so widening has to happen before the first migration at the new width is " +
+      "applied.",
   );
 }
 
