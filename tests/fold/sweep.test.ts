@@ -540,10 +540,11 @@ describe("scheduled reconciliation sweep", () => {
       expect(unhandled).toHaveLength(1);
       expect(unhandled[0]).toBeInstanceOf(TypeError);
 
-      // It ticks again here because the listener installed above suppresses
-      // Node's default for an unhandled rejection. Nothing in the module
-      // survives a console broken at every arity: in production that throw ends
-      // the process, and the second tick is this test's doing, not the module's.
+      // It ticks again because something in this process keeps Node's default
+      // for an unhandled rejection from ending the run — the listener installed
+      // above, vitest's own handling, or both. Nothing in the module survives a
+      // console broken at every arity: in production that throw ends the
+      // process, so the second tick is the harness's doing, not the module's.
       await timer.tick();
       expect(sweeps).toBe(2);
     } finally {
@@ -1160,6 +1161,47 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       intervals.restore();
       logged.mockRestore();
+    }
+  });
+
+  it("stands the unarmed line alone when the failure carries no reason", async () => {
+    // The reasonless line is not exclusive to a member that was never callable:
+    // `undefined` is the reason that carries nothing to print, so a scheduler
+    // that fails with it — thrown or rejected — has to read exactly the same.
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const noReason = undefined;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {},
+        schedule: () => {
+          throw noReason;
+        },
+      });
+      await drain();
+
+      startReconciliationSweep({
+        runSweep: async () => {},
+        schedule: () => Promise.reject(noReason),
+      });
+      // One drain is already enough for Node to report a rejection it is going
+      // to report; the second only widens the window the listener had to fire in.
+      await drain();
+      await drain();
+
+      expect(logged.mock.calls).toEqual([[UNARMED_MESSAGE], [UNARMED_MESSAGE]]);
+      expect(intervals.armed).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+      process.off("unhandledRejection", listener);
     }
   });
 
