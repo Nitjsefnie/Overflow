@@ -6,6 +6,7 @@
 !docker-compose.yml
 !package.json
 !pnpm-lock.yaml
+!pnpm-workspace.yaml
 !tsconfig.json
 !next.config.ts
 !postcss.config.mjs
@@ -157,6 +158,10 @@ db/migrations/*
 deploy/*
 !deploy/*.service
 !deploy/*.md
+
+!patches/
+patches/*
+!patches/*.patch
 
 !public/
 public/*
