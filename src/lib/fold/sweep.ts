@@ -45,9 +45,10 @@ export function shouldStartReconciliationSweep(
 /**
  * Reconciles every active repository, one at a time.
  *
- * Serial by design: #11 reports that concurrent reconciliations exhaust the
- * PostgreSQL pool, and a sweep is the one place that would otherwise fan out
- * across every registered repository at once.
+ * Serial by design: a sweep is the one place that would otherwise fan out
+ * across every registered repository at once, claiming the whole bounded
+ * coordination allowance and spending every repository's GitHub budget in the
+ * same moment.
  *
  * A repository that fails is counted and skipped rather than aborting the
  * sweep, so one unreachable repository cannot stop every other one from

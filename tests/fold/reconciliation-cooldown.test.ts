@@ -92,7 +92,9 @@ describe("persisted reconciliation cooldown", () => {
         },
       },
     });
-    const contenderStore = new PostgresFoldStore(contenderSql, tokenEncryptionKey);
+    // Coordination has its own pool, so the contender's client has to be given as
+    // the coordination client too for the row transform to see the lock attempt.
+    const contenderStore = new PostgresFoldStore(contenderSql, tokenEncryptionKey, contenderSql);
     const owner = store.withRepositoryReconciliation(repositoryId, async () => {
       ownerAcquired.resolve();
       await releaseOwner.promise;
