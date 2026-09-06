@@ -213,6 +213,88 @@ describe("reconcileRepository", () => {
     expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledExactlyOnceWith([2001, 3001]);
   });
 
+  it("never reads reviews or a diff for a closing pull request in another repository", async () => {
+    const calls: Array<{ operation: string; repository: { owner: string; name: string }; number: number }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
+    const dependencies = reconciliationDependencies({
+      materialize,
+      github: {
+        listIssues: vi.fn().mockResolvedValue([{
+          ...reconciliationIssue({ id: 101, number: 1 }),
+          closingPullRequests: [
+            {
+              ...reconciliationPullRequest({ id: 202, number: 12 }),
+              url: "https://github.com/other/fork/pull/12",
+              repositoryNameWithOwner: "other/fork",
+              mergedAt: "2026-09-01T11:45:00.000Z",
+            },
+            reconciliationPullRequest({ id: 201, number: 11 }),
+          ],
+        }]),
+        getPullRequestReviews: vi.fn(async (repository, number) => {
+          calls.push({ operation: "reviews", repository, number });
+          return [];
+        }),
+        getPullRequestDiff: vi.fn(async (repository, number) => {
+          calls.push({ operation: "diff", repository, number });
+          return `diff ${number}`;
+        }),
+      },
+    });
+
+    await reconcileRepository(dependencies, "repository");
+
+    expect(calls).toEqual([
+      { operation: "reviews", repository: { owner: "octo", name: "example" }, number: 11 },
+      { operation: "diff", repository: { owner: "octo", name: "example" }, number: 11 },
+    ]);
+    const fold = materialize.mock.calls[0]![0].fold as FoldResult;
+    expect(fold.settlements.map(({ githubIssueId, githubPullRequestId }) => [githubIssueId, githubPullRequestId]))
+      .toEqual([[101, 201]]);
+    expect(fold.pullRequests.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
+    expect(fold.unwritableClosures).toEqual([]);
+  });
+
+  it("records a cross-repository closure without reading any evidence for a wholly foreign closure", async () => {
+    const calls: Array<{ operation: string; number: number }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
+    const dependencies = reconciliationDependencies({
+      materialize,
+      github: {
+        listIssues: vi.fn().mockResolvedValue([{
+          ...reconciliationIssue({ id: 101, number: 1 }),
+          closingPullRequests: [{
+            ...reconciliationPullRequest({ id: 202, number: 12 }),
+            url: "https://github.com/other/fork/pull/12",
+            repositoryNameWithOwner: "other/fork",
+          }],
+        }]),
+        getPullRequestReviews: vi.fn(async (_repository, number) => {
+          calls.push({ operation: "reviews", number });
+          return [];
+        }),
+        getPullRequestDiff: vi.fn(async (_repository, number) => {
+          calls.push({ operation: "diff", number });
+          return `diff ${number}`;
+        }),
+      },
+    });
+
+    await reconcileRepository(dependencies, "repository");
+
+    expect(calls).toEqual([]);
+    const fold = materialize.mock.calls[0]![0].fold as FoldResult;
+    expect(fold.settlements).toEqual([]);
+    expect(fold.pullRequests).toEqual([]);
+    expect(fold.ledgerEntries).toEqual([]);
+    expect(fold.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: expect.stringContaining("other/fork"),
+    }]);
+  });
+
   it.each([false, true])("preserves every author's identity across reconciliation (reverse order: %s)", async (reverse) => {
     const issues = [
       reconciliationIssue({ id: 101, number: 1 }),
