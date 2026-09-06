@@ -80,7 +80,7 @@ function stateSummary(request: SettlementOverrideRequest, kind: SettlementOverri
     case "OPEN":
       return "Awaiting a moderator";
     case "GRANTED":
-      return `Granted at ${request.settledPoints ?? "unknown"} ${kind === "settlement" ? "settled" : "actual"} points`;
+      return `Granted at ${request.settledPoints ?? "unknown"} ${kind === "settlement" ? "settled" : "actual"} ${request.settledPoints === 1 ? "point" : "points"}`;
     case "DECLINED":
       return "Declined";
   }
