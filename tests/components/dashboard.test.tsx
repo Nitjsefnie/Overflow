@@ -117,6 +117,8 @@ describe("member dashboard", () => {
             openingName: "Offer band",
             actualName: "Delivered band",
             unavailableReason: null,
+            reconciliationState: "IDLE",
+            reconciliationLastFailureAt: null,
           }],
           enforcementNotices: [{
             id: "notice-1",
@@ -195,6 +197,113 @@ describe("member dashboard", () => {
     expect(screen.queryByText(/ARCHIVED_UPSTREAM/)).not.toBeInTheDocument();
   });
 
+  it("tells the sponsor which repositories the queue is behind on and stays silent about the rest", () => {
+    const failedAt = new Date("2026-09-04T11:00:00.000Z");
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            {
+              ...registered("repo-1", "co-op/harbour"),
+              reconciliationState: "FAILED",
+              reconciliationLastFailureAt: failedAt,
+            },
+            {
+              ...registered("repo-2", "co-op/lighthouse"),
+              reconciliationState: "RUNNING",
+              reconciliationLastFailureAt: failedAt,
+            },
+            {
+              ...registered("repo-3", "co-op/breakwater"),
+              reconciliationState: "PENDING",
+              reconciliationLastFailureAt: failedAt,
+            },
+            { ...registered("repo-4", "co-op/jetty"), reconciliationState: "RUNNING" },
+            { ...registered("repo-5", "co-op/quay"), reconciliationState: "PENDING" },
+            registered("repo-6", "co-op/seawall"),
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(
+      /co-op\/harbour.*· reconciliation is failing \(since 2026-09-04\); Overflow keeps retrying$/,
+    )).toBeVisible();
+    expect(screen.getByText(/co-op\/lighthouse.*· retrying reconciliation after a failure$/)).toBeVisible();
+    expect(screen.getByText(/co-op\/breakwater.*· retrying reconciliation after a failure$/)).toBeVisible();
+    expect(screen.getByText(/co-op\/jetty.*· reconciliation queued$/)).toBeVisible();
+    expect(screen.getByText(/co-op\/quay.*· reconciliation queued$/)).toBeVisible();
+    expect(screen.getByText(/co-op\/seawall/)).not.toHaveTextContent(/reconciliation/i);
+    // The queue's own vocabulary is an implementation detail the sponsor is never shown.
+    expect(screen.queryByText(/FAILED|RUNNING|PENDING|IDLE/)).not.toBeInTheDocument();
+  });
+
+  it("shows both the unavailability and the reconciliation clause on one repository's line", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            {
+              ...registered("repo-1", "co-op/harbour"),
+              unavailableReason: "NOT_FOUND",
+              reconciliationState: "FAILED",
+              reconciliationLastFailureAt: new Date("2026-09-04T11:00:00.000Z"),
+            },
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(
+      /co-op\/harbour.*· unavailable: not found on GitHub or no longer public · reconciliation is failing \(since 2026-09-04\); Overflow keeps retrying$/,
+    )).toBeVisible();
+  });
+
+  it("keeps a failing repository readable when the queue holds no time for the failure", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            { ...registered("repo-1", "co-op/harbour"), reconciliationState: "FAILED" },
+          ],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/co-op\/harbour.*· reconciliation is failing; Overflow keeps retrying$/)).toBeVisible();
+    expect(screen.queryByText(/since/)).not.toBeInTheDocument();
+  });
+
   it("renders positive, negative, and zero balances without inventing a floor", () => {
     const { rerender } = render(
       <BalanceCard
@@ -264,5 +373,7 @@ function registered(id: string, ownerName: string): RegisteredRepositoryProjecti
     openingName: "Offer band",
     actualName: "Delivered band",
     unavailableReason: null,
+    reconciliationState: "IDLE",
+    reconciliationLastFailureAt: null,
   };
 }

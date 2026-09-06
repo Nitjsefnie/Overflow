@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
-import type { DashboardProjection } from "@/lib/dashboard/queries";
+import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 
 type DashboardContentProps = {
@@ -82,13 +82,19 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
         <h2 id="registered-repositories-heading">Registered repositories</h2>
         {dashboard.registeredRepositories.length === 0 ? <p>No repositories are registered to this account.</p> : (
           <ul>
-            {dashboard.registeredRepositories.map((repository) => (
-              <li key={repository.id}>
-                {repository.ownerName} · {repository.visibility} · {repository.active ? "active" : "inactive"}
-                {" · "}{repository.openingName} / {repository.actualName}
-                {repository.unavailableReason === null ? null : ` · ${unavailabilityPhrase(repository.unavailableReason)}`}
-              </li>
-            ))}
+            {dashboard.registeredRepositories.map((repository) => {
+              // Held in a name so the two clauses stay independent: a repository can be both
+              // unavailable and behind on reconciliation, and the sponsor is owed both readings.
+              const reconciliation = reconciliationPhrase(repository);
+              return (
+                <li key={repository.id}>
+                  {repository.ownerName} · {repository.visibility} · {repository.active ? "active" : "inactive"}
+                  {" · "}{repository.openingName} / {repository.actualName}
+                  {repository.unavailableReason === null ? null : ` · ${unavailabilityPhrase(repository.unavailableReason)}`}
+                  {reconciliation === null ? null : ` · ${reconciliation}`}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -119,6 +125,30 @@ function unavailabilityPhrase(reason: string): string {
       return "unavailable: identity mismatch";
     default:
       return "unavailable";
+  }
+}
+
+/**
+ * What the reconciliation queue currently owes this repository, or nothing when it owes it nothing.
+ *
+ * A failed job is not abandoned work waiting on the sponsor: the six-hourly sweep re-enqueues every
+ * active repository and revives the row, so the copy says Overflow keeps trying rather than leaving
+ * a member hunting for a button that does not exist. The queue holds no error message on purpose —
+ * an upstream GitHub failure can carry the sponsor's token — so the date is all the detail there is.
+ */
+function reconciliationPhrase(repository: RegisteredRepositoryProjection): string | null {
+  const failedAt = repository.reconciliationLastFailureAt;
+  switch (repository.reconciliationState) {
+    case "FAILED":
+      // The schema admits a failed job with no recorded time; "since null" would be worse than silence.
+      return failedAt === null
+        ? "reconciliation is failing; Overflow keeps retrying"
+        : `reconciliation is failing (since ${failedAt.toISOString().slice(0, 10)}); Overflow keeps retrying`;
+    case "PENDING":
+    case "RUNNING":
+      return failedAt === null ? "reconciliation queued" : "retrying reconciliation after a failure";
+    default:
+      return null;
   }
 }
 
