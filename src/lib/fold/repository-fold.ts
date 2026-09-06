@@ -790,7 +790,7 @@ function resolveSettledDifficulty(
       kind: "rejected",
       reach: windowReach,
       violation: "SETTLED_LABEL_UNAUTHORIZED",
-      reason: settledLabelActorRejection(label, source.actorLogin, raterLogin),
+      reason: labelActorRejection("settled", label, source.actorLogin, raterLogin),
     };
   }
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
@@ -1088,20 +1088,29 @@ function repositorySponsorPhrase(raterLogin: string | null): string {
 }
 
 /**
- * Why a settled label's actor was not the sponsor. Where the rejected actor
- * carries the login the sponsor's record still stores — an account that took
- * the freed login after a rename — naming both sides puts the same login either
- * side of "rather than", which reads as a contradiction and names no
- * discriminator. The discriminator is the account.
+ * Why a label's actor was not the sponsor. Where the rejected actor carries the
+ * login the sponsor's record still stores — an account that took the freed login
+ * after a rename — naming both sides puts the same login either side of "rather
+ * than", which reads as a contradiction and names no discriminator. The
+ * discriminator is the account.
+ *
+ * Both label windows refuse an actor for the same reason and must say so the
+ * same way, so the noun is a parameter rather than the sentence being written
+ * out twice: a second copy is where the impostor branch goes missing.
  */
-function settledLabelActorRejection(label: string, actorLogin: string | null, raterLogin: string | null): string {
+function labelActorRejection(
+  labelKind: "opening" | "settled",
+  label: string,
+  actorLogin: string | null,
+  raterLogin: string | null,
+): string {
   const actor = normalizedNonblankLogin(actorLogin);
   if (actor !== null && actor === raterLogin) {
-    return `The settled label \`${label}\` was applied by a different GitHub account using the login `
+    return `The ${labelKind} label \`${label}\` was applied by a different GitHub account using the login `
       + `\`${actorLogin!.trim()}\`, not by the repository sponsor.`;
   }
   const sponsor = raterLogin === null ? "the repository sponsor" : `the repository sponsor \`${raterLogin}\``;
-  return `The settled label \`${label}\` was applied by \`${actorLogin?.trim() || "unknown"}\` rather than ${sponsor}.`;
+  return `The ${labelKind} label \`${label}\` was applied by \`${actorLogin?.trim() || "unknown"}\` rather than ${sponsor}.`;
 }
 
 function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
