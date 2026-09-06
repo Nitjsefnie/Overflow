@@ -212,6 +212,7 @@ describe("initial PostgreSQL materialization", () => {
       "018_refreshable_display_logins.sql",
       "019_recorded_materialization_removals.sql",
       "020_repository_reconciliation_jobs.sql",
+      "021_reconciliation_lease_duration.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -750,6 +751,7 @@ describe("initial PostgreSQL materialization", () => {
       update repository_reconciliation_jobs
       set state = 'RUNNING',
         lease_token = gen_random_uuid(),
+        lease_duration_ms = 20000,
         lease_expires_at = now() + interval '1 minute'
       where id = ${jobId}
       returning id
@@ -760,7 +762,7 @@ describe("initial PostgreSQL materialization", () => {
     // A job that gave up still owns the repository's row: it is what a later event revives.
     await sql`
       update repository_reconciliation_jobs
-      set state = 'FAILED', last_failure_at = now(), lease_token = null, lease_expires_at = null
+      set state = 'FAILED', last_failure_at = now(), lease_token = null, lease_duration_ms = null, lease_expires_at = null
       where id = ${jobId}
     `;
     await expect(insertReconciliationJob(sql, repositoryId, "REGISTRATION"))
@@ -806,6 +808,7 @@ describe("initial PostgreSQL materialization", () => {
       update repository_reconciliation_jobs
       set state = 'RUNNING',
         lease_token = gen_random_uuid(),
+        lease_duration_ms = 20000,
         lease_expires_at = now() + interval '1 minute'
       where id = ${jobId}
       returning id
@@ -816,10 +819,23 @@ describe("initial PostgreSQL materialization", () => {
     `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
     await expect(sql`
       update repository_reconciliation_jobs
-      set state = 'PENDING', lease_token = null, lease_expires_at = null
+      set state = 'PENDING', lease_token = null, lease_duration_ms = null, lease_expires_at = null
       where id = ${jobId}
       returning id
     `).resolves.toEqual([{ id: jobId }]);
+  });
+
+  it.each(["PENDING", "FAILED", "RUNNING"])("rejects a %s job with an inconsistent lease duration", async (state) => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const running = state === "RUNNING";
+    await expect(sql`
+      insert into repository_reconciliation_jobs
+        (repository_id, reason, state, lease_token, lease_expires_at, lease_duration_ms)
+      values (${repositoryId}, 'WEBHOOK', ${state}::repository_reconciliation_job_state,
+        ${running ? "11111111-1111-4111-8111-111111111111" : null},
+        ${running ? new Date("2100-01-01") : null}, ${running ? null : 20000})
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_duration_check/);
   });
 
   it("refuses a negative reconciliation attempt count and indexes the due jobs", async () => {

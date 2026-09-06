@@ -758,11 +758,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         where (
             (job.state = ${"PENDING"} and job.run_after <= now())
             or (job.state = ${"RUNNING"} and job.lease_expires_at <= now())
-            -- Permanent rollout guard: leases beyond twice this build's window
-            -- are from an older build or an anomalous database clock. Both now()
-            -- values are PostgreSQL's, so no cross-host clock skew is involved;
-            -- the margin protects current leases during snapshot re-evaluation.
-            or (job.state = ${"RUNNING"} and job.lease_expires_at > now() + make_interval(secs => ${2 * RECONCILIATION_LEASE_MS / 1000}))
+            -- One build transition: an unmarked lease predates duration tracking.
+            -- Once every row has been claimed by a build that writes the marker,
+            -- this arm is inert. It can remain permanently: current leases always
+            -- carry a duration and cannot be mistaken for legacy leases.
+            or (job.state = ${"RUNNING"} and job.lease_duration_ms is null)
           )
         order by job.run_after, job.created_at
         limit 1
@@ -771,6 +771,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       update repository_reconciliation_jobs
       set state = ${"RUNNING"},
           lease_token = ${leaseToken},
+          lease_duration_ms = ${RECONCILIATION_LEASE_MS},
           lease_expires_at = now() + make_interval(secs => ${RECONCILIATION_LEASE_MS / 1000}),
           attempt_count = repository_reconciliation_jobs.attempt_count + 1
       from due
@@ -794,7 +795,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         };
   }
 
-  public async renewReconciliationJobLease(jobId: string, leaseToken: string): Promise<boolean> {
+  public async renewReconciliationJobLease(jobId: string, leaseToken: string, renewalDeadline: Date): Promise<boolean> {
     // State is deliberate defence in depth: the lease check makes non-RUNNING
     // tokens null, so removing only the state predicate is unobservable under
     // the current schema; the token equality already excludes those rows.
@@ -804,6 +805,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       where id = ${jobId}
         and state = ${"RUNNING"}
         and lease_token = ${leaseToken}
+        and now() < ${renewalDeadline}
       returning id
     `;
     return rows.length === 1;
@@ -835,6 +837,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
               last_failure_at = null,
               follow_up_requested = false,
               lease_token = null,
+              lease_duration_ms = null,
               lease_expires_at = null
           where id = ${jobId}
         `;
@@ -867,6 +870,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           attempt_count = greatest(attempt_count - 1, 0),
           follow_up_requested = false,
           lease_token = null,
+          lease_duration_ms = null,
           lease_expires_at = null
       where id = ${jobId}
         and state = ${"RUNNING"}
@@ -888,6 +892,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           last_failure_at = now(),
           follow_up_requested = false,
           lease_token = null,
+          lease_duration_ms = null,
           lease_expires_at = null
       where id = ${jobId}
         and state = ${"RUNNING"}
@@ -904,6 +909,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           last_failure_at = now(),
           follow_up_requested = false,
           lease_token = null,
+          lease_duration_ms = null,
           lease_expires_at = null
       where id = ${jobId}
         and state = ${"RUNNING"}

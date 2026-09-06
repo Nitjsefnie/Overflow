@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
@@ -9,6 +9,16 @@ import {
   startReconciliationWorker,
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
+
+const heldSignals = new Set<() => void>();
+afterEach(() => {
+  // Runner cleanup also executes on timeout, when the test's finally is still
+  // awaiting an operation. Restore globals and release every held signal.
+  if (vi.isFakeTimers()) vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  for (const release of heldSignals) release();
+});
 
 // The lines the worker prints when it could not arm the recurring tick, or could
 // not read the caller's interval. Asserted whole because each is reported
@@ -321,6 +331,81 @@ describe("running the next reconciliation job", () => {
 });
 
 describe("reconciliation lease heartbeat", () => {
+  it("passes one absolute claim deadline to every renewal", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const renew = vi.spyOn(store, "renewReconciliationJobLease");
+    const timer = createRenewalTimer();
+    const fold = signal();
+    let time = Date.parse("2030-01-01T12:00:00Z");
+    const running = runNextReconciliationJob({
+      store, reconcile: () => fold.promise, now: () => new Date(time), ...timer.dependencies,
+    });
+    try {
+      await timer.armed;
+      for (const elapsed of [5_000, 599_999]) {
+        time = Date.parse("2030-01-01T12:00:00Z") + elapsed;
+        await timer.tick();
+      }
+      expect(renew.mock.calls).toEqual([
+        ["job-1", "lease-1", new Date("2030-01-01T12:10:00Z")],
+        ["job-1", "lease-1", new Date("2030-01-01T12:10:00Z")],
+      ]);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+  });
+
+  it("cancels at the cap while a renewal is still in flight", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const entered = signal();
+    const release = signal();
+    let time = Date.parse("2030-01-01T12:00:00Z");
+    store.renewReconciliationJobLease = async () => {
+      entered.resolve();
+      await release.promise;
+      return true;
+    };
+    const running = runNextReconciliationJob({
+      store, reconcile: () => fold.promise, now: () => new Date(time), ...timer.dependencies,
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      await timer.armed;
+      pending = timer.tick();
+      await entered.promise;
+      time += 600_000;
+      await timer.tick();
+      expect(timer.cancellations).toBe(1);
+    } finally {
+      release.resolve();
+      fold.resolve();
+      await pending;
+      await running;
+    }
+    expect(timer.cancellations).toBe(1);
+  });
+
+  it("cancels setup even when its scheduler delivers synchronously at the cap", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    let time = Date.parse("2030-01-01T12:00:00Z");
+    const cancel = vi.fn();
+    let tick: Promise<void> | undefined;
+    const running = runNextReconciliationJob({
+      store, reconcile: async () => {}, now: () => new Date(time),
+      scheduleLeaseRenewal(callback) {
+        time += 600_000;
+        tick = callback();
+        return cancel;
+      },
+    });
+    await expect(running).resolves.toBe("RECONCILED");
+    await tick;
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("stops renewing ten minutes after the claim even while the fold stays pending", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
     const timer = createRenewalTimer();
@@ -498,8 +583,8 @@ describe("reconciliation lease heartbeat", () => {
     const failure = new Error("renewal database hiccup");
     const renew = store.renewReconciliationJobLease.bind(store);
     let attempts = 0;
-    store.renewReconciliationJobLease = async (id, token) => {
-      await renew(id, token);
+    store.renewReconciliationJobLease = async (id, token, deadline) => {
+      await renew(id, token, deadline);
       if (++attempts === 1) throw failure;
       return true;
     };
@@ -533,7 +618,7 @@ describe("reconciliation lease heartbeat", () => {
     const timer = createRenewalTimer();
     const fold = signal();
     const renew = store.renewReconciliationJobLease.bind(store);
-    store.renewReconciliationJobLease = async (id, token) => { await renew(id, token); return false; };
+    store.renewReconciliationJobLease = async (id, token, deadline) => { await renew(id, token, deadline); return false; };
     const complete = store.completeReconciliationJob.bind(store);
     store.completeReconciliationJob = async (id, token) => { await complete(id, token); return false; };
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
@@ -703,8 +788,8 @@ describe("reconciliation lease heartbeat", () => {
     const renew = store.renewReconciliationJobLease.bind(store);
     let attempts = 0;
     const failure = new Error("held renewal failed");
-    store.renewReconciliationJobLease = async (id, token) => {
-      await renew(id, token);
+    store.renewReconciliationJobLease = async (id, token, deadline) => {
+      await renew(id, token, deadline);
       attempts += 1;
       enteredRenewal.resolve();
       if (attempts === 1) {
@@ -1306,7 +1391,10 @@ function watchUnhandledRejections() {
 
 function signal() {
   let resolve!: () => void;
-  const promise = new Promise<void>((settle) => { resolve = settle; });
+  const promise = new Promise<void>((settle) => {
+    resolve = () => { heldSignals.delete(resolve); settle(); };
+  });
+  heldSignals.add(resolve);
   return { promise, resolve };
 }
 
