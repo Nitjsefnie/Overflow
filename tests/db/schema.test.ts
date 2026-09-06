@@ -112,7 +112,8 @@ describe("initial PostgreSQL materialization", () => {
       id: secondId, githubUserId: secondGitHubId, githubLogin: "id-lookup-second",
     });
     const snapshot = materializationSnapshot({
-      repositoryId, ownerName: "example/id-lookup", sponsorId: firstId, contributorId: secondId,
+      repositoryId, ownerName: "example/id-lookup", githubRepositoryId: 9_100_000,
+      sponsorId: firstId, contributorId: secondId,
       sponsorGitHubUserId: firstGitHubId, contributorGitHubUserId: secondGitHubId,
       sponsorLogin: "id-lookup-renamed", contributorLogin: "id-lookup-second",
       issueLabels: ["M"], actualLabel: "delivered/6",
@@ -1575,12 +1576,13 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const snapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1651,13 +1653,14 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const snapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1706,14 +1709,15 @@ describe("initial PostgreSQL materialization", () => {
     const contributorGitHubUserId = nextExternalId();
     const contributorLogin = `backfill-contributor-${contributorGitHubUserId}`;
     const repositoryId = await insertRepository(sql, sponsor.id);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
     const snapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId: sponsor.id,
       sponsorGitHubUserId: sponsor.githubUserId,
       contributorId: "not-a-member",
@@ -1778,13 +1782,14 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUserWithLogin(sql, "materialization-sponsor");
     const contributorId = await insertUserWithLogin(sql, "materialization-contributor");
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const store = new PostgresFoldStore(sql);
     const initial = foldRepository(materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1803,6 +1808,7 @@ describe("initial PostgreSQL materialization", () => {
     const changedSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1866,6 +1872,7 @@ describe("initial PostgreSQL materialization", () => {
           ...materializationSnapshot({
             repositoryId,
             ownerName: repository.owner_name,
+            githubRepositoryId: Number(repository.github_repository_id),
             sponsorId,
             contributorId,
             sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1894,12 +1901,13 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const snapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1975,6 +1983,7 @@ describe("initial PostgreSQL materialization", () => {
     const staleSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -1989,6 +1998,7 @@ describe("initial PostgreSQL materialization", () => {
     const obsoleteIssue = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2153,8 +2163,8 @@ describe("initial PostgreSQL materialization", () => {
     `;
     const githubRepositoryId = nextExternalId();
     const repositoryId = await insertRepository(sql, sponsorId, githubRepositoryId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
@@ -2178,6 +2188,7 @@ describe("initial PostgreSQL materialization", () => {
       const snapshot = materializationSnapshot({
         repositoryId,
         ownerName: repository.owner_name,
+        githubRepositoryId: Number(repository.github_repository_id),
         sponsorId,
         contributorId,
         sponsorGitHubUserId,
@@ -2313,14 +2324,15 @@ describe("initial PostgreSQL materialization", () => {
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
     const olderSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2335,6 +2347,7 @@ describe("initial PostgreSQL materialization", () => {
     const newerSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2405,12 +2418,13 @@ describe("initial PostgreSQL materialization", () => {
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const outsiderSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2425,6 +2439,7 @@ describe("initial PostgreSQL materialization", () => {
     const selfWorkSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2482,12 +2497,13 @@ describe("initial PostgreSQL materialization", () => {
           ${"2026-08-31T00:00:00.000Z"})
       `;
       const repositoryId = await insertRepository(sql, sponsorId);
-      const [repository] = await sql<{ owner_name: string }[]>`
-        select owner_name from registered_repositories where id = ${repositoryId}
+      const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+        select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
       `;
       const snapshot = materializationSnapshot({
         repositoryId,
         ownerName: repository.owner_name,
+        githubRepositoryId: Number(repository.github_repository_id),
         sponsorId,
         contributorId,
         sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2512,14 +2528,15 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUserWithLogin(sql, `rejected-sponsor-${nextExternalId()}`);
     const contributorId = await insertUserWithLogin(sql, `rejected-contributor-${nextExternalId()}`);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
     const acceptedSnapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2592,13 +2609,14 @@ describe("initial PostgreSQL materialization", () => {
     const selfWorkSponsorId = await insertUserWithLogin(sql, selfWorkSponsorLogin);
     const selfWorkContributorId = await insertUserWithLogin(sql, `self-work-contributor-${nextExternalId()}`);
     const selfWorkRepositoryId = await insertRepository(sql, selfWorkSponsorId);
-    const [selfWorkRepository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${selfWorkRepositoryId}
+    const [selfWorkRepository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${selfWorkRepositoryId}
     `;
     const store = new PostgresFoldStore(sql);
     const selfWorkSnapshot = materializationSnapshot({
       repositoryId: selfWorkRepositoryId,
       ownerName: selfWorkRepository.owner_name,
+      githubRepositoryId: Number(selfWorkRepository.github_repository_id),
       sponsorId: selfWorkSponsorId,
       contributorId: selfWorkContributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, selfWorkSponsorId),
@@ -2677,12 +2695,13 @@ describe("initial PostgreSQL materialization", () => {
     const closureSponsorId = await insertUserWithLogin(sql, `closure-sponsor-${nextExternalId()}`);
     const closureContributorId = await insertUserWithLogin(sql, `closure-contributor-${nextExternalId()}`);
     const closureRepositoryId = await insertRepository(sql, closureSponsorId);
-    const [closureRepository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${closureRepositoryId}
+    const [closureRepository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${closureRepositoryId}
     `;
     const closureSnapshot = materializationSnapshot({
       repositoryId: closureRepositoryId,
       ownerName: closureRepository.owner_name,
+      githubRepositoryId: Number(closureRepository.github_repository_id),
       sponsorId: closureSponsorId,
       contributorId: closureContributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, closureSponsorId),
@@ -2756,14 +2775,15 @@ describe("initial PostgreSQL materialization", () => {
     const sponsorId = await insertUser(sql);
     const contributorId = await insertUser(sql);
     const repositoryId = await insertRepository(sql, sponsorId);
-    const [repository] = await sql<{ owner_name: string }[]>`
-      select owner_name from registered_repositories where id = ${repositoryId}
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
     `;
     const githubIssueId = nextExternalId();
     const githubPullRequestId = nextExternalId();
     const snapshot = materializationSnapshot({
       repositoryId,
       ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
       sponsorId,
       contributorId,
       sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
@@ -2774,7 +2794,7 @@ describe("initial PostgreSQL materialization", () => {
       githubPullRequestId,
     });
     const closingPullRequest = snapshot.issues[0]!.closingPullRequests[0]!;
-    closingPullRequest.repositoryGitHubId = materializedRepositoryGitHubId + 1;
+    closingPullRequest.repositoryGitHubId = Number(repository.github_repository_id) + 1;
     closingPullRequest.repositoryNameWithOwner = "other/fork";
 
     const store = new PostgresFoldStore(sql);
@@ -2815,7 +2835,8 @@ describe("initial PostgreSQL materialization", () => {
       where issues.github_issue_id = ${githubIssueId}
     `).resolves.toEqual([{ count: 0 }]);
 
-    const projected = (await listUnwritableClosures({ sql })).find(({ id }) => id === closure.id);
+    // Reads through getSql(), the same pool this suite holds.
+    const projected = (await listUnwritableClosures()).find(({ id }) => id === closure.id);
     expect(projected).toMatchObject({
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
       pullRequest: null,
@@ -3429,12 +3450,16 @@ async function githubUserIdOf(client: QueryableSql, userId: string): Promise<num
   return Number(row.github_user_id);
 }
 
-/** The GitHub repository id every materialization fixture is folded against. */
-const materializedRepositoryGitHubId = 9_100_000;
-
 function materializationSnapshot(input: {
   repositoryId: string;
   ownerName: string;
+  /**
+   * registered_repositories.github_repository_id of the repository being folded.
+   * A test that reconciles for real reads it from the row it registered: the
+   * store supplies the same id, and a fixture that invents one folds every
+   * closing pull request as foreign.
+   */
+  githubRepositoryId: number;
   sponsorId: string;
   contributorId: string;
   sponsorGitHubUserId: number;
@@ -3453,7 +3478,7 @@ function materializationSnapshot(input: {
   return {
     repository: {
       id: input.repositoryId,
-      githubRepositoryId: materializedRepositoryGitHubId,
+      githubRepositoryId: input.githubRepositoryId,
       ownerName: input.ownerName,
       active: true,
       sponsor: { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
@@ -3519,7 +3544,7 @@ function materializationSnapshot(input: {
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: contributorLogin,
             authorGitHubUserId: input.contributorGitHubUserId,
-            repositoryGitHubId: materializedRepositoryGitHubId,
+            repositoryGitHubId: input.githubRepositoryId,
             repositoryNameWithOwner: input.ownerName,
             reviews: [],
             rawDiff: "materialized diff",
