@@ -95,6 +95,16 @@ describe("claim path assessment", () => {
     expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
   });
 
+  it("accepts assigning the commenter before deleting the claim comment across a shell continuation", () => {
+    const assignment = 'gh api -X POST "repos/$REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR" && \\\n  gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT"';
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
+  });
+
+  it.each(["&&", "||", ";", "|", "&"])("accepts assignment separated from an unrelated deletion by %s", (separator) => {
+    const assignment = `${restAssignment} -f "assignees[]=$ACTOR" ${separator} gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT"`;
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
+  });
+
   it.each(["non:issues", "non=issues", "non$issues"])("rejects a longer REST path segment %s", (segment) => {
     expect(assessClaimPath([workflow("on: issue_comment", `gh api repos/acme/demo/${segment}/42/assignees`)])).toBe("NO_EVIDENCE_FOUND");
   });

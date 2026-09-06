@@ -6,6 +6,10 @@
  * leaves the sponsor where they were before this check, while a wrong
  * NO_EVIDENCE_FOUND warns about a fix they may already have.
  *
+ * REST deletion exclusion applies per command segment, after joining shell
+ * continuations. Segment splitting on &&, ||, ;, | and & is approximate,
+ * including within quotes, and deliberately errs toward EVIDENCE_FOUND.
+ *
  * Interpreting shell, conditional job gating and GitHub Actions expressions is
  * out of scope; the result names make that omission explicit. Known textual
  * limits yielding EVIDENCE_FOUND include read-only GETs, commented-out commands,
@@ -44,10 +48,11 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
       || (Array.isArray(trigger) && trigger.includes("issue_comment"))
       || (trigger instanceof Map && trigger.has("issue_comment"));
 
-    // Join shell continuations only for the REST deletion scan. Deletion tokens
-    // exclude even comments or repository names; additive calls stay independent.
+    // Join shell continuations before splitting commands for the REST deletion scan.
+    // Deletion tokens exclude even comments or repository names within a segment;
+    // additive calls stay independent.
     const referencesAssignment = additiveCall.test(content) || content.replace(/\\\r?\n/g, "").split(/\r?\n/).some(
-      (line) => assigneesCollection.test(line) && !deletion.test(line),
+      (line) => line.split(/&&|\|\||[;|&]/).some((segment) => assigneesCollection.test(segment) && !deletion.test(segment)),
     );
     if (reactsToComments && referencesAssignment) {
       return "EVIDENCE_FOUND";
