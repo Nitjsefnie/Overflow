@@ -9,6 +9,7 @@ import type {
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationEnforcementError,
+  RepositoryWebhookIdConflictError,
   parseGitHubRepository,
   registerRepository,
 } from "@/lib/repositories/register";
@@ -164,9 +165,22 @@ describe("explicit repository registration", () => {
     await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
       code: "CONFLICT",
       message:
-        "The GitHub path octo/overflow is held by a different registered repository. "
-        + "The submitted repository is not registered, and it cannot be registered under a path "
-        + "another registration still claims.",
+        "The GitHub path octo/overflow is claimed by a different registration. "
+        + "The submitted repository is not registered, and it cannot be registered while another "
+        + "registration holds that path.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
+  });
+
+  it("reports a GitHub webhook id another registration still claims as a conflict, not an upstream failure", async () => {
+    const harness = createHarness({ storeClaimedWebhookId: 501 });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "CONFLICT",
+      message:
+        "The GitHub webhook id for the submitted repository is claimed by a different registration. "
+        + "The submitted repository is not registered, and it cannot be registered while another "
+        + "registration holds that webhook id.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
@@ -402,6 +416,7 @@ type HarnessOptions = {
   databaseFailure?: boolean;
   storeRejectsAsDuplicateId?: boolean;
   storeClaimedOwnerName?: string;
+  storeClaimedWebhookId?: number;
   storeRejectsSponsorAsIneligible?: boolean;
   reconciliationFailure?: boolean;
   withoutReconcile?: boolean;
@@ -465,6 +480,9 @@ function createHarness(options: HarnessOptions = {}) {
         }
         if (options.storeClaimedOwnerName !== undefined) {
           throw new RepositoryOwnerNameConflictError(options.storeClaimedOwnerName);
+        }
+        if (options.storeClaimedWebhookId !== undefined) {
+          throw new RepositoryWebhookIdConflictError(options.storeClaimedWebhookId);
         }
         if (options.storeRejectsSponsorAsIneligible === true) {
           throw new RepositoryRegistrationEnforcementError();
