@@ -71,6 +71,13 @@ export class RepositoryRegistrationError extends Error {
   }
 }
 
+export class RepositoryOwnerNameConflictError extends Error {
+  public constructor(public readonly ownerName: string) {
+    super(`The GitHub path ${ownerName} is already claimed by a registered repository.`);
+    this.name = "RepositoryOwnerNameConflictError";
+  }
+}
+
 export class RepositoryRegistrationEnforcementError extends Error {
   public constructor() {
     super("The account is not eligible to register repositories.");
@@ -159,6 +166,19 @@ export async function registerRepository(
   } catch (error) {
     if (error instanceof RepositoryRegistrationError) {
       throw error;
+    }
+
+    // The submitted repository is genuinely absent from the table: some other registration
+    // holds the owner/name path, so the insert failed on that unique constraint rather than
+    // on the numeric GitHub id. Saying "already registered" here would name the wrong row.
+    if (error instanceof RepositoryOwnerNameConflictError) {
+      await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        `The GitHub path ${error.ownerName} is held by a different registered repository. `
+          + "The submitted repository is not registered, and it cannot be registered under a path "
+          + "another registration still claims.",
+      );
     }
 
     if (error instanceof RepositoryRegistrationEnforcementError) {

@@ -6,7 +6,11 @@ import type {
   RepositoryRegistrationDependencies,
   RepositoryRegistrationInput,
 } from "@/lib/repositories/register";
-import { parseGitHubRepository, registerRepository } from "@/lib/repositories/register";
+import {
+  RepositoryOwnerNameConflictError,
+  parseGitHubRepository,
+  registerRepository,
+} from "@/lib/repositories/register";
 
 describe("explicit repository registration", () => {
   it("normalizes a canonical GitHub repository URL", () => {
@@ -141,6 +145,29 @@ describe("explicit repository registration", () => {
     });
     expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
     expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it("reports a duplicate GitHub repository id discovered at insert as already registered", async () => {
+    const harness = createHarness({ storeRejectsAsDuplicateId: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This GitHub repository is already registered.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
+  });
+
+  it("reports a GitHub path another registration still claims as a held path, not as this repository", async () => {
+    const harness = createHarness({ storeClaimedOwnerName: "octo/overflow" });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "CONFLICT",
+      message:
+        "The GitHub path octo/overflow is held by a different registered repository. "
+        + "The submitted repository is not registered, and it cannot be registered under a path "
+        + "another registration still claims.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
   });
 
   it("rejects an incomplete actual point mapping without contacting GitHub", async () => {
@@ -362,6 +389,8 @@ type HarnessOptions = {
   existing?: RegisteredRepository | null;
   webhookFailure?: boolean;
   databaseFailure?: boolean;
+  storeRejectsAsDuplicateId?: boolean;
+  storeClaimedOwnerName?: string;
   reconciliationFailure?: boolean;
   withoutReconcile?: boolean;
 };
@@ -421,6 +450,12 @@ function createHarness(options: HarnessOptions = {}) {
         createdRepositories.push(repository);
         if (options.databaseFailure) {
           throw new Error("database connectivity failure");
+        }
+        if (options.storeClaimedOwnerName !== undefined) {
+          throw new RepositoryOwnerNameConflictError(options.storeClaimedOwnerName);
+        }
+        if (options.storeRejectsAsDuplicateId === true) {
+          return null;
         }
         return registeredRepository();
       },

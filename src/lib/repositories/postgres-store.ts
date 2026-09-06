@@ -9,7 +9,10 @@ import type {
   RegisteredRepository,
   RepositoryRegistrationStore,
 } from "@/lib/repositories/register";
-import { RepositoryRegistrationEnforcementError } from "@/lib/repositories/register";
+import {
+  RepositoryOwnerNameConflictError,
+  RepositoryRegistrationEnforcementError,
+} from "@/lib/repositories/register";
 import { getSql } from "@/lib/db/client";
 import { decryptToken } from "@/lib/security/token-cipher";
 
@@ -97,8 +100,12 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
       return toRegisteredRepository(row);
     } catch (error) {
-      if (isUniqueViolation(error)) {
-        return null;
+      // A duplicate github_repository_id never lands here: the on-conflict clause above absorbs
+      // it and the caller reads the missing row as "already registered". Every other unique
+      // constraint on the table describes a different collision, so answering "already
+      // registered" for one of those names a repository the sponsor did not submit.
+      if (uniqueViolationConstraint(error) === ownerNameConstraint) {
+        throw new RepositoryOwnerNameConflictError(repository.ownerName);
       }
       throw error;
     }
@@ -153,6 +160,18 @@ function toSafeInteger(value: number | string): number {
   return parsed;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+// PostgreSQL names an inline column `unique` after its table and column, and the postgres
+// driver copies the server's error fields onto the thrown error verbatim, so the failing
+// constraint arrives as the snake_case `constraint_name`.
+const ownerNameConstraint = "registered_repositories_owner_name_key";
+
+function uniqueViolationConstraint(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+  const reported = error as { code?: unknown; constraint_name?: unknown };
+  if (reported.code !== "23505" || typeof reported.constraint_name !== "string") {
+    return null;
+  }
+  return reported.constraint_name;
 }
