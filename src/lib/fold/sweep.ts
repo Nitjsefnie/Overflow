@@ -316,10 +316,10 @@ function armSweepInterval(
  * The message names the residual state and not just the failure, because
  * containing this one is what leaves a process alive and permanently not
  * sweeping: the line is all an operator gets, so it has to say that a restart is
- * what brings the sweep back. Every failure before arming it describes exactly.
- * It overstates on a scheduler that arms the tick and then fails — throwing
- * after setInterval, or rejecting on a registry write that follows it — which
- * gets the same line while the interval really is armed.
+ * what brings the sweep back. Every failure that reaches it before arming it
+ * describes exactly. It overstates on a scheduler that arms the tick and then
+ * fails — throwing after setInterval, or rejecting on a registry write that
+ * follows it — which gets the same line while the interval really is armed.
  *
  * The line survives a reason that refuses to be printed, for the reason
  * logRepositoryFailure gives. There is a reason to print only when something
@@ -371,8 +371,11 @@ type GuardedCallback<Arguments extends unknown[]> = (
  * member simply held a value that is not callable, since nothing failed there.
  * Anything uncallable — a member that could not be retrieved, or the null an
  * untyped caller can pass where an optional member expresses only undefined —
- * counts as no callback at all. The member is read once, through the thunk,
- * because an accessor can have a side effect as well as a failure.
+ * counts as no callback at all, though what arrives here is the thunk's to
+ * decide: armSweepInterval maps a nullish member to defaultSchedule before it
+ * gets this far, so a null scheduler arms the default rather than nothing. The
+ * member is read once, through the thunk, because an accessor can have a side
+ * effect as well as a failure.
  *
  * The receiver is passed rather than left to the call, because the local no
  * longer supplies the one the property access did: these members are declared as
