@@ -203,7 +203,58 @@ describe("audit targeting against PostgreSQL", () => {
       { ownerName: "example/lighthouse", unavailableReason: null },
     ]);
   });
+
+  it("carries each registered repository's outstanding reconciliation job into the member dashboard", async () => {
+    const sponsorId = await insertUser("grace");
+    // Registered inactive so the moderation repository listing above keeps its exact answer.
+    for (const ownerName of ["example/dock", "example/jetty", "example/pier", "example/quay", "example/slip"]) {
+      await insertRepository({ ownerName, sponsorId, active: false });
+    }
+    const failedAt = "2026-09-04T11:00:00.000Z";
+    await enqueueJobFor("example/dock", { state: "FAILED", lastFailureAt: failedAt });
+    await enqueueJobFor("example/jetty", { state: "PENDING", lastFailureAt: null });
+    await enqueueJobFor("example/pier", { state: "PENDING", lastFailureAt: failedAt });
+    await enqueueJobFor("example/slip", { state: "RUNNING", lastFailureAt: null });
+
+    const dashboard = await getDashboard(sponsorId);
+
+    // example/quay owns no job row at all, so it also proves the join keeps a repository the queue
+    // has nothing to say about.
+    expect(dashboard.registeredRepositories.map((repository) => ({
+      ownerName: repository.ownerName,
+      reconciliationState: repository.reconciliationState,
+      reconciliationLastFailureAt: repository.reconciliationLastFailureAt,
+    }))).toEqual([
+      { ownerName: "example/dock", reconciliationState: "FAILED", reconciliationLastFailureAt: new Date(failedAt) },
+      { ownerName: "example/jetty", reconciliationState: "PENDING", reconciliationLastFailureAt: null },
+      { ownerName: "example/pier", reconciliationState: "PENDING", reconciliationLastFailureAt: new Date(failedAt) },
+      { ownerName: "example/quay", reconciliationState: "IDLE", reconciliationLastFailureAt: null },
+      { ownerName: "example/slip", reconciliationState: "RUNNING", reconciliationLastFailureAt: null },
+    ]);
+  });
 });
+
+/**
+ * A job row written directly, because the states this projection renders are reached through the
+ * worker's claim and failure paths rather than through enqueueing alone. The lease columns travel
+ * with RUNNING to satisfy repository_reconciliation_jobs_lease_check.
+ */
+async function enqueueJobFor(
+  ownerName: string,
+  job: { state: "PENDING" | "RUNNING" | "FAILED"; lastFailureAt: string | null },
+): Promise<void> {
+  const running = job.state === "RUNNING";
+  await sql`
+    insert into repository_reconciliation_jobs (
+      repository_id, reason, state, last_failure_at, lease_token, lease_expires_at
+    )
+    select
+      repositories.id, ${"SWEEP"}, ${job.state}::repository_reconciliation_job_state, ${job.lastFailureAt},
+      ${running ? "11111111-1111-4111-8111-111111111111" : null}, ${running ? "2026-09-04T12:00:00.000Z" : null}
+    from registered_repositories as repositories
+    where repositories.owner_name = ${ownerName}
+  `;
+}
 
 function byLogin(candidates: Awaited<ReturnType<typeof listAuditCandidates>>, githubLogin: string) {
   const candidate = candidates.find((row) => row.githubLogin === githubLogin);

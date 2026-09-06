@@ -1,5 +1,6 @@
 import { compareCalibration, type CalibrationComparison, type CalibrationPair } from "@/lib/calibration/statistics";
 import { getSql } from "@/lib/db/client";
+import type { ReconciliationJobState } from "@/lib/fold/reconciliation-jobs";
 
 /** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database. */
 export type DashboardSql = {
@@ -42,6 +43,9 @@ export type RegisteredRepositoryProjection = {
   openingName: string;
   actualName: string;
   unavailableReason: string | null;
+  /** `IDLE` is the no-row case: a job deletes its own row on success, so nothing outstanding is nothing to say. */
+  reconciliationState: "IDLE" | ReconciliationJobState;
+  reconciliationLastFailureAt: Date | null;
 };
 
 export type EnforcementNoticeProjection = {
@@ -289,6 +293,8 @@ type RegisteredRepositoryRow = {
   opening_name: string;
   actual_name: string;
   unavailable_reason: string | null;
+  reconciliation_state: string | null;
+  reconciliation_last_failure_at: Date | string | null;
 };
 
 type EnforcementNoticeRow = {
@@ -561,6 +567,8 @@ export async function getDashboard(
       and issues.claim_assignee_github_login is not null
     order by issues.created_at asc, issues.id
   `;
+  // A repository owns at most one reconciliation job, enforced by a unique constraint, so a plain
+  // left join cannot multiply the repository rows and needs no precedence ordering to pick a job.
   const registeredRepositoryRows = await sql<RegisteredRepositoryRow[]>`
     select
       repositories.id,
@@ -569,8 +577,11 @@ export async function getDashboard(
       repositories.active,
       repositories.difficulty_scheme ->> 'openingName' as opening_name,
       repositories.difficulty_scheme ->> 'actualName' as actual_name,
-      repositories.unavailable_reason
+      repositories.unavailable_reason,
+      jobs.state::text as reconciliation_state,
+      jobs.last_failure_at as reconciliation_last_failure_at
     from registered_repositories as repositories
+    left join repository_reconciliation_jobs as jobs on jobs.repository_id = repositories.id
     where repositories.sponsor_id = ${accountId}
     order by repositories.owner_name, repositories.id
   `;
@@ -612,6 +623,14 @@ export async function getDashboard(
       unavailableReason: repository.unavailable_reason === null
         ? null
         : readText(repository.unavailable_reason, "Repository unavailability reason"),
+      reconciliationState: readReconciliationState(
+        repository.reconciliation_state,
+        "Repository reconciliation state",
+      ),
+      reconciliationLastFailureAt: readNullableDate(
+        repository.reconciliation_last_failure_at,
+        "Repository reconciliation failure time",
+      ),
     })),
     enforcementNotices: enforcementNoticeRows.map((notice) => ({
       id: readText(notice.id, "Enforcement notice identifier"),
@@ -1322,6 +1341,42 @@ function readText(value: unknown, label: string): string {
  */
 function readNullableText(value: unknown, label: string): string | null {
   return value === null ? null : readText(value, label);
+}
+
+/**
+ * The queue's state for one repository, where no row at all is the settled answer.
+ *
+ * A job deletes its own row when it succeeds, so a missing row means the repository agrees with
+ * GitHub rather than that its state is unknown. A state the queue cannot hold is a projection
+ * reading the wrong column, and saying so beats rendering it to a sponsor as if it meant something.
+ */
+function readReconciliationState(value: unknown, label: string): "IDLE" | ReconciliationJobState {
+  if (value === null) {
+    return "IDLE";
+  }
+  const state = readText(value, label);
+  const known: readonly ReconciliationJobState[] = ["PENDING", "RUNNING", "FAILED"];
+  for (const candidate of known) {
+    if (state === candidate) {
+      return candidate;
+    }
+  }
+  throw new Error(`${label} was not a known job state.`);
+}
+
+/**
+ * A timestamp the page renders rather than compares, kept as a `Date` because the driver hands
+ * `timestamp with time zone` back as one and a string form would only be parsed again to format it.
+ */
+function readNullableDate(value: unknown, label: string): Date | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = value instanceof Date ? value : new Date(readText(value, label));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${label} was not a timestamp.`);
+  }
+  return parsed;
 }
 
 function readTimestamp(value: string | Date, label: string): string {

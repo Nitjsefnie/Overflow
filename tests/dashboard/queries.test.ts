@@ -380,6 +380,8 @@ describe("dashboard projections", () => {
           opening_name: "Offer band",
           actual_name: "Delivered band",
           unavailable_reason: null,
+          reconciliation_state: null,
+          reconciliation_last_failure_at: null,
         },
       ],
       [
@@ -436,6 +438,8 @@ describe("dashboard projections", () => {
           opening_name: "Offer band",
           actual_name: "Delivered band",
           unavailable_reason: "NOT_PUBLIC",
+          reconciliation_state: null,
+          reconciliation_last_failure_at: null,
         },
         {
           id: "repo-2",
@@ -445,6 +449,8 @@ describe("dashboard projections", () => {
           opening_name: "Offer band",
           actual_name: "Delivered band",
           unavailable_reason: null,
+          reconciliation_state: null,
+          reconciliation_last_failure_at: null,
         },
       ],
       [],
@@ -479,6 +485,65 @@ describe("dashboard projections", () => {
 
     await expect(getDashboard("member-1", { sql })).rejects.toThrow(
       "Repository unavailability reason was not text.",
+    );
+  });
+
+  it("refuses a registered repository whose reconciliation job state is not one the queue can hold", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          unavailable_reason: null,
+          reconciliation_state: "SUCCEEDED",
+          reconciliation_last_failure_at: null,
+        },
+      ],
+      [],
+    ]);
+
+    await expect(getDashboard("member-1", { sql })).rejects.toThrow(
+      "Repository reconciliation state was not a known job state.",
+    );
+  });
+
+  it("reads a reconciliation failure time given as text and refuses one that is not a time at all", async () => {
+    const repositoryRow = {
+      id: "repo-1",
+      owner_name: "co-op/harbour",
+      visibility: "PUBLIC",
+      active: true,
+      opening_name: "Offer band",
+      actual_name: "Delivered band",
+      unavailable_reason: null,
+      reconciliation_state: "FAILED",
+      reconciliation_last_failure_at: "2026-09-04T11:00:00.000Z",
+    };
+    const balance = [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }];
+    const { sql } = sqlHarness([balance, [], [], [repositoryRow], []]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.registeredRepositories[0]?.reconciliationLastFailureAt).toEqual(
+      new Date("2026-09-04T11:00:00.000Z"),
+    );
+
+    const refused = sqlHarness([
+      balance,
+      [],
+      [],
+      [{ ...repositoryRow, reconciliation_last_failure_at: "the day it broke" }],
+      [],
+    ]);
+    await expect(getDashboard("member-1", { sql: refused.sql })).rejects.toThrow(
+      "Repository reconciliation failure time was not a timestamp.",
     );
   });
 
