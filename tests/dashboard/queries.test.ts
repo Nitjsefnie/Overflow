@@ -182,6 +182,7 @@ describe("dashboard projections", () => {
           active: true,
           opening_name: "Offer band",
           actual_name: "Delivered band",
+          unavailable_reason: null,
         },
       ],
       [
@@ -221,6 +222,66 @@ describe("dashboard projections", () => {
     });
     expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
       /encrypted_oauth_token|access_token|webhook_secret|credential/,
+    );
+  });
+
+  it("projects why a registered repository is unavailable and keeps an available one null", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          unavailable_reason: "NOT_PUBLIC",
+        },
+        {
+          id: "repo-2",
+          owner_name: "co-op/lighthouse",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+          unavailable_reason: null,
+        },
+      ],
+      [],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.registeredRepositories).toEqual([
+      expect.objectContaining({ id: "repo-1", unavailableReason: "NOT_PUBLIC" }),
+      expect.objectContaining({ id: "repo-2", unavailableReason: null }),
+    ]);
+    expect(captures[3]?.text ?? "").toMatch(/repositories\.unavailable_reason/i);
+  });
+
+  it("refuses a registered repository whose unavailability reason is neither text nor null", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [
+        {
+          id: "repo-1",
+          owner_name: "co-op/harbour",
+          visibility: "PUBLIC",
+          active: true,
+          opening_name: "Offer band",
+          actual_name: "Delivered band",
+        },
+      ],
+      [],
+    ]);
+
+    await expect(getDashboard("member-1", { sql })).rejects.toThrow(
+      "Repository unavailability reason was not text.",
     );
   });
 
