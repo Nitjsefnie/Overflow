@@ -32,12 +32,15 @@ describe("opening label authority", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.policyViolations).toEqual([
-      { code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 },
-    ]);
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+    }]);
     expect(result.issues).toEqual([]);
-    // The label is standing on the issue — nothing is missing here, which is
-    // exactly what the old `OPENING_LABEL_MISSING` record contradicted.
+    // The label was applied and is still on the issue — nothing is missing here,
+    // which is exactly what the old `OPENING_LABEL_MISSING` record contradicted.
     expect(snapshot.issues[0]!.labels).toContain("M");
   });
 
@@ -46,9 +49,12 @@ describe("opening label authority", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.policyViolations).toEqual([
-      { code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 },
-    ]);
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+    }]);
     expect(result.issues).toEqual([]);
   });
 
@@ -57,10 +63,74 @@ describe("opening label authority", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.policyViolations).toEqual([
-      { code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 },
-    ]);
+    // The login is the payload's own text, so here it is the login the impostor
+    // holds — which happens to read like the sponsor's. The account was refused
+    // on its numeric id; the login names what a moderator will see on the event.
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: SPONSOR_LOGIN,
+    }]);
     expect(result.issues).toEqual([]);
+  });
+
+  it("names `unknown` rather than the sponsor when the payload carries no usable actor login", () => {
+    const snapshot = openingFixture({ opening: { login: "   ", githubUserId: OUTSIDER_GITHUB_USER_ID } });
+
+    const result = foldRepository(snapshot);
+
+    // `sponsorDisplayLogin` would fall back to the sponsor's stored login here,
+    // which would name the sponsor as the account that applied an unauthorized
+    // label. The refusal names nobody rather than the wrong body.
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "unknown",
+    }]);
+  });
+
+  it("names the first candidate applied when several outsiders applied opening labels", () => {
+    const snapshot = openingFixture({ opening: outsider });
+    applyOpeningLabel(snapshot, {
+      id: "opening-2",
+      label: "S",
+      actor: { login: "maintainer", githubUserId: 3001 },
+      createdAt: "2026-08-30T10:30:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+    }]);
+  });
+
+  it("names the first candidate that can be compared, skipping one that cannot", () => {
+    // With no sponsor login stored, an idless actor is unattributable on its own
+    // — it is the later event carrying an account id that makes the refusal an
+    // accusation, so that is the one the row has to name.
+    const snapshot = openingFixture({ opening: { login: "contributor", githubUserId: null } });
+    snapshot.repository.sponsor.githubLogin = "   ";
+    applyOpeningLabel(snapshot, {
+      id: "opening-2",
+      label: "S",
+      actor: { login: "maintainer", githubUserId: 3001 },
+      createdAt: "2026-08-30T10:30:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED",
+      githubIssueId: 101,
+      openingLabel: "S",
+      openingSourceActorLogin: "maintainer",
+    }]);
   });
 
   it("reports a missing opening when no opening-catalog label was ever applied", () => {
@@ -132,6 +202,22 @@ describe("opening label authority", () => {
     })]);
   });
 });
+
+/** A second opening-catalog application, so a refusal has more than one candidate to choose from. */
+function applyOpeningLabel(
+  snapshot: RepositoryFoldSnapshot,
+  application: { id: string; label: string; actor: FixtureActor; createdAt: string },
+): void {
+  snapshot.issues[0]!.history.push({
+    kind: "LABELED",
+    id: application.id,
+    actorLogin: application.actor.login,
+    actorGitHubUserId: application.actor.githubUserId,
+    label: application.label,
+    createdAt: application.createdAt,
+  });
+  snapshot.issues[0]!.labels.push(application.label);
+}
 
 /**
  * One open issue the sponsor filed, carrying a standing opening-catalog label
