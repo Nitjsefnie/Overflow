@@ -18,13 +18,19 @@
 -- row. That collision lands on the ordinary "webhook arrives during a fold that
 -- then fails" path, which is precisely the path this table exists to survive.
 --
--- The lease a claim writes runs for a fixed window (RECONCILIATION_LEASE_MINUTES
--- in src/lib/fold/reconciliation-worker.ts) and is never renewed. A fold that
--- overruns it is reclaimed by another worker, which then takes the repository
--- advisory lock the first one still holds, so the two serialize and the cost is
--- one redundant idempotent fold rather than a corrupted one. That is why there
--- is no heartbeat: it would buy nothing here, and a lease long enough to make
--- overrun impossible would strand a repository for that long after a crash.
+-- Claims use a short window (RECONCILIATION_LEASE_MS in
+-- src/lib/fold/reconciliation-worker.ts), renewed throughout the fold and its
+-- outcome write. Advisory locking still makes reclaiming a slow live worker
+-- safe: the reclaimer serializes behind the first fold, and the cost is one
+-- redundant idempotent fold. That reasoning alone did not cover a dead worker,
+-- for which lease expiry is the only recovery path. A thirty-minute lease meant
+-- thirty minutes of ledger staleness after a deploy that interrupted a fold.
+--
+-- Renewing a short lease gives both properties: a live-but-slow worker keeps
+-- ownership, while a dead worker stops renewing and is reclaimed within the
+-- lease plus one poll (twenty seconds plus five seconds). The redundant-fold
+-- safety net remains underneath: even a spurious reclaim after a busy event
+-- loop starves renewal is harmless, which makes this aggressive window safe.
 --
 -- The lease check keeps `state` and the lease columns from drifting apart. A
 -- claim sets all three together and a release clears them together, so a
