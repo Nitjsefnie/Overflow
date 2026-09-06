@@ -697,18 +697,6 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.length === 1;
   }
 
-  public async renewDeliveryLease(deliveryId: string, leaseToken: string): Promise<boolean> {
-    const rows = await this.sql<{ id: string }[]>`
-      update webhook_deliveries
-      set lease_expires_at = now() + interval '5 minutes'
-      where github_delivery_id = ${deliveryId}
-        and processing_state = ${"PENDING"}
-        and processing_lease_token = ${leaseToken}
-      returning id
-    `;
-    return rows.length === 1;
-  }
-
   public async markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean> {
     void errorMessage;
     const rows = await this.sql<{ id: string }[]>`
