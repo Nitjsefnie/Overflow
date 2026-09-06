@@ -1,5 +1,6 @@
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
+import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
@@ -145,6 +146,7 @@ async function reconcileRepositoryWhileCoordinated(
     const pullRequestEvidence = await collectPullRequestEvidence(
       dependencies.github,
       reference,
+      repository,
       githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
     );
     const authorGitHubUserIds = [...new Set(
@@ -196,20 +198,22 @@ async function reconcileRepositoryWhileCoordinated(
 
 async function collectPullRequestEvidence(
   github: ReconciliationGateway,
-  repository: GitHubRepositoryReference,
+  reference: GitHubRepositoryReference,
+  registered: ReconciliationRepository,
   pullRequests: readonly GitHubPullRequest[],
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
   // A closing reference can name a pull request in another repository, and its
   // number means nothing here: reading it from the registered repository would
   // fingerprint whichever pull request happens to carry that number. Overflow's
   // authority ends at the registered repository, so its evidence is not read.
-  const registeredNameWithOwner = `${repository.owner}/${repository.name}`.toLowerCase();
+  // The fold makes the same call through the same predicate, because the two
+  // disagreeing is what puts an empty diff behind a settlement's proof.
   const uniqueMergedPullRequests = new Map(
     pullRequests
       .filter((pullRequest) =>
         pullRequest.state === "MERGED" &&
         pullRequest.mergedAt !== null &&
-        pullRequest.repositoryNameWithOwner.toLowerCase() === registeredNameWithOwner)
+        belongsToRegisteredRepository(registered, pullRequest))
       .map((pullRequest) => [pullRequest.id, pullRequest]),
   );
   const evidence = await mapWithConcurrency(
@@ -218,8 +222,8 @@ async function collectPullRequestEvidence(
     async (pullRequest) => [
       pullRequest.id,
       {
-        reviews: await github.getPullRequestReviews(repository, pullRequest.number),
-        rawDiff: await github.getPullRequestDiff(repository, pullRequest.number),
+        reviews: await github.getPullRequestReviews(reference, pullRequest.number),
+        rawDiff: await github.getPullRequestDiff(reference, pullRequest.number),
       },
     ] as const,
   );

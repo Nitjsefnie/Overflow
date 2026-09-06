@@ -3,6 +3,7 @@ import { isParticipationEligible, type EnforcementState, type IssueState, type P
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
+import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import type {
   GitHubIssueComment,
   GitHubIssueHistoryEvent,
@@ -283,7 +284,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     }
 
     const selection = issue.state === "CLOSED"
-      ? selectClosingPullRequest(issue.closingPullRequests, snapshot.repository.ownerName)
+      ? selectClosingPullRequest(issue.closingPullRequests, snapshot.repository)
       : noClosingPullRequest;
     const pullRequest = selection.kind === "SELECTED" ? selection.pullRequest : null;
     const settledResolution = pullRequest === null
@@ -483,7 +484,7 @@ function resolveOpening(
  */
 function selectClosingPullRequest(
   pullRequests: readonly RepositoryFoldPullRequest[],
-  registeredNameWithOwner: string,
+  registered: RepositoryFoldSnapshot["repository"],
 ): ClosingPullRequestSelection {
   const merged = pullRequests.filter(
     (pullRequest): pullRequest is AuthoritativeClosingPullRequest =>
@@ -501,11 +502,9 @@ function selectClosingPullRequest(
     return timestampDifference || left.number - right.number || left.id - right.id;
   });
 
-  const registered = merged.find(
-    (pullRequest) => ownsPullRequest(registeredNameWithOwner, pullRequest.repositoryNameWithOwner),
-  );
-  if (registered !== undefined) {
-    return { kind: "SELECTED", pullRequest: registered };
+  const owned = merged.find((pullRequest) => belongsToRegisteredRepository(registered, pullRequest));
+  if (owned !== undefined) {
+    return { kind: "SELECTED", pullRequest: owned };
   }
   const foreign = merged[0];
   return foreign === undefined ? noClosingPullRequest : { kind: "CROSS_REPOSITORY", pullRequest: foreign };
@@ -519,10 +518,6 @@ function crossRepositoryReason(
     + `not the registered repository ${registeredNameWithOwner}.`;
 }
 
-/** GitHub owner and repository names are compared without regard to case. */
-function ownsPullRequest(registeredNameWithOwner: string, pullRequestNameWithOwner: string): boolean {
-  return registeredNameWithOwner.toLowerCase() === pullRequestNameWithOwner.toLowerCase();
-}
 
 function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,

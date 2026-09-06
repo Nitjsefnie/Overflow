@@ -39,6 +39,7 @@ describe("foldRepository", () => {
     "octo/other-example",
   ])("refuses to settle a closing pull request that belongs to %s", (repositoryNameWithOwner) => {
     const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
     snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = repositoryNameWithOwner;
 
     const result = foldRepository(snapshot);
@@ -59,6 +60,7 @@ describe("foldRepository", () => {
   it("reports a foreign closing pull request without merge proof as no closing pull request", () => {
     const snapshot = outsiderFixture();
     const pullRequest = snapshot.issues[0]!.closingPullRequests[0]!;
+    pullRequest.repositoryGitHubId = 5002;
     pullRequest.repositoryNameWithOwner = "other/fork";
     pullRequest.mergeCommitOid = "not-a-merge-commit-oid";
 
@@ -74,6 +76,38 @@ describe("foldRepository", () => {
     }]);
   });
 
+  it("settles a closing pull request whose repository was renamed after registration", () => {
+    const snapshot = outsiderFixture();
+    // GitHub keeps answering for the stored owner/name and reports the new one,
+    // so the registered name goes stale silently. The id is what did not move.
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = "octo/renamed-example";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, githubPullRequestId: 201, status: "SETTLED", credits: 6 }),
+    ]);
+  });
+
+  it("refuses a closing pull request that merely reuses the registered repository's name", () => {
+    const snapshot = outsiderFixture();
+    // A freed owner/name can be taken by anyone once the original is renamed,
+    // so a name that matches proves nothing about which repository this is.
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([]);
+    expect(result.pullRequests).toEqual([]);
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: expect.stringContaining("octo/example"),
+    }]);
+  });
+
   it("settles the registered repository's closing pull request over one merged earlier elsewhere", () => {
     const snapshot = outsiderFixture();
     const registered = snapshot.issues[0]!.closingPullRequests[0]!;
@@ -84,6 +118,7 @@ describe("foldRepository", () => {
       id: 202,
       number: 12,
       url: "https://github.com/other/fork/pull/12",
+      repositoryGitHubId: 5002,
       repositoryNameWithOwner: "other/fork",
       mergedAt: "2026-09-01T11:45:00.000Z",
       mergeCommitOid: "89abcdef0123456789abcdef0123456789abcdef",
