@@ -60,6 +60,7 @@ describe("registering a repository against the real registered_repositories cons
     await expect(store.createRepository(submission)).rejects.toMatchObject({
       name: "RepositoryOwnerNameConflictError",
       ownerName: held.ownerName,
+      message: `The GitHub path ${held.ownerName} is already claimed by a registration.`,
     });
   });
 
@@ -106,7 +107,63 @@ describe("registering a repository against the real registered_repositories cons
     await expect(store.createRepository(submission)).rejects.toMatchObject({
       name: "RepositoryWebhookIdConflictError",
       githubWebhookId: held.githubWebhookId,
+      message: `The GitHub webhook id ${held.githubWebhookId} is already claimed by a registration.`,
     });
+  });
+
+  // Both conflict messages promise the sponsor that the submitted repository is not
+  // registered. That holds only because PostgreSQL consults the on-conflict arbiter index
+  // before the table's other unique indexes, so a submission that collides on the numeric
+  // identity as well resolves to an absent row instead of raising.
+  it("reports a submission whose numeric identity and path are both held by one registration as an absent row", async () => {
+    const held = await registeredRepository();
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubRepositoryId: held.githubRepositoryId,
+      ownerName: held.ownerName,
+    });
+
+    await expect(store.createRepository(submission)).resolves.toBeNull();
+  });
+
+  it("reports a submission whose numeric identity and path are held by different registrations as an absent row", async () => {
+    const holdsIdentity = await registeredRepository();
+    const holdsPath = await registeredRepository();
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubRepositoryId: holdsIdentity.githubRepositoryId,
+      ownerName: holdsPath.ownerName,
+    });
+
+    await expect(store.createRepository(submission)).resolves.toBeNull();
+  });
+
+  it("rethrows a check-constraint violation, which names a constraint without being a unique violation", async () => {
+    const submission = newRepository({ sponsorId: await sponsor(), ownerName: "   " });
+
+    await expect(store.createRepository(submission)).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "registered_repositories_owner_name_check",
+    });
+    await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
+  // The store recognises a collision by the constraint name PostgreSQL generates, so a
+  // migration that renames one silently retires a conflict branch. Read the names back.
+  it("declares the unique constraints the conflict branches are named after", async () => {
+    const rows = await sql<{ conname: string }[]>`
+      select conname
+      from pg_constraint
+      where conrelid = 'registered_repositories'::regclass
+        and contype = 'u'
+      order by conname
+    `;
+
+    expect(rows.map((row) => row.conname)).toEqual([
+      "registered_repositories_github_repository_id_key",
+      "registered_repositories_github_webhook_id_key",
+      "registered_repositories_owner_name_key",
+    ]);
   });
 
   it("refuses a sponsor whose enforcement state makes it ineligible", async () => {
@@ -120,6 +177,12 @@ describe("registering a repository against the real registered_repositories cons
 describe("raising a database error the registration store must not convert", () => {
   it("rethrows a unique violation on a constraint neither conflict branch recognises", async () => {
     const reported = { code: "23505", constraint_name: "registered_repositories_pkey" };
+
+    await expect(storeOverFailingSql(reported).createRepository(submissionShape())).rejects.toEqual(reported);
+  });
+
+  it("rethrows an error naming a constraint a conflict branch recognises when its SQLSTATE is not a unique violation", async () => {
+    const reported = { code: "23514", constraint_name: "registered_repositories_owner_name_key" };
 
     await expect(storeOverFailingSql(reported).createRepository(submissionShape())).rejects.toEqual(reported);
   });
