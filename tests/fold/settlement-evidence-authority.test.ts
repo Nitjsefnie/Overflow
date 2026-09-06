@@ -37,7 +37,7 @@ describe("integrated rejected settlement closure reasons", () => {
 });
 
 describe("same-instant settlement evidence ordering", () => {
-  it.each([false, true])("uses the last event id for a reapplied settled label (reversed: %s)", (reverse) => {
+  it.each([false, true])("uses the last reported application for a tied settled label (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture({ settler: "contributor" });
     const issue = snapshot.issues[0]!;
     issue.history.push({ ...issue.history[1]!, id: "actual-2", actorLogin: "sponsor" });
@@ -45,13 +45,17 @@ describe("same-instant settlement evidence ordering", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements[0]).toMatchObject({
+    expect(result.settlements[0]).toMatchObject(reverse ? {
+      status: "UNSETTLED", credits: 0, settledLabelEventId: null,
+    } : {
       status: "SETTLED", credits: 6, settledLabelEventId: "actual-2", settledLabelActorLogin: "sponsor",
     });
-    expect(result.policyViolations).toEqual([]);
+    expect(result.policyViolations).toEqual(reverse
+      ? [{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]
+      : []);
   });
 
-  it.each([false, true])("applies same-instant settled label removals by event id (reversed: %s)", (reverse) => {
+  it.each([false, true])("replays tied settled label removals in input order (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history.push({
@@ -62,14 +66,17 @@ describe("same-instant settlement evidence ordering", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", credits: 0 });
-    expect(result.unwritableClosures).toEqual([{
+    expect(result.settlements[0]).toMatchObject({
+      status: reverse ? "SETTLED" : "UNSETTLED", credits: reverse ? 6 : 0,
+      settledLabelEventId: reverse ? "actual-1" : null,
+    });
+    expect(result.unwritableClosures).toEqual(reverse ? [] : [{
       githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
   });
 
-  it.each([false, true])("names same-instant ambiguous settled labels by event id (reversed: %s)", (reverse) => {
+  it.each([false, true])("names tied ambiguous settled labels in input order (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history.push({
@@ -82,11 +89,13 @@ describe("same-instant settlement evidence ordering", () => {
 
     expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
-      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: `delivered/6`, `delivered/7`. Exactly one is required.",
+      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: "
+        + (reverse ? "`delivered/7`, `delivered/6`" : "`delivered/6`, `delivered/7`")
+        + ". Exactly one is required.",
     }]);
   });
 
-  it.each([false, true])("names the first later settled application by event id (reversed: %s)", (reverse) => {
+  it.each([false, true])("names the first reported later settled application in a tie (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history[1]!.createdAt = "2026-09-01T12:30:00.000Z";
@@ -100,11 +109,13 @@ describe("same-instant settlement evidence ordering", () => {
 
     expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
-      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z. The earliest later application, `delivered/6` at 2026-09-01T12:30:00.000Z, came after that window.",
+      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z. The earliest later application, "
+        + (reverse ? "`delivered/7`" : "`delivered/6`")
+        + " at 2026-09-01T12:30:00.000Z, came after that window.",
     }]);
   });
 
-  it.each([false, true])("selects same-instant rationales by comment id (reversed: %s)", (reverse) => {
+  it.each([false, true])("selects tied rationales in input order (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.comments.push({ ...issue.comments[0]!, id: "comment-2", databaseId: 402 });
@@ -113,9 +124,33 @@ describe("same-instant settlement evidence ordering", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED", credits: 6, settledRationaleCommentId: "comment-1",
+      status: "SETTLED", credits: 6, settledRationaleCommentId: reverse ? "comment-2" : "comment-1",
     });
     expect(result.policyViolations).toEqual([]);
+  });
+
+  it("preserves removal then reapplication with adversarial opaque ids", () => {
+    const snapshot = evidenceFixture();
+    const issue = snapshot.issues[0]!;
+    issue.history.push(
+      {
+        kind: "UNLABELED", id: "ULE_example", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+      {
+        kind: "LABELED", id: "LE_example", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+    );
+
+    const result = foldRepository(snapshot);
+
+    expect(issue.labels).toContain("delivered/6");
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", credits: 6, settledPoints: 6, settledLabelEventId: "LE_example",
+    });
+    expect(result.policyViolations).toEqual([]);
+    expect(result.unwritableClosures).toEqual([]);
   });
 });
 
