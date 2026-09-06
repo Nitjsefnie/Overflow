@@ -212,6 +212,8 @@ export type UnwritableClosureProjection = {
   pullRequest: { number: number; title: string; url: string } | null;
   settlementId: string | null;
   settlementParties: { creditorLogin: string | null; debtorLogin: string } | null;
+  calibrationId: string | null;
+  calibrationOwnerLogin: string | null;
   latestCorrection: { state: "OPEN" | "GRANTED" | "DECLINED"; requestedAt: string } | null;
 };
 
@@ -440,6 +442,8 @@ type UnwritableClosureRow = {
   settlement_id: string | null;
   creditor_login: string | null;
   debtor_login: string | null;
+  calibration_id: string | null;
+  calibration_owner_login: string | null;
   correction_state: "OPEN" | "GRANTED" | "DECLINED" | null;
   correction_requested_at: string | Date | null;
 };
@@ -1032,6 +1036,8 @@ export async function listUnwritableClosures(
       settlements.id as settlement_id,
       creditors.github_login as creditor_login,
       debtors.github_login as debtor_login,
+      calibrations.id as calibration_id,
+      calibration_owners.github_login as calibration_owner_login,
       latest_correction.state::text as correction_state,
       latest_correction.created_at as correction_requested_at
     from unwritable_closures
@@ -1041,6 +1047,8 @@ export async function listUnwritableClosures(
     left join settlements on settlements.issue_id = issues.id
     left join users as creditors on creditors.id = settlements.creditor_id
     left join users as debtors on debtors.id = settlements.debtor_id
+    left join self_work_calibrations as calibrations on calibrations.issue_id = issues.id
+    left join users as calibration_owners on calibration_owners.id = calibrations.user_id
     left join lateral (
       select settlement_override_requests.state, settlement_override_requests.created_at
       from settlement_override_requests
@@ -1070,6 +1078,11 @@ export async function listUnwritableClosures(
       creditorLogin: row.creditor_login === null ? null : readText(row.creditor_login, "Creditor login"),
       debtorLogin: readText(row.debtor_login, "Debtor login"),
     },
+    calibrationId: row.calibration_id === null ? null : readText(row.calibration_id, "Calibration identifier"),
+    calibrationOwnerLogin:
+      row.calibration_owner_login === null
+        ? null
+        : readText(row.calibration_owner_login, "Calibration owner login"),
     latestCorrection: row.correction_state === null ? null : {
       state: row.correction_state,
       requestedAt: readTimestamp(row.correction_requested_at!, "Correction request time"),

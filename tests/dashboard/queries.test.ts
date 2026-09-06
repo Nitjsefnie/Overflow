@@ -51,6 +51,8 @@ describe("unwritable closures", () => {
     settlement_id: "settlement-1",
     creditor_login: "mira",
     debtor_login: "quinn",
+    calibration_id: null,
+    calibration_owner_login: null,
     correction_state: null,
     correction_requested_at: null,
   };
@@ -95,6 +97,8 @@ describe("unwritable closures", () => {
         },
         settlementId: "settlement-1",
         settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
+        calibrationId: null,
+        calibrationOwnerLogin: null,
         latestCorrection: null,
       },
       expect.objectContaining({
@@ -136,6 +140,34 @@ describe("unwritable closures", () => {
     expect(query).toMatch(/left join users as creditors on creditors\.id = settlements\.creditor_id/i);
     expect(query).toMatch(/left join users as debtors on debtors\.id = settlements\.debtor_id/i);
     expect(query).toMatch(/order by unwritable_closures\.created_at desc, issues\.github_issue_id asc/i);
+  });
+
+  it("carries the self-work calibration for a closure the sponsor closed themselves", async () => {
+    const { sql, captures } = sqlHarness([[
+      {
+        ...rejected,
+        settlement_id: null,
+        creditor_login: null,
+        debtor_login: null,
+        calibration_id: "calibration-1",
+        calibration_owner_login: "grace",
+      },
+    ]]);
+
+    const closures = await listUnwritableClosures({ sql });
+
+    expect(closures[0]).toMatchObject({
+      settlementId: null,
+      settlementParties: null,
+      calibrationId: "calibration-1",
+      calibrationOwnerLogin: "grace",
+    });
+    const query = captures[0]?.text ?? "";
+    const projection = query.match(/^\s*select\s+([\s\S]*?)\s+from\s+unwritable_closures\b/i)?.[1] ?? "";
+    expect(projection).toMatch(/(?:^|,)\s*calibrations\.id\s+as\s+calibration_id\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*calibration_owners\.github_login\s+as\s+calibration_owner_login\s*(?:,|$)/i);
+    expect(query).toMatch(/left join self_work_calibrations as calibrations on calibrations\.issue_id = issues\.id/i);
+    expect(query).toMatch(/left join users as calibration_owners on calibration_owners\.id = calibrations\.user_id/i);
   });
 
   it("selects only the newest correction for the issue, including decided requests", async () => {
