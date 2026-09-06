@@ -16,26 +16,30 @@ export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
       <div className="calibration-grid">
         <section aria-labelledby="self-work-heading">
           <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} pairs</h2>
-          <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
-          <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
+          <p title={String(comparison.selfWork.meanDelta)}>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
+          <p title={String(comparison.selfWork.medianDelta)}>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
         </section>
         <section aria-labelledby="outsider-heading">
           <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} pairs</h2>
-          <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
-          <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
+          <p title={String(comparison.outsider.meanDelta)}>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
+          <p title={String(comparison.outsider.medianDelta)}>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
         </section>
       </div>
-      <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
+      <p className="calibration-difference" title={String(comparison.differenceBetweenMeans)}>Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
     </section>
   );
 }
 
+const deltaFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
 function formatSigned(value: number): string {
-  if (value > 0) {
-    return `+${value}`;
+  const magnitude = deltaFormatter.format(Math.abs(value));
+  let formatted = "0";
+  if (magnitude !== "0" && value > 0) {
+    formatted = `+${magnitude}`;
   }
-  if (value < 0) {
-    return `−${Math.abs(value)}`;
+  if (magnitude !== "0" && value < 0) {
+    formatted = `−${magnitude}`;
   }
-  return "0";
+  return formatted;
 }

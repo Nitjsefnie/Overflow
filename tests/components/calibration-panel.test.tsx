@@ -5,6 +5,22 @@ import { describe, expect, it } from "vitest";
 import { CalibrationPanel } from "@/components/calibration-panel";
 
 describe("calibration comparison", () => {
+  it("rounds fractional deltas and preserves raw values without signed zero", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 7, meanDelta: -4 / 7, medianDelta: 0 },
+          outsider: { count: 3, meanDelta: 1 / 3, medianDelta: 1 },
+          differenceBetweenMeans: -0.001,
+        }}
+      />,
+    );
+
+    expect(screen.getByTitle(String(-4 / 7))).toHaveTextContent("−0.57");
+    expect(screen.getByTitle(String(1 / 3))).toHaveTextContent("+0.33");
+    expect(screen.getByTitle("-0.001")).toHaveTextContent(/^Difference between means 0$/);
+  });
+
   it("compares self-work samples against outsider settlements", () => {
     render(
       <CalibrationPanel
