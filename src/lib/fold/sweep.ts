@@ -19,8 +19,12 @@ export type ReconciliationSweepSchedule = {
   runSweep(): Promise<unknown>;
   schedule?(callback: () => void, everyMs: number): void;
   intervalMs?: number;
-  /** Reports a sweep that rejected as a whole; defaults to console.error. */
-  onFailure?(error: unknown): void;
+  /**
+   * Reports a sweep that failed as a whole, as distinct from the per-repository
+   * `onFailure` on the dependencies. Defaults to console.error, and a hook that
+   * throws is swallowed rather than allowed to kill the process.
+   */
+  onSweepFailure?(error: unknown): void;
 };
 
 export const RECONCILIATION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -107,7 +111,6 @@ export async function sweepReconciliations(
 export function startReconciliationSweep(schedule: ReconciliationSweepSchedule): void {
   const everyMs = schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
   const scheduleTick = schedule.schedule ?? defaultSchedule;
-  const reportFailure = schedule.onFailure ?? defaultReportFailure;
   let running = false;
 
   const sweep = () => {
@@ -115,11 +118,13 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
       return;
     }
     running = true;
+    // Awaited inside an async function rather than chained onto the promise, so
+    // a runSweep that throws before it returns one is caught here too.
     void (async () => {
       try {
         await schedule.runSweep();
       } catch (error) {
-        reportFailure(error);
+        reportSweepFailure(schedule, error);
       } finally {
         // Cleared on rejection as well, or one failed sweep drops every later tick.
         running = false;
@@ -131,8 +136,33 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
   scheduleTick(sweep, everyMs);
 }
 
-function defaultReportFailure(error: unknown): void {
-  console.error("Reconciliation sweep failed", error);
+/**
+ * Reports a sweep that failed as a whole, and cannot itself throw.
+ *
+ * The hook is invoked through the schedule rather than through a reference
+ * hoisted out of it, so one written in method form keeps its receiver: the type
+ * declares it as a method and the sibling per-repository hook is called the same
+ * way, so a detached call would leave `this` undefined and turn the hook into
+ * exactly the process-killing throw this catch exists to prevent.
+ *
+ * A hook that throws for any other reason is swallowed. Losing the report is
+ * bad; losing the process is worse, and any last-resort report here could throw
+ * in turn, so there is nothing safe left to try.
+ */
+function reportSweepFailure(schedule: ReconciliationSweepSchedule, error: unknown): void {
+  try {
+    if (schedule.onSweepFailure === undefined) {
+      logSweepFailure(error);
+      return;
+    }
+    schedule.onSweepFailure(error);
+  } catch {
+    // Deliberately swallowed; see above.
+  }
+}
+
+function logSweepFailure(error: unknown): void {
+  console.error("Reconciliation sweep aborted before it finished", error);
 }
 
 function defaultSchedule(callback: () => void, everyMs: number): void {
