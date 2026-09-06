@@ -67,6 +67,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     withRepositoryReconciliation: async (_id, work) => work(),
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
+      registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: {
         openingName: "Size", actualName: "Delivered",
