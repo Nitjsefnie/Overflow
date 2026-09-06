@@ -20,7 +20,10 @@
 --
 -- Claims use a short window (RECONCILIATION_LEASE_MS in
 -- src/lib/fold/reconciliation-worker.ts), renewed throughout the fold and its
--- outcome write. Advisory locking serializes a reclaimer behind a slow live
+-- outcome write up to RECONCILIATION_LEASE_MAX_RENEWAL_MS after the claim. That
+-- cap surrenders a hung fold's job without releasing its advisory lock; a
+-- reclaimer then incurs the lock timeout and retry costs below, not recovery
+-- of the repository. Advisory locking serializes a reclaimer behind a slow live
 -- worker's fold. The cost is one redundant idempotent fold only if that worker
 -- releases the lock within the reclaimer's sixty-second acquisition deadline.
 -- Otherwise the claim has already consumed an attempt: lock timeout causes
