@@ -46,9 +46,9 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
   assertUniqueMigrationNumbers(numberedNames);
   assertUniformMigrationNumberWidth(numberedNames);
 
-  const migrationNames = numberedNames
-    .filter((name) => options.upTo === undefined || name <= options.upTo)
-    .sort();
+  const migrationNames = numberedNames.filter(
+    (name) => options.upTo === undefined || name <= options.upTo,
+  );
 
   const appliedNames = await readAppliedMigrations();
 
@@ -127,15 +127,20 @@ export function assertUniqueMigrationNumbers(migrationNames: readonly string[]):
 /**
  * Refuses a migration directory whose numeric prefixes are not all the same width.
  *
- * The runner applies migrations in filename order, so `19_x.sql` runs after `020_y.sql` on a
- * fresh database — the wrong order, and silently so. A prefix of an odd width usually carries a
- * number nothing else uses, which is why the collision check above cannot see it.
+ * The runner applies migrations in filename order, so a prefix of another width sorts away from
+ * the number it stands for: `19_x.sql` runs after `020_y.sql`, and `0003_c.sql` runs before
+ * `001_a.sql`. Such a prefix usually carries a number nothing else uses, which is why the
+ * collision check cannot see it.
+ *
+ * Every width is reported rather than one of them being named as the one to renumber to, because
+ * at a boundary crossing there is no such width: `10_j.sql` joining `1_a.sql`-`9_i.sql` cannot be
+ * written in one digit, and repadding the names already in `schema_migrations` is what the
+ * exemption above exists to say nobody may do.
  */
 export function assertUniformMigrationNumberWidth(migrationNames: readonly string[]): void {
-  const migrations = numberedMigrations(migrationNames);
   const namesByWidth = new Map<number, string[]>();
 
-  for (const { name, prefix } of migrations) {
+  for (const { name, prefix } of numberedMigrations(migrationNames)) {
     const sameWidthNames = namesByWidth.get(prefix.length);
     if (sameWidthNames === undefined) {
       namesByWidth.set(prefix.length, [name]);
@@ -148,24 +153,14 @@ export function assertUniformMigrationNumberWidth(migrationNames: readonly strin
     return;
   }
 
-  // The width the directory is written in is the one most of it uses. A tie falls to the width
-  // the first migration in filename order carries, which is the order this map was filled in and
-  // which a stable sort preserves.
-  const [[prevailingWidth]] = [...namesByWidth.entries()].sort(
-    ([, names], [, otherNames]) => otherNames.length - names.length,
+  const widthGroups = [...namesByWidth.entries()]
+    .sort(([width], [otherWidth]) => width - otherWidth)
+    .map(([width, names]) => `${width} digits (${names.join(", ")})`);
+
+  throw new Error(
+    `db/migrations mixes numeric prefix widths: ${widthGroups.join(", ")}. Migrations are ` +
+      "applied in filename order, so a prefix of another width is applied out of turn.",
   );
-
-  for (const { name, prefix } of migrations) {
-    if (prefix.length === prevailingWidth) {
-      continue;
-    }
-
-    throw new Error(
-      `Migration ${name} is numbered with ${prefix.length} digits, where db/migrations ` +
-        `otherwise uses ${prevailingWidth}. Migrations are applied in filename order, so a ` +
-        "prefix of another width runs out of order; renumber it to the prevailing width.",
-    );
-  }
 }
 
 /**
