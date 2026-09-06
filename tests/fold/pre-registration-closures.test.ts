@@ -448,6 +448,7 @@ function rejectedEvidenceFixture(): RepositoryFoldSnapshot {
         createdAt: "2026-08-20T09:00:00.000Z",
         closedAt: shift(registeredAt, -12 * HOUR + 3 * MINUTE),
         authorLogin: "sponsor",
+        authorGitHubUserId: null,
         labels: ["M"],
         history: [
           {

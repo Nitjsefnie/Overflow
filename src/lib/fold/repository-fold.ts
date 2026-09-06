@@ -53,6 +53,8 @@ export type RepositoryFoldIssue = {
   /** GraphQL `Issue.closedAt`; null while the issue is open. */
   closedAt: string | null;
   authorLogin: string | null;
+  /** GitHub's immutable numeric id of the author; null when GitHub reported none. */
+  authorGitHubUserId: number | null;
   labels: string[];
   claimAssigneeGitHubLogin?: string | null;
   history: GitHubIssueHistoryEvent[];
@@ -283,7 +285,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const usersByGitHubUserId = new Map(snapshot.users.map((user) => [user.githubUserId, user]));
   // The sponsor pays for the work, so only the sponsor's labels and rationale
   // price it. Work closed by the sponsor remains self-work calibration.
-  const raterLogin = normalizedNonblankLogin(snapshot.repository.sponsor.githubLogin);
+  const sponsor = snapshot.repository.sponsor;
   const issues: FoldIssue[] = [];
   const pullRequestsByGitHubId = new Map<number, FoldPullRequest>();
   const settlements: FoldSettlement[] = [];
@@ -296,7 +298,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const registeredAtTime = Date.parse(snapshot.repository.registeredAt);
 
   for (const issue of snapshot.issues) {
-    const opening = resolveOpening(issue, snapshot.repository.difficultyScheme, raterLogin);
+    const opening = resolveOpening(issue, snapshot.repository.difficultyScheme, sponsor);
     if (opening === null) {
       policyViolations.push({
         code: "OPENING_LABEL_MISSING",
@@ -315,7 +317,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     const pullRequest = selection.kind === "SELECTED" ? selection.pullRequest : null;
     const settledResolution = pullRequest === null
       ? null
-      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, raterLogin);
+      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, sponsor);
     // Said once for both gated recording sites. A closure's evidence window
     // shuts fifteen minutes after the merge that closed the issue — the same
     // fifteen minutes every rejection reason quotes back to a moderator — or,
@@ -471,9 +473,13 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
 function resolveOpening(
   issue: RepositoryFoldIssue,
   scheme: DifficultyScheme,
-  raterLogin: string | null,
+  sponsor: FoldUser,
 ): OpeningResolution | null {
   const ownerLogin = normalizedNonblankLogin(issue.authorLogin);
+  // A guard on the sponsor's own record, not on the evidence: every opening
+  // resolved here is attributed to the sponsor, and a record carrying no login
+  // names nobody to attribute it to.
+  const raterLogin = normalizedNonblankLogin(sponsor.githubLogin);
   if (ownerLogin === null || raterLogin === null || !validTimestamp(issue.createdAt)) {
     return null;
   }
@@ -492,7 +498,7 @@ function resolveOpening(
     (event) =>
       event.kind === "LABELED" &&
       openingByLabel.has(event.label) &&
-      normalizedNonblankLogin(event.actorLogin) === raterLogin &&
+      isRepositorySponsor({ login: event.actorLogin, githubUserId: event.actorGitHubUserId }, sponsor) &&
       Date.parse(event.createdAt) >= issueCreatedTime &&
       Date.parse(event.createdAt) <= openingDeadline,
   );
@@ -619,8 +625,12 @@ function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,
   pullRequest: AuthoritativeClosingPullRequest,
   scheme: DifficultyScheme,
-  raterLogin: string | null,
+  sponsor: FoldUser,
 ): SettledDifficultyResolution {
+  // Kept as a guard on the sponsor's own record rather than on the evidence:
+  // every rejection below names the sponsor, and a record with no login has no
+  // name to give the moderator who reads it.
+  const raterLogin = normalizedNonblankLogin(sponsor.githubLogin);
   if (raterLogin === null) {
     // Unreachable while `resolveOpening` also refuses a null rater login: the
     // loop prices no issue and continues before it ever gets here. Kept, and
@@ -694,7 +704,7 @@ function resolveSettledDifficulty(
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
-  if (normalizedNonblankLogin(source.actorLogin) !== raterLogin) {
+  if (!isRepositorySponsor({ login: source.actorLogin, githubUserId: source.actorGitHubUserId }, sponsor)) {
     return {
       kind: "rejected",
       reach: windowReach,
@@ -709,7 +719,7 @@ function resolveSettledDifficulty(
     .filter((comment) => {
       const commentTime = Date.parse(comment.createdAt);
       return (
-        normalizedNonblankLogin(comment.authorLogin) === raterLogin &&
+        isRepositorySponsor({ login: comment.authorLogin, githubUserId: comment.authorGitHubUserId }, sponsor) &&
         comment.body.trim().length > 0 &&
         comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
         commentTime >= sourceTime - EVIDENCE_ORDERING_GRACE_MS &&
@@ -920,6 +930,37 @@ function normalizedNonblankLogin(login: string | null): string | null {
     return null;
   }
   return normalizeLogin(login);
+}
+
+/** Whoever GitHub named on a timeline event or a comment, as the payload reports them. */
+type FoldActorIdentity = {
+  login: string | null;
+  githubUserId: number | null;
+};
+
+/**
+ * The one answer to "did the repository sponsor do this?", for every place the
+ * rater's identity decides whether evidence counts.
+ *
+ * `users.github_login` refreshes only when that user next signs in, so it goes
+ * stale the moment the sponsor renames on GitHub — while GitHub reports the
+ * renamed account's CURRENT login as the actor of every event it serves. The
+ * numeric account id is what a rename cannot move, so wherever GitHub reports
+ * one it decides alone: a differing id is a definitive "not the sponsor" and
+ * never a reason to consult the login, because the login the sponsor left
+ * behind is free for anyone else to take, and taking it would otherwise buy
+ * the authority to price this repository's work.
+ *
+ * The login is consulted only where GitHub reported no usable id at all — a
+ * Bot, a Mannequin, an Organization, a deleted account — which is the
+ * comparison that has always been made, unchanged.
+ */
+function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boolean {
+  if (actor.githubUserId !== null) {
+    return actor.githubUserId === sponsor.githubUserId;
+  }
+  const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
+  return sponsorLogin !== null && normalizedNonblankLogin(actor.login) === sponsorLogin;
 }
 
 function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {
