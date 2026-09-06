@@ -332,7 +332,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
           githubIssueId: issue.id,
           kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
           githubPullRequestId: null,
-          reason: crossRepositoryReason(selection.pullRequest, snapshot.repository.ownerName),
+          reason: crossRepositoryReason(selection.pullRequest, snapshot.repository),
         }
         : {
           githubIssueId: issue.id,
@@ -510,14 +510,24 @@ function selectClosingPullRequest(
   return foreign === undefined ? noClosingPullRequest : { kind: "CROSS_REPOSITORY", pullRequest: foreign };
 }
 
+/**
+ * Ownership is settled by id before this is called; the only question here is
+ * which sentence a moderator can act on. Naming the two repositories by name
+ * reads as a contradiction when the reported name is the registered one, which
+ * is exactly what a reused name looks like.
+ */
 function crossRepositoryReason(
   pullRequest: AuthoritativeClosingPullRequest,
-  registeredNameWithOwner: string,
+  registered: RepositoryFoldSnapshot["repository"],
 ): string {
-  return `Closing pull request ${pullRequest.number} belongs to ${pullRequest.repositoryNameWithOwner}, `
-    + `not the registered repository ${registeredNameWithOwner}.`;
+  if (pullRequest.repositoryNameWithOwner.toLowerCase() !== registered.ownerName.toLowerCase()) {
+    return `Closing pull request ${pullRequest.number} belongs to ${pullRequest.repositoryNameWithOwner}, `
+      + `not the registered repository ${registered.ownerName}.`;
+  }
+  return `Closing pull request ${pullRequest.number} does not belong to the registered repository: `
+    + `another repository now carries the name ${registered.ownerName} `
+    + `(GitHub repository ${pullRequest.repositoryGitHubId}, not ${registered.githubRepositoryId}).`;
 }
-
 
 function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,

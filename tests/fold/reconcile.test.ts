@@ -332,6 +332,50 @@ describe("reconcileRepository", () => {
     expect(fold.settlements[0]!.proofSha256).not.toBe(createHash("sha256").update("").digest("hex"));
   });
 
+  it("reads evidence when the repository was renamed after registration", async () => {
+    const calls: Array<{ operation: string; repository: { owner: string; name: string }; number: number }> = [];
+    const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
+    const dependencies = reconciliationDependencies({
+      materialize,
+      github: {
+        // The identity resolves to the new path while the stored one stays stale,
+        // and every closing reference reports the new name with the same id.
+        getRepositoryById: vi.fn().mockResolvedValue(
+          verifiedRepository({ owner: "octo", name: "renamed-example", fullName: "octo/renamed-example" }),
+        ),
+        listIssues: vi.fn().mockResolvedValue([{
+          ...reconciliationIssue({ id: 101, number: 1 }),
+          closingPullRequests: [{
+            ...reconciliationPullRequest({ id: 201, number: 11 }),
+            url: "https://github.com/octo/renamed-example/pull/11",
+            repositoryNameWithOwner: "octo/renamed-example",
+          }],
+        }]),
+        getPullRequestReviews: vi.fn(async (repository, number) => {
+          calls.push({ operation: "reviews", repository, number });
+          return [];
+        }),
+        getPullRequestDiff: vi.fn(async (repository, number) => {
+          calls.push({ operation: "diff", repository, number });
+          return `diff ${number}`;
+        }),
+      },
+    });
+
+    await reconcileRepository(dependencies, "repository");
+
+    expect(calls).toEqual([
+      { operation: "reviews", repository: { owner: "octo", name: "renamed-example" }, number: 11 },
+      { operation: "diff", repository: { owner: "octo", name: "renamed-example" }, number: 11 },
+    ]);
+    // The snapshot the fold works from still carries the stale stored path, so a
+    // rule reading that name rejects the repository's own pull request.
+    const fold = materialize.mock.calls[0]![0].fold as FoldResult;
+    expect(fold.unwritableClosures).toEqual([]);
+    expect(fold.settlements.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
+    expect(fold.settlements[0]!.proofSha256).toBe(createHash("sha256").update("diff 11").digest("hex"));
+  });
+
   it("never reads evidence for a different repository under the registered owner", async () => {
     const calls: Array<{ operation: string; number: number }> = [];
     const materialize = vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 });
