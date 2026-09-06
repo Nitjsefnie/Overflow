@@ -867,8 +867,8 @@ describe("scheduled reconciliation sweep", () => {
     // Not the reason failing — the console itself, reached from inside the loop
     // where nothing catches it. That it stays uncontained is deliberate: a sweep
     // with no way to report anything at all must not carry on silently. What it
-    // costs is every repository behind the failing one, and both paths that
-    // report from inside the loop pay it.
+    // costs is every repository behind the failing one, and the two paths driven
+    // here — no hook, and a hook that throws — each pay it.
     const reconciled: string[] = [];
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       throw new TypeError("The console cannot report at all");
