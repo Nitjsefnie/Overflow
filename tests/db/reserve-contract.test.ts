@@ -189,6 +189,38 @@ describe("the client's reserve contract", () => {
     expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("still queued");
   });
 
+  it("does not refuse a queued query with the error that killed the connection before it", async () => {
+    const sql = postgres(databaseUrl, { max: 1 });
+
+    try {
+      const holder = await sql.reserve();
+      const [backend] = await holder<{ pid: number }[]>`select pg_backend_pid()::integer as pid`;
+      // In flight when the backend goes, so the FATAL it sends on its way out arrives while the
+      // driver is holding a query for it. A postgres error is kept until the ReadyForQuery that
+      // ends that query, and a backend that has gone away never sends one.
+      const held = holder`select pg_sleep(30)`.then(
+        () => "held: served",
+        (error: { code?: string }) => `held: ${error.code}`,
+      );
+      // The pool is at its bound and its only connection is reserved, so this is queued. The close
+      // path hands it to the reconnect as that connection's startup query, which makes the
+      // handshake's own ReadyForQuery -- the first to arrive on the *new* socket -- the one that
+      // decides its fate.
+      const queued = sql<{ value: number }[]>`select 1::integer as value`.execute().then(
+        ([row]) => `queued: ${row!.value}`,
+        (error: { code?: string }) => `queued: ${error.code}`,
+      );
+
+      await observer!`select pg_terminate_backend(${backend!.pid})`;
+
+      // The queued query never reached the backend that died, so the death is not its answer: it
+      // runs on the connection the pool opened in its place.
+      expect([await held, await queued]).toEqual(["held: CONNECTION_CLOSED", "queued: 1"]);
+    } finally {
+      await sql.end({ timeout: 0 });
+    }
+  });
+
   it("refuses every reservation queued behind a destroyed pool, not only the first", async () => {
     const sql = postgres(databaseUrl, { max: 1, fetch_types: false });
     const record: string[] = [];

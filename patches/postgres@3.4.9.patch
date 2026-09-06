@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd481f1d2257 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89dce370d7f38d3cf47632c3c1fc1e52dd0b30ce 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -14,7 +14,21 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd48
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -451,6 +456,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -437,6 +442,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     incoming = Buffer.alloc(0)
+     remaining = 0
+     incomings = null
++    // A postgres error is held until the ReadyForQuery that ends the query it belongs to, and a
++    // backend that dies mid-query sends its FATAL and then goes away without sending one. Left
++    // set, it is read by the first ReadyForQuery to arrive on the NEXT socket -- the handshake's
++    // -- and rejects that connection's startup query, which is the pool's oldest queued work, with
++    // the error of a backend it never reached. Reset beside the other per-socket parse state
++    // rather than below, so the connect-phase close that returns early is covered too.
++    errorResponse = null
+     clearImmediate(nextWriteTimer)
+     socket.removeListener('data', data)
+     socket.removeListener('connect', connected)
+@@ -451,6 +463,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        return reconnect()
  
      !hadError && (query || sent.length) && error(Errors.connection('CONNECTION_CLOSED', options, socket))
@@ -28,7 +42,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd48
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +576,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +583,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
