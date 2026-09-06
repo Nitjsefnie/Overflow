@@ -2,7 +2,7 @@ import postgres from "postgres";
 import type { SqlClient, TransactionCallback } from "@/lib/db/types";
 
 /** Connections available for ordinary application work. */
-export const WORK_POOL_MAX = 10;
+const WORK_POOL_MAX = 10;
 
 /**
  * Connections reserved for reconciliation coordination.
