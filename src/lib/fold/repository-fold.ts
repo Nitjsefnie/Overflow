@@ -244,9 +244,27 @@ type SettledDifficultyEvidence = {
   rationaleCommentedAt: string;
 };
 
+/**
+ * What decides whether a refused settlement is still worth a moderator's time.
+ *
+ * Most refusals describe an evidence window that has since shut, and outside
+ * that window there is nothing left to produce. One does not: a sponsor with no
+ * login is a fact about the account as it stands, and no window bounds fixing
+ * it. The recording site cannot tell those apart from the reason sentence
+ * without reading English, so the resolver states which it produced.
+ *
+ * `refusedEvidenceAt` is the settled label the resolver refused for landing
+ * after the window closed, when there was one. It is the whole reason a stale
+ * window can still be actionable: the label exists, it is just late, which is
+ * the case the settlement-override path was built for.
+ */
+type RejectionReach =
+  | { kind: "UNBOUNDED" }
+  | { kind: "WINDOW"; refusedEvidenceAt: string | null };
+
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
-  | { kind: "rejected"; reason: string; violation?: SettlementEvidenceViolationCode };
+  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode };
 
 type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   mergedAt: string;
@@ -272,6 +290,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const selfWorkCalibrations: SelfWorkCalibration[] = [];
   const unwritableClosures: UnwritableClosure[] = [];
   const policyViolations: FoldPolicyViolation[] = [];
+  // A property of the repository, not of any one issue. NaN when the stored
+  // instant is unreadable, which every reachability test below treats as
+  // unknown and therefore still reachable.
+  const registeredAtTime = Date.parse(snapshot.repository.registeredAt);
 
   for (const issue of snapshot.issues) {
     const opening = resolveOpening(issue, snapshot.repository.difficultyScheme, raterLogin);
@@ -294,6 +316,13 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     const settledResolution = pullRequest === null
       ? null
       : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, raterLogin);
+    // Said once for both recording sites. A closure's evidence window shuts
+    // fifteen minutes after the merge that closed the issue — the same fifteen
+    // minutes every rejection reason quotes back to a moderator — or, where no
+    // pull request of this repository closed it, at the close of the issue.
+    const evidenceWindowClosedAt = pullRequest === null
+      ? parsedInstant(issue.closedAt)
+      : Date.parse(pullRequest.mergedAt) + EVIDENCE_ORDERING_GRACE_MS;
     const settledDifficulty = settledResolution?.kind === "accepted" ? settledResolution.evidence : null;
     if (settledResolution?.kind === "rejected" && settledResolution.violation !== undefined) {
       policyViolations.push({ code: settledResolution.violation, githubIssueId: issue.id });
@@ -329,27 +358,26 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     }
 
     if (pullRequest === null) {
-      // A foreign closing pull request is never materialized, so the closure
-      // that records it can reference no pull request row. Its evidence window
-      // shut at the foreign merge; with no merge at all, at the close itself.
-      const closure: UnwritableClosure = selection.kind === "CROSS_REPOSITORY"
-        ? {
+      // Either way a foreign closing pull request is never materialized, so
+      // the closure that records one can reference no pull request row.
+      if (selection.kind === "CROSS_REPOSITORY") {
+        // Deliberately ungated. What this asks of a moderator — register the
+        // other repository, or act on the identity alert the reason carries —
+        // is bound to no evidence window, so however long ago the foreign pull
+        // request merged, the work is still there to do.
+        unwritableClosures.push({
           githubIssueId: issue.id,
           kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
           githubPullRequestId: null,
           reason: crossRepositoryReason(selection.pullRequest, snapshot.repository),
-        }
-        : {
+        });
+      } else if (evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)) {
+        unwritableClosures.push({
           githubIssueId: issue.id,
           kind: "NO_CLOSING_PULL_REQUEST",
           githubPullRequestId: null,
           reason: "No merged GitHub GraphQL closing pull request was found.",
-        };
-      const windowClosedAt = selection.kind === "CROSS_REPOSITORY"
-        ? selection.pullRequest.mergedAt
-        : issue.closedAt;
-      if (evidenceWindowReachable(windowClosedAt, snapshot.repository.registeredAt)) {
-        unwritableClosures.push(closure);
+        });
       }
       continue;
     }
@@ -370,7 +398,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
 
     if (
       settledResolution?.kind === "rejected" &&
-      evidenceWindowReachable(pullRequest.mergedAt, snapshot.repository.registeredAt)
+      rejectionReachable(settledResolution.reach, evidenceWindowClosedAt, registeredAtTime)
     ) {
       unwritableClosures.push({
         githubIssueId: issue.id,
@@ -493,22 +521,45 @@ function resolveOpening(
 
 /**
  * An unwritable closure is a work item for a moderator, so it is worth
- * recording only while the evidence it asks for could still be produced. Every
- * settlement evidence window shuts at the closure — at the merge, or at the
- * close of an issue no pull request closed — and a window that shut before
- * Overflow was registered on the repository shut before anyone could have been
- * asked to fill it. No label applied and no comment written today reopens it,
- * so the row would sit in the queue forever with no action that could clear it.
+ * recording only while the evidence it asks for could still be produced. A
+ * settlement evidence window shuts fifteen minutes after the merge, and an
+ * issue no pull request closed has only its own close; a window that shut
+ * before Overflow was registered on the repository shut before anyone here
+ * could have been asked to fill it, and no label applied today reopens it.
  *
- * An instant nobody can read is not evidence the window was unreachable, so an
- * unparseable or absent one records: leaving a real work item visible is the
- * recoverable mistake, silently dropping one is not.
+ * Reachability is decided against the registration instant only. When that
+ * instant is unreadable, or the closing instant is absent or unreadable,
+ * nothing has been shown about the window, so the closure is recorded: leaving
+ * a real work item visible is the recoverable mistake, and silently dropping
+ * one is not.
  */
-function evidenceWindowReachable(windowClosedAt: string | null, registeredAt: string): boolean {
-  if (!validTimestamp(windowClosedAt) || !validTimestamp(registeredAt)) {
+function evidenceWindowReachable(windowClosedAt: number | null, registeredAtTime: number): boolean {
+  if (windowClosedAt === null || !Number.isFinite(registeredAtTime)) {
     return true;
   }
-  return Date.parse(windowClosedAt) >= Date.parse(registeredAt);
+  return windowClosedAt >= registeredAtTime;
+}
+
+/**
+ * A refused settlement outlives its own window when the evidence it refused
+ * arrived after the repository was registered: the settled label is there, it
+ * merely landed late, and pricing it is exactly what the settlement-override
+ * path does. Recording it is the only way a moderator ever sees it, so the
+ * late evidence is checked even once the window itself is out of reach.
+ */
+function rejectionReachable(
+  reach: RejectionReach,
+  windowClosedAt: number | null,
+  registeredAtTime: number,
+): boolean {
+  if (reach.kind === "UNBOUNDED") {
+    return true;
+  }
+  if (evidenceWindowReachable(windowClosedAt, registeredAtTime)) {
+    return true;
+  }
+  const refusedEvidenceAt = parsedInstant(reach.refusedEvidenceAt);
+  return refusedEvidenceAt !== null && refusedEvidenceAt >= registeredAtTime;
 }
 
 /**
@@ -572,6 +623,7 @@ function resolveSettledDifficulty(
   if (raterLogin === null) {
     return {
       kind: "rejected",
+      reach: { kind: "UNBOUNDED" },
       reason: "The repository sponsor has no login, so no settled label can be attributed to the sponsor.",
     };
   }
@@ -605,12 +657,14 @@ function resolveSettledDifficulty(
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
       kind: "rejected",
+      reach: { kind: "WINDOW", refusedEvidenceAt: earliestLaterApplication?.createdAt ?? null },
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }
   if (activeLabels.size > 1) {
     return {
       kind: "rejected",
+      reach: { kind: "WINDOW", refusedEvidenceAt: null },
       reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
     };
   }
@@ -622,12 +676,14 @@ function resolveSettledDifficulty(
   ) {
     return {
       kind: "rejected",
+      reach: { kind: "WINDOW", refusedEvidenceAt: null },
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   if (normalizedNonblankLogin(source.actorLogin) !== raterLogin) {
     return {
       kind: "rejected",
+      reach: { kind: "WINDOW", refusedEvidenceAt: null },
       violation: "SETTLED_LABEL_UNAUTHORIZED",
       reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the repository sponsor \`${raterLogin}\`.`,
     };
@@ -659,6 +715,7 @@ function resolveSettledDifficulty(
   if (rationale === undefined) {
     return {
       kind: "rejected",
+      reach: { kind: "WINDOW", refusedEvidenceAt: null },
       violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
       reason: candidates.length > 0
         ? `Every qualifying rationale comment by \`${raterLogin}\` naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
@@ -894,4 +951,9 @@ function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
 
 function validTimestamp(value: string | null): value is string {
   return value !== null && Number.isFinite(Date.parse(value));
+}
+
+/** The instant as a moment, or null when GitHub reported none we can read. */
+function parsedInstant(value: string | null): number | null {
+  return validTimestamp(value) ? Date.parse(value) : null;
 }
