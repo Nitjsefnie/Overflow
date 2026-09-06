@@ -651,20 +651,27 @@ function resolveSettledDifficulty(
       activeLabels.delete(event.label);
     }
   }
+  // Built once for every refusal below. All five describe the same shut window,
+  // and the label that landed after it is what can still make any of them
+  // actionable — so which refusal fired must not decide whether it is carried.
+  const windowReach: RejectionReach = {
+    kind: "WINDOW",
+    refusedEvidenceAt: earliestLaterApplication?.createdAt ?? null,
+  };
   if (activeLabels.size === 0) {
     const laterApplication = earliestLaterApplication === undefined
       ? ""
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
       kind: "rejected",
-      reach: { kind: "WINDOW", refusedEvidenceAt: earliestLaterApplication?.createdAt ?? null },
+      reach: windowReach,
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }
   if (activeLabels.size > 1) {
     return {
       kind: "rejected",
-      reach: { kind: "WINDOW", refusedEvidenceAt: null },
+      reach: windowReach,
       reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
     };
   }
@@ -676,14 +683,14 @@ function resolveSettledDifficulty(
   ) {
     return {
       kind: "rejected",
-      reach: { kind: "WINDOW", refusedEvidenceAt: null },
+      reach: windowReach,
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   if (normalizedNonblankLogin(source.actorLogin) !== raterLogin) {
     return {
       kind: "rejected",
-      reach: { kind: "WINDOW", refusedEvidenceAt: null },
+      reach: windowReach,
       violation: "SETTLED_LABEL_UNAUTHORIZED",
       reason: `The settled label \`${label}\` was applied by \`${source.actorLogin?.trim() || "unknown"}\` rather than the repository sponsor \`${raterLogin}\`.`,
     };
@@ -715,7 +722,7 @@ function resolveSettledDifficulty(
   if (rationale === undefined) {
     return {
       kind: "rejected",
-      reach: { kind: "WINDOW", refusedEvidenceAt: null },
+      reach: windowReach,
       violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
       reason: candidates.length > 0
         ? `Every qualifying rationale comment by \`${raterLogin}\` naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
