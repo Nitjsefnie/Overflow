@@ -56,8 +56,9 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
  *
  * Renewing every five seconds lets a live-but-slow fold keep ownership. A dead
  * worker stops renewing: expiry makes its job claimable within the twenty-second
- * lease plus a five-second poll. Actual pickup also needs a free worker; a drain
- * occupied by another repository delays it (issue 202).
+ * lease plus a five-second poll when a drain slot is free. Other repositories
+ * can fold concurrently, but pickup still waits when every worker slot is
+ * occupied; the lease and poll do not bound that capacity wait.
  *
  * Advisory locking still serializes a spurious reclaim behind the original fold.
  * Its cost is one redundant idempotent fold only if the original releases the
@@ -89,11 +90,37 @@ export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 /**
  * How often the worker looks for a job.
  *
- * An idle worker polls frequently; a drain already folding another repository
- * delays pickup (issue 202). Each poll is one indexed query against a table
- * holding one row per repository.
+ * Each tick admits another drain while a slot is free, so one repository's fold
+ * does not stop pickup for another. When all slots are occupied the tick is
+ * dropped, and a due job still waits for capacity before a later tick can pick
+ * it up. Each claim is one indexed query against a table holding one row per
+ * repository; the poll interval alone is not a bound on pickup latency.
  */
 export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * How many drains this worker may keep in flight, admitted one per poll.
+ *
+ * Four lets unrelated repositories make progress while a long fold occupies
+ * one slot, without treating the database and GitHub as unbounded resources.
+ * src/lib/db/client.ts gives the coordination pool
+ * RECONCILIATION_COORDINATION_POOL_MAX connections, currently ten like
+ * WORK_POOL_MAX. Each fold holds one for its repository advisory lock through
+ * every GitHub call. Four leaves room in that pool for other reconciliation
+ * callers; it is not a reservation against their own concurrent work.
+ *
+ * src/lib/fold/reconcile.ts already allows reconciliationConcurrency (four)
+ * concurrent GitHub requests inside each fold. N folds can therefore put 4N
+ * requests in flight: four drains allow sixteen, and raising this bound spends
+ * more GitHub budget as well as more coordination connections.
+ *
+ * The atomic leased row claim keeps concurrent drains from claiming the same
+ * live lease. If a lease expires during a fold, the repository advisory lock
+ * still serializes that repository's folds. Different repositories can proceed
+ * independently, but a due job behind four occupied slots still waits for
+ * capacity; this bound does not promise unconditional poll-bounded pickup.
+ */
+export const RECONCILIATION_WORKER_CONCURRENCY = 4;
 
 const DEFAULT_DRAIN_MAX_JOBS = 50;
 
@@ -101,6 +128,8 @@ export type ReconciliationWorkerSchedule = {
   drain(): Promise<unknown>;
   schedule?(callback: () => void, everyMs: number): void;
   intervalMs?: number;
+  /** Injection seam like intervalMs; omit to use the module's drain capacity. */
+  concurrency?: number;
   /**
    * Reports a drain that failed as a whole, as distinct from the
    * per-repository hook on the dependencies. A hook that fails costs neither
@@ -122,9 +151,10 @@ export type ReconciliationJobOutcome =
 /**
  * Claims one job, folds its repository, and records the outcome on the job.
  *
- * The worker takes one job at a time: the repository advisory lock inside the
- * fold would serialize two anyway, and the second one would spend GitHub budget
- * to discover that.
+ * Each drain takes one job at a time, while other drains may fold different
+ * repositories concurrently. The atomic leased claim excludes another claim
+ * of the same live job; the repository advisory lock still serializes folds of
+ * the same repository if an expired lease permits a reclaim.
  */
 export async function runNextReconciliationJob(
   dependencies: ReconciliationWorkerDependencies,
@@ -314,47 +344,94 @@ async function deferralTime(
  * The immediate drain is what picks up the jobs enqueued while the server was
  * down, which is the whole point of a durable queue.
  *
- * A tick arriving while the previous drain is still running is dropped rather
- * than queued: the queue is still there, and a second concurrent drain would
- * only race the first one for the same jobs.
+ * Each tick admits one more drain until capacity is occupied. Only ticks at
+ * capacity are dropped rather than queued: the durable jobs remain for a later
+ * tick after a slot is released. One long fold no longer blocks other
+ * repositories' pickup, but a worker at capacity still does.
  *
  * A drain that rejects — the store itself being briefly unreachable is the
  * ordinary case — is reported and swallowed. Node throws on an unhandled
  * rejection, so letting one escape would take the whole server down over a
  * transient database failure, which is far worse than the stale repository this
- * worker exists to repair. The running flag is cleared either way, so the next
- * tick drains again rather than finding the worker wedged.
+ * worker exists to repair. The slot is released either way, so a later tick can
+ * drain again rather than finding capacity permanently leaked.
  *
- * Every member the caller supplies is treated as hostile, and both of the ones
- * read to arm the tick are read after the immediate drain: readDrainInterval
- * contains a failing `intervalMs` and armDrainInterval a failing `schedule`. So
- * neither the cadence nor the arming mechanism can cost the startup drain that
- * picks up what was enqueued while the server was down, and the two differ only
- * in what survives their own failure — the cadence falls back and the tick is
- * armed anyway, while a broken mechanism is replaced by nothing and leaves
- * nothing armed. The sweep next door reads the same way, for the same reasons.
+ * Every caller-supplied configuration member is read after the immediate
+ * drain: readDrainConcurrency contains a failing `concurrency`,
+ * readDrainInterval a failing `intervalMs`, and armDrainInterval a failing
+ * `schedule`. Capacity starts at the module default so startup can run before
+ * any of those reads; every valid chosen capacity is at least one, so that
+ * startup drain fits even when the caller lowers the bound. The ordering keeps
+ * configuration failures from costing the startup pickup.
+ *
+ * A broken capacity or cadence falls back and the tick is armed anyway; a
+ * broken arming mechanism is replaced by nothing and leaves nothing armed.
+ * The sweep next door reads its cadence and scheduler after startup too.
  */
 export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule): void {
-  let running = false;
+  let inFlight = 0;
+  let capacity = RECONCILIATION_WORKER_CONCURRENCY;
 
   const drain = () => {
-    if (running) {
+    if (inFlight >= capacity) {
       return;
     }
-    running = true;
+    inFlight += 1;
     void (async () => {
       try {
         await schedule.drain();
       } catch (error) {
         reportDrainFailure(schedule, error);
       } finally {
-        running = false;
+        inFlight -= 1;
       }
     })();
   };
 
   drain();
+  capacity = readDrainConcurrency(schedule);
   armDrainInterval(schedule, drain, readDrainInterval(schedule));
+}
+
+/**
+ * Reads the capacity injection seam after startup, containing a lazily wired
+ * accessor just as readDrainInterval does. A nullish value is no choice and
+ * needs no report; any supplied value must be a positive integer.
+ *
+ * This guard protects admission as well as tuning: zero can stop every later
+ * drain, while NaN defeats the comparison and admits unbounded work. A broken
+ * value therefore uses the module's bounded default and reports that choice,
+ * leaving the caller's recurring scheduler available to be armed.
+ */
+function readDrainConcurrency(schedule: ReconciliationWorkerSchedule): number {
+  let value: number | undefined;
+  try {
+    value = schedule.concurrency;
+  } catch (error) {
+    logDefaultedConcurrency(error);
+    return RECONCILIATION_WORKER_CONCURRENCY;
+  }
+  if (value == null) return RECONCILIATION_WORKER_CONCURRENCY;
+  if (Number.isInteger(value) && value >= 1) return value;
+  logDefaultedConcurrency(value);
+  return RECONCILIATION_WORKER_CONCURRENCY;
+}
+
+/**
+ * Reports the capacity the worker will use after an unreadable or invalid
+ * choice. The reason is either the thrown value or the unusable capacity, and
+ * a reason that refuses to print still leaves the operator the fallback line.
+ * As with logDefaultedInterval, a console broken at both arities stays fatal;
+ * the startup drain has already run before either report is attempted.
+ */
+function logDefaultedConcurrency(reason: unknown): void {
+  const message =
+    "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
+  try {
+    console.error(message, reason);
+  } catch {
+    console.error(message);
+  }
 }
 
 /**
@@ -483,7 +560,7 @@ function logDefaultedInterval(reason: unknown): void {
  * and the lease to expire instead.
  *
  * Settling the hook rather than awaiting it matters for the same reason it does
- * in the sweep: the worker takes one job at a time, so awaiting would put the
+ * in the sweep: each drain takes one job at a time, so awaiting would put the
  * next job behind a diagnostic and let a hook that never settles stall the
  * drain rather than one report.
  */
