@@ -323,7 +323,7 @@ describe("PostgreSQL settlement override requests", () => {
       calibration: {
         calibrationId: calibration.calibrationId,
         ownerLogin: calibration.sponsorLogin,
-        openingComparisonPoints: 5,
+        openingComparisonPoints: 7,
         actualLabel: "delivered/4",
         actualPoints: 4,
         pullRequestNumber: calibration.pullRequestNumber,
@@ -354,7 +354,7 @@ describe("PostgreSQL settlement override requests", () => {
       settlement: null,
       calibration: {
         calibrationId: calibration.calibrationId,
-        openingComparisonPoints: 5,
+        openingComparisonPoints: 7,
         actualLabel: null,
         actualPoints: null,
         pullRequestNumber: calibration.pullRequestNumber,
@@ -539,11 +539,13 @@ async function insertCalibration(
     settledEvidence: options.settledEvidence,
   });
   const actualPoints = options.actualPoints === undefined ? 4 : options.actualPoints;
+  // Deliberately not the issue's 5: the queue must read this row's figure, and
+  // an equal value would pass just as well against issues.opening_comparison_points.
   const [calibration] = await sql<{ id: string }[]>`
     insert into self_work_calibrations (
       pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
     )
-    values (${scaffold.pullRequestId}, ${scaffold.issueId}, ${sponsorId}, 5, ${actualPoints})
+    values (${scaffold.pullRequestId}, ${scaffold.issueId}, ${sponsorId}, 7, ${actualPoints})
     returning id
   `;
   return {
