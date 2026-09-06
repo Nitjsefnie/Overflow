@@ -336,7 +336,7 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: RENAMED_SPONSOR_LOGIN,
-      reason: "The opening label `M` was applied by `sponsor-new` rather than the repository sponsor `sponsor-old`.",
+      reason: "The application of the opening label `M` by `sponsor-new` could not be attributed to the repository sponsor `sponsor-old`.",
     }]);
   });
 });

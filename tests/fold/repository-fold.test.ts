@@ -717,9 +717,9 @@ describe("rejected settlement closure records", () => {
   });
 
   it.each([
-    ["contributor", "The settled label `delivered/6` was applied by `contributor` rather than the repository sponsor `sponsor`."],
-    ["  ", "The settled label `delivered/6` was applied by `unknown` rather than the repository sponsor `sponsor`."],
-    [null, "The settled label `delivered/6` was applied by `unknown` rather than the repository sponsor `sponsor`."],
+    ["contributor", "The application of the settled label `delivered/6` by `contributor` could not be attributed to the repository sponsor `sponsor`."],
+    ["  ", "The application of the settled label `delivered/6` by `unknown` could not be attributed to the repository sponsor `sponsor`."],
+    [null, "The application of the settled label `delivered/6` by `unknown` could not be attributed to the repository sponsor `sponsor`."],
   ])("records a settled label actor of %s who is not the sponsor", (actorLogin, reason) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.history[1]!.actorLogin = actorLogin;
