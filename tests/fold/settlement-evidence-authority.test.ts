@@ -37,6 +37,49 @@ describe("integrated rejected settlement closure reasons", () => {
 });
 
 describe("same-instant settlement evidence ordering", () => {
+  it.each([false, true])("uses lexical refusal representatives without reordering accepted evidence (reversed refusal: %s)", (reverse) => {
+    const snapshot = evidenceFixture();
+    const accepted = snapshot.issues[0]!;
+    accepted.history[0]!.id = "opening-2";
+    accepted.history.splice(1, 0, { ...accepted.history[0]!, id: "opening-10", label: "S" });
+    accepted.history.push(
+      {
+        kind: "UNLABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+      {
+        kind: "LABELED", id: "actual-10", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+    );
+    const refused = evidenceFixture({ opener: "contributor" }).issues[0]!;
+    refused.id = 102;
+    refused.history[0]!.id = "opening-10";
+    refused.history.push({ ...refused.history[0]!, id: "opening-2", label: "S", actorLogin: "maintainer" });
+    if (reverse) refused.history.reverse();
+    snapshot.issues.push(refused);
+
+    const result = foldRepository(snapshot);
+
+    expect.soft(result.policyViolations).toEqual([
+      { code: "OPENING_LABEL_MUTATED", githubIssueId: 101 },
+      {
+        code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 102,
+        openingLabel: "M", openingSourceActorLogin: "contributor",
+        reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
+      },
+    ]);
+    expect.soft(result.issues).toEqual([expect.objectContaining({
+      githubIssueId: 101, openingSourceEventId: "opening-2", openingLabel: "M",
+      openingComparisonPoints: 5, openingReservePoints: 5,
+    })]);
+    expect.soft(result.settlements).toEqual([expect.objectContaining({
+      githubIssueId: 101, status: "SETTLED", credits: 6, settledPoints: 6,
+      settledLabelEventId: "actual-10", settledRationaleCommentId: "comment-1",
+    })]);
+    expect.soft(result.unwritableClosures).toEqual([]);
+  });
+
   it.each([false, true])("uses the last reported application for a tied settled label (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture({ settler: "contributor" });
     const issue = snapshot.issues[0]!;
