@@ -155,6 +155,13 @@ describe("a reservation the pool cannot serve straight away", () => {
       // empty throw from inside the driver would reach the caller as an unexplained failure.
       expect(refused.error).toBeInstanceOf(Error);
       expect(String(refused.error)).toMatch(/: \S/);
+      // Carrying a reason is not the same as being a refusal. `connected()` wraps the whole
+      // startup in a catch that hands whatever it throws to this same rejection path, so a driver
+      // that crashed on the way to the server arrives here as a well-formed error with a message
+      // and satisfies both lines above. A programmer-error subclass is what that crash looks like
+      // and no refusal by a database is ever one, so excluding it keeps this case about the
+      // connect being refused rather than about the driver breaking on the way.
+      expect(refused.error).not.toBeInstanceOf(TypeError);
 
       forwarder = await startForwarder(port, upstream);
 
