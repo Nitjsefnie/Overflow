@@ -233,11 +233,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       }
       let connection: Awaited<ReturnType<SqlClient["reserve"]>>;
       try {
-        const reservationBudgetMs = deadline - Date.now();
-        if (reservationBudgetMs <= 0) {
-          throw new Error(repositoryCoordinationFailure);
-        }
-        connection = await this.reserveCoordinationConnection(reservationBudgetMs);
+        connection = await this.reserveCoordinationConnection(deadline - Date.now());
       } catch {
         throw new Error(repositoryCoordinationFailure);
       }
