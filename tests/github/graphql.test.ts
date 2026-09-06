@@ -452,8 +452,8 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(issue?.labels).toEqual(Array.from({ length: 25 }, (_, index) => `label-${index}`));
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
-      // The timeline is asked for unconditionally, so it is issued before the
-      // label continuation the nested page only sometimes needs.
+      // Without detector options, this fixture requests the complete timeline
+      // before the label continuation.
       { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: null } },
       { operation: "IssueLabels", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: "nested-next" } },
     ]);
@@ -680,8 +680,8 @@ describe("GitHubGateway GraphQL source adapter", () => {
       ],
     });
     expect(historyCursors).toEqual([null, "history-cursor-2"]);
-    // Only the per-issue timeline document selects comments now; the bulk issue
-    // query deliberately carries no timeline connection at all.
+    // Both the cheap nested read and complete per-issue rereads select comments;
+    // this fixture checks the per-issue pagination path.
     const timelineQueries = queries.filter((query) => query.includes("query IssueTimeline"));
     expect(timelineQueries).toHaveLength(2);
     for (const query of timelineQueries) {
@@ -1704,9 +1704,8 @@ describe("GitHubGateway GraphQL account identities", () => {
     await gateway.listIssues({ owner: "octo", name: "overflow" });
 
     expect(queries.some((query) => query.includes("query RepositoryIssues"))).toBe(true);
-    // `issueTimelineQuery` is the only document that carries a timeline now, so
-    // an unfiltered loop would fail on the bulk query for a reason this test
-    // does not pin.
+    // Every issue gets a cheap nested timeline; the detector selects suspect
+    // issues for complete per-issue rereads. Check those documents here.
     const timelineQueries = queries.filter((query) => query.includes("query IssueTimeline"));
     expect(timelineQueries).toHaveLength(2);
     for (const query of timelineQueries) {
@@ -1756,6 +1755,12 @@ describe("GitHubGateway issue timeline query shape", () => {
   };
 
   it("rereads critical timelines from their first page even when the label event is already nested", async () => {
+    const nestedOnlyEvent = {
+      ...settledEvent, id: "nested-only-label-event", label: { name: "nested-only-sentinel" },
+    };
+    const nestedOnlyComment = {
+      ...rationale, id: "nested-only-comment", databaseId: 100, body: "Nested-only sentinel comment",
+    };
     const requests: Array<{ operation: string; cursor: unknown }> = [];
     const queries: string[] = [];
     const gateway = new GitHubGateway({
@@ -1769,8 +1774,8 @@ describe("GitHubGateway issue timeline query shape", () => {
           return Response.json({ data: { repository: { issues: {
             nodes: [{
               ...issueNode(101, 1, "Critical", { nodes: [{ name: "settled: 6" }], pageInfo }),
-              // The event is visible, but the rationale is silently omitted.
-              timelineItems: { nodes: [settledEvent], totalCount: 1, pageInfo },
+              // Settlement is visible and rationale omitted; nested-only sentinels must be discarded.
+              timelineItems: { nodes: [settledEvent, nestedOnlyEvent, nestedOnlyComment], totalCount: 3, pageInfo },
             }], pageInfo,
           } } } });
         }
@@ -1781,6 +1786,8 @@ describe("GitHubGateway issue timeline query shape", () => {
     });
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect.soft(issue?.history.map(({ id }) => id)).not.toContain("nested-only-label-event");
+    expect.soft(issue?.comments.map(({ id }) => id)).not.toContain("nested-only-comment");
     expect(issue?.comments).toMatchObject([{ id: "rationale-node", body: rationale.body }]);
     expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1", "settled-event"]);
     expect(requests).toEqual([
@@ -1978,7 +1985,7 @@ function issueNode(
   };
 }
 
-/** The per-issue timeline the gateway now asks for once per issue. */
+/** Complete per-issue reread pages for timelines the detector flags after each issue's cheap nested read. */
 function timelineResponse(
   nodes: unknown[] = [],
   pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
