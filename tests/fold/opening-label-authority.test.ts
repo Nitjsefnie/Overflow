@@ -286,8 +286,8 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("reports a missing opening for a non-sponsor label applied after the opening deadline", () => {
-    const snapshot = openingFixture({ opening: outsider });
+  it.each([sponsor, outsider])("reports a missing opening for $login one grace width after the deadline", (opening) => {
+    const snapshot = openingFixture({ opening });
     snapshot.issues[0]!.history.push({
       kind: "ASSIGNED",
       id: "assignment-1",
@@ -305,15 +305,58 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("reports a missing opening for a non-sponsor label applied before the issue was created", () => {
-    const snapshot = openingFixture({ opening: outsider });
-    snapshot.issues[0]!.history[0]!.createdAt = "2026-08-30T08:00:00.000Z";
+  it.each([sponsor, outsider])("reports a missing opening for $login one grace width before creation", (opening) => {
+    const snapshot = openingFixture({ opening });
+    snapshot.issues[0]!.history[0]!.createdAt = "2026-08-30T08:45:00.000Z";
 
     const result = foldRepository(snapshot);
 
     expect(result.policyViolations).toEqual([
       { code: "OPENING_LABEL_MISSING", githubIssueId: 101 },
     ]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it.each([
+    { name: "creation instant", createdAt: "2026-08-30T09:00:00.000Z" },
+    { name: "opening deadline", createdAt: "2026-08-30T09:45:00.000Z" },
+  ])("accepts a sponsor application exactly at the $name", ({ createdAt }) => {
+    const snapshot = openingFixture();
+    snapshot.issues[0]!.history[0]!.createdAt = createdAt;
+    snapshot.issues[0]!.history.push({
+      kind: "ASSIGNED", id: "assignment-1", actorLogin: SPONSOR_LOGIN,
+      actorGitHubUserId: SPONSOR_GITHUB_USER_ID, assigneeLogin: "contributor",
+      createdAt: "2026-08-30T09:30:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      githubIssueId: 101, openingLabel: "M", openingComparisonPoints: 5,
+      openingSourceEventId: "opening-1", openingSourceAt: createdAt,
+    })]);
+  });
+
+  it.each([
+    { name: "creation instant", createdAt: "2026-08-30T09:00:00.000Z" },
+    { name: "opening deadline", createdAt: "2026-08-30T09:45:00.000Z" },
+  ])("records an unauthorized application exactly at the $name", ({ createdAt }) => {
+    const snapshot = openingFixture({ opening: outsider });
+    snapshot.issues[0]!.history[0]!.createdAt = createdAt;
+    snapshot.issues[0]!.history.push({
+      kind: "ASSIGNED", id: "assignment-1", actorLogin: SPONSOR_LOGIN,
+      actorGitHubUserId: SPONSOR_GITHUB_USER_ID, assigneeLogin: "contributor",
+      createdAt: "2026-08-30T09:30:00.000Z",
+    });
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101, openingLabel: "M",
+      openingSourceActorLogin: "contributor",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
+    }]);
     expect(result.issues).toEqual([]);
   });
 
