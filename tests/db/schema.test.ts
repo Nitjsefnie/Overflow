@@ -767,7 +767,7 @@ describe("initial PostgreSQL materialization", () => {
       .rejects.toThrow(/repository_reconciliation_jobs_repository_key/);
   });
 
-  it("records a mid-fold event on the row being worked rather than in a second row", async () => {
+  it("gives every reconciliation job a non-null follow-up flag that starts clear", async () => {
     const sponsorId = await insertUser(sql);
     const repositoryId = await insertRepository(sql, sponsorId);
     const jobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");

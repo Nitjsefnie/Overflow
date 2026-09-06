@@ -167,9 +167,19 @@ describe("PostgreSQL reconciliation job queue", () => {
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
     const claimed = await claimOrFail();
     expect(await store.failReconciliationJob(claimed.id, claimed.leaseToken)).toBe(true);
+    // A job that backed off before its last attempt keeps that future run_after
+    // through the failure, so a revive that does not reset it leaves the sweep's
+    // repair waiting an hour. Without this the row is already due and the reset
+    // is indistinguishable from its absence.
+    await sql`
+      update repository_reconciliation_jobs
+      set run_after = now() + interval '1 hour'
+      where repository_id = ${repositoryId}
+    `;
     const failed = await onlyJobFor(repositoryId);
     expect(failed.state).toBe("FAILED");
     expect(failed.last_failure_at).not.toBeNull();
+    expect(failed.due_now).toBe(false);
 
     await store.enqueueReconciliationJob(repositoryId, "SWEEP");
 
@@ -178,6 +188,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(revived.state).toBe("PENDING");
     expect(revived.attempt_count).toBe(0);
     expect(revived.due_now).toBe(true);
+    expect(revived.run_after.toISOString()).not.toBe(failed.run_after.toISOString());
     expect(revived.last_failure_at?.toISOString()).toBe(failed.last_failure_at?.toISOString());
   });
 
@@ -243,6 +254,30 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect((await claimOrFail()).repositoryId).toBe(newerRepositoryId);
   });
 
+  it("breaks a run_after tie on the job that entered the queue first", async () => {
+    const firstInsertedId = await insertRepository();
+    const secondInsertedId = await insertRepository();
+    await store.enqueueReconciliationJob(firstInsertedId, "WEBHOOK");
+    await store.enqueueReconciliationJob(secondInsertedId, "SWEEP");
+    // One statement, so both rows land on the same run_after and only the
+    // tiebreak can order them.
+    await sql`
+      update repository_reconciliation_jobs
+      set run_after = now() - interval '5 minutes'
+      where repository_id in (${firstInsertedId}, ${secondInsertedId})
+    `;
+    // The row enqueued second is made the older one, so insertion order alone
+    // cannot produce the expected answer.
+    await sql`
+      update repository_reconciliation_jobs
+      set created_at = now() - interval '1 hour'
+      where repository_id = ${secondInsertedId}
+    `;
+
+    expect((await claimOrFail()).repositoryId).toBe(secondInsertedId);
+    expect((await claimOrFail()).repositoryId).toBe(firstInsertedId);
+  });
+
   it("reclaims a RUNNING job whose lease has expired", async () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
@@ -256,6 +291,31 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(second.leaseToken).not.toBe(first.leaseToken);
     expect(second.attemptCount).toBe(2);
     expect(await store.completeReconciliationJob(first.id, first.leaseToken)).toBe(false);
+  });
+
+  it("keeps a mid-fold enqueue's follow-up across a reclaimed lease", async () => {
+    // The event arrived while the first worker held the job and that worker then
+    // died. Clearing the flag on the reclaim would lose the event outright: the
+    // fold it belongs to never finished, and the reclaimed attempt is the run
+    // that has to answer for it.
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const first = await claimOrFail();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+    await expireLease(first.id);
+    const second = await claimOrFail();
+
+    expect(second.id).toBe(first.id);
+    expect((await onlyJobFor(repositoryId)).follow_up_requested).toBe(true);
+
+    expect(await store.completeReconciliationJob(second.id, second.leaseToken)).toBe(true);
+
+    const job = await onlyJobFor(repositoryId);
+    expect(job.state).toBe("PENDING");
+    expect(job.follow_up_requested).toBe(false);
+    expect(job.due_now).toBe(true);
+    expect((await claimOrFail()).id).toBe(job.id);
   });
 
   it("deletes the row a completed job leaves behind", async () => {

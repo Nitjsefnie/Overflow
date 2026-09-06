@@ -334,6 +334,11 @@ describe("member dashboard", () => {
             // A queued job still drains for an inactive repository, because claiming one does not
             // consult `active`; only the sweep's revival of a FAILED job does.
             { ...registered("repo-3", "co-op/breakwater"), active: false, reconciliationState: "PENDING" },
+            {
+              ...registered("repo-4", "co-op/seawall"),
+              active: false,
+              reconciliationState: "FAILED",
+            },
           ],
           enforcementNotices: [],
         }}
@@ -350,6 +355,9 @@ describe("member dashboard", () => {
       /co-op\/lighthouse.*· reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
     )).toBeVisible();
     expect(screen.getByText(/co-op\/breakwater.*· reconciliation queued$/)).toBeVisible();
+    expect(screen.getByText(
+      /co-op\/seawall.*· reconciliation is failing; it will not be retried while the repository is inactive$/,
+    )).toBeVisible();
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {

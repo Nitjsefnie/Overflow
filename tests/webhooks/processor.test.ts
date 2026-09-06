@@ -22,17 +22,17 @@ describe("processWebhook", () => {
     expect(dependencies.store.markProcessed).not.toHaveBeenCalled();
   });
 
-  it("does not schedule a fold for a repository Overflow does not actively track", async () => {
-    const unknown = processorDependencies({ findRepositoryByGitHubId: vi.fn().mockResolvedValue(null) });
-    const inactive = processorDependencies({
-      findRepositoryByGitHubId: vi.fn().mockResolvedValue({ id: "repository", active: false }),
+  it.each([
+    { repository: null, tracking: "a repository Overflow does not know" },
+    { repository: { id: "repository", active: false }, tracking: "a repository Overflow no longer tracks" },
+  ])("does not schedule a fold for $tracking", async ({ repository }) => {
+    const dependencies = processorDependencies({
+      findRepositoryByGitHubId: vi.fn().mockResolvedValue(repository),
     });
 
-    await expect(processWebhook(unknown, delivery())).resolves.toEqual({ status: "PROCESSED" });
-    await expect(processWebhook(inactive, delivery())).resolves.toEqual({ status: "PROCESSED" });
+    await expect(processWebhook(dependencies, delivery())).resolves.toEqual({ status: "PROCESSED" });
 
-    expect(unknown.enqueueReconciliation).not.toHaveBeenCalled();
-    expect(inactive.enqueueReconciliation).not.toHaveBeenCalled();
+    expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
   });
 
   it("writes only a sanitized failure status before allowing GitHub to retry", async () => {
