@@ -8,6 +8,7 @@ import type {
 } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
+  RepositoryRegistrationEnforcementError,
   parseGitHubRepository,
   registerRepository,
 } from "@/lib/repositories/register";
@@ -166,6 +167,16 @@ describe("explicit repository registration", () => {
         "The GitHub path octo/overflow is held by a different registered repository. "
         + "The submitted repository is not registered, and it cannot be registered under a path "
         + "another registration still claims.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
+  });
+
+  it("deletes the webhook when the store finds the sponsor ineligible at insert", async () => {
+    const harness = createHarness({ storeRejectsSponsorAsIneligible: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "The account is not eligible to register repositories.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
   });
@@ -391,6 +402,7 @@ type HarnessOptions = {
   databaseFailure?: boolean;
   storeRejectsAsDuplicateId?: boolean;
   storeClaimedOwnerName?: string;
+  storeRejectsSponsorAsIneligible?: boolean;
   reconciliationFailure?: boolean;
   withoutReconcile?: boolean;
 };
@@ -453,6 +465,9 @@ function createHarness(options: HarnessOptions = {}) {
         }
         if (options.storeClaimedOwnerName !== undefined) {
           throw new RepositoryOwnerNameConflictError(options.storeClaimedOwnerName);
+        }
+        if (options.storeRejectsSponsorAsIneligible === true) {
+          throw new RepositoryRegistrationEnforcementError();
         }
         if (options.storeRejectsAsDuplicateId === true) {
           return null;
