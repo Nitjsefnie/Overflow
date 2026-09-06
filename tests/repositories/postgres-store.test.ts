@@ -5,11 +5,12 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
-import type { EnforcementState } from "@/lib/db/types";
+import type { EnforcementState, SqlClient } from "@/lib/db/types";
 import type { NewRegisteredRepository } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationEnforcementError,
+  RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 
@@ -84,7 +85,18 @@ describe("registering a repository against the real registered_repositories cons
     });
   });
 
-  it("raises a unique violation it does not recognise rather than reporting the repository as present", async () => {
+  it("names the held GitHub webhook id when a new numeric identity is submitted under a claimed webhook id", async () => {
+    const held = await registeredRepository();
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubWebhookId: held.githubWebhookId,
+    });
+
+    await expect(store.createRepository(submission)).rejects.toThrow(RepositoryWebhookIdConflictError);
+    await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
+  it("carries the claimed webhook id on the webhook conflict it raises", async () => {
     const held = await registeredRepository();
     const submission = newRepository({
       sponsorId: await sponsor(),
@@ -92,10 +104,9 @@ describe("registering a repository against the real registered_repositories cons
     });
 
     await expect(store.createRepository(submission)).rejects.toMatchObject({
-      code: "23505",
-      constraint_name: "registered_repositories_github_webhook_id_key",
+      name: "RepositoryWebhookIdConflictError",
+      githubWebhookId: held.githubWebhookId,
     });
-    await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
   });
 
   it("refuses a sponsor whose enforcement state makes it ineligible", async () => {
@@ -105,6 +116,30 @@ describe("registering a repository against the real registered_repositories cons
     await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
   });
 });
+
+describe("raising a database error the registration store must not convert", () => {
+  it("rethrows a unique violation on a constraint neither conflict branch recognises", async () => {
+    const reported = { code: "23505", constraint_name: "registered_repositories_pkey" };
+
+    await expect(storeOverFailingSql(reported).createRepository(submissionShape())).rejects.toEqual(reported);
+  });
+});
+
+// The store reads the failing constraint off whatever the driver threw, so the guard is
+// exercised by handing it a query that throws that shape. `sql.array` and `sql.json` are
+// evaluated while building the statement, before the tagged template call raises.
+function storeOverFailingSql(error: unknown): PostgresRepositoryStore {
+  const failingSql = (() => {
+    throw error;
+  }) as unknown as Record<string, unknown>;
+  failingSql.array = (value: unknown) => value;
+  failingSql.json = (value: unknown) => value;
+  return new PostgresRepositoryStore(failingSql as unknown as SqlClient, tokenEncryptionKey);
+}
+
+function submissionShape(): NewRegisteredRepository {
+  return newRepository({ sponsorId: "00000000-0000-0000-0000-000000000000" });
+}
 
 async function countOf(githubRepositoryId: number): Promise<number> {
   const [row] = await sql<{ count: string }[]>`
