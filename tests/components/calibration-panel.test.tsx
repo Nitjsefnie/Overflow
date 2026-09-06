@@ -169,6 +169,14 @@ describe("self-work calibration proof page", () => {
     expect(screen.getByText(/The label landed nine minutes after the window./)).toBeVisible();
   });
 
+  it("shows a corrected figure that no GitHub label backs", async () => {
+    respondWith({ calibration: [{ ...calibrationRow, actual_label: null, actual_points: 6 }] });
+
+    render(await CalibrationProofPage(calibrationParams));
+
+    expect(proofValue("Delivered band")).toBe("no label recorded · 6");
+  });
+
   it("withholds a calibration recorded against another account", async () => {
     respondWith({ calibration: [] });
 
