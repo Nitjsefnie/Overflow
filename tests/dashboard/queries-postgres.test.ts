@@ -211,10 +211,10 @@ describe("audit targeting against PostgreSQL", () => {
       await insertRepository({ ownerName, sponsorId, active: false });
     }
     const failedAt = "2026-09-04T11:00:00.000Z";
-    await enqueueJobFor("example/dock", { state: "FAILED", lastFailureAt: failedAt });
-    await enqueueJobFor("example/jetty", { state: "PENDING", lastFailureAt: null });
-    await enqueueJobFor("example/pier", { state: "PENDING", lastFailureAt: failedAt });
-    await enqueueJobFor("example/slip", { state: "RUNNING", lastFailureAt: null });
+    await insertJobFor("example/dock", { state: "FAILED", lastFailureAt: failedAt });
+    await insertJobFor("example/jetty", { state: "PENDING", lastFailureAt: null });
+    await insertJobFor("example/pier", { state: "PENDING", lastFailureAt: failedAt });
+    await insertJobFor("example/slip", { state: "RUNNING", lastFailureAt: null });
 
     const dashboard = await getDashboard(sponsorId);
 
@@ -234,12 +234,8 @@ describe("audit targeting against PostgreSQL", () => {
   });
 });
 
-/**
- * A job row written directly, because the states this projection renders are reached through the
- * worker's claim and failure paths rather than through enqueueing alone. The lease columns travel
- * with RUNNING to satisfy repository_reconciliation_jobs_lease_check.
- */
-async function enqueueJobFor(
+/** The lease columns travel with RUNNING to satisfy repository_reconciliation_jobs_lease_check. */
+async function insertJobFor(
   ownerName: string,
   job: { state: "PENDING" | "RUNNING" | "FAILED"; lastFailureAt: string | null },
 ): Promise<void> {

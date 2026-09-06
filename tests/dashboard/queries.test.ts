@@ -514,35 +514,20 @@ describe("dashboard projections", () => {
     );
   });
 
-  it("reads a reconciliation failure time given as text and refuses one that is not a time at all", async () => {
-    const repositoryRow = {
-      id: "repo-1",
-      owner_name: "co-op/harbour",
-      visibility: "PUBLIC",
-      active: true,
-      opening_name: "Offer band",
-      actual_name: "Delivered band",
-      unavailable_reason: null,
-      reconciliation_state: "FAILED",
-      reconciliation_last_failure_at: "2026-09-04T11:00:00.000Z",
-    };
-    const balance = [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }];
-    const { sql } = sqlHarness([balance, [], [], [repositoryRow], []]);
+  it("reads a reconciliation failure time given as text", async () => {
+    const { sql } = sqlHarness(failingRepositoryResponses("2026-09-04T11:00:00.000Z"));
 
     const dashboard = await getDashboard("member-1", { sql });
 
     expect(dashboard.registeredRepositories[0]?.reconciliationLastFailureAt).toEqual(
       new Date("2026-09-04T11:00:00.000Z"),
     );
+  });
 
-    const refused = sqlHarness([
-      balance,
-      [],
-      [],
-      [{ ...repositoryRow, reconciliation_last_failure_at: "the day it broke" }],
-      [],
-    ]);
-    await expect(getDashboard("member-1", { sql: refused.sql })).rejects.toThrow(
+  it("refuses a reconciliation failure time that is not a time at all", async () => {
+    const { sql } = sqlHarness(failingRepositoryResponses("the day it broke"));
+
+    await expect(getDashboard("member-1", { sql })).rejects.toThrow(
       "Repository reconciliation failure time was not a timestamp.",
     );
   });
@@ -967,6 +952,29 @@ describe("dashboard projections", () => {
     );
   });
 });
+
+/** The five dashboard responses, carrying one failing repository whose failure time is the argument. */
+function failingRepositoryResponses(lastFailureAt: unknown): unknown[][] {
+  return [
+    [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+    [],
+    [],
+    [
+      {
+        id: "repo-1",
+        owner_name: "co-op/harbour",
+        visibility: "PUBLIC",
+        active: true,
+        opening_name: "Offer band",
+        actual_name: "Delivered band",
+        unavailable_reason: null,
+        reconciliation_state: "FAILED",
+        reconciliation_last_failure_at: lastFailureAt,
+      },
+    ],
+    [],
+  ];
+}
 
 describe("settlement history", () => {
   it("lists every settlement the account is party to, newest first, without hiding unsettled work", async () => {
