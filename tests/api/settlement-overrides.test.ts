@@ -349,7 +349,10 @@ describe("settlement override decision API", () => {
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({
         decideRequest: vi.fn().mockRejectedValue(
-          new SettlementOverrideError("NOT_FOUND", "No settlement, calibration or correction request was found under that identifier."),
+          new SettlementOverrideError(
+            "NOT_FOUND",
+            "No settlement, calibration or correction request was found under that identifier.",
+          ),
         ),
       }),
     });
