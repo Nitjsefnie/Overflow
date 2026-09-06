@@ -198,9 +198,17 @@ async function collectPullRequestEvidence(
   repository: GitHubRepositoryReference,
   pullRequests: readonly GitHubPullRequest[],
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
+  // A closing reference can name a pull request in another repository, and its
+  // number means nothing here: reading it from the registered repository would
+  // fingerprint whichever pull request happens to carry that number. Overflow's
+  // authority ends at the registered repository, so its evidence is not read.
+  const registeredNameWithOwner = `${repository.owner}/${repository.name}`.toLowerCase();
   const uniqueMergedPullRequests = new Map(
     pullRequests
-      .filter((pullRequest) => pullRequest.state === "MERGED" && pullRequest.mergedAt !== null)
+      .filter((pullRequest) =>
+        pullRequest.state === "MERGED" &&
+        pullRequest.mergedAt !== null &&
+        pullRequest.repositoryNameWithOwner.toLowerCase() === registeredNameWithOwner)
       .map((pullRequest) => [pullRequest.id, pullRequest]),
   );
   const evidence = await mapWithConcurrency(
