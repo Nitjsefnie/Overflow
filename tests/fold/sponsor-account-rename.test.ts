@@ -68,8 +68,10 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
     const result = foldRepository(fixture({ opening: impostorHoldingTheFreedLogin }));
 
     expect(result.issues).toEqual([]);
+    // GitHub named the impostor's numeric id, so the comparison was decisive
+    // and the account it refused can be named. The label itself is standing.
     expect(result.policyViolations).toEqual([
-      { code: "OPENING_LABEL_MISSING", githubIssueId: 101 },
+      { code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 },
     ]);
     expect(result.settlements).toEqual([]);
   });
@@ -317,8 +319,10 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
     }));
 
     expect(result.issues).toEqual([]);
+    // The sponsor's record still holds a login, so the claim was compared
+    // against something and lost — an unauthorized label, not an absent one.
     expect(result.policyViolations).toEqual([
-      { code: "OPENING_LABEL_MISSING", githubIssueId: 101 },
+      { code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 },
     ]);
   });
 });

@@ -241,7 +241,7 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       pull_request_id: null,
       before_state: null,
       after_state: {
-        code: "OPENING_LABEL_MISSING",
+        code: "OPENING_LABEL_UNAUTHORIZED",
         githubIssueId: impostorIssueGitHubId,
       },
     }]);

@@ -83,7 +83,9 @@ describe("rating authority", () => {
     expect(result.issues).toEqual([]);
     expect(result.settlements).toEqual([]);
     expect(result.ledgerEntries).toEqual([]);
-    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_MISSING", githubIssueId: 101 }]);
+    // The `M` label is standing on the issue; what the outsider lacks is the
+    // authority to have applied it.
+    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
   });
 
   it("does not let two outsiders price and close an issue between them", () => {
@@ -99,7 +101,7 @@ describe("rating authority", () => {
 
     expect(result.issues).toEqual([]);
     expect(result.settlements).toEqual([]);
-    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_MISSING", githubIssueId: 101 }]);
+    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
   });
 
   it("settles an outsider-filed issue that the sponsor priced at opening and at settlement", () => {
