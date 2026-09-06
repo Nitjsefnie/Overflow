@@ -85,7 +85,7 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
             GitHub closing-link proof <code>{settlement.proofSha256}</code>
           </p>
         </article>
-        <SettlementCorrections settlementId={settlement.id} requests={corrections} />
+        <SettlementCorrections target={{ kind: "settlement", settlementId: settlement.id }} requests={corrections} />
       </AppShell>
     );
   } catch {
