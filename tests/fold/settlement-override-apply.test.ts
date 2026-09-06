@@ -130,15 +130,10 @@ describe("granted correction applied to a folded self-work calibration", () => {
     const before = uncalibrated();
     const applied = applyGrantedSelfWorkCalibrationOverride(before, 6);
 
-    expect(applied.actualLabel).toBeNull();
-    expect(applied.actualLabelEventId).toBeNull();
-    expect(applied.actualLabelActorLogin).toBeNull();
-    expect(applied.actualLabelAppliedAt).toBeNull();
-    expect(applied.rationaleCommentId).toBeNull();
-    expect(applied.rationaleActorLogin).toBeNull();
-    expect(applied.rationaleCommentedAt).toBeNull();
-    expect(applied.openingComparisonPoints).toBe(before.openingComparisonPoints);
-    expect(applied.mergeCommitOid).toBe(before.mergeCommitOid);
+    // The whole class rather than the fields anyone thought to list: a grant
+    // prices the work and claims nothing else, so the points are the only
+    // difference a correction is allowed to make.
+    expect(applied).toEqual({ ...before, actualPoints: 6 });
     expect(before.actualPoints).toBeNull();
   });
 

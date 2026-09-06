@@ -446,7 +446,10 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       // One snapshot of the granted corrections for the whole run: settlements
       // and calibrations are two ways of recording the same issue's outcome, so
       // reading the table twice could price one against a grant the other never
-      // saw.
+      // saw. Reading it before `upsertIssues` cannot miss one: migration 009
+      // gives `settlement_override_requests.issue_id` a foreign key to
+      // `issues.id`, so a request exists only for an issue already in the
+      // table, and an issue this run is about to insert can carry no grant.
       const [existingSettlements, existingSelfWorkCalibrations, grantedOverrides] = await Promise.all([
         loadExistingSettlements(transaction, input.repositoryId),
         loadExistingSelfWorkCalibrations(transaction, input.repositoryId),
