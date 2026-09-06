@@ -1806,9 +1806,10 @@ describe("initial PostgreSQL materialization", () => {
       fold: foldRepository(snapshotAs(sponsorLogin)),
     });
 
-    // GitHub renames the account: the users row, the issue author and the opening
-    // label actor all report the new login while the labelling event is untouched.
-    await sql`update users set github_login = ${renamedSponsorLogin} where id = ${sponsorId}`;
+    // GitHub renames the account: the snapshot's issue author and opening label
+    // actor report the new login while the labelling event itself is untouched.
+    // What the rename does to the rest of the product is a reconciliation
+    // concern, covered by tests/fold/renamed-owner-reconciliation.test.ts.
     const renameRun = await store.beginRun(repositoryId);
     // The one recorded change is the settled evidence's display text following the rename.
     await expect(store.materialize({
