@@ -922,7 +922,7 @@ export async function getSelfWorkCalibrationProof(
     projection.openingLabel = readText(row.opening_label, "Opening label");
   }
   if (row.actual_label !== undefined) {
-    projection.actualLabel = row.actual_label;
+    projection.actualLabel = readNullableText(row.actual_label, "Actual label");
   }
   if (row.merge_commit_oid !== undefined) {
     projection.mergeCommitOid = readNullableMergeOid(row.merge_commit_oid);
@@ -1308,6 +1308,17 @@ function readText(value: unknown, label: string): string {
     throw new Error(`${label} was not text.`);
   }
   return value;
+}
+
+/**
+ * A column that is legitimately absent, still checked when it is present.
+ *
+ * Null is the answer on the closure this product has to render — a settled
+ * label the fold refused to write — so it passes through, but anything else
+ * non-textual is a projection reading the wrong column and says so.
+ */
+function readNullableText(value: unknown, label: string): string | null {
+  return value === null ? null : readText(value, label);
 }
 
 function readTimestamp(value: string | Date, label: string): string {

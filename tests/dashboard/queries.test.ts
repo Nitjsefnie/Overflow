@@ -284,6 +284,14 @@ describe("self-work calibrations", () => {
     });
   });
 
+  it("refuses an actual label that is not text, and keeps the absent one", async () => {
+    const { sql } = sqlHarness([[{ ...calibrationRow, actual_label: 4 }]]);
+
+    await expect(getSelfWorkCalibrationProof("member-1", "calibration-1", { sql })).rejects.toThrow(
+      "Actual label was not text.",
+    );
+  });
+
   it("lists the account's calibrations newest merge first, capped at a stated depth", async () => {
     const { sql, captures } = sqlHarness([[
       {
