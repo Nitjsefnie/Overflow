@@ -25,6 +25,16 @@ export type GitHubGatewayOptions = {
   timeoutMs?: number;
 };
 
+/** Omit these options to read every timeline exactly. Supplying them opts into
+ * targeted reads: other nested timelines can still silently omit history/comments.
+ */
+export type GitHubIssueListOptions = {
+  /** Always reread the full timeline when one of these labels is standing. */
+  timelineCriticalLabels: ReadonlySet<string>;
+  /** Reread when a standing label has no corresponding label event. */
+  timelineWatchedLabels: ReadonlySet<string>;
+};
+
 type GitHubRestRepository = {
   id: number;
   name: string;
@@ -81,7 +91,10 @@ export class GitHubGateway {
     return toGitHubRepository(await responseJson<GitHubRestRepository>(response));
   }
 
-  public async listIssues(repository: GitHubRepositoryReference): Promise<GitHubIssue[]> {
+  public async listIssues(
+    repository: GitHubRepositoryReference,
+    options?: GitHubIssueListOptions,
+  ): Promise<GitHubIssue[]> {
     const nodes = await collectCursorPages((cursor) =>
       this.getIssuesPage(repository, cursor),
     );
@@ -89,10 +102,18 @@ export class GitHubGateway {
     for (const node of nodes) {
       const [labels, timeline, closingPullRequests] = await Promise.all([
         this.getIssueLabels(repository, node.number, node.labels),
-        this.getIssueTimeline(repository, node.number),
+        this.getIssueTimeline(repository, node.number, options === undefined ? undefined : node.timelineItems),
         this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
       ]);
-      issues.push(toGitHubIssue(node, labels, timeline, closingPullRequests));
+      // Check both fully assembled connections. A nested timeline can claim it is
+      // complete while omitting events or comments, even when totalCount agrees.
+      const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
+      const suspect = options !== undefined && node.timelineItems !== undefined && labels.some((label) =>
+        options.timelineCriticalLabels.has(label)
+        || (options.timelineWatchedLabels.has(label) && !labeled.has(label)),
+      );
+      const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
+      issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
     }
     return issues;
   }
@@ -274,21 +295,15 @@ export class GitHubGateway {
     return page;
   }
 
-  /**
-   * Always read the timeline through the per-issue document, first page included.
-   * GitHub degrades a timeline nested under `issues(first: 100)`: it drops events
-   * and then reports the shortened connection as complete — `hasNextPage: false`
-   * beside a `totalCount` that agrees with what it sent — so no continuation
-   * fires and nothing in the response distinguishes the loss. Not selecting the
-   * nested connection at all is the only guard that does not depend on a
-   * threshold holding.
-   */
   private async getIssueTimeline(
     repository: GitHubRepositoryReference,
     issueNumber: number,
+    initialPage?: GitHubGraphqlIssueTimelineConnection,
   ): Promise<{ history: GitHubIssueHistoryEvent[]; comments: GitHubIssueComment[] }> {
     const nodes = await collectCursorPages((cursor) =>
-      this.getIssueTimelinePage(repository, issueNumber, cursor),
+      cursor === null && initialPage !== undefined
+        ? Promise.resolve(initialPage)
+        : this.getIssueTimelinePage(repository, issueNumber, cursor),
     );
     const history: GitHubIssueHistoryEvent[] = [];
     const comments: GitHubIssueComment[] = [];
@@ -468,6 +483,7 @@ type GitHubGraphqlIssueNode = {
   author: GitHubGraphqlAccount | null;
   labels: GitHubGraphqlLabelConnection;
   assignees: { nodes: GitHubGraphqlAssignee[] };
+  timelineItems: GitHubGraphqlIssueTimelineConnection;
   closedByPullRequestsReferences: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>;
 };
 
@@ -566,6 +582,20 @@ const issuesQuery = `
           }
           assignees(first: 2) {
             nodes { login }
+          }
+          timelineItems(
+            first: 50
+            itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
+          ) {
+            nodes {
+              __typename
+              ... on LabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { id createdAt actor { login ... on User { databaseId } } label { name } }
+              ... on AssignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+              ... on UnassignedEvent { id createdAt actor { login ... on User { databaseId } } assignee { ... on User { login } } }
+              ... on IssueComment { id databaseId createdAt lastEditedAt author { login ... on User { databaseId } } body }
+            }
+            pageInfo { hasNextPage endCursor }
           }
         }
         pageInfo { hasNextPage endCursor }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
 import type { ReconciliationGateway, ReconciliationRepository, ReconciliationStore } from "@/lib/fold/reconcile";
@@ -30,6 +30,27 @@ describe("reconciling a repository as its sponsor", () => {
 
     expect(harness.gatewaysBuilt).toEqual(["sponsor-token"]);
     expect(harness.calls).toContain("getGitHubAccessToken");
+  });
+
+  it("passes the repository catalogs through the sponsor gateway", async () => {
+    const harness = createHarness({ active: true, accessToken: "sponsor-token" });
+    const listIssues = vi.fn().mockResolvedValue([]);
+    harness.store.findUsersByGitHubUserIds = async () => [];
+    harness.store.materialize = async () => ({ adds: 0, changes: 0, removals: 0 });
+    await reconcileRepositoryAsSponsor(harness.store, "repo-1", () => ({
+      getRepositoryById: async () => ({
+        id: 4242, owner: "example", ownerType: "USER", name: "repository", fullName: "example/repository",
+        visibility: "PUBLIC", url: "https://github.com/example/repository", canAdminister: true,
+      }),
+      listIssues, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+    }));
+    expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, {
+      timelineCriticalLabels: new Set([
+        "delivered/1", "delivered/2", "delivered/3", "delivered/4", "delivered/5",
+        "delivered/6", "delivered/7", "delivered/8", "delivered/9", "delivered/10",
+      ]),
+      timelineWatchedLabels: new Set(["S", "M", "L"]),
+    });
   });
 
   it("refuses an active repository whose sponsor has no token", async () => {

@@ -8,9 +8,10 @@ const pageInfo = { hasNextPage: false, endCursor: null };
 
 it("bounds actual HTTP requests across worker cohorts and both review paginators", async () => {
   const count = 9;
-  // One issue page, one timeline read per issue, two review pages, two dismissal
-  // pages and a diff per PR.
-  const total = 55;
+  // One issue page + nine PRs * (two review pages + two dismissal pages + one diff) = 46.
+  // All nine nested timelines contain their watched opening event; none carries
+  // a critical label, so no per-issue timeline read is needed. Identity REST is excluded.
+  const total = 46;
   const gates = Array.from({ length: total }, signal);
   const starts = Array.from({ length: total }, signal);
   const calls: Array<{ operation: string; number: number | null; cursor: string | null }> = [];
@@ -106,6 +107,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     expect(active).toBe(0);
     expect(calls).toHaveLength(total);
     expect(calls.filter(({ operation }) => operation === "RepositoryIssues")).toHaveLength(1);
+    expect(calls.filter(({ operation }) => operation === "IssueTimeline")).toHaveLength(0);
     for (let number = 1; number <= count; number++) {
       expect(calls.filter((call) => call.number === number)).toEqual(expect.arrayContaining([
         { operation: "PullRequestReviews", number, cursor: null },
@@ -146,6 +148,7 @@ function issueNode(number: number) {
     databaseId: 100 + number, number, title: `Issue ${number}`, body: "", state: "CLOSED",
     url: `https://github.com/sponsor/repository/issues/${number}`, createdAt: "2026-09-01T07:00:00.000Z",
     author: { login: "sponsor" }, labels: { nodes: [{ name: "M" }], pageInfo }, assignees: { nodes: [] },
+    timelineItems: issueTimeline(number),
     closedByPullRequestsReferences: { nodes: [{
       databaseId: 200 + number, number, title: `PR ${number}`, body: "", state: "MERGED",
       url: `https://github.com/sponsor/repository/pull/${number}`, mergedAt: "2026-09-01T12:00:00.000Z",

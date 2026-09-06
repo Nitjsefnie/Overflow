@@ -1,3 +1,4 @@
+import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -27,7 +28,7 @@ export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY
 
 export type ReconciliationGateway = {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
-  listIssues(repository: GitHubRepositoryReference): Promise<GitHubIssue[]>;
+  listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
@@ -142,7 +143,10 @@ async function reconcileRepositoryWhileCoordinated(
       visibility: verified.visibility,
     });
     const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
-    const githubIssues = await dependencies.github.listIssues(reference);
+    const githubIssues = await dependencies.github.listIssues(reference, {
+      timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+      timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
+    });
     const pullRequestEvidence = await collectPullRequestEvidence(
       dependencies.github,
       reference,
