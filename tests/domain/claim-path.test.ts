@@ -21,16 +21,16 @@ describe("claim path assessment", () => {
       ["sequence", ": [issues, issue_comment]"],
       ["mapping", ":\n  issue_comment:\n    types: [created]"],
     ])(`accepts ${keyName} with a %s trigger`, (_shape, value) => {
-      expect(assessClaimPath([workflow(`${key}${value}`)])).toBe("PRESENT");
+      expect(assessClaimPath([workflow(`${key}${value}`)])).toBe("EVIDENCE_FOUND");
     });
   }
 
   it("rejects an issue-comment workflow without assignment", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "echo hello")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "echo hello")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects assignment triggered only by issues", () => {
-    expect(assessClaimPath([workflow("on: issues")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issues")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each([
@@ -38,51 +38,53 @@ describe("claim path assessment", () => {
     ["GraphQL", 'gh api graphql -f query="mutation { addAssigneesToAssignable(input: {}) { clientMutationId } }"'],
     ["Octokit", "await github.rest.issues.addAssignees({ owner, repo, issue_number, assignees });"],
   ])("accepts the %s assignment surface in raw script text", (_surface, assignment) => {
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
   });
 
   const broken = { path: ".github/workflows/broken.yml", content: "on: [issue_comment\n" };
 
   it("skips unparseable YAML before a qualifying workflow", () => {
-    expect(assessClaimPath([broken, workflow("on: issue_comment")])).toBe("PRESENT");
+    expect(assessClaimPath([broken, workflow("on: issue_comment")])).toBe("EVIDENCE_FOUND");
   });
 
   it("rejects unparseable YAML alone", () => {
-    expect(assessClaimPath([broken])).toBe("ABSENT");
+    expect(assessClaimPath([broken])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects an empty workflow list", () => {
-    expect(assessClaimPath([])).toBe("ABSENT");
+    expect(assessClaimPath([])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("requires both signals in the same workflow", () => {
     expect(assessClaimPath([
       workflow("on: issue_comment", "echo hello"),
       workflow("on: issues"),
-    ])).toBe("ABSENT");
+    ])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each([
     ["semicolon", 'gh api -X POST -f "assignees[]=$ACTOR" repos/$REPO/issues/$ISSUE/assignees; echo assigned'],
     ["line continuation", 'gh api -X POST repos/$REPO/issues/$ISSUE/assignees\\\n  -f "assignees[]=$ACTOR"'],
+    ["closing quote", restAssignment],
+    ["line ending", 'gh api -X POST repos/$REPO/issues/$ISSUE/assignees'],
   ])("accepts a REST collection followed by a %s", (_terminator, assignment) => {
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
   });
 
   it.each([":disabled", "=disabled"])("rejects an assignees endpoint continued by %s", (suffix) => {
     const assignment = `gh api -X POST "repos/acme/demo/issues/42/assignees${suffix}" -f "assignees[]=$ACTOR"`;
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
   });
 
   for (const method of ["-X POST", "--method POST", "-x post", "--METHOD post"]) {
-    it(`accepts ${method} for a repository named removeAssignees`, () => {
+    it(`deliberately reports NO_EVIDENCE_FOUND for ${method} when the repository is named removeAssignees`, () => {
       const assignment = `gh api ${method} "repos/acme/removeAssignees/issues/42/assignees" -f "assignees[]=$ACTOR"`;
-      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
     });
 
-    it(`deliberately reports ABSENT for ${method} with a DELETE comment`, () => {
+    it(`deliberately reports NO_EVIDENCE_FOUND for ${method} with a DELETE comment`, () => {
       const assignment = `gh api ${method} "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"  # use -X DELETE to unclaim`;
-      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
     });
   }
 
@@ -90,38 +92,38 @@ describe("claim path assessment", () => {
     ["POST comment", 'gh api -X DELETE "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR" # use -X POST to claim'],
     ["POST to another endpoint", 'gh api -X POST repos/acme/demo/issues/42/comments -f body=unclaim; gh api -X DELETE "repos/acme/demo/issues/42/assignees" -f "assignees[]=$ACTOR"'],
   ])("rejects a DELETE collection call despite a %s", (_context, assignment) => {
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each(["non:issues", "non=issues", "non$issues"])("rejects a longer REST path segment %s", (segment) => {
-    expect(assessClaimPath([workflow("on: issue_comment", `gh api repos/acme/demo/${segment}/42/assignees`)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", `gh api repos/acme/demo/${segment}/42/assignees`)])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a nested assignees endpoint", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/disabled"')])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/disabled"')])).toBe("NO_EVIDENCE_FOUND");
   });
 
-  it("deliberately reports ABSENT for a trailing collection slash", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/"')])).toBe("ABSENT");
+  it("deliberately reports NO_EVIDENCE_FOUND for a trailing collection slash", () => {
+    expect(assessClaimPath([workflow("on: issue_comment", 'gh api "repos/acme/demo/issues/42/assignees/"')])).toBe("NO_EVIDENCE_FOUND");
   });
 
-  it("deliberately reports ABSENT for an empty shell expansion after assignees", () => {
+  it("deliberately reports NO_EVIDENCE_FOUND for an empty shell expansion after assignees", () => {
     const assignment = 'EMPTY=""\ngh api "repos/acme/demo/issues/42/assignees${EMPTY}"';
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
   });
 
-  it("deliberately accepts the quoted semicolon suffix as a residual false PRESENT", () => {
+  it("deliberately accepts the quoted semicolon suffix as a residual false EVIDENCE_FOUND", () => {
     const assignment = 'gh api "repos/acme/demo/issues/42/assignees;disabled"';
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
   });
 
   it("rejects a REST URL with a hyphenated non-issues segment", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "gh api example.com/non-issues/123/assignees")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api example.com/non-issues/123/assignees")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("accepts an Octokit member access split across lines", () => {
     const assignment = "await github.rest.issues\n  . addAssignees({ owner, repo, issue_number, assignees });";
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("PRESENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
   });
 
   it.each([
@@ -129,47 +131,65 @@ describe("claim path assessment", () => {
     '--method DELETE',
     '-x delete',
     '--METHOD delete',
+    '-XDELETE',
+    '--method=DELETE',
+    '-X "DELETE"',
+    "-X 'DELETE'",
   ])("rejects a REST collection line naming deletion with %s", (deletion) => {
-    expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$REPO/issues/$ISSUE/assignees"`)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", `gh api ${deletion} "repos/$REPO/issues/$ISSUE/assignees"`)])).toBe("NO_EVIDENCE_FOUND");
+  });
+
+  for (const [ending, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+    it.each([
+      ["before", `gh api -X DELETE \\${newline}  "repos/$REPO/issues/$ISSUE/assignees"`],
+      ["after", `gh api "repos/$REPO/issues/$ISSUE/assignees" \\${newline}  -X DELETE`],
+    ])(`rejects a DELETE method %s the endpoint across a ${ending} shell continuation`, (_order, assignment) => {
+      expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
+    });
+  }
+
+  it.each(["removeAssignees", "removeAssigneesFromAssignable"])("rejects an unclaim command wrapped in a shell function named %s", (name) => {
+    const assignment = `${name}() {\n  gh api --method DELETE "$@"\n}\n${name} "repos/$REPO/issues/$ISSUE/assignees" -f "assignees[]=$ACTOR"`;
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a REST collection with an empty issue identifier", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "gh api issues//assignees")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api issues//assignees")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a REST collection with a nonissues prefix", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "gh api nonissues/42/assignees")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "gh api nonissues/42/assignees")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a GraphQL mutation name with an extra suffix", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "addAssigneesToAssignableDisabled")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "addAssigneesToAssignableDisabled")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a slash instead of Octokit member access", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "issues/addAssignees")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "issues/addAssignees")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects an Octokit method name with an extra suffix", () => {
-    expect(assessClaimPath([workflow("on: issue_comment", "issues.addAssigneesDisabled")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", "issues.addAssigneesDisabled")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects malformed YAML even when raw text contains both signals", () => {
     expect(assessClaimPath([{
       path: ".github/workflows/broken.yml",
       content: "on: [issue_comment\n# issues.addAssignees",
-    }])).toBe("ABSENT");
+    }])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("continues past a valid non-qualifying workflow", () => {
-    expect(assessClaimPath([workflow("on: issues"), workflow("on: issue_comment")])).toBe("PRESENT");
+    expect(assessClaimPath([workflow("on: issues"), workflow("on: issue_comment")])).toBe("EVIDENCE_FOUND");
   });
 
   it("rejects a sequence trigger containing only issues", () => {
-    expect(assessClaimPath([workflow("on: [issues]")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: [issues]")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it("rejects a mapping trigger containing only issues", () => {
-    expect(assessClaimPath([workflow("on: { issues: { types: [opened] } }")])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: { issues: { types: [opened] } }")])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each([
@@ -179,7 +199,7 @@ describe("claim path assessment", () => {
     ["nested trigger", "jobs:\n  on: issue_comment"],
     ["event substring", "on: issue_comment_extra"],
   ])("rejects a %s without a top-level issue-comment trigger", (_shape, content) => {
-    expect(assessClaimPath([{ path: "workflow.yml", content: `${content}\n# ${restAssignment}` }])).toBe("ABSENT");
+    expect(assessClaimPath([{ path: "workflow.yml", content: `${content}\n# ${restAssignment}` }])).toBe("NO_EVIDENCE_FOUND");
   });
 
   it.each([
@@ -189,7 +209,25 @@ describe("claim path assessment", () => {
     "removeAssigneesFromAssignable",
     "issues.removeAssignees",
   ])("rejects a reference to a different surface: %s", (assignment) => {
-    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("ABSENT");
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("NO_EVIDENCE_FOUND");
+  });
+});
+
+describe("known limits of textual evidence, not guaranteed runtime assignment", () => {
+  it.each([
+    ["a read-only GET on the assignees collection", 'gh api -X GET "repos/acme/demo/issues/42/assignees"'],
+    ["a commented-out assignment command", `# ${restAssignment}`],
+    ["a POST assigning a fixed maintainer instead of the commenter", 'gh api -X POST "repos/acme/demo/issues/42/assignees" -f "assignees[]=maintainer"'],
+    ["an ampersand suffix inside the quoted endpoint", 'gh api -X POST "repos/acme/demo/issues/42/assignees&disabled"'],
+    ["a path suffix appended after the closing quote", 'gh api -X POST "repos/acme/demo/issues/42/assignees"/disabled'],
+  ])("reports EVIDENCE_FOUND for %s", (_limit, assignment) => {
+    expect(assessClaimPath([workflow("on: issue_comment", assignment)])).toBe("EVIDENCE_FOUND");
+  });
+
+  it("reports EVIDENCE_FOUND for a job gated off by a false expression", () => {
+    const gated = workflow("on: issue_comment");
+    gated.content = gated.content.replace("  claim:\n", "  claim:\n    if: ${{ false }}\n");
+    expect(assessClaimPath([gated])).toBe("EVIDENCE_FOUND");
   });
 });
 
@@ -324,5 +362,5 @@ it("recognizes the repository claim workflow", () => {
   expect(assessClaimPath([{
     path: ".github/workflows/claim.yml",
     content: repositoryClaimWorkflow,
-  }])).toBe("PRESENT");
+  }])).toBe("EVIDENCE_FOUND");
 });
