@@ -123,7 +123,7 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
           return;
         }
         response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(JSON.stringify(successResponse(fixture, operation, changed, failure)));
+        response.end(JSON.stringify(successResponse(fixture, operation, changed, failure, variables)));
       } catch (error) {
         serverErrors.push(error);
         response.statusCode = 500;
@@ -222,6 +222,20 @@ async function registeredRepository() {
 
 type RepositoryFixture = Awaited<ReturnType<typeof registeredRepository>>;
 
+function issueTimeline(fixture: RepositoryFixture, number: number, changed: boolean) {
+  const id = fixture.githubRepositoryId + 10 + number;
+  const actualLabel = changed ? "delivered/7" : "delivered/6";
+  return { nodes: [
+    { __typename: "LabeledEvent", id: `opening-${id}`, actor: { login: fixture.sponsorLogin },
+      createdAt: "2026-09-01T08:00:00.000Z", label: { name: "M" } },
+    { __typename: "LabeledEvent", id: `actual-${id}`, actor: { login: fixture.sponsorLogin },
+      createdAt: "2026-09-01T11:00:00.000Z", label: { name: actualLabel } },
+    { __typename: "IssueComment", id: `comment-${id}`, databaseId: id + 300,
+      author: { login: fixture.sponsorLogin }, body: `Settled as ${actualLabel}.`,
+      createdAt: "2026-09-01T11:30:00.000Z", lastEditedAt: null },
+  ], pageInfo };
+}
+
 function issueNode(fixture: RepositoryFixture, number: number, changed: boolean) {
   const id = fixture.githubRepositoryId + 10 + number;
   const actualLabel = changed ? "delivered/7" : "delivered/6";
@@ -230,15 +244,6 @@ function issueNode(fixture: RepositoryFixture, number: number, changed: boolean)
     url: `https://github.com/${fixture.ownerName}/issues/${number}`, createdAt: "2026-09-01T07:00:00.000Z",
     author: { login: fixture.sponsorLogin }, assignees: { nodes: [] },
     labels: { nodes: [{ name: "M" }, { name: actualLabel }], pageInfo },
-    timelineItems: { nodes: [
-      { __typename: "LabeledEvent", id: `opening-${id}`, actor: { login: fixture.sponsorLogin },
-        createdAt: "2026-09-01T08:00:00.000Z", label: { name: "M" } },
-      { __typename: "LabeledEvent", id: `actual-${id}`, actor: { login: fixture.sponsorLogin },
-        createdAt: "2026-09-01T11:00:00.000Z", label: { name: actualLabel } },
-      { __typename: "IssueComment", id: `comment-${id}`, databaseId: id + 300,
-        author: { login: fixture.sponsorLogin }, body: `Settled as ${actualLabel}.`,
-        createdAt: "2026-09-01T11:30:00.000Z", lastEditedAt: null },
-    ], pageInfo },
     closedByPullRequestsReferences: { nodes: number === 1 ? [{
       databaseId: id + 100, number: 11, title: "PR", body: "", state: "MERGED",
       url: `https://github.com/${fixture.ownerName}/pull/11`, mergedAt: "2026-09-01T12:00:00.000Z" as string | null,
@@ -250,7 +255,13 @@ function issueNode(fixture: RepositoryFixture, number: number, changed: boolean)
   };
 }
 
-function successResponse(fixture: RepositoryFixture, operation: string, changed: boolean, failure: Failure) {
+function successResponse(
+  fixture: RepositoryFixture,
+  operation: string,
+  changed: boolean,
+  failure: Failure,
+  variables: { issueNumber?: number },
+) {
   const continuation = changed && operation === failure.operation ? { hasNextPage: true, endCursor: "next" } : pageInfo;
   if (operation === "RepositoryIssues") {
     const issue = issueNode(fixture, 1, changed);
@@ -264,6 +275,11 @@ function successResponse(fixture: RepositoryFixture, operation: string, changed:
       };
     }
     return { data: { repository: { issues: { nodes: changed ? [issue, issueNode(fixture, 2, true)] : [issue], pageInfo } } } };
+  }
+  if (operation === "IssueTimeline") {
+    return { data: { repository: { issue: {
+      timelineItems: issueTimeline(fixture, variables.issueNumber!, changed),
+    } } } };
   }
   const reviewId = fixture.githubRepositoryId + 200;
   if (operation === "PullRequestReviews") {
