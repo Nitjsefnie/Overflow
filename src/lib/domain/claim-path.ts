@@ -25,6 +25,7 @@ import { parse } from "yaml";
 
 export type ClaimPathEvidence = { path: string; content: string };
 export type ClaimPathAssessment = "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND";
+export type ClaimPathVerdict = ClaimPathAssessment | "NOT_CHECKED";
 
 // PATCHing an issue with an assignees body is deliberately not evidence: matching
 // a bare issue URL and a nearby field would admit too many false positives.

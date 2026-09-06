@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import type { ClaimPathVerdict } from "@/lib/domain/claim-path";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
 
 export type RepositoryFormValues = {
@@ -75,7 +76,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 
       const ownerName = body?.repository?.ownerName ?? values.repositoryUrl.trim();
       setFeedback({
-        kind: body?.claimPath === "NO_EVIDENCE_FOUND" ? "warning" : "success",
+        kind: body?.claimPath === "NO_EVIDENCE_FOUND" || body?.claimPath === "NOT_CHECKED" ? "warning" : "success",
         message: registrationMessage(ownerName, body?.initialImportScheduled, body?.claimPath),
       });
     } catch {
@@ -214,7 +215,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
 type RegistrationResponse = {
   repository?: { ownerName?: string };
   initialImportScheduled?: boolean;
-  claimPath?: "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND" | "NOT_CHECKED";
+  claimPath?: ClaimPathVerdict;
   error?: { message?: string };
 };
 
@@ -237,10 +238,10 @@ function registrationMessage(
   }
 
   if (claimPath === "NO_EVIDENCE_FOUND") {
-    return `${message} No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example.`;
+    return `${message} No workflow assigning the author of an issue comment was found in this repository. Without such a workflow, contributors cannot claim issues themselves by commenting; someone with write access must assign them before any credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example.`;
   }
   if (claimPath === "NOT_CHECKED") {
-    return `${message} The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed.`;
+    return `${message} Overflow could not read this repository's workflows, so it does not know whether comment-based claiming is set up. Check the workflows yourself for one triggered by issue_comment that assigns the comment author.`;
   }
   return message;
 }
