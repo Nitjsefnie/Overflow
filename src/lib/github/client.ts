@@ -18,6 +18,7 @@ import type {
 const defaultApiUrl = "https://api.github.com";
 const defaultTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
+const maxWorkflowBytes = 256 * 1024;
 
 export type GitHubGatewayOptions = {
   accessToken: string;
@@ -44,6 +45,13 @@ type GitHubRestRepository = {
   html_url: string;
   owner: { login: string; type?: string };
   permissions?: { admin?: boolean };
+};
+
+type GitHubRestWorkflowFile = {
+  type: "file";
+  name: string;
+  path: string;
+  size: number;
 };
 
 export class GitHubGateway {
@@ -219,6 +227,8 @@ export class GitHubGateway {
     return response.text();
   }
 
+  // Sequential reads avoid request bursts, but up to 50 slow requests add registration
+  // latency. Keep the file cap and request timeout; callers treat failures as "not checked".
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
@@ -233,9 +243,17 @@ export class GitHubGateway {
       throw error;
     }
 
-    const entries = await responseJson<Array<{ type: string; name: string; path: string; size: number }>>(response);
-    const files = entries.filter((entry) =>
-      entry.type === "file" && /\.ya?ml$/i.test(entry.name) && entry.size <= 256 * 1024)
+    const entries = await responseJson<unknown>(response);
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    const files = entries.filter((entry: unknown): entry is GitHubRestWorkflowFile =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      && "type" in entry && entry.type === "file"
+      && "name" in entry && typeof entry.name === "string" && entry.name.length > 0
+      && "path" in entry && typeof entry.path === "string" && entry.path.length > 0
+      && "size" in entry && typeof entry.size === "number" && Number.isSafeInteger(entry.size)
+      && entry.size >= 0 && entry.size <= maxWorkflowBytes && /\.ya?ml$/i.test(entry.name))
       .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
       .slice(0, 50);
     const workflows: ClaimPathEvidence[] = [];
@@ -244,7 +262,10 @@ export class GitHubGateway {
         `${contentsPath}/${entry.path.split("/").map(segment).join("/")}`,
         { headers: { Accept: "application/vnd.github.raw" } },
       );
-      workflows.push({ path: entry.path, content: await fileResponse.text() });
+      const content = await boundedResponseText(fileResponse, maxWorkflowBytes);
+      if (content !== null) {
+        workflows.push({ path: entry.path, content });
+      }
     }
     return workflows;
   }
@@ -907,6 +928,32 @@ function toGitHubPullRequestReview(
     submittedAt: node.submittedAt,
     dismissal,
   };
+}
+
+async function boundedResponseText(response: Response, maxBytes: number): Promise<string | null> {
+  if (response.body === null) {
+    return "";
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let content = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return content + decoder.decode();
+      }
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function segment(value: string): string {
