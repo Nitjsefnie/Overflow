@@ -2312,6 +2312,56 @@ describe("initial PostgreSQL materialization", () => {
       .resolves.toBe("released-after-error");
   });
 
+  it("keeps the work pool available while distinct repositories hold reconciliation locks", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryIds = [
+      await insertRepository(sql, sponsorId),
+      await insertRepository(sql, sponsorId),
+    ];
+    // A work pool small enough that a coordinator drawing from it would consume
+    // every connection the reconciliations it protects still need.
+    const workSql = postgres(process.env.DATABASE_URL!, { max: 2 });
+    const interactions: string[] = [];
+    let holders = 0;
+    let maximumConcurrentHolders = 0;
+    let markEveryLockHeld!: () => void;
+    const everyLockHeld = new Promise<void>((resolve) => { markEveryLockHeld = resolve; });
+
+    try {
+      const coordinated = repositoryIds.map((repositoryId, index) => {
+        const store = new PostgresFoldStore(workSql);
+        return store.withRepositoryReconciliation(repositoryId, async () => {
+          interactions.push(`holder-${index}-entered`);
+          holders += 1;
+          maximumConcurrentHolders = Math.max(maximumConcurrentHolders, holders);
+          if (holders === repositoryIds.length) {
+            markEveryLockHeld();
+          }
+          await everyLockHeld;
+          const [row] = await workSql<{ value: number }[]>`select ${index}::integer as value`;
+          interactions.push(`holder-${index}-queried`);
+          holders -= 1;
+          return row.value;
+        });
+      });
+
+      await everyLockHeld;
+      const dashboardRead = workSql<{ value: number }[]>`select 7::integer as value`;
+
+      await expect(Promise.all(coordinated)).resolves.toEqual([0, 1]);
+      await expect(dashboardRead).resolves.toEqual([{ value: 7 }]);
+      expect(maximumConcurrentHolders).toBe(repositoryIds.length);
+      // Both critical sections were entered before either could query, so the
+      // locks were held concurrently rather than one after the other.
+      expect(interactions.slice(0, repositoryIds.length).sort())
+        .toEqual(["holder-0-entered", "holder-1-entered"]);
+      expect(interactions.slice(repositoryIds.length).sort())
+        .toEqual(["holder-0-queried", "holder-1-queried"]);
+    } finally {
+      await workSql.end();
+    }
+  });
+
   it("keeps a slow older reconciliation from overwriting the newer authoritative snapshot", async () => {
     const tokenEncryptionKey = Buffer.alloc(32, 10).toString("base64url");
     const sponsorLogin = `concurrency-sponsor-${nextExternalId()}`;
