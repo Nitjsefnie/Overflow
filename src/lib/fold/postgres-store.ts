@@ -163,6 +163,41 @@ const repositoryLockMaximumRetryMs = 250;
 const repositoryLockNamespace = 684029183;
 const repositoryCoordinationFailure = "Unable to coordinate repository reconciliation.";
 
+/**
+ * Takes back every session-level lock a reserved coordination connection may still hold, and
+ * answers whether the connection is fit to serve another caller.
+ *
+ * `pg_advisory_unlock_all()` goes first because a session that answers it holds no advisory lock
+ * at all and stays usable. It is a different function from the targeted unlock that just failed,
+ * so whatever stopped that one need not stop this one.
+ *
+ * When even that does not answer, nothing on the session can be trusted to give the lock up and
+ * the session itself has to end. A role may always signal its own backends, so terminating does
+ * not depend on any grant. Self-termination makes the statement fail — the server sends a FATAL
+ * and closes the socket — so that rejection is the success signal and is swallowed. The caller
+ * must then never release the connection: postgres.js returns a closed connection to the pool on
+ * its own and reconnects it on next use, whereas `release()` would push a session that may still
+ * hold the lock back onto the pool's open queue for the next caller to reserve.
+ */
+async function reclaimCoordinationConnection(
+  connection: Awaited<ReturnType<SqlClient["reserve"]>>,
+): Promise<boolean> {
+  try {
+    await connection`select pg_advisory_unlock_all()`;
+    return true;
+  } catch {
+    // Nothing on this session can be trusted to give the lock up, so the session itself has to go.
+  }
+
+  try {
+    await connection`select pg_terminate_backend(pg_backend_pid())`;
+  } catch {
+    // The session is gone, which is the whole point of asking.
+  }
+
+  return false;
+}
+
 function waitForRepositoryLockRetry(attempt: number, remainingMs: number): Promise<void> {
   const retryCeilingMs = Math.min(
     repositoryLockMaximumRetryMs,
@@ -239,6 +274,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       }
 
       let locked = false;
+      let lockMayStillBeHeld = false;
       try {
         const [lock] = await connection<{ acquired: boolean }[]>`
           select pg_try_advisory_lock(
@@ -250,16 +286,23 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           try {
             return await work();
           } finally {
+            let released = false;
             try {
               const [unlock] = await connection<{ released: boolean }[]>`
                 select pg_advisory_unlock(
                   hashtextextended(${repositoryId}, ${repositoryLockNamespace})
                 ) as released
               `;
-              if (unlock?.released !== true) {
-                throw new Error(repositoryCoordinationFailure);
-              }
+              released = unlock?.released === true;
             } catch {
+              released = false;
+            }
+            if (!released) {
+              // The lock is session-level, so it lives exactly as long as this connection's
+              // server session. Handing that session back to the pool would leave the lock
+              // granted for the life of the process, refusing every later reconciliation of this
+              // repository once its own lock wait ran out.
+              lockMayStillBeHeld = true;
               throw new Error(repositoryCoordinationFailure);
             }
           }
@@ -270,7 +313,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         }
         throw new Error(repositoryCoordinationFailure);
       } finally {
-        connection.release();
+        // A connection whose session might still hold the repository's lock never goes back into
+        // the pool; `reclaimCoordinationConnection` says whether this one is fit to.
+        if (!lockMayStillBeHeld || await reclaimCoordinationConnection(connection)) {
+          connection.release();
+        }
       }
 
       const remainingMs = deadline - Date.now();
