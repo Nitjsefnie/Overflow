@@ -56,10 +56,13 @@ making `end()` always settle.
 
 `error()` returns early when
 `connection.queue === queues.connecting && options.host[retries + 1]` — the
-multi-host fallback, at `src/connection.js` lines 382-383. On that branch
-`errored()` never runs either, so a `closed(true)` can still be reached with
-the slot occupied and the hang survives. Unreachable here: this repository's
-`DATABASE_URL` names a single host.
+multi-host fallback, at `src/connection.js` lines 382-383. It is the one route
+into `error()` that skips the clear, and `errored()` does not run on it either.
+The connection is still connecting there, so the pending work is `initial`
+rather than `query` — `connect()` assigns it at line 114, and `query` is taken
+only inside the types fetch — and a slot of either kind is enough to send
+`end()` down its slow path, so the hang survives. Unreachable here: this
+repository's `DATABASE_URL` names a single host.
 
 ### Housekeeping
 
