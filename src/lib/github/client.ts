@@ -229,6 +229,10 @@ export class GitHubGateway {
 
   // Sequential reads avoid request bursts, but up to 50 slow requests add registration
   // latency. Keep the file cap and request timeout; callers treat failures as "not checked".
+  // The byte cap is checked after delivery, so one transport chunk can exceed it in memory.
+  // A local 8 MiB HTTP probe on Node 24.17 / Undici 7.28 yielded chunks <= 64 KiB:
+  // Node frames the reads, not the server's writes. This is an observation, not a guaranteed
+  // chunk limit; an injected fetch can deliver larger chunks, which are still skipped.
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
