@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
+import { classifyGitHubRateLimit } from "@/lib/github/errors";
 
 describe("GitHubGateway REST transport", () => {
   it("uses GitHub's versioned API headers when reading one explicitly named repository", async () => {
@@ -323,6 +324,7 @@ describe("GitHubGateway repository resolution by id", () => {
 
     await expect(gateway.getRepositoryById(42)).resolves.toMatchObject({
       visibility: "PRIVATE",
+      ownerType: "USER",
       canAdminister: false,
     });
   });
@@ -334,6 +336,21 @@ describe("GitHubGateway repository resolution by id", () => {
     });
 
     await expect(gateway.getRepositoryById(42)).resolves.toBeNull();
+  });
+
+  it("reads a 404 carrying throttle signals as gone rather than as a rate limit", async () => {
+    const headers = { "x-ratelimit-remaining": "0", "retry-after": "60" };
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => new Response('{"message":"Not Found"}', { status: 404, headers }),
+    });
+
+    await expect(gateway.getRepositoryById(42)).resolves.toBeNull();
+    // Answering null is only correct while src/lib/github/errors.ts confines
+    // rate-limit classification to 403 and 429: a 404 that could be classified as
+    // throttled would be retired as gone instead of retried.
+    expect(classifyGitHubRateLimit(404, new Headers(headers), '{"message":"Not Found"}'))
+      .toMatchObject({ rateLimited: false });
   });
 
   it.each([403, 429, 500, 502, 503])(
