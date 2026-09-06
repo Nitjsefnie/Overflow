@@ -202,7 +202,10 @@ export type OpenAuditProjection = {
 
 export type UnwritableClosureProjection = {
   id: string;
-  kind: "NO_CLOSING_PULL_REQUEST" | "SETTLEMENT_EVIDENCE_REJECTED";
+  kind:
+    | "NO_CLOSING_PULL_REQUEST"
+    | "SETTLEMENT_EVIDENCE_REJECTED"
+    | "CROSS_REPOSITORY_CLOSING_PULL_REQUEST";
   reason: string;
   recordedAt: string;
   repositoryName: string;
