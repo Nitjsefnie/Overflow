@@ -416,8 +416,12 @@ function readSweepInterval(schedule: ReconciliationSweepSchedule): number {
  * The message names the residual state and not just the failure, as
  * logUnarmedInterval's does: sweeps go on running here, at a cadence the caller
  * did not choose, and that difference is the whole of what an operator has to
- * act on. There is always a reason to print, since nothing reaches this but a
- * read that threw.
+ * act on. It claims a state the call has not reached, though, and overstates
+ * wherever the caller's own scheduler then fails to arm: this line is printed
+ * from the read, arming is the step after it, and a caller that broke both
+ * members gets logUnarmedInterval's line next — that one is the one that holds.
+ * There is always a reason to print, since nothing reaches this but a read that
+ * threw.
  *
  * The line survives a reason that refuses to be printed, for the reason
  * logRepositoryFailure gives. A console broken at both arities stays fatal, as
