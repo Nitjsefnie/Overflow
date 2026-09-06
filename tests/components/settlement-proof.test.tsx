@@ -100,6 +100,7 @@ describe("settlement proof page", () => {
     const proof = screen.getByRole("article", { name: "co-op/harbour settlement" });
     expect(proof).toBeVisible();
     expect(proof.outerHTML).toBe(emptyHistoryProof);
+    expect(within(proof).getByText("Delivered band").nextElementSibling).toHaveTextContent("landed/4 · 4");
     expect(screen.getByRole("button", { name: "Report this settlement as incorrect" })).toBeVisible();
   });
 
