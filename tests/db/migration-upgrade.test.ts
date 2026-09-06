@@ -105,6 +105,17 @@ describe("upgrading an already-deployed database", () => {
       `;
       await runMigrations();
       const queue = new PostgresFoldStore(sql);
+      const [beforeEnqueue] = await sql<{ lease_expires_at: Date }[]>`
+        select lease_expires_at from repository_reconciliation_jobs where id = ${legacy.id}
+      `;
+      await expect(queue.enqueueReconciliationJob(repository.id, "WEBHOOK")).resolves.toBeUndefined();
+      const [enqueued] = await sql<{ lease_duration_ms: number | null; follow_up_requested: boolean; lease_expires_at: Date }[]>`
+        select lease_duration_ms, follow_up_requested, lease_expires_at
+        from repository_reconciliation_jobs where id = ${legacy.id}
+      `;
+      expect(enqueued).toEqual({
+        lease_duration_ms: null, follow_up_requested: true, lease_expires_at: beforeEnqueue.lease_expires_at,
+      });
       const reclaimed = await queue.claimNextReconciliationJob();
       expect(reclaimed?.id).toBe(legacy.id);
       expect(reclaimed?.leaseToken).not.toBe(legacy.lease_token);
