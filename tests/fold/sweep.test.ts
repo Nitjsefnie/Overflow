@@ -14,6 +14,12 @@ import {
 const UNARMED_MESSAGE =
   "Reconciliation sweep interval was not armed; no further sweeps will run until the process restarts";
 
+// The line the scheduler prints when it could not read the caller's intervalMs.
+// Asserted as a whole for the same reason: the fallback is reported rather than
+// silent, so the line is the only notice the caller's cadence was replaced.
+const DEFAULTED_INTERVAL_MESSAGE =
+  "Reconciliation sweep interval could not be read; the recurring tick is armed at the default interval instead";
+
 describe("scheduled reconciliation sweep", () => {
   it("counts reconciled, failed, and cooling repositories in one summary", async () => {
     const attempted: string[] = [];
@@ -1230,13 +1236,13 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
-  it("reads intervalMs before the startup sweep, and does not guard that read", async () => {
-    // Not a property to preserve — a deficiency to pin. Every other member the
-    // caller supplies is treated as hostile, and this one is read first, so an
-    // accessor that throws here is fatal and takes the startup sweep with it.
-    // Issue 159 tracks closing that; until it does, this is what keeps the
-    // comment on startReconciliationSweep honest when the code around it moves.
+  it("contains an intervalMs accessor that throws and arms the default cadence", async () => {
+    // intervalMs is an injection seam like the three callables around it, so an
+    // accessor wired lazily can fail the same way. The tuning number falling back
+    // costs the caller's chosen cadence and nothing else: its own scheduler is
+    // still the mechanism, so the tick is armed rather than abandoned.
     const unwired = new Error("The interval is not configured yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
     let sweeps = 0;
     const schedule = {
@@ -1251,13 +1257,129 @@ describe("scheduled reconciliation sweep", () => {
     try {
       expect(() => {
         startReconciliationSweep(schedule);
-      }).toThrow(unwired);
+      }).not.toThrow();
       await drain();
 
-      expect(sweeps).toBe(0);
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toHaveLength(1);
+      expect(intervals.armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+      // The fallback is reported rather than silent: the cadence a caller asked
+      // for is gone, and this line is the only notice of it.
+      expect(logged.mock.calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, unwired]]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("still reports a defaulted interval whose reason cannot be printed", async () => {
+    const unwired = new Error("The interval is not configured yet");
+    const calls: unknown[][] = [];
+    // Printing the reason is what fails here — a custom inspector that throws, a
+    // proxy, a getter with a side effect. The line itself has to survive that:
+    // it is the only notice that the caller's cadence was replaced.
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+      if (args.length > 1) {
+        throw new TypeError("This reason cannot be printed");
+      }
+    });
+    const intervals = captureIntervals();
+    const schedule = {
+      runSweep: async () => {},
+      get intervalMs(): number {
+        throw unwired;
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      // The reason is what could not be printed, so the line survives without it.
+      expect(calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, unwired], [DEFAULTED_INTERVAL_MESSAGE]]);
+      expect(intervals.armed).toHaveLength(1);
+      expect(intervals.armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("runs the startup sweep before it reads intervalMs", async () => {
+    // The same proof the scheduler member gets, applied to the read that used to
+    // sit above the startup sweep. A console broken at every arity is fatal here,
+    // deliberately, so for the sweep to have run it has to have run first — and
+    // nothing is armed, because the throw leaves before arming.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new TypeError("The console cannot report at all");
+    });
+    const intervals = captureIntervals();
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get intervalMs(): number {
+        throw new Error("The interval is not configured yet");
+      },
+    };
+
+    try {
+      expect(() => {
+        startReconciliationSweep(schedule);
+      }).toThrow(TypeError);
+      await drain();
+
+      expect(sweeps).toBe(1);
       expect(intervals.armed).toEqual([]);
     } finally {
       intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
+  it("arms the caller's own scheduler at the default interval when intervalMs throws", async () => {
+    // This is what separates a defaulted tuning number from a broken mechanism.
+    // The scheduler the caller supplied still works and is still the one armed;
+    // only the cadence falls back, so nothing is substituted for what the caller
+    // asked for and no six-hour setInterval appears behind its back.
+    const unwired = new Error("The interval is not configured yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const armed: Array<{ callback: () => void; everyMs: number }> = [];
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get intervalMs(): number {
+        throw unwired;
+      },
+      schedule: (callback: () => void, everyMs: number) => {
+        armed.push({ callback, everyMs });
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(armed).toHaveLength(1);
+      expect(armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+      // The caller's scheduler is the only one used; the default never runs.
+      expect(intervals.armed).toEqual([]);
+      expect(logged.mock.calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, unwired]]);
+
+      // The registered callback is the sweep itself, not some other function
+      // that happened to be handed over.
+      expect(sweeps).toBe(1);
+      armed[0]?.callback();
+      await drain();
+      expect(sweeps).toBe(2);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
     }
   });
 
