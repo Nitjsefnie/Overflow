@@ -57,18 +57,28 @@ export class GitHubGateway {
 
   public async getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository> {
     const response = await this.request(`/repos/${segment(repository.owner)}/${segment(repository.name)}`);
-    const payload = await responseJson<GitHubRestRepository>(response);
 
-    return {
-      id: payload.id,
-      owner: payload.owner.login,
-      ownerType: payload.owner.type === "Organization" ? "ORGANIZATION" : "USER",
-      name: payload.name,
-      fullName: payload.full_name,
-      visibility: payload.private ? "PRIVATE" : "PUBLIC",
-      url: payload.html_url,
-      canAdminister: payload.permissions?.admin === true,
-    };
+    return toGitHubRepository(await responseJson<GitHubRestRepository>(response));
+  }
+
+  public async getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null> {
+    if (!Number.isSafeInteger(githubRepositoryId) || githubRepositoryId <= 0) {
+      throw new Error("GitHub repository id must be a positive safe integer.");
+    }
+
+    let response: Response;
+    try {
+      response = await this.request(`/repositories/${githubRepositoryId}`);
+    } catch (error) {
+      // Only 404 answers "this id is unreachable". Every other failure is an upstream
+      // problem, and reading one as a deleted repository would retire a live one.
+      if (error instanceof GitHubApiError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+
+    return toGitHubRepository(await responseJson<GitHubRestRepository>(response));
   }
 
   public async listIssues(repository: GitHubRepositoryReference): Promise<GitHubIssue[]> {
@@ -657,6 +667,19 @@ const pullRequestReviewDismissalsQuery = `
     }
   }
 `;
+
+function toGitHubRepository(payload: GitHubRestRepository): GitHubRepository {
+  return {
+    id: payload.id,
+    owner: payload.owner.login,
+    ownerType: payload.owner.type === "Organization" ? "ORGANIZATION" : "USER",
+    name: payload.name,
+    fullName: payload.full_name,
+    visibility: payload.private ? "PRIVATE" : "PUBLIC",
+    url: payload.html_url,
+    canAdminister: payload.permissions?.admin === true,
+  };
+}
 
 function toGitHubIssue(
   node: GitHubGraphqlIssueNode,
