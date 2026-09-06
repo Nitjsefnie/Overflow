@@ -1,5 +1,7 @@
 /** @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RepositoryForm, type RepositoryFormValues } from "@/components/repository-form";
@@ -30,15 +32,87 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+
+function declarations(block: string): Record<string, string> {
+  return Object.fromEntries([...block.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
+    ([, property, value]) => [property!, value!.trim()],
+  ));
+}
+
+function feedbackDeclarations(kind: string): Record<string, string> {
+  const rule = stylesheet.match(new RegExp(`\\.feedback\\.${kind}\\s*\\{([^}]*)\\}`));
+  expect(rule, `Missing .feedback.${kind} rule`).not.toBeNull();
+  return declarations(rule![1]!);
+}
+
+function resolveColor(value: string): string {
+  const token = value.match(/^var\((--[\w-]+)\)$/)?.[1];
+  const root = declarations(stylesheet.match(/:root\s*\{([^}]*)\}/)![1]!);
+  const hex = token ? root[token] : value;
+  expect(hex, `Expected a six-digit hex color for ${value}`).toMatch(/^#[\da-f]{6}$/i);
+  return hex!;
+}
+
+function relativeLuminance(hex: string): number {
+  const [red, green, blue] = [1, 3, 5].map((offset) => {
+    const channel = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+}
+
+describe("feedback stylesheet", () => {
+  it("keeps the warning visible with a light amber background and dark ink", () => {
+    const rule = feedbackDeclarations("warning");
+    expect(rule.background).toBe("#fff0c2");
+    expect(rule.color).toBe("var(--debit-ink)");
+    expect(rule.display).not.toBe("none");
+  });
+
+  it.each(["warning", "error", "success"])("gives %s text at least 4.5:1 contrast", (kind) => {
+    const rule = feedbackDeclarations(kind);
+    const background = relativeLuminance(resolveColor(rule.background!));
+    const ink = relativeLuminance(resolveColor(rule.color!));
+    const contrast = (Math.max(background, ink) + 0.05) / (Math.min(background, ink) + 0.05);
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe("repository registration form", () => {
-  it.each([
-    ["EVIDENCE_FOUND", { claimPath: "EVIDENCE_FOUND" }],
-    ["missing claimPath", {}],
-  ])("keeps the existing success message for %s", async (_name, claimPathFields) => {
+  describe.each([
+    ["EVIDENCE_FOUND", "success", ""],
+    ["NO_EVIDENCE_FOUND", "warning", " No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example."],
+    ["NOT_CHECKED", "success", " The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed."],
+  ])("claimPath: %s", (claimPath, kind, claimMessage) => {
+    it.each([
+      [true, "co-op/harbour is registered. Its existing issues are being imported and will appear shortly."],
+      [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."],
+      [undefined, "co-op/harbour is registered."],
+    ])("composes the complete message with initialImportScheduled: %s", async (initialImportScheduled, importMessage) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+        repository: { ownerName: "co-op/harbour" },
+        initialImportScheduled,
+        claimPath,
+      }, { status: 201 })));
+      const { container } = render(<RepositoryForm initialValues={initialValues} />);
+
+      fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+      const feedback = await screen.findByRole("status");
+      expect(feedback).toHaveClass("feedback", kind);
+      expect(feedback.textContent).toBe(importMessage + claimMessage);
+      if (kind === "warning") {
+        expect(container.querySelector(".feedback.success")).toBeNull();
+        expect(feedback).not.toHaveAttribute("aria-live");
+      }
+    });
+  });
+
+  it("keeps the existing success message for missing claimPath", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
       repository: { ownerName: "co-op/harbour" },
       initialImportScheduled: true,
-      ...claimPathFields,
     }, { status: 201 })));
     render(<RepositoryForm initialValues={initialValues} />);
 
@@ -48,43 +122,6 @@ describe("repository registration form", () => {
     expect(feedback).toHaveClass("feedback", "success");
     expect(feedback.textContent).toBe(
       "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
-    );
-  });
-
-  it.each([
-    [true, "co-op/harbour is registered. Its existing issues are being imported and will appear shortly."],
-    [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."],
-  ])("warns about NO_EVIDENCE_FOUND with initialImportScheduled: %s", async (initialImportScheduled, importMessage) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
-      repository: { ownerName: "co-op/harbour" },
-      initialImportScheduled,
-      claimPath: "NO_EVIDENCE_FOUND",
-    }, { status: 201 })));
-    const { container } = render(<RepositoryForm initialValues={initialValues} />);
-
-    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
-
-    const feedback = await screen.findByRole("status");
-    expect(feedback).toHaveClass("feedback", "warning");
-    expect(container.querySelector(".feedback.success")).toBeNull();
-    expect(feedback.textContent).toBe(
-      `${importMessage} No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example.`,
-    );
-  });
-
-  it("explains NOT_CHECKED while keeping registration successful", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
-      repository: { ownerName: "co-op/harbour" },
-      claimPath: "NOT_CHECKED",
-    }, { status: 201 })));
-    render(<RepositoryForm initialValues={initialValues} />);
-
-    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
-
-    const feedback = await screen.findByRole("status");
-    expect(feedback).toHaveClass("feedback", "success");
-    expect(feedback.textContent).toBe(
-      "co-op/harbour is registered. The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed.",
     );
   });
 
