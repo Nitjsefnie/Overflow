@@ -1421,10 +1421,11 @@ describe("scheduled reconciliation sweep", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const intervals = captureIntervals();
     const armed: Array<{ callback: () => void; everyMs: number }> = [];
-    // The same boundary the uncallable scheduler above turns on, read from the
-    // other side: falsy but not nullish separates the member the default stands
-    // in for from the member the caller supplied. Zero is a cadence, so `??`
-    // arms it where `||` would replace it with this module's own default.
+    // A different member and a different `??` from the uncallable scheduler
+    // above, treating the two alike on that boundary: falsy but not nullish
+    // separates the member the default stands in for from the member the caller
+    // supplied. Zero is a cadence, so `??` arms it where `||` would replace it
+    // with this module's own default.
     const schedule = {
       runSweep: async () => {},
       intervalMs: 0,
