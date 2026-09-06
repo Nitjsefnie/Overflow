@@ -336,6 +336,43 @@ describe("POST /api/repositories", () => {
     });
   });
 
+  it.each(["EVIDENCE_FOUND", "NOT_CHECKED"] as const)(
+    "carries the service's %s claim-path verdict in the 201 response",
+    async (claimPath) => {
+      const dependencies = successfulDependencies();
+      dependencies.github.listWorkflowFiles = async () => {
+        if (claimPath === "NOT_CHECKED") {
+          throw new Error("workflow read failed");
+        }
+        return [{
+          path: ".github/workflows/claim.yml",
+          content: "on: issue_comment\njobs:\n  claim:\n    steps:\n      - run: gh api repos/octo/overflow/issues/1/assignees -f assignees[]=contributor\n",
+        }];
+      };
+      const handler = createRepositoryPostHandler({
+        findAccountByTokenHash: async () => null,
+        getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+        createRegistrationDependencies: async () => dependencies,
+      });
+
+      const response = await handler(jsonRequest(validInput()));
+
+      expect(response.status).toBe(201);
+      await expect(response.json()).resolves.toEqual({
+        repository: {
+          id: "repository-id",
+          githubRepositoryId: 42,
+          ownerName: "octo/overflow",
+          sponsorId: "moderator-id",
+          visibility: "PUBLIC",
+          githubWebhookId: 501,
+        },
+        initialImportScheduled: true,
+        claimPath,
+      });
+    },
+  );
+
   it("reports an unscheduled initial import when the enqueue fails", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
