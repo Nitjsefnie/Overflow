@@ -795,6 +795,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
         authorLogin: logins.issueAuthor,
+        authorGitHubUserId: null,
         labels: ["M", "delivered/6"],
         claimAssigneeGitHubLogin: null,
         history: [
