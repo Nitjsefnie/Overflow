@@ -734,36 +734,52 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ unavailable_reason: null, unavailable_since: null }]);
   });
 
-  it("keeps at most one outstanding reconciliation job per repository", async () => {
+  it("keeps exactly one reconciliation job row per repository, whatever its state", async () => {
     const sponsorId = await insertUser(sql);
     const repositoryId = await insertRepository(sql, sponsorId);
     const otherRepositoryId = await insertRepository(sql, sponsorId);
-    const firstJobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+    const jobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
 
     await expect(insertReconciliationJob(sql, repositoryId, "SWEEP"))
-      .rejects.toThrow(/repository_reconciliation_jobs_outstanding_key/);
+      .rejects.toThrow(/repository_reconciliation_jobs_repository_key/);
     await expect(insertReconciliationJob(sql, otherRepositoryId, "WEBHOOK"))
       .resolves.toEqual(expect.any(String));
 
-    // The index is partial so that an event arriving mid-fold still gets a job of its own.
+    // A partial index excluding RUNNING would let a second row in here, and then every
+    // path out of RUNNING would collide with it. This is the case that must be closed.
     await expect(sql`
       update repository_reconciliation_jobs
       set state = 'RUNNING',
         lease_token = gen_random_uuid(),
         lease_expires_at = now() + interval '1 minute'
-      where id = ${firstJobId}
+      where id = ${jobId}
       returning id
-    `).resolves.toEqual([{ id: firstJobId }]);
-    const followUpId = await insertReconciliationJob(sql, repositoryId, "SWEEP");
+    `).resolves.toEqual([{ id: jobId }]);
+    await expect(insertReconciliationJob(sql, repositoryId, "SWEEP"))
+      .rejects.toThrow(/repository_reconciliation_jobs_repository_key/);
 
-    // A job that gave up is still outstanding: it is the row a later event has to coalesce into.
+    // A job that gave up still owns the repository's row: it is what a later event revives.
     await sql`
       update repository_reconciliation_jobs
-      set state = 'FAILED', last_failure_at = now()
-      where id = ${followUpId}
+      set state = 'FAILED', last_failure_at = now(), lease_token = null, lease_expires_at = null
+      where id = ${jobId}
     `;
     await expect(insertReconciliationJob(sql, repositoryId, "REGISTRATION"))
-      .rejects.toThrow(/repository_reconciliation_jobs_outstanding_key/);
+      .rejects.toThrow(/repository_reconciliation_jobs_repository_key/);
+  });
+
+  it("records a mid-fold event on the row being worked rather than in a second row", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const jobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+
+    await expect(sql`
+      select data_type, is_nullable, column_default from information_schema.columns
+      where table_name = 'repository_reconciliation_jobs' and column_name = 'follow_up_requested'
+    `).resolves.toEqual([{ data_type: "boolean", is_nullable: "NO", column_default: "false" }]);
+    await expect(sql`
+      select follow_up_requested from repository_reconciliation_jobs where id = ${jobId}
+    `).resolves.toEqual([{ follow_up_requested: false }]);
   });
 
   it("rejects a reconciliation job whose lease disagrees with its state", async () => {
