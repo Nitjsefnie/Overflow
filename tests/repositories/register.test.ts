@@ -382,6 +382,7 @@ describe("explicit repository registration", () => {
       message: "Unable to save the repository registration.",
     });
     expect(harness.deletedWebhookIds).toEqual([501]);
+    expect(harness.scheduledRepositoryIds).toEqual([]);
   });
 
   it("schedules the import of the repository's existing work once the registration is stored", async () => {
