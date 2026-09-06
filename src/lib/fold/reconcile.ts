@@ -17,9 +17,10 @@ const reconciliationConcurrency = 4;
 // allow a full hour for it to recover before spending points on another full fold.
 export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
 
-// The fold itself works from the stored path, but reconciliation must resolve the
-// registered repository by the identity GitHub cannot reassign.
-export type ReconciliationRepository = RepositoryFoldSnapshot["repository"] & { githubRepositoryId: number };
+// Reconciliation resolves the registered repository by the identity GitHub cannot
+// reassign, and so does the fold: the snapshot repository carries it, so there is
+// one declaration of where the registered identity lives rather than two.
+export type ReconciliationRepository = RepositoryFoldSnapshot["repository"];
 
 export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
 

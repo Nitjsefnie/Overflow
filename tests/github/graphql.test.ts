@@ -504,6 +504,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
       state: node.state, mergedAt: node.mergedAt, mergeCommitOid: node.mergeCommit.oid,
       finalCommitAt: node.commits.nodes[0]!.commit.committedDate, authorLogin: node.author!.login,
       authorGitHubUserId: node.author!.databaseId,
+      repositoryGitHubId: node.repository.databaseId,
       repositoryNameWithOwner: node.repository.nameWithOwner,
     })));
     expect(requests).toEqual([
@@ -880,6 +881,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         finalCommitAt: "2026-09-04T10:00:00.000Z",
         authorLogin: "contributor",
         authorGitHubUserId: 7001,
+        repositoryGitHubId: 6001,
         repositoryNameWithOwner: "octo/overflow",
       },
     ]);
@@ -984,7 +986,10 @@ describe("GitHubGateway GraphQL source adapter", () => {
               closedByPullRequestsReferences: {
                 nodes: [
                   pullRequestNode(201, 4),
-                  { ...pullRequestNode(202, 5), repository: { nameWithOwner: "other/fork" } },
+                  {
+                    ...pullRequestNode(202, 5),
+                    repository: { databaseId: 6002, nameWithOwner: "other/fork" },
+                  },
                 ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
@@ -997,21 +1002,31 @@ describe("GitHubGateway GraphQL source adapter", () => {
     await expect(
       gateway.getIssueClosingPullRequests({ owner: "octo", name: "overflow" }, 1),
     ).resolves.toEqual([
-      expect.objectContaining({ id: 201, repositoryNameWithOwner: "octo/overflow" }),
-      expect.objectContaining({ id: 202, repositoryNameWithOwner: "other/fork" }),
+      expect.objectContaining({ id: 201, repositoryGitHubId: 6001, repositoryNameWithOwner: "octo/overflow" }),
+      expect.objectContaining({ id: 202, repositoryGitHubId: 6002, repositoryNameWithOwner: "other/fork" }),
     ]);
   });
 
   it.each([
     { name: "an absent repository", repository: undefined },
     { name: "a null repository", repository: null },
-    { name: "a null nameWithOwner", repository: { nameWithOwner: null } },
-    { name: "a numeric nameWithOwner", repository: { nameWithOwner: 42 } },
-    { name: "a blank nameWithOwner", repository: { nameWithOwner: "   " } },
-    { name: "an empty nameWithOwner", repository: { nameWithOwner: "" } },
-    { name: "a bare owner", repository: { nameWithOwner: "octo" } },
-    { name: "a three-segment nameWithOwner", repository: { nameWithOwner: "octo/overflow/extra" } },
-    { name: "an owner with no name", repository: { nameWithOwner: "octo/" } },
+    { name: "a null nameWithOwner", repository: { databaseId: 6001, nameWithOwner: null } },
+    { name: "a numeric nameWithOwner", repository: { databaseId: 6001, nameWithOwner: 42 } },
+    { name: "a blank nameWithOwner", repository: { databaseId: 6001, nameWithOwner: "   " } },
+    { name: "an empty nameWithOwner", repository: { databaseId: 6001, nameWithOwner: "" } },
+    { name: "a bare owner", repository: { databaseId: 6001, nameWithOwner: "octo" } },
+    { name: "a three-segment nameWithOwner", repository: { databaseId: 6001, nameWithOwner: "octo/overflow/extra" } },
+    { name: "an owner with no name", repository: { databaseId: 6001, nameWithOwner: "octo/" } },
+    { name: "an absent repository databaseId", repository: { nameWithOwner: "octo/overflow" } },
+    { name: "a null repository databaseId", repository: { databaseId: null, nameWithOwner: "octo/overflow" } },
+    { name: "a zero repository databaseId", repository: { databaseId: 0, nameWithOwner: "octo/overflow" } },
+    { name: "a negative repository databaseId", repository: { databaseId: -1, nameWithOwner: "octo/overflow" } },
+    { name: "a fractional repository databaseId", repository: { databaseId: 1.5, nameWithOwner: "octo/overflow" } },
+    { name: "a stringified repository databaseId", repository: { databaseId: "6001", nameWithOwner: "octo/overflow" } },
+    {
+      name: "an unsafe repository databaseId",
+      repository: { databaseId: Number.MAX_SAFE_INTEGER + 1, nameWithOwner: "octo/overflow" },
+    },
   ])("rejects a closing pull request with $name", async ({ repository }) => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -1380,7 +1395,7 @@ function pullRequestNode(
       nodes: [{ commit: { committedDate: "2026-09-04T10:00:00.000Z" } }],
     },
     author,
-    repository: { nameWithOwner: "octo/overflow" },
+    repository: { databaseId: 6001, nameWithOwner: "octo/overflow" },
   };
 }
 

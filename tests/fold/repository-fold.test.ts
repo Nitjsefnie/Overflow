@@ -518,6 +518,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
   return {
     repository: {
       id: "repository",
+      githubRepositoryId: 5001,
       ownerName: "octo/example",
       active: true,
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
@@ -577,6 +578,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: "contributor",
             authorGitHubUserId: 2001,
+            repositoryGitHubId: 5001,
             repositoryNameWithOwner: "octo/example",
             reviews: [],
             rawDiff: "diff",

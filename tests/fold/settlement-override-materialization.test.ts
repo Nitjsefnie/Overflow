@@ -16,7 +16,9 @@ let sql: Sql;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 21).toString("base64url");
 
+const repositoryGitHubId = 8_300_001;
 const repositoryOwnerName = "example/overrides";
+const selfWorkGitHubId = 8_300_003;
 const selfWorkOwnerName = "example/self-work";
 const sponsorLogin = "override-sponsor";
 const contributorLogin = "override-contributor";
@@ -59,7 +61,7 @@ describe("a granted settlement override survives reconciliation", () => {
     const moderatorId = await insertUser("override-moderator", 3001);
     await giveAccessToken(sponsorId);
     const repositoryId = await insertRepository(sponsorId, {
-      githubRepositoryId: 8_300_001,
+      githubRepositoryId: repositoryGitHubId,
       ownerName: repositoryOwnerName,
       githubWebhookId: 8_300_002,
     });
@@ -196,7 +198,7 @@ describe("a granted correction to a self-work calibration survives reconciliatio
     const moderatorId = await insertUser("calibration-moderator", 4002);
     await giveAccessToken(selfWorkSponsorId);
     const repositoryId = await insertRepository(selfWorkSponsorId, {
-      githubRepositoryId: 8_300_003,
+      githubRepositoryId: selfWorkGitHubId,
       ownerName: selfWorkOwnerName,
       githubWebhookId: 8_300_004,
     });
@@ -433,13 +435,14 @@ function difficultyScheme() {
 }
 
 const settlementParticipants = {
-  repository: "example/overrides",
+  repository: repositoryOwnerName,
   ownerLogin: sponsorLogin,
   assigneeLogin: contributorLogin,
 };
 
 const settlementAuthor = {
-  repository: "example/overrides",
+  repositoryGitHubId,
+  repository: repositoryOwnerName,
   authorLogin: contributorLogin,
   authorGitHubUserId: 2001,
 };
@@ -507,6 +510,7 @@ function unsettledIssue(input: {
 function mergedPullRequest(input: {
   id: number;
   number: number;
+  repositoryGitHubId: number;
   repository: string;
   authorLogin: string;
   authorGitHubUserId: number;
@@ -523,6 +527,7 @@ function mergedPullRequest(input: {
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
     authorGitHubUserId: input.authorGitHubUserId,
+    repositoryGitHubId: input.repositoryGitHubId,
     repositoryNameWithOwner: input.repository,
   };
 }
@@ -534,12 +539,13 @@ function mergedPullRequest(input: {
  */
 function selfWorkGateway(): ReconciliationGateway {
   const participants = {
-    repository: "example/self-work",
+    repository: selfWorkOwnerName,
     ownerLogin: selfWorkSponsorLogin,
     assigneeLogin: selfWorkSponsorLogin,
   };
   const author = {
-    repository: "example/self-work",
+    repositoryGitHubId: selfWorkGitHubId,
+    repository: selfWorkOwnerName,
     authorLogin: selfWorkSponsorLogin,
     authorGitHubUserId: 4001,
   };

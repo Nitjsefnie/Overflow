@@ -762,6 +762,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
   return {
     repository: {
       id: "repository",
+      githubRepositoryId: 5001,
       ownerName: "octo/example",
       active: true,
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
@@ -820,6 +821,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: logins.pullRequestAuthor,
             authorGitHubUserId: 2001,
+            repositoryGitHubId: 5001,
             repositoryNameWithOwner: "octo/example",
             reviews: [],
             rawDiff: "diff",
