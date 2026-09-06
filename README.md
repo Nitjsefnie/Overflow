@@ -295,7 +295,7 @@ Run reconciliation explicitly when GitHub history must be re-read:
 
 ```bash
 # Reconcile one explicit registered repository by owner/name.
-pnpm reconcile -- --repository <owner>/<name>
+pnpm reconcile --repository <owner>/<name>
 
 # Reconcile every active registered repository.
 pnpm reconcile
