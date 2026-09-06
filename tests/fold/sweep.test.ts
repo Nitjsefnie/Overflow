@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   RECONCILIATION_SWEEP_INTERVAL_MS,
   shouldStartReconciliationSweep,
@@ -152,6 +152,82 @@ describe("scheduled reconciliation sweep", () => {
 
     await timer.tick();
     expect(started).toBe(2);
+  });
+
+  it("reports a sweep that rejects and sweeps again on the next interval", async () => {
+    const timer = createTimer();
+    const failures: unknown[] = [];
+    const unreachable = new Error("Active repositories could not be listed");
+    let sweeps = 0;
+
+    startReconciliationSweep({
+      runSweep: async () => {
+        sweeps += 1;
+        throw unreachable;
+      },
+      schedule: timer.schedule,
+      onFailure: (error) => {
+        failures.push(error);
+      },
+    });
+    await timer.settle();
+
+    expect(sweeps).toBe(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBe(unreachable);
+
+    // The running flag must be cleared on rejection too, or every later tick is dropped.
+    await timer.tick();
+    expect(sweeps).toBe(2);
+    expect(failures).toHaveLength(2);
+    expect(failures[1]).toBe(unreachable);
+  });
+
+  it("reports a sweep that rejects on the console when no callback is supplied", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          throw unreachable;
+        },
+        schedule: timer.schedule,
+      });
+      await timer.settle();
+
+      expect(reported).toHaveBeenCalledTimes(1);
+      expect(reported.mock.calls[0]).toContain(unreachable);
+    } finally {
+      reported.mockRestore();
+    }
+  });
+
+  it("leaves no unhandled rejection behind when a sweep rejects", async () => {
+    const timer = createTimer();
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          throw new Error("Active repositories could not be listed");
+        },
+        schedule: timer.schedule,
+        onFailure: () => {},
+      });
+      // Node reports an unhandled rejection on a later macrotask, so drain twice.
+      await timer.settle();
+      await timer.settle();
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
   });
 
   it("sweeps every six hours", () => {
