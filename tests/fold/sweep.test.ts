@@ -1489,6 +1489,44 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("carries a reason that is itself undefined to the defaulted line", async () => {
+    // The counterpart of the unarmed line below, and the one input the two
+    // helpers read differently. That one folds `undefined` into its reasonless
+    // form, since it reports a member that never failed as well and an
+    // `undefined` there would suggest a reason went missing. Nothing reaches
+    // this line but a read that threw, so it prints the reason it was given.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    const armed: Array<{ callback: () => void; everyMs: number }> = [];
+    const noReason = undefined;
+    const schedule = {
+      runSweep: async () => {},
+      get intervalMs(): number {
+        throw noReason;
+      },
+      schedule: (callback: () => void, everyMs: number) => {
+        armed.push({ callback, everyMs });
+      },
+    };
+
+    try {
+      startReconciliationSweep(schedule);
+      await drain();
+
+      expect(logged.mock.calls).toEqual([[DEFAULTED_INTERVAL_MESSAGE, noReason]]);
+      // The two-argument form itself, not a line that merely read alike.
+      expect(logged.mock.calls[0]).toHaveLength(2);
+      // A reason that carries nothing to print costs the cadence and no more:
+      // the caller's own scheduler is still armed, at the default.
+      expect(armed).toHaveLength(1);
+      expect(armed[0]?.everyMs).toBe(RECONCILIATION_SWEEP_INTERVAL_MS);
+      expect(intervals.armed).toEqual([]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
   it("stands the unarmed line alone when the failure carries no reason", async () => {
     // The reasonless line is not exclusive to a member that was never callable:
     // `undefined` is the reason that carries nothing to print, so a scheduler
