@@ -9,7 +9,6 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { sweepReconciliations } from "@/lib/fold/sweep";
 import { encryptToken } from "@/lib/security/token-cipher";
-import { processWebhook } from "@/lib/webhooks/processor";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -136,26 +135,19 @@ describe("persisted reconciliation cooldown", () => {
     }
   });
 
-  it.each([0, 1])("creates no run for a cooled-down webhook, then reconciles at expiry plus %s ms and clears it", async (offset) => {
-    const { store, repositoryId, githubRepositoryId, ownerName, github, calls } = await cooledRepository();
+  it.each([0, 1])("creates no run for a cooled-down repository, then reconciles at expiry plus %s ms and clears it", async (offset) => {
+    const { store, repositoryId, github, calls } = await cooledRepository();
     let instant = new Date("2030-01-02T03:04:05.678Z");
     const now = () => instant;
-    const dependencies = { store, reconcileRepository: (id: string) => reconcileRepository({ store, github, now }, id) };
-    const delivery = {
-      deliveryId: `cooldown-${githubRepositoryId}`,
-      event: "pull_request" as const,
-      action: "closed",
-      repositoryGitHubId: githubRepositoryId,
-      repositoryFullName: ownerName,
-    };
-    await expect(processWebhook(dependencies, delivery)).resolves.toEqual({ status: "PROCESSED" });
+    const reconcile = () => reconcileRepository({ store, github, now }, repositoryId);
+
+    await expect(reconcile()).resolves.toMatchObject({ skipped: true });
     expect(await runs(repositoryId)).toEqual([]);
     expect(calls).toEqual([]);
     expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
 
     instant = new Date(notBefore.getTime() + offset);
-    await expect(processWebhook(dependencies, { ...delivery, deliveryId: `${delivery.deliveryId}-expired` }))
-      .resolves.toEqual({ status: "PROCESSED" });
+    await expect(reconcile()).resolves.toMatchObject({ skipped: false });
     expect(await runs(repositoryId)).toEqual([{ status: "COMPLETED" }]);
     expect(calls).toEqual(["identity", "issues"]);
     await expect(sql`

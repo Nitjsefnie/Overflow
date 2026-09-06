@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler, POST } from "@/app/api/github/webhooks/route";
+import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
 
 const secret = "webhook-secret";
 const rawPayload = JSON.stringify({
@@ -45,6 +46,44 @@ describe("GitHub webhook route", () => {
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
     });
+  });
+
+  it("answers a tracked repository's delivery with a scheduled fold and none of the fold", async () => {
+    const enqueued: string[] = [];
+    const reconciled: string[] = [];
+    // The reconcile dependency is offered on purpose. A handler that still folds
+    // inside the request reaches for it and lands in `reconciled`, so this fails
+    // on what the handler did rather than on a dependency it could not find.
+    const dependencies: WebhookProcessorDependencies & {
+      reconcileRepository(repositoryId: string): Promise<void>;
+    } = {
+      store: {
+        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        markProcessed: async () => true,
+        markFailed: async () => true,
+      },
+      enqueueReconciliation: async (repositoryId) => {
+        enqueued.push(repositoryId);
+      },
+      reconcileRepository: async (repositoryId) => {
+        reconciled.push(repositoryId);
+      },
+    };
+    const route = createGitHubWebhookPostHandler({
+      secret,
+      processWebhook: (delivery) => processWebhook(dependencies, delivery),
+    });
+
+    const response = await route(
+      request(rawPayload, {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-scheduled",
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect({ enqueued, reconciled }).toEqual({ enqueued: ["repository-1"], reconciled: [] });
   });
 
   it("rejects an invalid signature before attempting to parse malformed JSON", async () => {

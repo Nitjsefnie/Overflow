@@ -8,7 +8,6 @@ import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
 import { sweepReconciliations } from "@/lib/fold/sweep";
-import { processWebhook } from "@/lib/webhooks/processor";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -161,24 +160,20 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
       expect(await materializedHistory()).toEqual(history);
 
       const callsAfterFailure = calls.length;
-      const delivery = {
-        deliveryId: `http-cooldown-${fixture.githubRepositoryId}`, event: "pull_request" as const, action: "closed",
-        repositoryGitHubId: fixture.githubRepositoryId, repositoryFullName: fixture.ownerName,
-      };
-      const webhook = () => processWebhook({ store, reconcileRepository: reconcile }, delivery);
+      const retry = () => reconcile(fixture.repositoryId);
       const sweep = () => sweepReconciliations({
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
         getReconciliationCooldown: (id) => store.getReconciliationCooldown(id), reconcile, now: () => instant,
       });
       if (failure.seconds !== null) {
-        await expect(webhook()).resolves.toEqual({ status: "PROCESSED" });
+        await expect(retry()).resolves.toMatchObject({ skipped: true });
         await expect(sweep()).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
         expect(calls).toHaveLength(callsAfterFailure);
         expect(await failedRuns(fixture.repositoryId, baseline.runId!)).toEqual([
           { status: "FAILED", error_message: "Reconciliation failed." },
         ]);
       } else {
-        await expect(webhook()).rejects.toThrow("Webhook processing failed.");
+        await expect(retry()).rejects.toThrow("Unable to reconcile repository.");
         await expect(sweep()).resolves.toEqual({ attempted: 1, reconciled: 0, failed: 1, skipped: 0 });
         expect(calls.length).toBeGreaterThan(callsAfterFailure);
         expect(await failedRuns(fixture.repositoryId, baseline.runId!)).toEqual(Array.from({ length: 3 }, () => (

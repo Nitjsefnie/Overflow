@@ -22,7 +22,6 @@ import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/reposito
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
-import { processWebhook } from "@/lib/webhooks/processor";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -2721,26 +2720,10 @@ describe("initial PostgreSQL materialization", () => {
 
     const ownerStore = new PostgresFoldStore(sql, tokenEncryptionKey);
     const ownerGateway = trackedGateway("owner", 1, holdOwnerFetch);
-    const delivery = {
-      deliveryId: `delivery-pool-contention-${nextExternalId()}`,
-      event: "pull_request" as const,
-      action: "closed",
-      repositoryGitHubId: githubRepositoryId,
-      repositoryFullName: repository.owner_name,
-    };
-    const ownerRun = processWebhook({
-      store: ownerStore,
-      reconcileRepository: (id) => reconcileRepository({ store: ownerStore, github: ownerGateway }, id),
-      leaseHeartbeatIntervalMs: 25,
-    }, delivery);
+    const ownerRun = reconcileRepository({ store: ownerStore, github: ownerGateway }, repositoryId);
     await ownerFetchStarted;
 
     const observer = postgres(process.env.DATABASE_URL!, { max: 1 });
-    const [initialLease] = await observer<{ lease_expires_at: string }[]>`
-      select lease_expires_at::text
-      from webhook_deliveries
-      where github_delivery_id = ${delivery.deliveryId}
-    `;
     const waiterRuns = Array.from({ length: sharedPoolCapacity }, (_, index) => {
       const points = index + 1;
       const waiterStore = new PostgresFoldStore(sql, tokenEncryptionKey);
@@ -2768,14 +2751,6 @@ describe("initial PostgreSQL materialization", () => {
       expect(runOrder).toEqual(["owner"]);
       await expect(resolveWithin(ordinaryQuery, 750)).resolves.toEqual([{ value: 1 }]);
       expect(blockingWaitersDetected).toBe(false);
-      await expect(conditionWithin(async () => {
-        const [lease] = await observer<{ renewed: boolean }[]>`
-          select lease_expires_at > ${initialLease.lease_expires_at}::timestamptz as renewed
-          from webhook_deliveries
-          where github_delivery_id = ${delivery.deliveryId}
-        `;
-        return lease.renewed;
-      }, 750)).resolves.toBe(true);
     } finally {
       releaseOwnerFetch();
       await observer`
@@ -2789,7 +2764,7 @@ describe("initial PostgreSQL materialization", () => {
       await observer.end();
     }
 
-    await expect(ownerRun).resolves.toEqual({ status: "PROCESSED" });
+    await expect(ownerRun).resolves.toMatchObject({ repositoryId, skipped: false });
     await expect(Promise.all(waiterRuns)).resolves.toHaveLength(sharedPoolCapacity);
     expect(runOrder).toHaveLength(sharedPoolCapacity + 1);
     expect(new Set(runOrder).size).toBe(sharedPoolCapacity + 1);
@@ -3585,30 +3560,6 @@ describe("initial PostgreSQL materialization", () => {
       where github_delivery_id = ${delivery.deliveryId}
     `;
     expect(record).toEqual({ processing_state: "PROCESSED" });
-  });
-
-  it("renews only the current webhook lease far enough to cover continued reconciliation", async () => {
-    const store = new PostgresFoldStore(sql);
-    const delivery = {
-      deliveryId: "delivery-renewal",
-      event: "pull_request" as const,
-      action: "closed",
-      repositoryGitHubId: nextExternalId(),
-      repositoryFullName: "octo/example",
-    };
-    const claim = expectClaimedLease(await store.claimDelivery(delivery));
-
-    await expect(
-      store.renewDeliveryLease(delivery.deliveryId, "00000000-0000-4000-8000-000000000099"),
-    ).resolves.toBe(false);
-    await expect(store.renewDeliveryLease(delivery.deliveryId, claim.leaseToken)).resolves.toBe(true);
-
-    const [record] = await sql<{ renewed: boolean }[]>`
-      select lease_expires_at > now() + interval '4 minutes' as renewed
-      from webhook_deliveries
-      where github_delivery_id = ${delivery.deliveryId}
-    `;
-    expect(record).toEqual({ renewed: true });
   });
 
   it("reclaims a failed delivery only through a new lease and persists a sanitized failure", async () => {
