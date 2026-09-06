@@ -227,8 +227,7 @@ export class GitHubGateway {
     return response.text();
   }
 
-  // Sequential reads avoid request bursts, but up to 50 slow requests add registration
-  // latency. Keep the file cap and request timeout; callers treat failures as "not checked".
+  // Sequential reads avoid request bursts; callers treat failures as "not checked".
   // The byte cap is checked after delivery, so one transport chunk can exceed it in memory.
   // A local 8 MiB HTTP probe on Node 24.17 / Undici 7.28 yielded chunks <= 64 KiB:
   // Node frames the reads, not the server's writes. This is an observation, not a guaranteed
@@ -236,42 +235,55 @@ export class GitHubGateway {
   public async listWorkflowFiles(
     repository: GitHubRepositoryReference,
   ): Promise<ClaimPathEvidence[]> {
-    const contentsPath = `/repos/${segment(repository.owner)}/${segment(repository.name)}/contents`;
-    let response: Response;
+    // Issue 203 tracks request()'s general response-body timeout defect. Keep this
+    // advisory read bounded here: one ten-second budget covers all requests AND
+    // bodies, honoring a shorter configured timeout. Race each await so expiry
+    // abandons the read and cannot start another file after registration returns.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error("GitHub workflow read timed out.")), Math.min(this.timeoutMs, 10_000));
+    });
+    const beforeDeadline = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline]);
     try {
-      response = await this.request(`${contentsPath}/.github/workflows`);
-    } catch (error) {
-      if (error instanceof GitHubApiError && error.status === 404) {
+      const contentsPath = `/repos/${segment(repository.owner)}/${segment(repository.name)}/contents`;
+      let response: Response;
+      try {
+        response = await beforeDeadline(this.request(`${contentsPath}/.github/workflows`));
+      } catch (error) {
+        if (error instanceof GitHubApiError && error.status === 404) {
+          return [];
+        }
+        throw error;
+      }
+
+      const entries = await beforeDeadline(responseJson<unknown>(response));
+      if (!Array.isArray(entries)) {
         return [];
       }
-      throw error;
-    }
-
-    const entries = await responseJson<unknown>(response);
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    const files = entries.filter((entry: unknown): entry is GitHubRestWorkflowFile =>
-      entry !== null && typeof entry === "object" && !Array.isArray(entry)
-      && "type" in entry && entry.type === "file"
-      && "name" in entry && typeof entry.name === "string" && entry.name.length > 0
-      && "path" in entry && typeof entry.path === "string" && entry.path.length > 0
-      && "size" in entry && typeof entry.size === "number" && Number.isSafeInteger(entry.size)
-      && entry.size >= 0 && entry.size <= maxWorkflowBytes && /\.ya?ml$/i.test(entry.name))
-      .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
-      .slice(0, 50);
-    const workflows: ClaimPathEvidence[] = [];
-    for (const entry of files) {
-      const fileResponse = await this.request(
-        `${contentsPath}/${entry.path.split("/").map(segment).join("/")}`,
-        { headers: { Accept: "application/vnd.github.raw" } },
-      );
-      const content = await boundedResponseText(fileResponse, maxWorkflowBytes);
-      if (content !== null) {
-        workflows.push({ path: entry.path, content });
+      const files = entries.filter((entry: unknown): entry is GitHubRestWorkflowFile =>
+        entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        && "type" in entry && entry.type === "file"
+        && "name" in entry && typeof entry.name === "string" && entry.name.length > 0
+        && "path" in entry && typeof entry.path === "string" && entry.path.length > 0
+        && "size" in entry && typeof entry.size === "number" && Number.isSafeInteger(entry.size)
+        && entry.size >= 0 && entry.size <= maxWorkflowBytes && /\.ya?ml$/i.test(entry.name))
+        .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+        .slice(0, 50);
+      const workflows: ClaimPathEvidence[] = [];
+      for (const entry of files) {
+        const fileResponse = await beforeDeadline(this.request(
+          `${contentsPath}/${entry.path.split("/").map(segment).join("/")}`,
+          { headers: { Accept: "application/vnd.github.raw" } },
+        ));
+        const content = await beforeDeadline(boundedResponseText(fileResponse, maxWorkflowBytes));
+        if (content !== null) {
+          workflows.push({ path: entry.path, content });
+        }
       }
+      return workflows;
+    } finally {
+      clearTimeout(timeout);
     }
-    return workflows;
   }
 
   private async getIssuesPage(

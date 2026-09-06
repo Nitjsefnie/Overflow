@@ -82,8 +82,8 @@ describe("feedback stylesheet", () => {
 describe("repository registration form", () => {
   describe.each([
     ["EVIDENCE_FOUND", "success", ""],
-    ["NO_EVIDENCE_FOUND", "warning", " No workflow assigning the author of an issue comment was found in this repository. Without one, only accounts with write access can be assigned its issues, so outside contributors cannot claim them and no credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example."],
-    ["NOT_CHECKED", "success", " The repository's workflows could not be read, so the check for a workflow triggered by issue_comment that assigns the commenter could not be completed."],
+    ["NO_EVIDENCE_FOUND", "warning", " No workflow assigning the author of an issue comment was found in this repository. Without such a workflow, contributors cannot claim issues themselves by commenting; someone with write access must assign them before any credit is reserved. Add a workflow triggered by issue_comment that assigns the commenter; Overflow's own .github/workflows/claim.yml is a working example."],
+    ["NOT_CHECKED", "warning", " Overflow could not read this repository's workflows, so it does not know whether comment-based claiming is set up. Check the workflows yourself for one triggered by issue_comment that assigns the comment author."],
   ])("claimPath: %s", (claimPath, kind, claimMessage) => {
     it.each([
       [true, "co-op/harbour is registered. Its existing issues are being imported and will appear shortly."],

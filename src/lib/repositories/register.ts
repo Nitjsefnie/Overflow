@@ -1,6 +1,6 @@
 import { isParticipationEligible, type EnforcementState, type UserRole } from "@/lib/db/types";
 import { GitHubApiError } from "@/lib/github/errors";
-import { assessClaimPath, type ClaimPathEvidence } from "@/lib/domain/claim-path";
+import { assessClaimPath, type ClaimPathEvidence, type ClaimPathVerdict } from "@/lib/domain/claim-path";
 import {
   validateDifficultyScheme,
   type ActualDifficultyLabel,
@@ -61,7 +61,7 @@ export type RepositoryRegistrationDependencies = {
 
 export type RepositoryRegistrationResult = RegisteredRepository & {
   initialImportScheduled: boolean;
-  claimPath: "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND" | "NOT_CHECKED";
+  claimPath: ClaimPathVerdict;
 };
 
 export class RepositoryRegistrationError extends Error {
