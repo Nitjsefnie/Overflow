@@ -18,6 +18,14 @@
 -- row. That collision lands on the ordinary "webhook arrives during a fold that
 -- then fails" path, which is precisely the path this table exists to survive.
 --
+-- The lease a claim writes runs for a fixed window (RECONCILIATION_LEASE_MINUTES
+-- in src/lib/fold/reconciliation-worker.ts) and is never renewed. A fold that
+-- overruns it is reclaimed by another worker, which then takes the repository
+-- advisory lock the first one still holds, so the two serialize and the cost is
+-- one redundant idempotent fold rather than a corrupted one. That is why there
+-- is no heartbeat: it would buy nothing here, and a lease long enough to make
+-- overrun impossible would strand a repository for that long after a crash.
+--
 -- The lease check keeps `state` and the lease columns from drifting apart. A
 -- claim sets all three together and a release clears them together, so a
 -- crashed worker leaves a row whose expiry says it is reclaimable rather than a

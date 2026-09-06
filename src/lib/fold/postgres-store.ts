@@ -7,6 +7,7 @@ import {
   type TransactionClient,
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
+import { RECONCILIATION_LEASE_MINUTES } from "@/lib/fold/reconciliation-worker";
 import type {
   FoldModerationEvent,
   FoldResult,
@@ -762,7 +763,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       update repository_reconciliation_jobs
       set state = ${"RUNNING"},
           lease_token = ${leaseToken},
-          lease_expires_at = now() + interval '30 minutes',
+          lease_expires_at = now() + make_interval(mins => ${RECONCILIATION_LEASE_MINUTES}),
           attempt_count = repository_reconciliation_jobs.attempt_count + 1
       from due
       where repository_reconciliation_jobs.id = due.id

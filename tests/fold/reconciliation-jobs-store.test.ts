@@ -8,6 +8,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
+import { RECONCILIATION_LEASE_MINUTES } from "@/lib/fold/reconciliation-worker";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -252,6 +253,23 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.lease_expires_at).not.toBeNull();
     expect(job.attempt_count).toBe(1);
     expect((await claimOrFail()).repositoryId).toBe(newerRepositoryId);
+  });
+
+  it("leases a claimed job for the window the worker documents", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+    await claimOrFail();
+
+    // Read as an interval the database computes, so the only slack is the clock
+    // between the claim and this query rather than anything waited on here.
+    const [row] = await sql<{ minutes: number }[]>`
+      select (extract(epoch from (lease_expires_at - now())) / 60)::float8 as minutes
+      from repository_reconciliation_jobs
+      where repository_id = ${repositoryId}
+    `;
+    expect(row.minutes).toBeGreaterThan(RECONCILIATION_LEASE_MINUTES - 1);
+    expect(row.minutes).toBeLessThanOrEqual(RECONCILIATION_LEASE_MINUTES);
   });
 
   it("breaks a run_after tie on the job that entered the queue first", async () => {
