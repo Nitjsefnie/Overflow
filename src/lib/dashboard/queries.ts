@@ -141,6 +141,48 @@ export type SettlementProofProjection = {
   balanceEffect?: number;
 };
 
+/**
+ * The evidence behind a closure the fold calibrated instead of settling.
+ *
+ * A sponsor who closes their own issue is both parties, so no credits move and
+ * there is no settlement row to point at. The comparison the account is judged
+ * on is recorded here instead, and the actual figure is absent whenever the
+ * closure's settled evidence was rejected.
+ */
+export type SelfWorkCalibrationProofProjection = {
+  id: string;
+  repositoryName: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  pullRequestNumber: number;
+  pullRequestTitle: string;
+  pullRequestUrl: string;
+  proofSha256: string | null;
+  openingComparisonPoints: number;
+  actualPoints: number | null;
+  openingName?: string;
+  actualName?: string;
+  openingLabel?: string;
+  actualLabel?: string | null;
+  mergeCommitOid?: string | null;
+  mergedAt?: string | null;
+};
+
+/** One row of the sponsor's self-work calibrations, enough to link to its proof. */
+export type SelfWorkCalibrationProjection = {
+  id: string;
+  repositoryName: string;
+  issueNumber: number;
+  issueTitle: string;
+  openingComparisonPoints: number;
+  actualPoints: number | null;
+  mergedAt: string | null;
+};
+
+/** The calibration list is unpaginated, so it is capped the way the settlement history is. */
+export const SELF_WORK_CALIBRATION_HISTORY_LIMIT = 200;
+
 export type OpenAuditProjection = {
   id: string;
   targetAccountId: string;
@@ -325,6 +367,36 @@ type SettlementProofRow = {
   merge_commit_oid?: string | null;
   merged_at?: string | Date | null;
   balance_effect?: number | string;
+};
+
+type SelfWorkCalibrationProofRow = {
+  id: string;
+  repository_name: string;
+  issue_number: number | string;
+  issue_title: string;
+  issue_url: string;
+  pull_request_number: number | string;
+  pull_request_title: string;
+  pull_request_url: string;
+  proof_sha256: string | null;
+  opening_comparison_points: number | string;
+  actual_points: number | string | null;
+  opening_name?: string;
+  actual_name?: string;
+  opening_label?: string;
+  actual_label?: string | null;
+  merge_commit_oid?: string | null;
+  merged_at?: string | Date | null;
+};
+
+type SelfWorkCalibrationRow = {
+  id: string;
+  repository_name: string;
+  issue_number: number | string;
+  issue_title: string;
+  opening_comparison_points: number | string;
+  actual_points: number | string | null;
+  merged_at: string | Date | null;
 };
 
 type CalibrationRow = {
@@ -774,6 +846,123 @@ export async function getSettlementProof(
     projection.balanceEffect = readNumber(row.balance_effect, "Balance effect");
   }
   return projection;
+}
+
+/**
+ * The proof a sponsor can read for their own closure, withheld from every other
+ * account: the calibration is the only record of work they were priced on, and
+ * `user_id` is what makes it theirs.
+ *
+ * The actual label is read back from the issue rather than the calibration,
+ * because the fold derives one settled difficulty per closure and writes the
+ * label on the issue and the points on the calibration. Both are absent
+ * together on a closure whose settled evidence was rejected.
+ */
+export async function getSelfWorkCalibrationProof(
+  accountId: string,
+  calibrationId: string,
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<SelfWorkCalibrationProofProjection | null> {
+  const sql = resolveSql(dependencies);
+  const [row] = await sql<SelfWorkCalibrationProofRow[]>`
+    select
+      self_work_calibrations.id,
+      repositories.owner_name as repository_name,
+      repositories.difficulty_scheme ->> 'openingName' as opening_name,
+      repositories.difficulty_scheme ->> 'actualName' as actual_name,
+      issues.issue_number,
+      issues.title as issue_title,
+      issues.url as issue_url,
+      issues.opening_label,
+      issues.settled_label as actual_label,
+      pull_requests.pull_request_number,
+      pull_requests.title as pull_request_title,
+      pull_requests.url as pull_request_url,
+      pull_requests.merge_commit_oid,
+      pull_requests.merged_at,
+      pull_requests.proof_sha256,
+      self_work_calibrations.opening_comparison_points,
+      self_work_calibrations.actual_points
+    from self_work_calibrations
+    join issues on issues.id = self_work_calibrations.issue_id
+    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where self_work_calibrations.id = ${calibrationId}
+      and self_work_calibrations.user_id = ${accountId}
+    limit 1
+  `;
+  if (row === undefined) {
+    return null;
+  }
+
+  const projection: SelfWorkCalibrationProofProjection = {
+    id: readText(row.id, "Calibration identifier"),
+    repositoryName: readText(row.repository_name, "Repository name"),
+    issueNumber: readNumber(row.issue_number, "Issue number"),
+    issueTitle: readText(row.issue_title, "Issue title"),
+    issueUrl: readText(row.issue_url, "Issue URL"),
+    pullRequestNumber: readNumber(row.pull_request_number, "Pull request number"),
+    pullRequestTitle: readText(row.pull_request_title, "Pull request title"),
+    pullRequestUrl: readText(row.pull_request_url, "Pull request URL"),
+    proofSha256: row.proof_sha256 === null ? null : readText(row.proof_sha256, "Closing-link proof"),
+    openingComparisonPoints: readNumber(row.opening_comparison_points, "Opening comparison points"),
+    actualPoints: row.actual_points === null ? null : readNumber(row.actual_points, "Actual points"),
+  };
+  if (row.opening_name !== undefined) {
+    projection.openingName = readText(row.opening_name, "Opening catalog name");
+  }
+  if (row.actual_name !== undefined) {
+    projection.actualName = readText(row.actual_name, "Actual catalog name");
+  }
+  if (row.opening_label !== undefined) {
+    projection.openingLabel = readText(row.opening_label, "Opening label");
+  }
+  if (row.actual_label !== undefined) {
+    projection.actualLabel = row.actual_label;
+  }
+  if (row.merge_commit_oid !== undefined) {
+    projection.mergeCommitOid = readNullableMergeOid(row.merge_commit_oid);
+    projection.mergedAt = readNullableTimestamp(row.merged_at, "Merge time");
+  }
+  return projection;
+}
+
+/**
+ * Every closure this account was calibrated on, newest merge first, including
+ * the ones with no actual figure: a calibration that recorded nothing is the
+ * one a sponsor most needs to find.
+ */
+export async function listSelfWorkCalibrations(
+  accountId: string,
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<SelfWorkCalibrationProjection[]> {
+  const sql = resolveSql(dependencies);
+  const rows = await sql<SelfWorkCalibrationRow[]>`
+    select
+      self_work_calibrations.id,
+      repositories.owner_name as repository_name,
+      issues.issue_number,
+      issues.title as issue_title,
+      self_work_calibrations.opening_comparison_points,
+      self_work_calibrations.actual_points,
+      pull_requests.merged_at
+    from self_work_calibrations
+    join issues on issues.id = self_work_calibrations.issue_id
+    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where self_work_calibrations.user_id = ${accountId}
+    order by pull_requests.merged_at desc nulls last, self_work_calibrations.id desc
+    limit ${SELF_WORK_CALIBRATION_HISTORY_LIMIT}
+  `;
+  return rows.map((row) => ({
+    id: readText(row.id, "Calibration identifier"),
+    repositoryName: readText(row.repository_name, "Repository name"),
+    issueNumber: readNumber(row.issue_number, "Issue number"),
+    issueTitle: readText(row.issue_title, "Issue title"),
+    openingComparisonPoints: readNumber(row.opening_comparison_points, "Opening comparison points"),
+    actualPoints: row.actual_points === null ? null : readNumber(row.actual_points, "Actual points"),
+    mergedAt: readNullableTimestamp(row.merged_at, "Merge time"),
+  }));
 }
 
 export async function getCalibrationComparison(
