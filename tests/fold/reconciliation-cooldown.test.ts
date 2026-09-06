@@ -7,7 +7,7 @@ import { verifiedRepositoryAt } from "../support/verified-repository";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
-import { sweepReconciliations } from "@/lib/fold/sweep";
+import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
@@ -36,49 +36,61 @@ describe("persisted reconciliation cooldown", () => {
     }
   });
 
-  it("skips a cooled-down repository in a sweep without gateway calls or run rows", async () => {
+  it("defers a cooled-down repository's job without gateway calls or run rows", async () => {
     const fixture = await cooledRepository();
     const { store, repositoryId, github, calls } = fixture;
-    const callbacks: string[] = [];
+    const folded: string[] = [];
     const now = () => new Date("2030-01-02T03:04:05.678Z");
-    const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => [repositoryId],
-      getReconciliationCooldown: (id) => store.getReconciliationCooldown(id),
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
+    const outcome = await runNextReconciliationJob({
+      store,
       now,
+      // Recorded so the assertions below stand on this repository's own job
+      // rather than on whichever job the worker happened to claim.
       reconcile: async (id) => {
-        callbacks.push(id);
+        folded.push(id);
         return reconcileRepository({ store, github, now }, id);
       },
     });
-    expect(callbacks).toEqual([]);
+    expect(folded).toEqual([repositoryId]);
     expect(calls).toEqual([]);
     expect(await runs(repositoryId)).toEqual([]);
-    expect(summary).toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+    expect(outcome).toBe("DEFERRED");
     expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
+    expect(await jobs(repositoryId)).toEqual([
+      { state: "PENDING", attempt_count: 0, run_after: notBefore },
+    ]);
   });
 
   it.each([
-    { offset: -1, attempted: 0, reconciled: 0, skipped: 1, gatewayCalls: [], runRows: [] },
-    { offset: 0, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }] },
-    { offset: 1, attempted: 1, reconciled: 1, skipped: 0, gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }] },
-  ])("checks the sweep expiry boundary at offset $offset ms", async ({ offset, attempted, reconciled, skipped, gatewayCalls, runRows }) => {
+    { offset: -1, outcome: "DEFERRED", gatewayCalls: [], runRows: [], jobRows: [{ state: "PENDING", attempt_count: 0, run_after: notBefore }] },
+    { offset: 0, outcome: "RECONCILED", gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }], jobRows: [] },
+    { offset: 1, outcome: "RECONCILED", gatewayCalls: ["identity", "issues"], runRows: [{ status: "COMPLETED" }], jobRows: [] },
+  ])("checks the worker's expiry boundary at offset $offset ms", async ({ offset, outcome, gatewayCalls, runRows, jobRows }) => {
     const { store, repositoryId, github, calls } = await cooledRepository();
+    const folded: string[] = [];
     const now = () => new Date(notBefore.getTime() + offset);
-    const summary = await sweepReconciliations({
-      listActiveRepositoryIds: async () => [repositoryId],
-      getReconciliationCooldown: (id) => store.getReconciliationCooldown(id),
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
+    const result = await runNextReconciliationJob({
+      store,
       now,
-      reconcile: (id) => reconcileRepository({ store, github, now }, id),
+      reconcile: (id) => {
+        folded.push(id);
+        return reconcileRepository({ store, github, now }, id);
+      },
     });
-    expect(summary).toEqual({ attempted, reconciled, failed: 0, skipped });
+    expect(folded).toEqual([repositoryId]);
+    expect(result).toBe(outcome);
     expect(calls).toEqual(gatewayCalls);
     expect(await runs(repositoryId)).toEqual(runRows);
-    expect(await store.getReconciliationCooldown(repositoryId)).toEqual(skipped === 1 ? notBefore : null);
+    expect(await jobs(repositoryId)).toEqual(jobRows);
+    expect(await store.getReconciliationCooldown(repositoryId)).toEqual(outcome === "DEFERRED" ? notBefore : null);
   });
 
   it("reads a contender's cooldown after acquiring the real repository lock", async () => {
     const { store, repositoryId, github, calls } = await cooledRepository();
     await store.setReconciliationCooldown(repositoryId, null);
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
     const ownerAcquired = signal();
     const releaseOwner = signal();
     const contenderBlocked = signal();
@@ -98,39 +110,42 @@ describe("persisted reconciliation cooldown", () => {
       ownerAcquired.resolve();
       await releaseOwner.promise;
     });
-    const prechecks: Array<Date | null> = [];
+    const folded: string[] = [];
     const now = () => new Date("2030-01-02T03:04:05.678Z");
-    let sweep: ReturnType<typeof sweepReconciliations> | undefined;
+    let contender: ReturnType<typeof runNextReconciliationJob> | undefined;
     try {
       await Promise.race([ownerAcquired.promise, owner]);
-      sweep = sweepReconciliations({
-        listActiveRepositoryIds: async () => [repositoryId],
-        getReconciliationCooldown: async (id) => {
-          const value = await store.getReconciliationCooldown(id);
-          prechecks.push(value);
-          return value;
-        },
+      contender = runNextReconciliationJob({
+        store,
         now,
-        reconcile: (id) => reconcileRepository({ store: contenderStore, github, now }, id),
+        reconcile: (id) => {
+          folded.push(id);
+          return reconcileRepository({ store: contenderStore, github, now }, id);
+        },
       });
       await Promise.race([
         contenderBlocked.promise,
-        sweep.then(() => { throw new Error("Contender completed without waiting for the owner lock."); }),
+        contender.then(() => { throw new Error("Contender completed without waiting for the owner lock."); }),
       ]);
-      expect(prechecks).toEqual([null]);
+      // The job was claimed and the fold entered before any cooldown existed, so
+      // only a read taken under the lock can see the one set below.
+      expect(folded).toEqual([repositoryId]);
       expect(calls).toEqual([]);
       expect(await runs(repositoryId)).toEqual([]);
       await store.setReconciliationCooldown(repositoryId, notBefore);
       releaseOwner.resolve();
       await owner;
-      const summary = await sweep;
+      const outcome = await contender;
       expect(calls).toEqual([]);
       expect(await runs(repositoryId)).toEqual([]);
       expect(await store.getReconciliationCooldown(repositoryId)).toEqual(notBefore);
-      expect(summary).toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+      expect(outcome).toBe("DEFERRED");
+      expect(await jobs(repositoryId)).toEqual([
+        { state: "PENDING", attempt_count: 0, run_after: notBefore },
+      ]);
     } finally {
       releaseOwner.resolve();
-      await Promise.allSettled([owner, sweep]);
+      await Promise.allSettled([owner, contender]);
       await contenderSql.end();
     }
   });
@@ -164,6 +179,13 @@ function signal() {
 
 async function runs(repositoryId: string) {
   return sql`select status from reconciliation_runs where repository_id = ${repositoryId}`;
+}
+
+async function jobs(repositoryId: string) {
+  return sql`
+    select state, attempt_count, run_after
+    from repository_reconciliation_jobs where repository_id = ${repositoryId}
+  `;
 }
 
 async function cooledRepository() {

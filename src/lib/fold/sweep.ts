@@ -1,10 +1,8 @@
 export type ReconciliationSweepDependencies = {
   listActiveRepositoryIds(): Promise<string[]>;
-  getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
-  reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
-  now?: () => Date;
+  enqueue(repositoryId: string): Promise<unknown>;
   /**
-   * Reports one repository this sweep could not reconcile, as distinct from the
+   * Reports one repository this sweep could not queue, as distinct from the
    * whole-sweep `onSweepFailure` on the schedule. A hook that fails costs
    * neither the sweep nor the report, whichever way it fails: reading the member
    * can throw, since it may be an accessor wired lazily; the call can throw; and
@@ -24,12 +22,10 @@ export type ReconciliationSweepDependencies = {
 };
 
 export type ReconciliationSweepSummary = {
-  /** Repositories reconciled or failed during this sweep; excludes cooldown skips. */
+  /** Repositories the sweep offered to the queue, enqueued or failed. */
   attempted: number;
-  reconciled: number;
+  enqueued: number;
   failed: number;
-  /** Repositories deferred by cooldown, at the precheck or after acquiring the repository lock. */
-  skipped: number;
 };
 
 export type ReconciliationSweepSchedule = {
@@ -75,13 +71,19 @@ export type ReconciliationSweepSchedule = {
 export const RECONCILIATION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Whether this process should run the sweep at all.
+ * Whether this process should run the reconciliation background work at all —
+ * both the queue worker and the sweep that feeds it.
  *
- * The sweep talks to GitHub and to PostgreSQL, so it belongs only to a running
- * Node.js server: the edge runtime cannot reach either, and a production build
- * imports the instrumentation hook without being a server at all.
+ * They talk to PostgreSQL and, through the fold, to GitHub, so they belong only
+ * to a running Node.js server: the edge runtime cannot reach either, and a
+ * production build imports the instrumentation hook without being a server at
+ * all.
+ *
+ * The environment variable keeps the name deployments already set, so turning
+ * the sweep off has never needed a configuration change — it now turns off the
+ * worker with it, which is the whole of reconciliation.
  */
-export function shouldStartReconciliationSweep(
+export function shouldStartReconciliationBackground(
   environment: Partial<Record<string, string>>,
 ): boolean {
   if (environment.NEXT_RUNTIME !== "nodejs") {
@@ -94,47 +96,36 @@ export function shouldStartReconciliationSweep(
 }
 
 /**
- * Reconciles every active repository, one at a time.
+ * Offers every active repository to the reconciliation queue, one at a time.
  *
- * Serial by design: a sweep is the one place that would otherwise fan out
- * across every registered repository at once, claiming the whole bounded
- * coordination allowance and spending every repository's GitHub budget in the
- * same moment.
+ * The sweep enqueues unconditionally rather than deciding which repositories
+ * are worth reconciling. The enqueue is an upsert on one row per repository, so
+ * a repository already queued keeps its place and its backoff, and one whose
+ * retries were exhausted is revived — which is exactly the repair this sweep
+ * exists to perform. Whether the fold should actually run is the worker's
+ * decision, taken against the cooldown at the moment it folds.
  *
  * A repository that fails is counted and skipped rather than aborting the
- * sweep, so one unreachable repository cannot stop every other one from
- * catching up.
+ * sweep, so one bad row cannot stop every other repository being queued.
  */
 export async function sweepReconciliations(
   dependencies: ReconciliationSweepDependencies,
 ): Promise<ReconciliationSweepSummary> {
   const repositoryIds = await dependencies.listActiveRepositoryIds();
-  let reconciled = 0;
+  let enqueued = 0;
   let failed = 0;
-  let skipped = 0;
-  const now = dependencies.now ?? (() => new Date());
 
   for (const repositoryId of repositoryIds) {
     try {
-      const notBefore = await dependencies.getReconciliationCooldown(repositoryId);
-      if (notBefore !== null && notBefore.getTime() > now().getTime()) {
-        skipped += 1;
-        continue;
-      }
-      const result = await dependencies.reconcile(repositoryId);
-      // Another delivery can set a cooldown between the precheck and acquiring the lock.
-      if (result?.skipped) {
-        skipped += 1;
-        continue;
-      }
-      reconciled += 1;
+      await dependencies.enqueue(repositoryId);
+      enqueued += 1;
     } catch (error) {
       failed += 1;
       reportRepositoryFailure(dependencies, repositoryId, error);
     }
   }
 
-  return { attempted: reconciled + failed, reconciled, failed, skipped };
+  return { attempted: enqueued + failed, enqueued, failed };
 }
 
 /**
@@ -147,7 +138,7 @@ export async function sweepReconciliations(
  * Costing the sweep is what is specific here. The counters are already settled
  * when this is reached, so they are untouched either way; what a throw used to
  * cost was every repository still queued behind the failing one, since it
- * propagated out of the loop and left them unreconciled. A diagnostic must not
+ * propagated out of the loop and left them unqueued. A diagnostic must not
  * be able to do that.
  *
  * Settling the hook rather than awaiting it counts for more here than it does at
@@ -200,9 +191,9 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
 /**
  * Runs a sweep now and then on a fixed interval.
  *
- * The immediate sweep is what brings a repository registered before ingestion
- * existed into agreement with GitHub, and it also repairs any webhook delivery
- * that was missed while the server was down.
+ * The immediate sweep is what queues a repository registered before ingestion
+ * existed, and it also repairs any webhook delivery that was missed while the
+ * server was down.
  *
  * A tick that arrives while the previous sweep is still running is dropped, not
  * queued: sweeps are idempotent, so a slow one only needs to finish, never to

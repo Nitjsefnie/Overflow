@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   RECONCILIATION_SWEEP_INTERVAL_MS,
-  shouldStartReconciliationSweep,
+  shouldStartReconciliationBackground,
   startReconciliationSweep,
   sweepReconciliations,
   type ReconciliationSweepDependencies,
@@ -21,82 +21,70 @@ const DEFAULTED_INTERVAL_MESSAGE =
   "Reconciliation sweep interval could not be read; the recurring tick is armed at the default interval instead";
 
 describe("scheduled reconciliation sweep", () => {
-  it("counts reconciled, failed, and cooling repositories in one summary", async () => {
-    const attempted: string[] = [];
-    const failures: string[] = [];
-    const now = () => new Date("2030-01-02T03:04:05.678Z");
-    await expect(sweepReconciliations({
-      listActiveRepositoryIds: async () => ["ready", "cooling", "broken"],
-      getReconciliationCooldown: async (id) => id === "cooling" ? new Date("2030-01-02T04:04:05.678Z") : null,
-      now,
-      reconcile: async (id) => {
-        attempted.push(id);
-        if (id === "broken") {
-          throw new Error("Reconciliation failed");
-        }
-      },
-      onFailure: (id) => { failures.push(id); },
-    })).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 1 });
-    expect(attempted).toEqual(["ready", "broken"]);
-    expect(failures).toEqual(["broken"]);
-  });
-
-  it("counts a cooldown discovered under the repository lock as skipped", async () => {
-    await expect(sweepReconciliations({
-      listActiveRepositoryIds: async () => ["repo-a"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async () => ({ skipped: true }),
-    })).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
-  });
-
-  it("reconciles every active repository", async () => {
-    const reconciled: string[] = [];
+  it("enqueues every active repository", async () => {
+    const enqueued: string[] = [];
 
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
-        getReconciliationCooldown: async () => null,
-        reconcile: async (repositoryId) => {
-          reconciled.push(repositoryId);
+        enqueue: async (repositoryId) => {
+          enqueued.push(repositoryId);
         },
       }),
-    ).resolves.toEqual({ attempted: 3, reconciled: 3, failed: 0, skipped: 0 });
+    ).resolves.toEqual({ attempted: 3, enqueued: 3, failed: 0 });
 
-    expect(reconciled).toEqual(["repo-a", "repo-b", "repo-c"]);
+    expect(enqueued).toEqual(["repo-a", "repo-b", "repo-c"]);
   });
 
-  it("continues the sweep when one repository fails", async () => {
-    const reconciled: string[] = [];
-    const failures: string[] = [];
+  it("enqueues a repository without asking whether it is worth enqueuing", async () => {
+    // The enqueue is an upsert on one row per repository, so a repository that
+    // is already queued, cooling down, or exhausted its retries is offered
+    // again unconditionally; that is what makes the sweep the repair path.
+    const enqueued: string[] = [];
+
+    await expect(
+      sweepReconciliations({
+        listActiveRepositoryIds: async () => ["cooling", "failed", "queued"],
+        enqueue: async (repositoryId) => {
+          enqueued.push(repositoryId);
+        },
+      }),
+    ).resolves.toEqual({ attempted: 3, enqueued: 3, failed: 0 });
+
+    expect(enqueued).toEqual(["cooling", "failed", "queued"]);
+  });
+
+  it("continues the sweep when one repository fails to enqueue", async () => {
+    const enqueued: string[] = [];
+    const failures: { repositoryId: string; error: unknown }[] = [];
+    const failure = new Error("PostgreSQL is unreachable");
 
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
-        getReconciliationCooldown: async () => null,
-        reconcile: async (repositoryId) => {
+        enqueue: async (repositoryId) => {
           if (repositoryId === "repo-b") {
-            throw new Error("GitHub reconciliation failed");
+            throw failure;
           }
-          reconciled.push(repositoryId);
+          enqueued.push(repositoryId);
         },
-        onFailure: (repositoryId) => {
-          failures.push(repositoryId);
+        onFailure: (repositoryId, error) => {
+          failures.push({ repositoryId, error });
         },
       }),
-    ).resolves.toEqual({ attempted: 3, reconciled: 2, failed: 1, skipped: 0 });
+    ).resolves.toEqual({ attempted: 3, enqueued: 2, failed: 1 });
 
-    expect(reconciled).toEqual(["repo-a", "repo-c"]);
-    expect(failures).toEqual(["repo-b"]);
+    expect(enqueued).toEqual(["repo-a", "repo-c"]);
+    expect(failures).toEqual([{ repositoryId: "repo-b", error: failure }]);
   });
 
-  it("reconciles one repository at a time", async () => {
+  it("enqueues one repository at a time", async () => {
     let inFlight = 0;
     let peak = 0;
 
     await sweepReconciliations({
       listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async () => {
+      enqueue: async () => {
         inFlight += 1;
         peak = Math.max(peak, inFlight);
         await Promise.resolve();
@@ -111,12 +99,11 @@ describe("scheduled reconciliation sweep", () => {
     await expect(
       sweepReconciliations({
         listActiveRepositoryIds: async () => [],
-        getReconciliationCooldown: async () => null,
-        reconcile: async () => {
-          throw new Error("should not be reconciled");
+        enqueue: async () => {
+          throw new Error("should not be enqueued");
         },
       }),
-    ).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 0 });
+    ).resolves.toEqual({ attempted: 0, enqueued: 0, failed: 0 });
   });
 
   it("sweeps once on start and again on every interval", async () => {
@@ -544,23 +531,23 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("starts only in the Node.js server runtime", () => {
-    expect(shouldStartReconciliationSweep({ NEXT_RUNTIME: "nodejs" })).toBe(true);
-    expect(shouldStartReconciliationSweep({ NEXT_RUNTIME: "edge" })).toBe(false);
-    expect(shouldStartReconciliationSweep({})).toBe(false);
+    expect(shouldStartReconciliationBackground({ NEXT_RUNTIME: "nodejs" })).toBe(true);
+    expect(shouldStartReconciliationBackground({ NEXT_RUNTIME: "edge" })).toBe(false);
+    expect(shouldStartReconciliationBackground({})).toBe(false);
   });
 
   it("does not start during a production build", () => {
     expect(
-      shouldStartReconciliationSweep({
+      shouldStartReconciliationBackground({
         NEXT_RUNTIME: "nodejs",
         NEXT_PHASE: "phase-production-build",
       }),
     ).toBe(false);
   });
 
-  it("can be turned off explicitly", () => {
+  it("can be turned off explicitly, under the variable deployments already set", () => {
     expect(
-      shouldStartReconciliationSweep({
+      shouldStartReconciliationBackground({
         NEXT_RUNTIME: "nodejs",
         OVERFLOW_DISABLE_RECONCILIATION_SWEEP: "1",
       }),
@@ -568,7 +555,7 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("costs neither the sweep nor the report when a repository hook rejects", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+    const unqueued = new Error("Queueing the repository failed");
     const unhandled: unknown[] = [];
     // The hook's rejection settles one of two ways — contained and reported, or
     // escaped to Node — and either resolves the wait below.
@@ -587,9 +574,8 @@ describe("scheduled reconciliation sweep", () => {
       await expect(
         sweepReconciliations({
           listActiveRepositoryIds: async () => ["repo-a"],
-          getReconciliationCooldown: async () => null,
-          reconcile: async () => {
-            throw unreconciled;
+          enqueue: async () => {
+            throw unqueued;
           },
           // The ordinary shape of a reporter that ships the failure somewhere:
           // async, and able to reject. A `try` around the call cannot see that
@@ -599,7 +585,7 @@ describe("scheduled reconciliation sweep", () => {
             throw new Error("Shipping the report failed");
           },
         }),
-      ).resolves.toEqual({ attempted: 1, reconciled: 0, failed: 1, skipped: 0 });
+      ).resolves.toEqual({ attempted: 1, enqueued: 0, failed: 1 });
 
       expect(reports).toEqual(["repo-a"]);
       // The sweep returns before the hook has settled, so wait on the settlement
@@ -611,7 +597,7 @@ describe("scheduled reconciliation sweep", () => {
       await drain();
       expect(unhandled).toEqual([]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unreconciled],
+        ["Reconciliation failed for repository", "repo-a", unqueued],
       ]);
     } finally {
       logged.mockRestore();
@@ -619,33 +605,32 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
-  it("reconciles every repository after one whose failure hook throws", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+  it("enqueues every repository after one whose failure hook throws", async () => {
+    const unqueued = new Error("Queueing the repository failed");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    const reconciled: string[] = [];
+    const enqueued: string[] = [];
 
     try {
       await expect(
         sweepReconciliations({
           listActiveRepositoryIds: async () => ["repo-a", "broken", "repo-b", "repo-c"],
-          getReconciliationCooldown: async () => null,
-          reconcile: async (repositoryId) => {
+          enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
-              throw unreconciled;
+              throw unqueued;
             }
-            reconciled.push(repositoryId);
+            enqueued.push(repositoryId);
           },
           onFailure: () => {
             throw new Error("The failure hook itself failed");
           },
         }),
-      ).resolves.toEqual({ attempted: 4, reconciled: 3, failed: 1, skipped: 0 });
+      ).resolves.toEqual({ attempted: 4, enqueued: 3, failed: 1 });
 
       // One repository's failing reporter must not cost every later repository
-      // its reconciliation.
-      expect(reconciled).toEqual(["repo-a", "repo-b", "repo-c"]);
+      // its place in the queue.
+      expect(enqueued).toEqual(["repo-a", "repo-b", "repo-c"]);
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "broken", unreconciled],
+        ["Reconciliation failed for repository", "broken", unqueued],
       ]);
     } finally {
       logged.mockRestore();
@@ -654,19 +639,18 @@ describe("scheduled reconciliation sweep", () => {
 
   it("sweeps the next repository without waiting for the failure hook", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    const reconciled: string[] = [];
+    const enqueued: string[] = [];
     let reports = 0;
 
     try {
       await expect(
         sweepReconciliations({
           listActiveRepositoryIds: async () => ["broken", "repo-b"],
-          getReconciliationCooldown: async () => null,
-          reconcile: async (repositoryId) => {
+          enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
-              throw new Error("GitHub reconciliation failed");
+              throw new Error("Queueing the repository failed");
             }
-            reconciled.push(repositoryId);
+            enqueued.push(repositoryId);
           },
           // A reporter that never settles — a collector that accepted the
           // connection and then went quiet. The sweep is serial, so an awaited
@@ -679,10 +663,10 @@ describe("scheduled reconciliation sweep", () => {
             return new Promise<void>(() => {});
           },
         }),
-      ).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 0 });
+      ).resolves.toEqual({ attempted: 2, enqueued: 1, failed: 1 });
 
       expect(reports).toBe(1);
-      expect(reconciled).toEqual(["repo-b"]);
+      expect(enqueued).toEqual(["repo-b"]);
       // The hook neither threw nor rejected, so nothing falls back to the console.
       expect(logged).not.toHaveBeenCalled();
     } finally {
@@ -692,17 +676,13 @@ describe("scheduled reconciliation sweep", () => {
 
   it("counts a sweep the same whether the failure hook fails or is absent", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    // One of each outcome the summary distinguishes, so a hook that fails has
-    // every counter to disturb and disturbs none of them.
+    // Both outcomes the summary distinguishes, so a hook that fails has every
+    // counter to disturb and disturbs none of them.
     const dependencies = () => ({
-      listActiveRepositoryIds: async () => ["ready", "cooling", "broken", "also-broken"],
-      getReconciliationCooldown: async (repositoryId: string) => (
-        repositoryId === "cooling" ? new Date("2030-01-02T04:04:05.678Z") : null
-      ),
-      now: () => new Date("2030-01-02T03:04:05.678Z"),
-      reconcile: async (repositoryId: string) => {
+      listActiveRepositoryIds: async () => ["ready", "also-ready", "broken", "also-broken"],
+      enqueue: async (repositoryId: string) => {
         if (repositoryId.endsWith("broken")) {
-          throw new Error("GitHub reconciliation failed");
+          throw new Error("Queueing the repository failed");
         }
       },
     });
@@ -716,7 +696,7 @@ describe("scheduled reconciliation sweep", () => {
         },
       });
 
-      expect(withoutHook).toEqual({ attempted: 3, reconciled: 1, failed: 2, skipped: 1 });
+      expect(withoutHook).toEqual({ attempted: 4, enqueued: 2, failed: 2 });
       expect(withFailingHook).toEqual(withoutHook);
     } finally {
       logged.mockRestore();
@@ -724,15 +704,14 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("treats a repository hook whose retrieval throws as no hook at all", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+    const unqueued = new Error("Queueing the repository failed");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // A lazily wired reporter: the accessor throws until its collector is
     // configured, and reading the member is the first thing the sweep does.
     const dependencies = {
       listActiveRepositoryIds: async () => ["repo-a"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async () => {
-        throw unreconciled;
+      enqueue: async () => {
+        throw unqueued;
       },
       get onFailure(): (repositoryId: string, error: unknown) => void {
         throw new Error("The reporter is not wired up yet");
@@ -741,10 +720,10 @@ describe("scheduled reconciliation sweep", () => {
 
     try {
       await expect(sweepReconciliations(dependencies)).resolves.toEqual({
-        attempted: 1, reconciled: 0, failed: 1, skipped: 0,
+        attempted: 1, enqueued: 0, failed: 1,
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unreconciled],
+        ["Reconciliation failed for repository", "repo-a", unqueued],
       ]);
     } finally {
       logged.mockRestore();
@@ -752,7 +731,7 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("calls a method-form repository hook with its receiver intact", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+    const unqueued = new Error("Queueing the repository failed");
     // Nothing should reach the console here, but a hook called without its
     // receiver throws and falls back to it, so the spy keeps that out of the
     // run output and gives the failure a second thing to say.
@@ -763,9 +742,8 @@ describe("scheduled reconciliation sweep", () => {
     const dependencies = {
       failures: [] as Array<{ repositoryId: string; error: unknown }>,
       listActiveRepositoryIds: async () => ["repo-a"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async () => {
-        throw unreconciled;
+      enqueue: async () => {
+        throw unqueued;
       },
       onFailure(repositoryId: string, error: unknown) {
         this.failures.push({ repositoryId, error });
@@ -774,9 +752,9 @@ describe("scheduled reconciliation sweep", () => {
 
     try {
       await expect(sweepReconciliations(dependencies)).resolves.toEqual({
-        attempted: 1, reconciled: 0, failed: 1, skipped: 0,
+        attempted: 1, enqueued: 0, failed: 1,
       });
-      expect(dependencies.failures).toEqual([{ repositoryId: "repo-a", error: unreconciled }]);
+      expect(dependencies.failures).toEqual([{ repositoryId: "repo-a", error: unqueued }]);
       expect(logged).not.toHaveBeenCalled();
     } finally {
       logged.mockRestore();
@@ -790,10 +768,9 @@ describe("scheduled reconciliation sweep", () => {
     // read per repository failure, not one per use of the value.
     const dependencies = {
       listActiveRepositoryIds: async () => ["repo-a", "repo-b", "repo-c"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async (repositoryId: string) => {
+      enqueue: async (repositoryId: string) => {
         if (repositoryId !== "repo-b") {
-          throw new Error("GitHub reconciliation failed");
+          throw new Error("Queueing the repository failed");
         }
       },
       get onFailure(): (repositoryId: string, error: unknown) => void {
@@ -805,32 +782,31 @@ describe("scheduled reconciliation sweep", () => {
     };
 
     await expect(sweepReconciliations(dependencies)).resolves.toEqual({
-      attempted: 3, reconciled: 1, failed: 2, skipped: 0,
+      attempted: 3, enqueued: 1, failed: 2,
     });
     expect(failures).toEqual(["repo-a", "repo-c"]);
     expect(reads).toBe(2);
   });
 
   it("reports on the console when the repository failure hook is null", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+    const unqueued = new Error("Queueing the repository failed");
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // An untyped caller — a config object, parsed JSON, a JavaScript consumer —
     // can hand over null where the optional member expresses only undefined.
     const dependencies = {
       listActiveRepositoryIds: async () => ["repo-a"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async () => {
-        throw unreconciled;
+      enqueue: async () => {
+        throw unqueued;
       },
       onFailure: null,
     } as unknown as ReconciliationSweepDependencies;
 
     try {
       await expect(sweepReconciliations(dependencies)).resolves.toEqual({
-        attempted: 1, reconciled: 0, failed: 1, skipped: 0,
+        attempted: 1, enqueued: 0, failed: 1,
       });
       expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", unreconciled],
+        ["Reconciliation failed for repository", "repo-a", unqueued],
       ]);
     } finally {
       logged.mockRestore();
@@ -838,7 +814,7 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("still reports a repository failure whose reason cannot be printed", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
+    const unqueued = new Error("Queueing the repository failed");
     const message = "Reconciliation failed for repository";
     const calls: unknown[][] = [];
     // Printing the reason is what fails here — a custom inspector that throws, a
@@ -855,15 +831,14 @@ describe("scheduled reconciliation sweep", () => {
       await expect(
         sweepReconciliations({
           listActiveRepositoryIds: async () => ["repo-a"],
-          getReconciliationCooldown: async () => null,
-          reconcile: async () => {
-            throw unreconciled;
+          enqueue: async () => {
+            throw unqueued;
           },
         }),
-      ).resolves.toEqual({ attempted: 1, reconciled: 0, failed: 1, skipped: 0 });
+      ).resolves.toEqual({ attempted: 1, enqueued: 0, failed: 1 });
 
       // The reason is what could not be printed, so the line survives without it.
-      expect(calls).toEqual([[message, "repo-a", unreconciled], [message, "repo-a"]]);
+      expect(calls).toEqual([[message, "repo-a", unqueued], [message, "repo-a"]]);
     } finally {
       logged.mockRestore();
     }
@@ -875,25 +850,24 @@ describe("scheduled reconciliation sweep", () => {
     // with no way to report anything at all must not carry on silently. What it
     // costs is every repository behind the failing one, and the two paths driven
     // here — no hook, and a hook that throws — each pay it.
-    const reconciled: string[] = [];
+    const enqueued: string[] = [];
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       throw new TypeError("The console cannot report at all");
     });
     const dependencies = () => ({
       listActiveRepositoryIds: async () => ["broken", "repo-b", "repo-c"],
-      getReconciliationCooldown: async () => null,
-      reconcile: async (repositoryId: string) => {
+      enqueue: async (repositoryId: string) => {
         if (repositoryId === "broken") {
-          throw new Error("GitHub reconciliation failed");
+          throw new Error("Queueing the repository failed");
         }
-        reconciled.push(repositoryId);
+        enqueued.push(repositoryId);
       },
     });
 
     try {
       // No hook at all, which is the path a caller that reports nowhere takes.
       await expect(sweepReconciliations(dependencies())).rejects.toBeInstanceOf(TypeError);
-      expect(reconciled).toEqual([]);
+      expect(enqueued).toEqual([]);
 
       // A hook that throws reaches the same line from the same place.
       await expect(
@@ -904,15 +878,15 @@ describe("scheduled reconciliation sweep", () => {
           },
         }),
       ).rejects.toBeInstanceOf(TypeError);
-      expect(reconciled).toEqual([]);
+      expect(enqueued).toEqual([]);
     } finally {
       logged.mockRestore();
     }
   });
 
   it("finishes the sweep when a rejecting hook meets a console that cannot report", async () => {
-    const unreconciled = new Error("GitHub reconciliation failed");
-    const reconciled: string[] = [];
+    const unqueued = new Error("Queueing the repository failed");
+    const enqueued: string[] = [];
     // The same broken console, reached from a handler the loop is no longer
     // inside: there is nothing left to abort, so the throw escapes to Node
     // instead and the sweep runs to its end. The listener resolves the wait
@@ -932,22 +906,21 @@ describe("scheduled reconciliation sweep", () => {
       await expect(
         sweepReconciliations({
           listActiveRepositoryIds: async () => ["broken", "repo-b"],
-          getReconciliationCooldown: async () => null,
-          reconcile: async (repositoryId) => {
+          enqueue: async (repositoryId) => {
             if (repositoryId === "broken") {
-              throw unreconciled;
+              throw unqueued;
             }
-            reconciled.push(repositoryId);
+            enqueued.push(repositoryId);
           },
           onFailure: async () => {
             throw new Error("Shipping the report failed");
           },
         }),
-      ).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 0 });
+      ).resolves.toEqual({ attempted: 2, enqueued: 1, failed: 1 });
 
-      // The repository behind the failing one is reconciled, which is the whole
+      // The repository behind the failing one is enqueued, which is the whole
       // difference between this path and the synchronous one above.
-      expect(reconciled).toEqual(["repo-b"]);
+      expect(enqueued).toEqual(["repo-b"]);
       await escaped.promise;
       // One drain is already enough for Node to report a rejection it is going
       // to report; the second only widens the window a second one had to arrive in.
