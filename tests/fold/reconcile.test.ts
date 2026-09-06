@@ -318,13 +318,18 @@ describe("reconcileRepository", () => {
 
     await reconcileRepository(dependencies, "repository");
 
-    expect(calls).toEqual([
+    // Soft, so a run that skips the fetch still reports what it did to the proof.
+    expect.soft(calls).toEqual([
       { operation: "reviews", number: 11 },
       { operation: "diff", number: 11 },
     ]);
     const fold = materialize.mock.calls[0]![0].fold as FoldResult;
     expect(fold.unwritableClosures).toEqual([]);
     expect(fold.settlements.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
+    // The harm of reconciliation and the fold disagreeing is not a missing
+    // settlement, it is this: a settlement proved by the empty diff nobody read.
+    expect(fold.settlements[0]!.proofSha256).toBe(createHash("sha256").update("diff 11").digest("hex"));
+    expect(fold.settlements[0]!.proofSha256).not.toBe(createHash("sha256").update("").digest("hex"));
   });
 
   it("never reads evidence for a different repository under the registered owner", async () => {
