@@ -7,7 +7,7 @@ import { GitHubGateway } from "@/lib/github/client";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
-import { sweepReconciliations } from "@/lib/fold/sweep";
+import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -161,20 +161,28 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
 
       const callsAfterFailure = calls.length;
       const retry = () => reconcile(fixture.repositoryId);
-      const sweep = () => sweepReconciliations({
-        listActiveRepositoryIds: () => store.listActiveRepositoryIds(),
-        getReconciliationCooldown: (id) => store.getReconciliationCooldown(id), reconcile, now: () => instant,
-      });
+      // The queued job is the sweep's only vehicle now, so the cooldown decision
+      // is the worker's; `folded` proves the worker claimed this repository's job
+      // and not some other one left over in the queue.
+      const workQueuedJob = async () => {
+        await store.enqueueReconciliationJob(fixture.repositoryId, "SWEEP");
+        const folded: string[] = [];
+        const outcome = await runNextReconciliationJob({
+          store, now: () => instant,
+          reconcile: (repositoryId) => { folded.push(repositoryId); return reconcile(repositoryId); },
+        });
+        return { outcome, folded };
+      };
       if (failure.seconds !== null) {
         await expect(retry()).resolves.toMatchObject({ skipped: true });
-        await expect(sweep()).resolves.toEqual({ attempted: 0, reconciled: 0, failed: 0, skipped: 1 });
+        await expect(workQueuedJob()).resolves.toEqual({ outcome: "DEFERRED", folded: [fixture.repositoryId] });
         expect(calls).toHaveLength(callsAfterFailure);
         expect(await failedRuns(fixture.repositoryId, baseline.runId!)).toEqual([
           { status: "FAILED", error_message: "Reconciliation failed." },
         ]);
       } else {
         await expect(retry()).rejects.toThrow("Unable to reconcile repository.");
-        await expect(sweep()).resolves.toEqual({ attempted: 1, reconciled: 0, failed: 1, skipped: 0 });
+        await expect(workQueuedJob()).resolves.toEqual({ outcome: "RETRY_SCHEDULED", folded: [fixture.repositoryId] });
         expect(calls.length).toBeGreaterThan(callsAfterFailure);
         expect(await failedRuns(fixture.repositoryId, baseline.runId!)).toEqual(Array.from({ length: 3 }, () => (
           { status: "FAILED", error_message: "Reconciliation failed." }

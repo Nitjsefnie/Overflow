@@ -1,12 +1,16 @@
 import {
-  shouldStartReconciliationSweep,
+  drainReconciliationJobs,
+  startReconciliationWorker,
+} from "@/lib/fold/reconciliation-worker";
+import {
+  shouldStartReconciliationBackground,
   startReconciliationSweep,
   sweepReconciliations,
 } from "@/lib/fold/sweep";
 
 // Next.js calls this once when the server starts.
 export async function register(): Promise<void> {
-  if (!shouldStartReconciliationSweep(process.env)) {
+  if (!shouldStartReconciliationBackground(process.env)) {
     return;
   }
 
@@ -14,16 +18,12 @@ export async function register(): Promise<void> {
   const { reconcileRepository } = await import("@/lib/fold/reconcile");
   const { GitHubGateway } = await import("@/lib/github/client");
 
-  startReconciliationSweep({
-    runSweep: () =>
-      sweepReconciliations({
-        listActiveRepositoryIds: async () => {
-          const store = new PostgresFoldStore();
-          return store.listActiveRepositoryIds();
-        },
-        getReconciliationCooldown: (repositoryId) => new PostgresFoldStore().getReconciliationCooldown(repositoryId),
+  startReconciliationWorker({
+    drain: () =>
+      drainReconciliationJobs({
+        store: new PostgresFoldStore(),
         // Each repository is read with its own sponsor's token, the same way the
-        // webhook route reads it — a sweep has no actor of its own.
+        // webhook route reads it — the worker has no actor of its own.
         reconcile: async (repositoryId) => {
           const store = new PostgresFoldStore();
           const repository = await store.getRepository(repositoryId);
@@ -40,8 +40,28 @@ export async function register(): Promise<void> {
           );
         },
         onFailure: (repositoryId, error) => {
-          // One unreachable repository must not silently stall the sweep for the
-          // rest, so the failure is reported and the sweep moves on.
+          // The job carries its own retry, so this is the operator's only view of
+          // a repository that keeps failing to fold.
+          console.error(`Reconciliation failed for repository ${repositoryId}`, error);
+        },
+      }),
+    onFailure: (error) => {
+      console.error("Reconciliation worker could not drain the job queue", error);
+    },
+  });
+
+  startReconciliationSweep({
+    runSweep: () =>
+      sweepReconciliations({
+        listActiveRepositoryIds: async () => {
+          const store = new PostgresFoldStore();
+          return store.listActiveRepositoryIds();
+        },
+        enqueue: (repositoryId) =>
+          new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "SWEEP"),
+        onFailure: (repositoryId, error) => {
+          // One repository that cannot be queued must not silently stall the
+          // sweep for the rest, so the failure is reported and the sweep moves on.
           console.error(`Reconciliation sweep failed for repository ${repositoryId}`, error);
         },
       }),
