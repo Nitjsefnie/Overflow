@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { startPostgresContainer } from "../support/postgres-container";
-import { closeSql, getSql } from "@/lib/db/client";
+import { closeSql, getCoordinationSql, getSql } from "@/lib/db/client";
 
 const database = "overflow_closesql_shutdown_test";
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -25,11 +25,11 @@ let databaseUrl: string;
  * the shutdown is registered while a query is still on the wire, and the backend running that
  * query dies afterwards.
  *
- * `end()` cannot take its fast path with a query in flight, so it hands back a promise whose
- * only resolver runs on a `ReadyForQuery` — a message a backend that has been killed never
- * sends. `scripts/reconcile.ts` awaits `closeSql()` in a `finally`, so a shutdown left in that
- * state is indistinguishable from work still in progress: the process never exits and nothing
- * is logged.
+ * In the unpatched, timeout-free shutdown driven here, `end()` takes its slow path while the
+ * query is in flight. The backend then dies without sending the `ReadyForQuery` that would
+ * reach `terminate()` and resolve that pending shutdown; the socket's close path does not
+ * resolve it. The patch settles it directly in `closed()`. `scripts/reconcile.ts` awaits
+ * `closeSql()` in a `finally`, so leaving that shutdown pending prevents the script from exiting.
  *
  * No wall-clock margin is asserted anywhere here, and nothing is ordered by sleeping. Each step
  * is sequenced behind an observable event — a completed round trip, a row in `pg_stat_activity`
@@ -53,8 +53,11 @@ describe("closing the shared clients before the backend of an in-flight query di
     }
   });
 
-  it("settles even though the shutdown was registered before the connection lost its backend", async () => {
-    const sql = getSql();
+  it.each([
+    { pool: "work", getClient: getSql },
+    { pool: "coordination", getClient: getCoordinationSql },
+  ])("waits for the $pool client when shutdown precedes backend death", async ({ getClient }) => {
+    const sql = getClient();
 
     // A control query, so the pool is known to hold one live connection before it is shut down.
     await expect(sql`select 1 as value`).resolves.toEqual([{ value: 1 }]);
@@ -127,6 +130,8 @@ describe("closing the shared clients before the backend of an in-flight query di
       // ahead of it.
       await expect(observer`select 1 as value`).resolves.toEqual([{ value: 1 }]);
 
+      expect(observed).toEqual([]);
+
       // `pg_terminate_backend` reports whether it signalled the process. A false here would mean
       // nothing was killed and the assertion below would pass for the wrong reason.
       await expect(observer`select pg_terminate_backend(${backendPid}) as terminated`).resolves.toEqual([
@@ -147,5 +152,5 @@ describe("closing the shared clients before the backend of an in-flight query di
     } finally {
       await observer.end({ timeout: cleanupTimeoutSeconds });
     }
-  });
+  }, 120_000);
 });
