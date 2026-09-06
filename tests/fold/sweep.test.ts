@@ -656,6 +656,44 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("sweeps the next repository without waiting for the failure hook", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const reconciled: string[] = [];
+    let reports = 0;
+
+    try {
+      await expect(
+        sweepReconciliations({
+          listActiveRepositoryIds: async () => ["broken", "repo-b"],
+          getReconciliationCooldown: async () => null,
+          reconcile: async (repositoryId) => {
+            if (repositoryId === "broken") {
+              throw new Error("GitHub reconciliation failed");
+            }
+            reconciled.push(repositoryId);
+          },
+          // A reporter that never settles — a collector that accepted the
+          // connection and then went quiet. The sweep is serial, so an awaited
+          // hook would hold every later repository behind this one diagnostic
+          // and never return at all. The wait is unbounded and on the sweep's
+          // own promise: awaiting the hook hangs this test rather than failing
+          // an assertion about how long anything took.
+          onFailure: () => {
+            reports += 1;
+            return new Promise<void>(() => {});
+          },
+        }),
+      ).resolves.toEqual({ attempted: 2, reconciled: 1, failed: 1, skipped: 0 });
+
+      expect(reports).toBe(1);
+      expect(reconciled).toEqual(["repo-b"]);
+      // The hook neither threw nor rejected, so nothing falls back to the console.
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("counts a sweep the same whether the failure hook fails or is absent", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // One of each outcome the summary distinguishes, so a hook that fails has
@@ -719,6 +757,10 @@ describe("scheduled reconciliation sweep", () => {
 
   it("calls a method-form repository hook with its receiver intact", async () => {
     const unreconciled = new Error("GitHub reconciliation failed");
+    // Nothing should reach the console here, but a hook called without its
+    // receiver throws and falls back to it, so the spy keeps that out of the
+    // run output and gives the failure a second thing to say.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // Declared as a method that reaches its own object through `this`, which is
     // the form the type's method syntax invites and the receiver the property
     // access used to supply for free.
@@ -734,10 +776,15 @@ describe("scheduled reconciliation sweep", () => {
       },
     };
 
-    await expect(sweepReconciliations(dependencies)).resolves.toEqual({
-      attempted: 1, reconciled: 0, failed: 1, skipped: 0,
-    });
-    expect(dependencies.failures).toEqual([{ repositoryId: "repo-a", error: unreconciled }]);
+    try {
+      await expect(sweepReconciliations(dependencies)).resolves.toEqual({
+        attempted: 1, reconciled: 0, failed: 1, skipped: 0,
+      });
+      expect(dependencies.failures).toEqual([{ repositoryId: "repo-a", error: unreconciled }]);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("reads the repository failure hook once per repository failure", async () => {
@@ -833,9 +880,10 @@ function signal() {
   return { promise, resolve };
 }
 
-// One macrotask turn, which is where Node reports a rejection nothing handled.
-// Used only to assert that no such report arrives, never as a margin something
-// is expected to finish inside.
+// One macrotask turn: long enough for the queued work of a turn to run, and the
+// window in which Node reports a rejection nothing handled. Used to let such a
+// report arrive so a test can assert it did not, never as a margin something is
+// expected to finish inside.
 function drain() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -857,7 +905,7 @@ function createTimer() {
       await this.settle();
     },
     async settle() {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await drain();
     },
   };
 }

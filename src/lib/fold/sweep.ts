@@ -9,8 +9,9 @@ export type ReconciliationSweepDependencies = {
    * neither the sweep nor the report, whichever way it fails: reading the member
    * can throw, since it may be an accessor wired lazily; the call can throw; and
    * an async hook can reject. Each of the three ends with the repository failure
-   * on console.error instead, and the sweep carries on to the next repository.
-   * Omit the hook to report there in the first place.
+   * on console.error instead, and the sweep carries on to the next repository —
+   * as long as the console works, which is the one exception, described on
+   * logRepositoryFailure. Omit the hook to report there in the first place.
    *
    * The return is declared, not left as `void`, because an async hook is
    * supported rather than merely tolerated by TypeScript's void-return
@@ -179,8 +180,15 @@ function reportRepositoryFailure(
  * getter with a side effect — and losing the whole line to that would hide the
  * failure entirely. The repository id is passed as its own argument rather than
  * built into the message, so the line that survives still says which repository
- * it was about. A console broken outright is left to surface, for the reason
- * given on logSweepFailure.
+ * it was about.
+ *
+ * A console broken at both arities is left to surface, as on logSweepFailure,
+ * though it costs more here than it does there: reached from the sweep's catch
+ * block, the throw leaves sweepReconciliations rejecting, so the repositories
+ * after this one go unswept; reached from the rejection handler on an async
+ * hook, it becomes an unhandled rejection instead. It stays uncontained
+ * deliberately: catching it would leave the sweep unable to report anything at
+ * all, with no sign of that.
  */
 function logRepositoryFailure(repositoryId: string, error: unknown): void {
   const message = "Reconciliation failed for repository";
