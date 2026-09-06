@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   foldRepository,
   type FoldResult,
+  type FoldUser,
   type RepositoryFoldSnapshot,
 } from "@/lib/fold/repository-fold";
 
@@ -100,7 +101,11 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: expect.stringContaining("rather than the repository sponsor"),
+      // The impostor holds the login `users.github_login` still stores, so a
+      // message naming that login on both sides of the refusal names no
+      // discriminator at all. What was refused is the ACCOUNT.
+      reason: "The settled label `delivered/6` was applied by a different GitHub account using the login "
+        + "`sponsor-old`, not by the repository sponsor.",
     }]);
     expect(result.settlements).toEqual([
       expect.objectContaining({ settledLabel: null, settledPoints: null, status: "UNSETTLED" }),
@@ -124,7 +129,11 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: expect.stringContaining("No rationale comment by"),
+      // Same discriminator: a comment carrying the stored login is not a
+      // comment by the sponsor, and the sentence has to say which it means.
+      reason: "No rationale comment by the repository sponsor's account (login `sponsor-old`) naming "
+        + "`delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z "
+        + "and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.settlements).toEqual([
       expect.objectContaining({ settledLabel: null, settledPoints: null, status: "UNSETTLED" }),
@@ -151,6 +160,56 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       settledPoints: 6,
       credits: 6,
     })]);
+  });
+
+  it("identifies the sponsor by account id when the stored login is blank", () => {
+    // `db/migrations/001_initial.sql` rejects a blank `github_login`, but its
+    // one-argument `trim()` strips spaces only while the fold's `.trim()`
+    // strips all whitespace, so a stored tab is a login the database accepts
+    // and the fold reads as blank (issue 141). The account id is untouched by
+    // that, and a blank stored login must not veto an identification the id
+    // already made — vetoing it produces the issue-129 loss itself.
+    const result = foldRepository(fixture({ storedSponsorLogin: "\t" }));
+
+    expect(result.policyViolations).toEqual([]);
+    expect(result.unwritableClosures).toEqual([]);
+    expect(openingIdentity(result)).toEqual([{
+      githubIssueId: 101,
+      openingLabel: "M",
+      openingComparisonPoints: 5,
+      openingReservePoints: 5,
+      openingSourceEventId: "opening-1",
+      openingSourceAt: "2026-08-30T10:00:00.000Z",
+    }]);
+    expect(result.settlements).toEqual([expect.objectContaining({
+      githubIssueId: 101,
+      status: "SETTLED",
+      settledLabel: "delivered/6",
+      settledPoints: 6,
+      settledLabelActorLogin: RENAMED_SPONSOR_LOGIN,
+      credits: 6,
+    })]);
+  });
+
+  it("refuses an idless actor when the stored sponsor login is blank, and says why", () => {
+    // Nothing but the login is left to compare with, and there is no login to
+    // compare against: the refusal is about the sponsor's own record, so it
+    // keeps naming that record rather than the actor.
+    const result = foldRepository(fixture({
+      storedSponsorLogin: "\t",
+      settledLabel: { login: STORED_SPONSOR_LOGIN, githubUserId: null },
+    }));
+
+    expect(result.policyViolations).toEqual([]);
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "The repository sponsor has no login, so no settled label can be attributed to the sponsor.",
+    }]);
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ settledLabel: null, settledPoints: null, status: "UNSETTLED" }),
+    ]);
   });
 
   it("refuses an idless actor whose login is not the sponsor's stored login", () => {
@@ -189,11 +248,23 @@ function fixture(actors: {
   opening?: FixtureActor;
   settledLabel?: FixtureActor;
   rationale?: FixtureActor;
+  /** What `users.github_login` holds for the sponsor, when it is not the stored login. */
+  storedSponsorLogin?: string;
 } = {}): RepositoryFoldSnapshot {
   const author = actors.author ?? renamedSponsor;
   const opening = actors.opening ?? renamedSponsor;
   const settledLabel = actors.settledLabel ?? renamedSponsor;
   const rationale = actors.rationale ?? renamedSponsor;
+  // One record, referenced by both `repository.sponsor` and `users`: editing a
+  // second copy and not this one would silently decouple the sponsor the fold
+  // rates evidence against from the user the ledger pays.
+  const sponsor: FoldUser = {
+    id: "sponsor",
+    githubUserId: SPONSOR_GITHUB_USER_ID,
+    githubLogin: actors.storedSponsorLogin ?? STORED_SPONSOR_LOGIN,
+    enforcementState: "ACTIVE",
+    moderationEvents: [],
+  };
 
   return {
     repository: {
@@ -202,23 +273,11 @@ function fixture(actors: {
       ownerName: "octo/example",
       active: true,
       registeredAt: "2026-01-01T00:00:00.000Z",
-      sponsor: {
-        id: "sponsor",
-        githubUserId: SPONSOR_GITHUB_USER_ID,
-        githubLogin: STORED_SPONSOR_LOGIN,
-        enforcementState: "ACTIVE",
-        moderationEvents: [],
-      },
+      sponsor,
       difficultyScheme: difficultyScheme(),
     },
     users: [
-      {
-        id: "sponsor",
-        githubUserId: SPONSOR_GITHUB_USER_ID,
-        githubLogin: STORED_SPONSOR_LOGIN,
-        enforcementState: "ACTIVE",
-        moderationEvents: [],
-      },
+      sponsor,
       {
         id: "contributor",
         githubUserId: 2001,
