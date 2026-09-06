@@ -191,6 +191,11 @@ describe("unwritable closures", () => {
   });
 });
 
+/** The select list of a query over `self_work_calibrations`, with its sources intact. */
+function calibrationProjection(query: string): string {
+  return query.match(/^\s*select\s+([\s\S]*?)\s+from\s+self_work_calibrations\b/i)?.[1] ?? "";
+}
+
 describe("self-work calibrations", () => {
   const calibrationRow = {
     id: "calibration-1",
@@ -224,7 +229,7 @@ describe("self-work calibrations", () => {
   });
 
   it("returns the owner's calibration evidence with the closing-link proof", async () => {
-    const { sql } = sqlHarness([[calibrationRow]]);
+    const { sql, captures } = sqlHarness([[calibrationRow]]);
 
     const calibration = await getSelfWorkCalibrationProof("member-1", "calibration-1", { sql });
 
@@ -247,6 +252,21 @@ describe("self-work calibrations", () => {
       mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
       mergedAt: "2026-09-05T11:00:00.000Z",
     });
+    // The harness returns one flat row keyed by output alias, so a projection
+    // reading the right name off the wrong table would answer identically. The
+    // sources are asserted directly instead: the points are the calibration's
+    // own, and the label is the settled one the fold wrote on the issue.
+    const projection = calibrationProjection(captures[0]?.text ?? "");
+    expect(projection).toMatch(
+      /(?:^|,)\s*self_work_calibrations\.opening_comparison_points(?:\s+as\s+opening_comparison_points)?\s*(?:,|$)/i,
+    );
+    expect(projection).toMatch(
+      /(?:^|,)\s*self_work_calibrations\.actual_points(?:\s+as\s+actual_points)?\s*(?:,|$)/i,
+    );
+    expect(projection).toMatch(/(?:^|,)\s*issues\.settled_label\s+as\s+actual_label\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*issues\.opening_label(?:\s+as\s+opening_label)?\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.proof_sha256(?:\s+as\s+proof_sha256)?\s*(?:,|$)/i);
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.merge_commit_oid(?:\s+as\s+merge_commit_oid)?\s*(?:,|$)/i);
   });
 
   it("keeps the calibration whose settled evidence was rejected, with no actual figure", async () => {
@@ -309,6 +329,14 @@ describe("self-work calibrations", () => {
       },
     ]);
     const query = captures[0]?.text ?? "";
+    const projection = calibrationProjection(query);
+    expect(projection).toMatch(
+      /(?:^|,)\s*self_work_calibrations\.opening_comparison_points(?:\s+as\s+opening_comparison_points)?\s*(?:,|$)/i,
+    );
+    expect(projection).toMatch(
+      /(?:^|,)\s*self_work_calibrations\.actual_points(?:\s+as\s+actual_points)?\s*(?:,|$)/i,
+    );
+    expect(projection).toMatch(/(?:^|,)\s*pull_requests\.merged_at(?:\s+as\s+merged_at)?\s*(?:,|$)/i);
     expect(query).toMatch(/where self_work_calibrations\.user_id = \?/i);
     expect(query).toMatch(/order by pull_requests\.merged_at desc nulls last, self_work_calibrations\.id desc/i);
     expect(query).toMatch(/limit/i);
