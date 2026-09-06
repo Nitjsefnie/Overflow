@@ -174,11 +174,11 @@ export async function registerRepository(
     // not constrain.
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
 
-    // The submitted repository is genuinely absent from the table: some other registration
-    // holds the owner/name path or the webhook id, so the insert failed on that unique
-    // constraint rather than on the numeric GitHub id. Saying "already registered" here would
-    // name the wrong row, and answering an upstream failure would invite a retry that can only
-    // fail the same way.
+    // The submitted repository is genuinely absent from the table: another registration holds
+    // the owner/name path, so the insert failed on that unique constraint rather than on the
+    // numeric GitHub id. Saying "already registered" here would name the wrong row, and
+    // answering an upstream failure would invite a retry that can only fail the same way,
+    // because the path is read off the submission and is the same on every attempt.
     if (error instanceof RepositoryOwnerNameConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
@@ -188,12 +188,17 @@ export async function registerRepository(
       );
     }
 
+    // The same collision on a different constraint, and the opposite advice: the colliding
+    // value is the id GitHub minted for the hook this call created, that hook was abandoned
+    // above, and the next attempt asks GitHub for a new one. So a retry submits a webhook id
+    // no registration holds, which makes retrying the first thing worth trying rather than the
+    // one action ruled out.
     if (error instanceof RepositoryWebhookIdConflictError) {
       throw new RepositoryRegistrationError(
         "CONFLICT",
-        "The GitHub webhook id for the submitted repository is claimed by a different registration. "
-          + "The submitted repository is not registered, and it cannot be registered while another "
-          + "registration holds that webhook id.",
+        "The GitHub webhook created for the submitted repository collided with one a different "
+          + "registration already records. The submitted repository is not registered. GitHub "
+          + "assigns a new webhook id on each attempt, so registering again is the first thing to try.",
       );
     }
 
