@@ -4,6 +4,36 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 
 const coordinationFailure = "Unable to coordinate repository reconciliation.";
 const lockWaitDeadlineMs = 60_000;
+const realTimeEscapeMs = 5_000;
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+
+/**
+ * Fake timers fake vitest's own test deadline along with the code's, so a
+ * refusal that never arrives hangs the run for as long as it is left running
+ * rather than failing it. Timers captured before the fakes were installed still
+ * run on the wall clock, so bounding the wait on one turns a lost deadline into
+ * a named failure. The bound is an escape hatch, not a speed assertion: the
+ * awaited work needs no wall-clock time at all once the faked clock is advanced.
+ */
+async function awaitWithRealTimeBound<T>(pending: Promise<T>, expectation: string): Promise<T> {
+  let escape: ReturnType<typeof realSetTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        escape = realSetTimeout(
+          () => reject(new Error(`${expectation} within ${realTimeEscapeMs}ms of real time.`)),
+          realTimeEscapeMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (escape !== undefined) {
+      realClearTimeout(escape);
+    }
+  }
+}
 
 type PendingReservation = {
   arrive(connection: { release(): void }): void;
@@ -83,7 +113,10 @@ describe("reconciliation coordination pool", () => {
 
       await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
 
-      await refusal;
+      await awaitWithRealTimeBound(
+        refusal,
+        "The wait for a coordination connection did not give up",
+      );
       expect(workStarted).toBe(false);
       expect(reservations).toHaveLength(1);
     } finally {
@@ -104,7 +137,10 @@ describe("reconciliation coordination pool", () => {
 
       await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
 
-      await refusal;
+      await awaitWithRealTimeBound(
+        refusal,
+        "The retrying of a refused lock did not give up",
+      );
       expect(workStarted).toBe(false);
       expect(lockAttempts.length).toBeGreaterThan(1);
       expect(releases).toHaveLength(lockAttempts.length);
