@@ -1,7 +1,7 @@
 import { closeSql } from "../src/lib/db/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
-import { reconcileRepository, type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
-import { GitHubGateway } from "../src/lib/github/client.ts";
+import { type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
+import { reconcileRepositoryAsSponsor } from "../src/lib/fold/reconcile-as-sponsor.ts";
 
 export type ReconcileCliDependencies = {
   store: Pick<PostgresFoldStore, "findRepositoryByOwnerName" | "listActiveRepositoryIds">;
@@ -51,17 +51,7 @@ function productionDependencies(): ReconcileCliDependencies {
   const store = new PostgresFoldStore();
   return {
     store,
-    reconcile: async (repositoryId) => {
-      const repository = await store.getRepository(repositoryId);
-      if (repository === null) {
-        throw new Error("Repository was not found.");
-      }
-      const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
-      if (accessToken === null) {
-        throw new Error("GitHub access token was not available.");
-      }
-      return reconcileRepository({ store, github: new GitHubGateway({ accessToken }) }, repositoryId);
-    },
+    reconcile: (repositoryId) => reconcileRepositoryAsSponsor(store, repositoryId),
     write: (line) => process.stdout.write(`${line}\n`),
   };
 }
