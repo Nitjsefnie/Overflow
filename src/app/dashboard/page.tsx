@@ -51,7 +51,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
                         Pull request #{settlement.pullRequestNumber}: {settlement.pullRequestTitle}
                       </a>
                     </p>
-                    <p className="mono-meta">{settlement.credits} credits · review deduction {settlement.reviewRounds}</p>
+                    <p className="mono-meta">{settlement.credits} {settlement.credits === 1 ? "credit" : "credits"} · review deduction {settlement.reviewRounds}</p>
                     <Link className="text-link" href={`/settlements/${settlement.id}`}>
                       View proof for issue #{settlement.issueNumber}
                     </Link>
