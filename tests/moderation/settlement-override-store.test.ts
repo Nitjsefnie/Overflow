@@ -279,7 +279,7 @@ describe("PostgreSQL settlement override requests", () => {
       settlement: {
         settlementId: settlement.settlementId,
         status: "UNSETTLED",
-        openingComparisonPoints: 5,
+        openingComparisonPoints: 6,
         settledPoints: null,
         reviewRounds: 2,
         credits: 0,
@@ -488,6 +488,8 @@ async function insertSettlement(options: { reviewRounds?: number } = {}): Promis
     authorId: creditorId,
     authorLogin: creditor.github_login,
   });
+  // Deliberately not the issue's 5, for the same reason the calibration opens
+  // at 7: an equal value would pass against issues.opening_comparison_points.
   const [settlement] = await sql<{ id: string }[]>`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
@@ -495,7 +497,7 @@ async function insertSettlement(options: { reviewRounds?: number } = {}): Promis
     )
     values (
       ${scaffold.pullRequestId}, ${scaffold.issueId}, ${creditorId}, ${creditor.github_login}, ${debtorId},
-      5, ${null}, ${options.reviewRounds ?? 0}, 0,
+      6, ${null}, ${options.reviewRounds ?? 0}, 0,
       ${nextExternalId().toString(16).padStart(64, "0")}, ${"UNSETTLED"}
     )
     returning id
