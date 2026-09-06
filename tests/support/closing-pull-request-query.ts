@@ -13,7 +13,7 @@ export function assertClosingPullRequestQuery(
     ? "first: 20, includeClosedPrs: true"
     : "first: 100, includeClosedPrs: true, after: $cursor";
   // Pin the selected subtree, not merely variable values sent alongside the query.
-  expect(normalized).toContain(`closedByPullRequestsReferences(${argumentsText}) { nodes { databaseId number title body url state mergedAt mergeCommit { oid } commits(last: 1) { nodes { commit { committedDate } } } author { login ... on User { databaseId } } } pageInfo { hasNextPage endCursor } }`);
+  expect(normalized).toContain(`closedByPullRequestsReferences(${argumentsText}) { nodes { databaseId number title body url state mergedAt mergeCommit { oid } commits(last: 1) { nodes { commit { committedDate } } } author { login ... on User { databaseId } } repository { nameWithOwner } } pageInfo { hasNextPage endCursor } }`);
 
   if (operation === "ClosingPullRequests") {
     expect(normalized).toMatch(/^query ClosingPullRequests\([^)]*\$issueNumber: Int!/);

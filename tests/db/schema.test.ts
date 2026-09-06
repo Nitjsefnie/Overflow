@@ -1976,12 +1976,14 @@ describe("initial PostgreSQL materialization", () => {
             number: 11,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryNameWithOwner: repository.owner_name,
           })]],
           [3, [authoritativePullRequest({
             id: addedPullRequestId,
             number: 13,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryNameWithOwner: repository.owner_name,
           })]],
         ]),
       },
@@ -1996,12 +1998,14 @@ describe("initial PostgreSQL materialization", () => {
             number: 13,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryNameWithOwner: repository.owner_name,
           })]],
           [1, [authoritativePullRequest({
             id: changedPullRequestId,
             number: 11,
             authorLogin: contributorLogin,
             authorGitHubUserId: await githubUserIdOf(sql, contributorId),
+            repositoryNameWithOwner: repository.owner_name,
           })]],
         ]),
       },
@@ -3383,6 +3387,7 @@ function materializationSnapshot(input: {
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: contributorLogin,
             authorGitHubUserId: input.contributorGitHubUserId,
+            repositoryNameWithOwner: input.ownerName,
             reviews: [],
             rawDiff: "materialized diff",
           },
@@ -3430,6 +3435,7 @@ function authoritativePullRequest(input: {
   number: number;
   authorLogin: string;
   authorGitHubUserId?: number;
+  repositoryNameWithOwner: string;
 }): GitHubPullRequest {
   return {
     id: input.id,
@@ -3443,6 +3449,7 @@ function authoritativePullRequest(input: {
     finalCommitAt: "2026-09-01T10:00:00.000Z",
     authorLogin: input.authorLogin,
     authorGitHubUserId: input.authorGitHubUserId ?? null,
+    repositoryNameWithOwner: input.repositoryNameWithOwner,
   };
 }
 
@@ -3577,6 +3584,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       finalCommitAt: pullRequest.finalCommitAt,
       authorLogin: pullRequest.authorLogin,
       authorGitHubUserId: pullRequest.authorGitHubUserId,
+      repositoryNameWithOwner: pullRequest.repositoryNameWithOwner,
     })),
   }));
   const evidenceByPullRequest = new Map(snapshot.issues.flatMap((issue) => (

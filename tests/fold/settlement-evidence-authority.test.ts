@@ -820,6 +820,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
             finalCommitAt: "2026-09-01T10:00:00.000Z",
             authorLogin: logins.pullRequestAuthor,
             authorGitHubUserId: 2001,
+            repositoryNameWithOwner: "octo/example",
             reviews: [],
             rawDiff: "diff",
           },
