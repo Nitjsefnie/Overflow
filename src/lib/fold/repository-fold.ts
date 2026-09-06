@@ -198,7 +198,7 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  * record still stores, since there the structured login is the sponsor's own
  * and says nothing.
  */
-export type OpeningRefusal =
+type OpeningRefusal =
   | { code: "OPENING_LABEL_MISSING" }
   | {
       code: "OPENING_LABEL_UNAUTHORIZED";
