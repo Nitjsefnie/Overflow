@@ -3,7 +3,9 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CalibrationProofPage from "@/app/calibration/[id]/page";
-import { CalibrationPanel } from "@/components/calibration-panel";
+import CalibrationPage from "@/app/calibration/page";
+import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
+import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 
 const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
 
@@ -194,5 +196,118 @@ describe("self-work calibration proof page", () => {
 
     expect(screen.getByRole("heading", { name: "Calibration proof could not be loaded." })).toBeVisible();
     expect(screen.getByRole("link", { name: "Return to the ledger" })).toHaveAttribute("href", "/dashboard");
+  });
+});
+
+/** A calibration with no actual figure: the closure this whole path exists for. */
+const uncalibrated: SelfWorkCalibrationProjection = {
+  id: "calibration-1",
+  repositoryName: "co-op/harbour",
+  issueNumber: 17,
+  issueTitle: "Repair the tide gate",
+  openingComparisonPoints: 7,
+  actualPoints: null,
+  mergedAt: "2026-09-05T11:00:00.000Z",
+};
+
+const calibrated: SelfWorkCalibrationProjection = {
+  id: "calibration-2",
+  repositoryName: "co-op/quay",
+  issueNumber: 12,
+  issueTitle: "Dredge the channel",
+  openingComparisonPoints: 3,
+  actualPoints: 5,
+  mergedAt: "2026-09-01T11:00:00.000Z",
+};
+
+describe("self-work calibration list", () => {
+  it("links each closure to its proof page in the order it was given", () => {
+    render(<SelfWorkCalibrationList calibrations={[uncalibrated, calibrated]} />);
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByRole("link", { name: "View proof for issue #" + "17" })).toHaveAttribute(
+      "href",
+      "/calibration/calibration-1",
+    );
+    expect(within(rows[1]).getByRole("link", { name: "View proof for issue #" + "12" })).toHaveAttribute(
+      "href",
+      "/calibration/calibration-2",
+    );
+    expect(within(rows[0]).getByText("co-op/harbour · 2026-09-05")).toBeVisible();
+    expect(within(rows[1]).getByText("Issue #" + "12: Dredge the channel")).toBeVisible();
+    expect(within(rows[1]).getByText("Opening comparison 3 · actual 5")).toBeVisible();
+  });
+
+  it("says an uncalibrated closure was rejected and can be corrected", () => {
+    render(<SelfWorkCalibrationList calibrations={[uncalibrated]} />);
+
+    const row = screen.getByRole("listitem");
+    expect(within(row).getByText("Opening comparison 7 · actual never recorded")).toBeVisible();
+    expect(within(row).getByText(
+      "The settled evidence for this closure was rejected, so no actual figure was recorded. Open the proof "
+      + "to request a correction.",
+    )).toBeVisible();
+  });
+
+  it("leaves a calibrated closure without the rejection note", () => {
+    render(<SelfWorkCalibrationList calibrations={[calibrated]} />);
+
+    expect(screen.queryByText(/was rejected/)).toBeNull();
+  });
+
+  it("names what produces a calibration when the account has none", () => {
+    render(<SelfWorkCalibrationList calibrations={[]} />);
+
+    expect(screen.getByRole("heading", { name: "No closure of your own has been calibrated yet." })).toBeVisible();
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+});
+
+describe("calibration page", () => {
+  function respondToCalibrationPage(options: { calibrations?: unknown[] | Error } = {}) {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("as offered_difficulty")) {
+        return [];
+      }
+      if (options.calibrations instanceof Error) {
+        throw options.calibrations;
+      }
+      return options.calibrations ?? [];
+    });
+  }
+
+  it("lists the account's calibrations beneath the comparison", async () => {
+    respondToCalibrationPage({
+      calibrations: [{
+        id: "calibration-1",
+        repository_name: "co-op/harbour",
+        issue_number: 17,
+        issue_title: "Repair the tide gate",
+        opening_comparison_points: 7,
+        actual_points: null,
+        merged_at: "2026-09-05T11:00:00.000Z",
+      }],
+    });
+
+    render(await CalibrationPage());
+
+    expect(screen.getByRole("heading", { name: "Calibration comparison", level: 1 })).toBeVisible();
+    expect(screen.getByText("Self-work sample · 0 pairs")).toBeVisible();
+    expect(screen.getByRole("link", { name: "View proof for issue #" + "17" })).toHaveAttribute(
+      "href",
+      "/calibration/calibration-1",
+    );
+  });
+
+  it("keeps the comparison when the calibration list cannot be read", async () => {
+    respondToCalibrationPage({ calibrations: new Error("Calibration list unavailable") });
+
+    render(await CalibrationPage());
+
+    expect(screen.getByRole("heading", { name: "Calibration comparison", level: 1 })).toBeVisible();
+    expect(screen.getByText("Your calibrated closures could not be loaded.")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /View proof for issue/ })).toBeNull();
   });
 });
