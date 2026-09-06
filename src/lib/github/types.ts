@@ -84,10 +84,16 @@ export type GitHubPullRequest = {
   /** GraphQL `User.databaseId` of the author; null when the author is absent or not a User (Bot, Mannequin). */
   authorGitHubUserId: number | null;
   /**
-   * GraphQL `Repository.nameWithOwner` (`"owner/name"`) of the repository this
-   * pull request lives in. A closing reference can name a pull request in a
-   * different repository, so its evidence must never be read from the
-   * registered one.
+   * GraphQL `Repository.databaseId` of the repository this pull request lives
+   * in. A closing reference can name a pull request in a different repository,
+   * so its evidence must never be read from the registered one — and this id,
+   * unlike the name, survives a rename or an owner transfer.
+   */
+  repositoryGitHubId: number;
+  /**
+   * GraphQL `Repository.nameWithOwner` (`"owner/name"`) of the same repository.
+   * Carried for what a person reads, never for deciding ownership: GitHub keeps
+   * serving a renamed repository under its old name while reporting the new one.
    */
   repositoryNameWithOwner: string;
 };
