@@ -1,56 +1,93 @@
-import { readdir } from "node:fs/promises";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { assertUniqueMigrationNumbers } from "../../scripts/migrate";
+import { describe, expect, it, vi } from "vitest";
+import {
+  assertUniformMigrationNumberWidth,
+  assertUniqueMigrationNumbers,
+  listMigrationNames,
+  runMigrations,
+} from "../../scripts/migrate";
 
+const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
+
+// Standing in for the directory is what lets the production entry point be driven without a
+// database: the numbering guards run before the first query, so `runMigrations` rejects while
+// `readFile` is still untouched — and a `readFile` that only rejects proves it stayed that way.
+vi.mock("node:fs/promises", () => ({
+  readdir: () => Promise.resolve(migrationsOnDisk.entries),
+  readFile: () => Promise.reject(new Error("a migration was read despite unusable numbering")),
+}));
+
+// Read with the synchronous API on purpose: the promise-based one is mocked above, and this is
+// the one test that has to see the real directory.
 const migrationsDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../db/migrations",
 );
 
 /** The message, not the throw, is what tells whoever hit this which files to renumber. */
-function collisionMessage(migrationNames: readonly string[]): string {
+function rejectionMessage(check: () => void): string {
   try {
-    assertUniqueMigrationNumbers(migrationNames);
+    check();
   } catch (error) {
     return (error as Error).message;
   }
-  throw new Error(`Expected a collision to be reported for ${migrationNames.join(", ")}.`);
+  throw new Error("Expected the numbering to be rejected.");
 }
 
 describe("migration numbering", () => {
-  it("accepts the migrations this repository ships", async () => {
-    const migrationNames = await readdir(migrationsDirectory);
+  it("accepts the migrations this repository ships", () => {
+    const migrationNames = listMigrationNames(readdirSync(migrationsDirectory));
 
+    expect(migrationNames.length).toBeGreaterThan(0);
     expect(() => {
       assertUniqueMigrationNumbers(migrationNames);
     }).not.toThrow();
+    expect(() => {
+      assertUniformMigrationNumberWidth(migrationNames);
+    }).not.toThrow();
+  });
+
+  it("selects migrations by the rule the runner applies them by", () => {
+    const migrationNames = listMigrationNames([
+      "README.md",
+      "013_reconciliation_cooldown.sql.orig",
+      "001_initial.sql",
+    ]);
+
+    expect(migrationNames).toEqual(["001_initial.sql"]);
   });
 
   it("names the number and both files when two migrations share a number", () => {
-    const message = collisionMessage([
-      "013_immutable_github_identity.sql",
-      "014_a.sql",
-      "014_b.sql",
-    ]);
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers([
+        "013_immutable_github_identity.sql",
+        "014_a.sql",
+        "014_b.sql",
+      ]);
+    });
 
     expect(message).toMatch(/\b14\b/);
-    expect(message).toContain("014_a.sql");
-    expect(message).toContain("014_b.sql");
+    expect(message).toContain("014_a.sql, 014_b.sql");
   });
 
   it("compares the parsed number, so 013 collides with 13", () => {
-    const message = collisionMessage(["013_alpha.sql", "13_beta.sql"]);
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers(["13_beta.sql", "013_alpha.sql"]);
+    });
 
     expect(message).toMatch(/\b13\b/);
-    expect(message).toContain("013_alpha.sql");
-    expect(message).toContain("13_beta.sql");
+    expect(message).toContain("013_alpha.sql, 13_beta.sql");
   });
 
-  it("ignores directory entries that are not numbered migrations", () => {
+  it("counts nothing the runner would not apply, such as a merge leftover", () => {
     expect(() => {
-      assertUniqueMigrationNumbers(["README.md", "001_initial.sql"]);
+      assertUniqueMigrationNumbers([
+        "README.md",
+        "013_reconciliation_cooldown.sql.orig",
+        "013_reconciliation_cooldown.sql",
+      ]);
     }).not.toThrow();
   });
 
@@ -66,23 +103,66 @@ describe("migration numbering", () => {
   });
 
   it("rejects a third migration numbered 013 alongside the historical pair", () => {
-    const message = collisionMessage([
-      "013_immutable_github_identity.sql",
-      "013_reconciliation_cooldown.sql",
-      "013_something_else.sql",
-    ]);
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers([
+        "013_immutable_github_identity.sql",
+        "013_reconciliation_cooldown.sql",
+        "013_something_else.sql",
+      ]);
+    });
 
     expect(message).toMatch(/\b13\b/);
     expect(message).toContain("013_something_else.sql");
   });
 
   it("rejects a grandfathered filename paired with a different 013 migration", () => {
-    const message = collisionMessage([
-      "013_immutable_github_identity.sql",
-      "013_something_else.sql",
-    ]);
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers([
+        "013_immutable_github_identity.sql",
+        "013_something_else.sql",
+      ]);
+    });
 
-    expect(message).toContain("013_immutable_github_identity.sql");
-    expect(message).toContain("013_something_else.sql");
+    expect(message).toContain("013_immutable_github_identity.sql, 013_something_else.sql");
+  });
+
+  it("does not exempt a case-differing spelling of a grandfathered filename", () => {
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers([
+        "013_Immutable_GitHub_Identity.sql",
+        "013_reconciliation_cooldown.sql",
+      ]);
+    });
+
+    expect(message).toContain("013_Immutable_GitHub_Identity.sql");
+  });
+
+  it("rejects a numeric prefix of an odd width, naming the width the rest uses", () => {
+    const message = rejectionMessage(() => {
+      assertUniformMigrationNumberWidth(["018_a.sql", "019_b.sql", "20_c.sql"]);
+    });
+
+    expect(message).toContain("20_c.sql");
+    expect(message).toMatch(/otherwise uses 3\b/);
+  });
+
+  it("accepts a uniform width other than the one this repository writes", () => {
+    expect(() => {
+      assertUniformMigrationNumberWidth(["01_a.sql", "02_b.sql"]);
+    }).not.toThrow();
+  });
+
+  it("refuses to run a directory in which two migrations share a number", async () => {
+    migrationsOnDisk.entries = ["002_c.sql", "001_a.sql", "002_b.sql"];
+
+    await expect(runMigrations()).rejects.toThrow(
+      "More than one migration is numbered 2: 002_b.sql, 002_c.sql",
+    );
+  });
+
+  it("refuses to run a directory that mixes numeric prefix widths", async () => {
+    migrationsOnDisk.entries = ["001_a.sql", "002_b.sql", "03_c.sql"];
+
+    await expect(runMigrations()).rejects.toThrow("Migration 03_c.sql is numbered with 2 digits");
   });
 });
