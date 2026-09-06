@@ -166,7 +166,7 @@ describe("scheduled reconciliation sweep", () => {
         throw unreachable;
       },
       schedule: timer.schedule,
-      onFailure: (error) => {
+      onSweepFailure: (error) => {
         failures.push(error);
       },
     });
@@ -218,9 +218,10 @@ describe("scheduled reconciliation sweep", () => {
           throw new Error("Active repositories could not be listed");
         },
         schedule: timer.schedule,
-        onFailure: () => {},
+        onSweepFailure: () => {},
       });
-      // Node reports an unhandled rejection on a later macrotask, so drain twice.
+      // One drain is already enough for Node to report a rejection it is going
+      // to report; the second only widens the window the listener had to fire in.
       await timer.settle();
       await timer.settle();
 
@@ -228,6 +229,96 @@ describe("scheduled reconciliation sweep", () => {
     } finally {
       process.off("unhandledRejection", listener);
     }
+  });
+
+  it("calls a method-form failure hook with its receiver intact", async () => {
+    const timer = createTimer();
+    const unreachable = new Error("Active repositories could not be listed");
+    // Declared as a method that reaches its own object through `this`, which is
+    // the form the type's method syntax invites and the sibling per-repository
+    // hook already supports.
+    const schedule = {
+      failures: [] as unknown[],
+      runSweep: async () => {
+        throw unreachable;
+      },
+      schedule: timer.schedule,
+      onSweepFailure(error: unknown) {
+        this.failures.push(error);
+      },
+    };
+
+    startReconciliationSweep(schedule);
+    await timer.settle();
+
+    expect(schedule.failures).toHaveLength(1);
+    expect(schedule.failures[0]).toBe(unreachable);
+  });
+
+  it("survives a failure hook that throws and sweeps again on the next interval", async () => {
+    const timer = createTimer();
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    let sweeps = 0;
+    let reports = 0;
+
+    try {
+      startReconciliationSweep({
+        runSweep: async () => {
+          sweeps += 1;
+          throw new Error("Active repositories could not be listed");
+        },
+        schedule: timer.schedule,
+        onSweepFailure: () => {
+          reports += 1;
+          throw new Error("The failure hook itself failed");
+        },
+      });
+      await timer.settle();
+      await timer.settle();
+
+      expect(sweeps).toBe(1);
+      expect(reports).toBe(1);
+      expect(unhandled).toEqual([]);
+
+      // The running flag is cleared even when the hook threw.
+      await timer.tick();
+      expect(sweeps).toBe(2);
+      expect(reports).toBe(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("reports a runSweep that throws before it returns a promise", async () => {
+    const timer = createTimer();
+    const beforeThePromise = new Error("Active repositories could not be listed");
+    const failures: unknown[] = [];
+    let sweeps = 0;
+
+    startReconciliationSweep({
+      runSweep: () => {
+        sweeps += 1;
+        throw beforeThePromise;
+      },
+      schedule: timer.schedule,
+      onSweepFailure: (error) => {
+        failures.push(error);
+      },
+    });
+    await timer.settle();
+
+    expect(sweeps).toBe(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBe(beforeThePromise);
+
+    await timer.tick();
+    expect(sweeps).toBe(2);
+    expect(failures).toHaveLength(2);
   });
 
   it("sweeps every six hours", () => {
