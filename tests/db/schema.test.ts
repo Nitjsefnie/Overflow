@@ -208,6 +208,7 @@ describe("initial PostgreSQL materialization", () => {
       "014_opening_authority_precondition.sql",
       "015_normalize_settlement_status_check.sql",
       "016_repository_identity_verification.sql",
+      "016_repository_reconciliation_jobs.sql",
       "017_cross_repository_closures.sql",
       "018_refreshable_display_logins.sql",
       "019_recorded_materialization_removals.sql",
@@ -730,6 +731,80 @@ describe("initial PostgreSQL materialization", () => {
     await expect(sql`
       select unavailable_reason, unavailable_since from registered_repositories where id = ${repositoryId}
     `).resolves.toEqual([{ unavailable_reason: null, unavailable_since: null }]);
+  });
+
+  it("keeps at most one outstanding reconciliation job per repository", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const otherRepositoryId = await insertRepository(sql, sponsorId);
+    await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+
+    await expect(insertReconciliationJob(sql, repositoryId, "SWEEP"))
+      .rejects.toThrow(/repository_reconciliation_jobs_outstanding_key/);
+    await expect(insertReconciliationJob(sql, otherRepositoryId, "WEBHOOK"))
+      .resolves.toEqual(expect.any(String));
+
+    // The index is partial so that an event arriving mid-fold still gets a job of its own.
+    const [running] = await sql<{ id: string }[]>`
+      update repository_reconciliation_jobs
+      set state = 'RUNNING',
+        lease_token = gen_random_uuid(),
+        lease_expires_at = now() + interval '1 minute'
+      where repository_id = ${repositoryId}
+      returning id
+    `;
+    expect(running.id).toEqual(expect.any(String));
+    const followUpId = await insertReconciliationJob(sql, repositoryId, "SWEEP");
+
+    // A job that gave up is still outstanding: it is the row a later event has to coalesce into.
+    await sql`
+      update repository_reconciliation_jobs
+      set state = 'FAILED', last_failure_at = now()
+      where id = ${followUpId}
+    `;
+    await expect(insertReconciliationJob(sql, repositoryId, "REGISTRATION"))
+      .rejects.toThrow(/repository_reconciliation_jobs_outstanding_key/);
+  });
+
+  it("rejects a reconciliation job whose lease disagrees with its state", async () => {
+    const sponsorId = await insertUser(sql);
+    const repositoryId = await insertRepository(sql, sponsorId);
+
+    await expect(sql`
+      insert into repository_reconciliation_jobs (repository_id, reason, lease_token)
+      values (${repositoryId}, ${"WEBHOOK"}, gen_random_uuid())
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
+    await expect(sql`
+      insert into repository_reconciliation_jobs (repository_id, reason, lease_expires_at)
+      values (${repositoryId}, ${"WEBHOOK"}, now() + interval '1 minute')
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
+    await expect(sql`
+      insert into repository_reconciliation_jobs (repository_id, reason, state)
+      values (${repositoryId}, ${"WEBHOOK"}, ${"RUNNING"})
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
+
+    const jobId = await insertReconciliationJob(sql, repositoryId, "WEBHOOK");
+    await expect(sql`
+      update repository_reconciliation_jobs set state = 'RUNNING' where id = ${jobId}
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
+    await expect(sql`
+      update repository_reconciliation_jobs
+      set state = 'RUNNING',
+        lease_token = gen_random_uuid(),
+        lease_expires_at = now() + interval '1 minute'
+      where id = ${jobId}
+      returning id
+    `).resolves.toEqual([{ id: jobId }]);
+    // Releasing the lease and the state together is the only way back out of RUNNING.
+    await expect(sql`
+      update repository_reconciliation_jobs set state = 'PENDING' where id = ${jobId}
+    `).rejects.toThrow(/repository_reconciliation_jobs_lease_check/);
+    await expect(sql`
+      update repository_reconciliation_jobs
+      set state = 'PENDING', lease_token = null, lease_expires_at = null
+      where id = ${jobId}
+      returning id
+    `).resolves.toEqual([{ id: jobId }]);
   });
 
   it("rejects out-of-range opening and issue-owned settled difficulty points", async () => {
@@ -3848,6 +3923,19 @@ async function insertRepositoryWithDifficultyScheme(
     returning id
   `;
   return repository.id;
+}
+
+async function insertReconciliationJob(
+  client: QueryableSql,
+  repositoryId: string,
+  reason: string,
+): Promise<string> {
+  const [job] = await client<{ id: string }[]>`
+    insert into repository_reconciliation_jobs (repository_id, reason)
+    values (${repositoryId}, ${reason})
+    returning id
+  `;
+  return job.id;
 }
 
 async function insertSchemelessRepository(client: QueryableSql, ownerName: string): Promise<void> {
