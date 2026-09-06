@@ -6,24 +6,31 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Two defects, five hunks. The first is a shutdown that never settles; the second
+Two defects, six hunks. The first is a shutdown that never settles; the second
 is a `reserve()` that never settles. They are unrelated, and each has its own
 section below.
 
-### A dead connection's query slot is never cleared, so `end()` never settles
+### A connection that loses its backend leaves `sql.end()` waiting
 
-In the `postgres` package's own `src/connection.js` — not this repository's
-`src/` — a connection holds the query it is serving in a `query` slot, and only
-the `ReadyForQuery` handler clears it. A backend that has gone away never sends
+Two hunks, both in the `postgres` package's own `src/connection.js` — not this
+repository's `src/`. They settle the two orders in which a connection losing
+its backend leaves `sql.end()` waiting on a message that will never arrive,
+apart from the connect-phase case *What it still does not cover* sets out
+below. `sql.end()` awaits every connection in the pool, so a single stranded
+connection stalls the whole shutdown, and with it `closeSql()` and everything
+awaiting it — `scripts/reconcile.ts` awaits it in a `finally`, so the reconcile
+script simply never exits.
+
+#### The connection died, then the shutdown was registered
+
+A connection holds the query it is serving in a `query` slot, and only the
+`ReadyForQuery` handler clears it. A backend that has gone away never sends
 one, so once a connection died mid-query the slot stayed occupied: `end()` saw
 a query still in flight, declined to terminate, and handed back a promise
-nothing left on that path could resolve. `sql.end()` awaits every connection in
-the pool, so a single dead connection stranded the whole shutdown, and with it
-`closeSql()` and everything awaiting it — `scripts/reconcile.ts` awaits it in a
-`finally`, so the reconcile script simply never exited.
+nothing left on that path could resolve.
 
-The patch clears the slot in `error()`, immediately after its `errored()` call.
-`tests/db/closesql-connection-death.test.ts` holds the behaviour.
+The first hunk clears the slot in `error()`, immediately after its `errored()`
+call. `tests/db/closesql-connection-death.test.ts` holds the behaviour.
 
 #### The placement is the fix, and it is not where it looks like it belongs
 
@@ -40,22 +47,71 @@ whenever every connection is busy, because its `handler` falls through to
 closing socket — which is what makes clearing safe there.
 `tests/db/pipelined-query-after-build-failure.test.ts` holds the placement.
 
+#### The shutdown was registered, then the connection died
+
+Clearing the slot only settles the order in which `end()` runs after the death.
+Called while a query is still on the wire, `end()` cannot take its fast path at
+all: it returns `ending = new Promise(r => ended = r)`, and stock `postgres`
+invokes `ended` from exactly one place, `terminate()`. Every route into
+`terminate()` needs a backend that is still answering — `end()`'s own fast path
+on an idle connection, and the arms of `ReadyForQuery`, a message a dead
+backend never sends — so a connection whose socket has already gone leaves that
+promise pending forever.
+
+The second hunk settles it from `closed()`, adding
+`ended && (ended(), ending = ended = null)` after the line that fails the
+in-flight query and before `onclose()`.
+`tests/db/closesql-shutdown-before-death.test.ts` holds the behaviour.
+
+`closed()` rather than `terminate()` because `closed()` is the one place a dead
+socket does reach: it is the socket's own `close` handler, it runs whether or
+not the close carried an error, and by the time it runs there is no protocol
+traffic left to hang on.
+
+The position **before** `onclose()` is the conservative order rather than a
+demonstrated necessity, and the difference is worth stating plainly.
+`onclose()` moves the connection to the closed queue and, if any query is
+waiting, immediately hands it one (`connect(c, queries.shift())`), so settling
+first keeps the settle off a connection that is already being reused. But
+moving the settle below `onclose()` leaves every suite here green, so treat the
+order as defensive: it is cheap, and nothing in the tests argues for the other
+side.
+
 #### Where this diverges from upstream
 
-Upstream tracks the hang as `porsager/postgres` issue 1097, and open pull
-request 1142 proposes a fix. **Ours is deliberately not the same change.** That
-pull request clears the slot inside `errored()` — the placement described
+Upstream tracks the first order as `porsager/postgres` issue 1097, and open
+pull request 1142 proposes a fix. **Ours is deliberately not the same change.**
+That pull request clears the slot inside `errored()` — the placement described
 above — so it carries the silent-wrong-answer defect; it is also unmerged and
-unreleased. Do not resync this patch with it. When a release does land, judge
-it against both tests named here rather than against the pull request.
+unreleased. Do not resync this patch with it.
 
-#### It fixes one interleaving, not both
+Upstream has nothing at all for the second order: issue 1097 describes only the
+death-then-`end()` interleaving, and pull request 1142 touches neither `end()`
+nor `terminate()`. When a release does land, judge it against the tests named
+here rather than against the pull request.
 
-The patch settles `end()` called **after** the connection died. The reverse
-order — `end()` called while a query is still in flight, the backend dying
-afterwards — still never settles, because `end()` has by then returned a
-promise whose only resolver is a `terminate()` that nothing on that path
-reaches. That is tracked as Overflow issue 156. Do not read this patch as
+#### What it still does not cover
+
+A connection that dies while it is still in its **connect** phase takes
+`closed()`'s `if (initial) return reconnect()` early return, above both the
+in-flight failure and the settle, so a pending `end()` is not settled there.
+Whether that is safe depends entirely on how the reconnect attempts end:
+
+- An attempt that **completes** settles normally. `ReadyForQuery` clears
+  `initial`, the initial query runs, and its own `ReadyForQuery` reaches the
+  `ending ? terminate()` arm.
+- An attempt that raises an error reaching `errored()` — a refused connect, a
+  `CONNECT_TIMEOUT`, a startup `ErrorResponse` — nulls `initial`, so the
+  **next** `closed()` falls past the early return and is settled by this
+  patch's own line.
+- An attempt that ends in a plain socket close, with no `error` event and no
+  protocol message, does neither. That is what a pooler, a TCP load balancer or
+  any non-postgres service on the port produces while the backend is gone: the
+  reconnect loop is unbounded, `closedTime` is assigned below the same early
+  return so every attempt is scheduled at delay zero, and the pending `end()`
+  is stranded.
+
+That gap is Overflow issue 164, and it is why this patch must not be read as
 making `end()` always settle.
 
 #### Caveat if you reuse this patch elsewhere
@@ -211,11 +267,12 @@ process, on `main` as well as on this patch before this hunk.
 
 ### Housekeeping
 
-- **Only the ESM build is patched.** All five hunks land in `src/`. The
+- **Only the ESM build is patched.** All six hunks land in `src/`. The
   package also ships `cjs/src/` and `cf/src/` copies, and both still shift the
-  queue in `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, and
-  carry no `peek` in their `queue.js` — the same as on `main`, so this is a
-  standing property of the patch rather than something a release regressed. It
+  queue in `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`,
+  carry no `peek` in their `queue.js`, and leave `closed()` without the settle
+  — the same as on `main`, so this is a standing property of the patch rather
+  than something a release regressed. It
   does not bite today: the package's `exports` map sends `import` to `src/`, and
   `next build` bundles that build into every server chunk that reaches the
   `postgres` client, the edge chunk included. Reaching `postgres` through
@@ -232,10 +289,13 @@ process, on `main` as well as on this patch before this hunk.
   `patchedDependencies` block and its content hash until you do, and
   `pnpm install --frozen-lockfile` fails on the mismatch. Then let
   `tests/db/closesql-connection-death.test.ts`,
+  `tests/db/closesql-shutdown-before-death.test.ts`,
   `tests/db/pipelined-query-after-build-failure.test.ts`,
   `tests/db/reserve-contract.test.ts`,
   `tests/db/postgres-queue.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
-  whether the release really carries both fixes without the regression. A
-  release that carries only one of the two defects' fixes keeps the patch,
-  minus the hunks it made redundant.
+  whether the release really carries every fix without the regression. All of
+  them: the first two name one interleaving each, and a release that settles
+  one and not the other passes a check that names only its own and reinstates
+  the hang unnoticed. A release that carries only some of the fixes keeps the
+  patch, minus the hunks it made redundant.
