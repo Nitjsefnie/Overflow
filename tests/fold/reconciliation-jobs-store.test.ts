@@ -25,6 +25,7 @@ type JobSnapshot = {
   lease_token: string | null;
   lease_expires_at: Date | null;
   last_failure_at: Date | null;
+  follow_up_requested: boolean;
   /** Computed in the database so the assertion never compares two machines' clocks. */
   due_now: boolean;
 };
@@ -59,7 +60,7 @@ async function jobsFor(repositoryId: string): Promise<JobSnapshot[]> {
   return sql<JobSnapshot[]>`
     select id, repository_id, reason, state::text as state, attempt_count, run_after,
            lease_token::text as lease_token, lease_expires_at, last_failure_at,
-           run_after <= now() as due_now
+           follow_up_requested, run_after <= now() as due_now
     from repository_reconciliation_jobs
     where repository_id = ${repositoryId}
     order by created_at
@@ -76,7 +77,7 @@ async function jobById(jobId: string): Promise<JobSnapshot | undefined> {
   const [row] = await sql<JobSnapshot[]>`
     select id, repository_id, reason, state::text as state, attempt_count, run_after,
            lease_token::text as lease_token, lease_expires_at, last_failure_at,
-           run_after <= now() as due_now
+           follow_up_requested, run_after <= now() as due_now
     from repository_reconciliation_jobs
     where id = ${jobId}
   `;
@@ -180,6 +181,31 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(revived.last_failure_at?.toISOString()).toBe(failed.last_failure_at?.toISOString());
   });
 
+  it("records an enqueue that arrives mid-fold on the running job, lease intact", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+    const running = await onlyJobFor(repositoryId);
+
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+    const job = await onlyJobFor(repositoryId);
+    expect(job.state).toBe("RUNNING");
+    expect(job.follow_up_requested).toBe(true);
+    expect(job.lease_token).toBe(claimed.leaseToken);
+    expect(job.lease_expires_at?.toISOString()).toBe(running.lease_expires_at?.toISOString());
+    expect(job.attempt_count).toBe(running.attempt_count);
+  });
+
+  it("keeps the reason the repository first entered the queue with", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "REGISTRATION");
+
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+    expect((await onlyJobFor(repositoryId)).reason).toBe("REGISTRATION");
+  });
+
   it("returns null when the queue is empty", async () => {
     expect(await store.claimNextReconciliationJob()).toBeNull();
   });
@@ -232,30 +258,6 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(await store.completeReconciliationJob(first.id, first.leaseToken)).toBe(false);
   });
 
-  it("skips a repository that is already being folded under a live lease", async () => {
-    const busyRepositoryId = await insertRepository();
-    const freeRepositoryId = await insertRepository();
-    await store.enqueueReconciliationJob(busyRepositoryId, "WEBHOOK");
-    const running = await claimOrFail();
-    // A webhook arriving mid-fold: the outstanding index does not cover the
-    // RUNNING row, so this inserts a second, immediately due job.
-    await store.enqueueReconciliationJob(busyRepositoryId, "WEBHOOK");
-    await sql`
-      update repository_reconciliation_jobs
-      set run_after = now() - interval '1 hour'
-      where repository_id = ${busyRepositoryId} and state = 'PENDING'
-    `;
-    await store.enqueueReconciliationJob(freeRepositoryId, "WEBHOOK");
-
-    const claimed = await claimOrFail();
-
-    expect(claimed.repositoryId).toBe(freeRepositoryId);
-    expect(await store.claimNextReconciliationJob()).toBeNull();
-    const busyJobs = await jobsFor(busyRepositoryId);
-    expect(busyJobs.map((job) => job.state)).toEqual(["RUNNING", "PENDING"]);
-    expect(busyJobs.find((job) => job.state === "RUNNING")?.id).toBe(running.id);
-  });
-
   it("deletes the row a completed job leaves behind", async () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
@@ -264,6 +266,27 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(await store.completeReconciliationJob(claimed.id, claimed.leaseToken)).toBe(true);
 
     expect(await jobsFor(repositoryId)).toHaveLength(0);
+  });
+
+  it("leaves a fresh PENDING job behind when the completed fold took a follow-up", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const claimed = await claimOrFail();
+    await store.retryReconciliationJob(claimed.id, claimed.leaseToken, new Date(Date.now() - 1_000));
+    const reclaimed = await claimOrFail();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+    expect(await store.completeReconciliationJob(reclaimed.id, reclaimed.leaseToken)).toBe(true);
+
+    const job = await onlyJobFor(repositoryId);
+    expect(job.state).toBe("PENDING");
+    expect(job.attempt_count).toBe(0);
+    expect(job.due_now).toBe(true);
+    expect(job.last_failure_at).toBeNull();
+    expect(job.follow_up_requested).toBe(false);
+    expect(job.lease_token).toBeNull();
+    expect(job.lease_expires_at).toBeNull();
+    expect((await claimOrFail()).id).toBe(job.id);
   });
 
   it("returns a deferred job to PENDING at the given time and gives back the claim's attempt", async () => {
@@ -314,6 +337,38 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.lease_expires_at).toBeNull();
     expect(job.last_failure_at).not.toBeNull();
     expect(await store.claimNextReconciliationJob()).toBeNull();
+  });
+
+  it("releases a job whose fold took a mid-flight enqueue, on every path out of RUNNING", async () => {
+    const runAfter = new Date(Date.now() + 600_000);
+    const releases = [
+      {
+        name: "defer",
+        release: (job: ClaimedReconciliationJob) =>
+          store.deferReconciliationJob(job.id, job.leaseToken, runAfter),
+      },
+      {
+        name: "retry",
+        release: (job: ClaimedReconciliationJob) =>
+          store.retryReconciliationJob(job.id, job.leaseToken, runAfter),
+      },
+      {
+        name: "fail",
+        release: (job: ClaimedReconciliationJob) => store.failReconciliationJob(job.id, job.leaseToken),
+      },
+    ];
+
+    for (const { name, release } of releases) {
+      const repositoryId = await insertRepository();
+      await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+      const claimed = await claimOrFail();
+      await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+
+      expect(await release(claimed), name).toBe(true);
+
+      const job = await onlyJobFor(repositoryId);
+      expect(job.follow_up_requested, name).toBe(false);
+    }
   });
 
   it("changes nothing under a stale lease token, for every outcome writer", async () => {

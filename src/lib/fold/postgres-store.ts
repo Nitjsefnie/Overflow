@@ -730,18 +730,24 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     repositoryId: string,
     reason: ReconciliationJobReason,
   ): Promise<void> {
-    // The conflict target is the partial outstanding index, so a burst of events
-    // for one repository collapses onto the single waiting-or-failed row rather
-    // than queueing one fold per event. A job that is merely backing off keeps
-    // its `run_after`, while a FAILED job is revived as due now with its attempts
-    // reset — that revival is what makes the sweep an autonomous repair path.
-    // `last_failure_at` deliberately survives it, as the visible evidence that
-    // this repository has been failing.
+    // A repository owns exactly one row, so a burst of events collapses onto it
+    // rather than queueing one fold per event. A job that is merely backing off
+    // keeps its `run_after`; a FAILED job is revived as due now with its attempts
+    // reset, which is what makes the sweep an autonomous repair path, and
+    // `last_failure_at` survives that revival as the visible evidence that this
+    // repository has been failing. An event arriving mid-fold leaves the RUNNING
+    // job alone and records `follow_up_requested` instead, because the fold in
+    // flight may have read GitHub before the event happened. The update never
+    // touches the lease columns, so it cannot violate the lease check. `reason`
+    // is left as first recorded: it says why the repository entered the queue.
+    // The cast on the state arm is required: a `case` whose branches are both
+    // bare literals resolves to text, which will not assign to an enum column.
     await this.sql`
       insert into repository_reconciliation_jobs (repository_id, reason)
       values (${repositoryId}, ${reason})
-      on conflict (repository_id) where state in ('PENDING', 'FAILED') do update
-      set state = 'PENDING',
+      on conflict (repository_id) do update
+      set state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
+          follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
           attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
           run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end
     `;
@@ -750,12 +756,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public async claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null> {
     const leaseToken = randomUUID();
     // The claim increments `attempt_count` so that a worker which dies mid-fold
-    // still burns an attempt and the reclaim path cannot loop forever. The
-    // `not exists` limb is what keeps two workers off one repository: the
-    // outstanding index bounds only the waiting-or-failed row, so a repository
-    // being folded can also hold a due follow-up job, and taking that job would
-    // spend a second fold's worth of GitHub budget before the two met at the
-    // repository advisory lock.
+    // still burns an attempt and the reclaim path cannot loop forever. Nothing
+    // further is needed to keep two workers off one repository: a repository owns
+    // one row, so a repository already being folded has no second row to claim.
     const rows = await this.sql<ReconciliationJobLeaseRow[]>`
       with due as (
         select job.id
@@ -763,13 +766,6 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         where (
             (job.state = ${"PENDING"} and job.run_after <= now())
             or (job.state = ${"RUNNING"} and job.lease_expires_at <= now())
-          )
-          and not exists (
-            select 1
-            from repository_reconciliation_jobs as busy
-            where busy.repository_id = job.repository_id
-              and busy.state = ${"RUNNING"}
-              and busy.lease_expires_at > now()
           )
         order by job.run_after, job.created_at
         limit 1
@@ -802,14 +798,41 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean> {
-    const rows = await this.sql<{ id: string }[]>`
-      delete from repository_reconciliation_jobs
-      where id = ${jobId}
-        and state = ${"RUNNING"}
-        and lease_token = ${leaseToken}
-      returning id
-    `;
-    return rows.length === 1;
+    // An event that arrived during the fold may not be reflected in it, so a job
+    // that took a follow-up becomes a fresh PENDING job instead of disappearing.
+    // The row is locked for the decision so that an enqueue cannot set the flag
+    // between reading it and acting on it, which would drop that event silently.
+    return this.sql.begin(async (transaction) => {
+      const [row] = await transaction<{ follow_up_requested: boolean }[]>`
+        select follow_up_requested
+        from repository_reconciliation_jobs
+        where id = ${jobId}
+          and state = ${"RUNNING"}
+          and lease_token = ${leaseToken}
+        for update
+      `;
+      if (row === undefined) {
+        return false;
+      }
+      if (row.follow_up_requested) {
+        await transaction`
+          update repository_reconciliation_jobs
+          set state = ${"PENDING"},
+              attempt_count = 0,
+              run_after = now(),
+              last_failure_at = null,
+              follow_up_requested = false,
+              lease_token = null,
+              lease_expires_at = null
+          where id = ${jobId}
+        `;
+        return true;
+      }
+      await transaction`
+        delete from repository_reconciliation_jobs where id = ${jobId}
+      `;
+      return true;
+    }) as Promise<boolean>;
   }
 
   public async deferReconciliationJob(
@@ -819,11 +842,16 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   ): Promise<boolean> {
     // The reconciliation cooldown declined to fold, so the claim's increment is
     // given back: nothing was attempted and nothing failed.
+    // This path and the two below clear `follow_up_requested`: each returns the
+    // row to a state that will be worked again, so a mid-fold event is already
+    // accounted for by that future run, and the flag keeps its single meaning —
+    // a fold is in flight and an event arrived after it started.
     const rows = await this.sql<{ id: string }[]>`
       update repository_reconciliation_jobs
       set state = ${"PENDING"},
           run_after = ${runAfter},
           attempt_count = greatest(attempt_count - 1, 0),
+          follow_up_requested = false,
           lease_token = null,
           lease_expires_at = null
       where id = ${jobId}
@@ -844,6 +872,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       set state = ${"PENDING"},
           run_after = ${runAfter},
           last_failure_at = now(),
+          follow_up_requested = false,
           lease_token = null,
           lease_expires_at = null
       where id = ${jobId}
@@ -859,6 +888,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       update repository_reconciliation_jobs
       set state = ${"FAILED"},
           last_failure_at = now(),
+          follow_up_requested = false,
           lease_token = null,
           lease_expires_at = null
       where id = ${jobId}
