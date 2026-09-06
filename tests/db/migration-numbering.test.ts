@@ -11,13 +11,19 @@ import {
 
 const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
 const databaseClient = vi.hoisted(() => ({
-  withTransaction: vi.fn(() => Promise.reject(new Error("a query was issued for a bad directory"))),
+  withTransaction: vi.fn(() => Promise.reject(new Error("the database client is stubbed here"))),
   closeSql: vi.fn(() => Promise.resolve()),
 }));
 
 // Standing in for the directory is what lets the production entry point be driven at all, and
 // standing in for the database is what makes the run hermetic: without it, the only thing keeping
 // these cases off whatever `DATABASE_URL` names is the guard they are testing.
+//
+// The listing is spread over the real module rather than replacing it, so that the day anything
+// in this module graph reaches for a third `node:fs/promises` export it finds the real one
+// instead of a hole. `readFile` guards a path no case here reaches: with the guards in place a
+// bad directory stops before any migration is read, and a run that got that far would rather say
+// so than read from disk.
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   readdir: () => Promise.resolve(migrationsOnDisk.entries),
@@ -59,14 +65,16 @@ describe("migration numbering", () => {
     }).not.toThrow();
   });
 
-  it("selects migrations by the rule the runner applies them by", () => {
+  it("selects migrations by the rule the runner applies them by, in filename order", () => {
     const migrationNames = listMigrationNames([
+      "010_c.sql",
       "README.md",
-      "013_reconciliation_cooldown.sql.orig",
       "001_initial.sql",
+      "013_reconciliation_cooldown.sql.orig",
+      "002_b.sql",
     ]);
 
-    expect(migrationNames).toEqual(["001_initial.sql"]);
+    expect(migrationNames).toEqual(["001_initial.sql", "002_b.sql", "010_c.sql"]);
   });
 
   it("names the number and both files when two migrations share a number", () => {
@@ -112,6 +120,14 @@ describe("migration numbering", () => {
     }).not.toThrow();
   });
 
+  it("reports every colliding number in one throw", () => {
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers(["015_d.sql", "014_a.sql", "015_c.sql", "014_b.sql"]);
+    });
+
+    expect(message).toContain("numbered 14: 014_a.sql, 014_b.sql; 15: 015_c.sql, 015_d.sql");
+  });
+
   it("rejects a third migration numbered 013 alongside the historical pair", () => {
     const message = rejectionMessage(() => {
       assertUniqueMigrationNumbers([
@@ -134,6 +150,18 @@ describe("migration numbering", () => {
     });
 
     expect(message).toContain("013_immutable_github_identity.sql, 013_something_else.sql");
+  });
+
+  it("does not exempt a grandfathered filename listed twice in place of its partner", () => {
+    const message = rejectionMessage(() => {
+      assertUniqueMigrationNumbers([
+        "013_immutable_github_identity.sql",
+        "013_immutable_github_identity.sql",
+        "013_reconciliation_cooldown.sql",
+      ]);
+    });
+
+    expect(message).toContain("013_immutable_github_identity.sql");
   });
 
   it("does not exempt a case-differing spelling of a grandfathered filename", () => {
@@ -165,14 +193,21 @@ describe("migration numbering", () => {
     expect(message).toContain("4 digits (0003_c.sql)");
   });
 
-  it("reports every width when more than two are in use", () => {
+  it("reports every width in width order when more than two are in use", () => {
     const message = rejectionMessage(() => {
       assertUniformMigrationNumberWidth(["0001_a.sql", "001_b.sql", "01_c.sql"]);
     });
 
-    expect(message).toContain("2 digits (01_c.sql)");
-    expect(message).toContain("3 digits (001_b.sql)");
-    expect(message).toContain("4 digits (0001_a.sql)");
+    expect(message).toContain("2 digits (01_c.sql), 3 digits (001_b.sql), 4 digits (0001_a.sql)");
+  });
+
+  it("says what to do at the boundary crossing that has no width to renumber to", () => {
+    const message = rejectionMessage(() => {
+      assertUniformMigrationNumberWidth(["8_h.sql", "9_i.sql", "10_j.sql"]);
+    });
+
+    expect(message).toContain("1 digit (8_h.sql, 9_i.sql), 2 digits (10_j.sql)");
+    expect(message).toContain("before the first migration at the new width is applied");
   });
 
   it("accepts a uniform width other than the one this repository writes", () => {
@@ -213,5 +248,14 @@ describe("migration numbering", () => {
       "db/migrations mixes numeric prefix widths",
     );
     expect(databaseClient.withTransaction).not.toHaveBeenCalled();
+  });
+
+  // The witness for every `not.toHaveBeenCalled` above: an unbound mock reports no calls just as
+  // quietly as a bound one the guards stopped short of, so one usable directory has to reach it.
+  it("reaches the database once the numbering is usable", async () => {
+    migrationsOnDisk.entries = ["001_a.sql", "002_b.sql"];
+
+    await expect(runMigrations()).rejects.toThrow("the database client is stubbed here");
+    expect(databaseClient.withTransaction).toHaveBeenCalled();
   });
 });
