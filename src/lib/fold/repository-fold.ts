@@ -522,10 +522,14 @@ function resolveOpening(
     ? Number.POSITIVE_INFINITY
     : Date.parse(firstAssignment.createdAt) + EVIDENCE_ORDERING_GRACE_MS;
   const issueCreatedTime = Date.parse(issue.createdAt);
-  // An opening-catalog label standing inside the opening window, whoever applied
-  // it. The accepting predicate below is this AND `isRepositorySponsor`, so the
-  // only conjunct separating a candidate from an accepted opening is the one
-  // whose failure is an authority problem rather than an absence.
+  // An opening-catalog label APPLIED inside the opening window, whoever applied
+  // it and whether or not it is still on the issue. The accepting predicate
+  // below is this AND `isRepositorySponsor`, so the only conjunct separating a
+  // candidate from an accepted opening is the one whose failure is an authority
+  // problem rather than an absence — which is what lets a refusal say which of
+  // the two it is. Reading the history rather than `issue.labels` is the
+  // accepting predicate's own rule: a later removal is recorded as `mutated`,
+  // not as an opening that never happened.
   const openingCandidate = (event: GitHubIssueHistoryEvent): event is OpeningLabelEvent =>
     event.kind === "LABELED" &&
     openingByLabel.has(event.label) &&
@@ -564,16 +568,19 @@ function resolveOpening(
 }
 
 /**
- * Which refusal to record when no opening-catalog label the sponsor applied
- * stood inside the opening window.
+ * Which refusal to record when the sponsor applied no opening-catalog label
+ * inside the opening window.
  *
- * `OPENING_LABEL_UNAUTHORIZED` is an accusation — a label IS standing and the
- * account that applied it is not the sponsor — so it is reported only where an
- * account could actually be compared: GitHub named a numeric actor id, or the
+ * `OPENING_LABEL_UNAUTHORIZED` is an accusation — someone other than the sponsor
+ * applied an opening-catalog label in the window — so it is reported only where
+ * an account could actually be compared: GitHub named a numeric actor id, or the
  * sponsor's stored login is there to read. Where GitHub named no id and the
  * sponsor record's login is blank, nothing was compared and nobody can be
  * accused, so the refusal stays the absence one. `resolveSettledDifficulty`
- * declines to emit `SETTLED_LABEL_UNAUTHORIZED` on the same guard.
+ * declines to emit `SETTLED_LABEL_UNAUTHORIZED` on the same guard — but only on
+ * that guard: it first reduces the history to the labels still STANDING at the
+ * merge, while an opening is decided by the applications themselves, so a label
+ * applied here and removed again is still refused by name.
  *
  * Candidates arrive already bounded by the opening window, so a label applied
  * before the issue existed or after the opening deadline never reaches here as
