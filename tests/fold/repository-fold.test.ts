@@ -56,6 +56,24 @@ describe("foldRepository", () => {
     expect(result.unwritableClosures[0]!.reason).toContain("11");
   });
 
+  it("reports a foreign closing pull request without merge proof as no closing pull request", () => {
+    const snapshot = outsiderFixture();
+    const pullRequest = snapshot.issues[0]!.closingPullRequests[0]!;
+    pullRequest.repositoryNameWithOwner = "other/fork";
+    pullRequest.mergeCommitOid = "not-a-merge-commit-oid";
+
+    const result = foldRepository(snapshot);
+
+    // Nothing merged that clears the merge-proof checks, which is what the
+    // older kind has always meant; the repository never comes into it.
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "NO_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "No merged GitHub GraphQL closing pull request was found.",
+    }]);
+  });
+
   it("settles the registered repository's closing pull request over one merged earlier elsewhere", () => {
     const snapshot = outsiderFixture();
     const registered = snapshot.issues[0]!.closingPullRequests[0]!;
