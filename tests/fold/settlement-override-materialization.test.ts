@@ -492,6 +492,7 @@ function unsettledIssue(input: {
     createdAt: "2026-09-01T08:00:00.000Z",
     closedAt: "2026-09-01T12:05:00.000Z",
     authorLogin: input.ownerLogin,
+    authorGitHubUserId: null,
     labels: ["M"],
     claimAssigneeGitHubLogin: input.assigneeLogin,
     history: [
@@ -499,6 +500,7 @@ function unsettledIssue(input: {
         kind: "LABELED",
         id: `opening-${input.id}`,
         actorLogin: input.ownerLogin,
+        actorGitHubUserId: null,
         label: "M",
         createdAt: "2026-09-01T08:01:00.000Z",
       },

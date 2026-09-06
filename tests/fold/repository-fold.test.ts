@@ -186,6 +186,7 @@ describe("foldRepository", () => {
         kind: "LABELED",
         id: "opening-mutation",
         actorLogin: "sponsor",
+        actorGitHubUserId: null,
         label: "L",
         createdAt: "2026-08-31T10:00:00.000Z",
       },
@@ -214,6 +215,7 @@ describe("foldRepository", () => {
       kind: "ASSIGNED",
       id: "assignment-before-opening",
       actorLogin: "sponsor",
+      actorGitHubUserId: null,
       assigneeLogin: "contributor",
       createdAt: "2026-08-30T09:30:00.000Z",
     });
@@ -566,6 +568,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             kind: "LABELED",
             id: "opening-1",
             actorLogin: "sponsor",
+            actorGitHubUserId: null,
             label: "M",
             createdAt: "2026-08-30T10:00:00.000Z",
           },
@@ -573,6 +576,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             kind: "LABELED",
             id: "actual-1",
             actorLogin: "sponsor",
+            actorGitHubUserId: null,
             label: "delivered/6",
             createdAt: "2026-09-01T11:00:00.000Z",
           },
@@ -582,6 +586,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
             id: "comment-1",
             databaseId: 401,
             authorLogin: "sponsor",
+            authorGitHubUserId: null,
             body: "Settled as delivered/6 after reviewing the final diff.",
             createdAt: "2026-09-01T11:30:00.000Z",
             lastEditedAt: null,
@@ -683,7 +688,7 @@ describe("rejected settlement closure records", () => {
       relabeledAt: "2026-09-01T12:20:00.000Z",
     });
     snapshot.issues[0]!.history.push({
-      kind: "LABELED", id: "unconfigured", actorLogin: "sponsor",
+      kind: "LABELED", id: "unconfigured", actorLogin: "sponsor", actorGitHubUserId: null,
       label: "unconfigured", createdAt: "2026-09-01T12:16:00.000Z",
     });
 
@@ -698,7 +703,7 @@ describe("rejected settlement closure records", () => {
   it("records several standing labels in active-map order", () => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.history.unshift({
-      kind: "LABELED", id: "another-actual", actorLogin: "sponsor",
+      kind: "LABELED", id: "another-actual", actorLogin: "sponsor", actorGitHubUserId: null,
       label: "delivered/3", createdAt: "2026-09-01T11:10:00.000Z",
     });
 
@@ -936,6 +941,7 @@ describe("settlement rationale pairing", () => {
       id: "comment-2",
       databaseId: 402,
       authorLogin: "sponsor",
+      authorGitHubUserId: null,
       body: "Re-settled as delivered/6 after reapplying the label.",
       createdAt: "2026-09-01T11:41:00.000Z",
       lastEditedAt: null,
@@ -956,6 +962,7 @@ describe("settlement rationale pairing", () => {
       id: "comment-2",
       databaseId: 402,
       authorLogin: "sponsor",
+      authorGitHubUserId: null,
       body: "Settled as delivered/6 after reviewing the final diff.",
       createdAt: "2026-09-01T11:05:00.000Z",
       lastEditedAt: null,
@@ -975,6 +982,7 @@ describe("settlement rationale pairing", () => {
         id: "comment-2",
         databaseId: 402,
         authorLogin: "sponsor",
+        authorGitHubUserId: null,
         body: "Settled as delivered/6 while applying the label.",
         createdAt: "2026-09-01T11:00:00.000Z",
         lastEditedAt: null,
@@ -983,6 +991,7 @@ describe("settlement rationale pairing", () => {
         id: "comment-3",
         databaseId: 403,
         authorLogin: "sponsor",
+        authorGitHubUserId: null,
         body: "Still delivered/6 after reviewing the final diff.",
         createdAt: "2026-09-01T11:05:00.000Z",
         lastEditedAt: null,
@@ -1000,6 +1009,7 @@ describe("settlement rationale pairing", () => {
       id: "comment-2",
       databaseId: 402,
       authorLogin: "sponsor",
+      authorGitHubUserId: null,
       body: "Still delivered/6 on a second look.",
       createdAt: "2026-09-01T11:45:00.000Z",
       lastEditedAt: null,
@@ -1121,6 +1131,7 @@ function reapplyActualLabel(
       kind: "UNLABELED",
       id: "actual-1-removed",
       actorLogin: "sponsor",
+      actorGitHubUserId: null,
       label: "delivered/6",
       createdAt: times.unlabeledAt,
     },
@@ -1128,6 +1139,7 @@ function reapplyActualLabel(
       kind: "LABELED",
       id: "actual-2",
       actorLogin: "sponsor",
+      actorGitHubUserId: null,
       label: "delivered/6",
       createdAt: times.relabeledAt,
     },
@@ -1170,6 +1182,7 @@ function assignAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
     kind: "ASSIGNED",
     id: "assignment-1",
     actorLogin: "sponsor",
+    actorGitHubUserId: null,
     assigneeLogin: "contributor",
     createdAt,
   });

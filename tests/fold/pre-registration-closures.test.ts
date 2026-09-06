@@ -390,6 +390,7 @@ function standingSettledLabel(
     kind: "LABELED",
     id: `standing-${input.label}`,
     actorLogin: input.actorLogin ?? "sponsor",
+    actorGitHubUserId: null,
     label: input.label,
     createdAt: input.at,
   });
@@ -405,6 +406,7 @@ function applyRefusedSettledLabelAt(snapshot: RepositoryFoldSnapshot, createdAt:
     kind: "LABELED",
     id: "actual-late",
     actorLogin: "sponsor",
+    actorGitHubUserId: null,
     label: "delivered/6",
     createdAt,
   });
@@ -452,6 +454,7 @@ function rejectedEvidenceFixture(): RepositoryFoldSnapshot {
             kind: "LABELED",
             id: "opening-1",
             actorLogin: "sponsor",
+            actorGitHubUserId: null,
             label: "M",
             createdAt: "2026-08-20T10:00:00.000Z",
           },

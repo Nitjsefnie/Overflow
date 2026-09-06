@@ -719,6 +719,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: null,
         authorLogin: "owner",
+        authorGitHubUserId: null,
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
         history: [],
@@ -735,6 +736,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: null,
         authorLogin: "owner",
+        authorGitHubUserId: null,
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
         history: [],
@@ -1378,6 +1380,281 @@ describe("GitHubGateway GraphQL source adapter", () => {
 
     await expect(gateway.getPullRequestReviews({ owner: "octo", name: "overflow" }, 4))
       .rejects.toThrow("GitHub GraphQL response was invalid.");
+  });
+});
+
+describe("GitHubGateway GraphQL account identities", () => {
+  const commentBody = "Owner rationale for delivered/6.";
+
+  function timelinePage(nodes: unknown[]) {
+    return { nodes, pageInfo: { hasNextPage: false, endCursor: null } };
+  }
+
+  function gatewayReturningIssue(node: Record<string, unknown>): GitHubGateway {
+    return new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => Response.json({
+        data: {
+          repository: {
+            issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        },
+      }),
+    });
+  }
+
+  it("carries the numeric account id of every timeline actor that is a GitHub user", async () => {
+    const gateway = gatewayReturningIssue({
+      ...issueNode(101, 1, "Identity issue"),
+      timelineItems: timelinePage([
+        {
+          __typename: "LabeledEvent",
+          id: "labeled-1",
+          createdAt: "2026-08-30T10:00:00.000Z",
+          actor: { login: "owner", databaseId: 4242 },
+          label: { name: "size/M" },
+        },
+        {
+          __typename: "UnlabeledEvent",
+          id: "unlabeled-1",
+          createdAt: "2026-08-30T11:00:00.000Z",
+          actor: { login: "owner", databaseId: 4242 },
+          label: { name: "size/M" },
+        },
+        {
+          __typename: "AssignedEvent",
+          id: "assigned-1",
+          createdAt: "2026-08-30T12:00:00.000Z",
+          actor: { login: "helper", databaseId: 909 },
+          assignee: { login: "contributor" },
+        },
+        {
+          __typename: "UnassignedEvent",
+          id: "unassigned-1",
+          createdAt: "2026-08-30T13:00:00.000Z",
+          actor: { login: "helper", databaseId: 909 },
+          assignee: { login: "contributor" },
+        },
+      ]),
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issue?.history).toEqual([
+      {
+        kind: "LABELED",
+        id: "labeled-1",
+        actorLogin: "owner",
+        actorGitHubUserId: 4242,
+        label: "size/M",
+        createdAt: "2026-08-30T10:00:00.000Z",
+      },
+      {
+        kind: "UNLABELED",
+        id: "unlabeled-1",
+        actorLogin: "owner",
+        actorGitHubUserId: 4242,
+        label: "size/M",
+        createdAt: "2026-08-30T11:00:00.000Z",
+      },
+      {
+        kind: "ASSIGNED",
+        id: "assigned-1",
+        actorLogin: "helper",
+        actorGitHubUserId: 909,
+        assigneeLogin: "contributor",
+        createdAt: "2026-08-30T12:00:00.000Z",
+      },
+      {
+        kind: "UNASSIGNED",
+        id: "unassigned-1",
+        actorLogin: "helper",
+        actorGitHubUserId: 909,
+        assigneeLogin: "contributor",
+        createdAt: "2026-08-30T13:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("carries the numeric account id of the issue author and of a comment author", async () => {
+    const gateway = gatewayReturningIssue({
+      ...issueNode(101, 1, "Identity issue"),
+      author: { login: "owner", databaseId: 4242 },
+      timelineItems: timelinePage([
+        {
+          __typename: "IssueComment",
+          id: "comment-1",
+          databaseId: 501,
+          createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: null,
+          author: { login: "sponsor", databaseId: 909 },
+          body: commentBody,
+        },
+      ]),
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issue).toMatchObject({ authorLogin: "owner", authorGitHubUserId: 4242 });
+    expect(issue?.comments).toEqual([
+      {
+        id: "comment-1",
+        databaseId: 501,
+        authorLogin: "sponsor",
+        authorGitHubUserId: 909,
+        body: commentBody,
+        createdAt: "2026-09-01T11:30:00.000Z",
+        lastEditedAt: null,
+      },
+    ]);
+  });
+
+  it("carries no account id when GitHub reports an actor or author that is not a user", async () => {
+    const gateway = gatewayReturningIssue({
+      ...issueNode(101, 1, "Bot issue"),
+      author: { login: "dependabot[bot]" },
+      timelineItems: timelinePage([
+        {
+          __typename: "LabeledEvent",
+          id: "labeled-1",
+          createdAt: "2026-08-30T10:00:00.000Z",
+          actor: { login: "github-actions[bot]" },
+          label: { name: "size/M" },
+        },
+        {
+          __typename: "UnlabeledEvent",
+          id: "unlabeled-1",
+          createdAt: "2026-08-30T11:00:00.000Z",
+          actor: null,
+          label: { name: "size/M" },
+        },
+        {
+          __typename: "IssueComment",
+          id: "comment-1",
+          databaseId: 501,
+          createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: null,
+          author: { login: "dependabot[bot]" },
+          body: commentBody,
+        },
+      ]),
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issue).toMatchObject({ authorLogin: "dependabot[bot]", authorGitHubUserId: null });
+    expect(issue?.history).toEqual([
+      {
+        kind: "LABELED",
+        id: "labeled-1",
+        actorLogin: "github-actions[bot]",
+        actorGitHubUserId: null,
+        label: "size/M",
+        createdAt: "2026-08-30T10:00:00.000Z",
+      },
+      {
+        kind: "UNLABELED",
+        id: "unlabeled-1",
+        actorLogin: null,
+        actorGitHubUserId: null,
+        label: "size/M",
+        createdAt: "2026-08-30T11:00:00.000Z",
+      },
+    ]);
+    expect(issue?.comments[0]).toMatchObject({
+      authorLogin: "dependabot[bot]",
+      authorGitHubUserId: null,
+    });
+  });
+
+  it.each([null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "carries no account id for an invalid databaseId of %s",
+    async (databaseId) => {
+      const gateway = gatewayReturningIssue({
+        ...issueNode(101, 1, "Invalid identity issue"),
+        author: { login: "owner", databaseId },
+        timelineItems: timelinePage([
+          {
+            __typename: "LabeledEvent",
+            id: "labeled-1",
+            createdAt: "2026-08-30T10:00:00.000Z",
+            actor: { login: "owner", databaseId },
+            label: { name: "size/M" },
+          },
+          {
+            __typename: "IssueComment",
+            id: "comment-1",
+            databaseId: 501,
+            createdAt: "2026-09-01T11:30:00.000Z",
+            lastEditedAt: null,
+            author: { login: "owner", databaseId },
+            body: commentBody,
+          },
+        ]),
+      });
+
+      const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+      expect(issue).toMatchObject({ authorLogin: "owner", authorGitHubUserId: null });
+      expect(issue?.history[0]).toMatchObject({ actorLogin: "owner", actorGitHubUserId: null });
+      expect(issue?.comments[0]).toMatchObject({ authorLogin: "owner", authorGitHubUserId: null });
+    },
+  );
+
+  it("asks GitHub for the numeric account id beside every login it selects", async () => {
+    const queries: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(request.query);
+        if (request.query.includes("query RepositoryIssues")) {
+          return Response.json({
+            data: {
+              repository: {
+                issues: {
+                  nodes: [{
+                    ...issueNode(101, 1, "Identity issue"),
+                    timelineItems: {
+                      nodes: [],
+                      pageInfo: { hasNextPage: true, endCursor: "timeline-cursor-2" },
+                    },
+                  }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          });
+        }
+        return Response.json({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(queries.some((query) => query.includes("query RepositoryIssues"))).toBe(true);
+    expect(queries.some((query) => query.includes("query IssueTimeline"))).toBe(true);
+    for (const query of queries) {
+      for (const event of ["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent"]) {
+        expect(query).toMatch(
+          new RegExp(
+            `\\.\\.\\.\\s*on\\s+${event}\\s*\\{[^}]*actor\\s*\\{\\s*login\\s*\\.\\.\\.\\s*on\\s+User\\s*\\{\\s*databaseId\\s*\\}\\s*\\}`,
+          ),
+        );
+      }
+      expect(query).toMatch(
+        /\.\.\.\s*on\s+IssueComment\s*\{[^}]*author\s*\{\s*login\s*\.\.\.\s*on\s+User\s*\{\s*databaseId\s*\}\s*\}/,
+      );
+      expect(query).not.toMatch(/\b(?:author|actor)\s*\{\s*login\s*\}/);
+    }
   });
 });
 
