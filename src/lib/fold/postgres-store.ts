@@ -1474,12 +1474,24 @@ async function replacePullRequestIssueLinks(
 }
 
 /**
- * Exactly the columns `deleteAbsentMaterialization` selects, and no others. The
- * shared `IssueRow` and `PullRequestRow` describe what the upserts return, which
- * is a wider set than either removal query fetches; typing these rows as those
- * would let a snapshot read a column the query never asked for and record it as
- * `undefined`, which `JSON.stringify` then drops from the stored payload without
- * a word. Naming the narrow shape here makes that a compile error instead.
+ * The columns each removal snapshot records, named per query rather than
+ * borrowed from the shared `IssueRow` and `PullRequestRow`. Those two describe
+ * what the upserts return, which neither contains nor is contained by what
+ * these selects fetch: `IssueRow` declares no number, state, title or url, and
+ * `PullRequestRow` declares only its two ids and the merge pair, so reusing
+ * either here would not compile at all.
+ *
+ * The other direction is the one worth guarding once it does compile.
+ * `IssueRow` carries the opening-source and settlement columns that neither
+ * removal select fetches, and a column declared on the row type but absent
+ * from the query arrives `undefined`: `JSON.stringify` drops the key on its
+ * way into `before_state`, so the snapshot quietly loses a field and nothing
+ * fails. Naming the fetched columns here makes reading anything else a
+ * compile error.
+ *
+ * `id` is the one column both selects fetch that no snapshot records — it
+ * addresses the delete that follows, not the item that left — so the call
+ * sites intersect it in rather than putting it on these types.
  */
 type RemovedIssueRow = {
   github_issue_id: number | string;
