@@ -330,8 +330,9 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
 
     if (pullRequest === null) {
       // A foreign closing pull request is never materialized, so the closure
-      // that records it can reference no pull request row.
-      unwritableClosures.push(selection.kind === "CROSS_REPOSITORY"
+      // that records it can reference no pull request row. Its evidence window
+      // shut at the foreign merge; with no merge at all, at the close itself.
+      const closure: UnwritableClosure = selection.kind === "CROSS_REPOSITORY"
         ? {
           githubIssueId: issue.id,
           kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
@@ -343,7 +344,13 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
           kind: "NO_CLOSING_PULL_REQUEST",
           githubPullRequestId: null,
           reason: "No merged GitHub GraphQL closing pull request was found.",
-        });
+        };
+      const windowClosedAt = selection.kind === "CROSS_REPOSITORY"
+        ? selection.pullRequest.mergedAt
+        : issue.closedAt;
+      if (evidenceWindowReachable(windowClosedAt, snapshot.repository.registeredAt)) {
+        unwritableClosures.push(closure);
+      }
       continue;
     }
 
@@ -361,7 +368,10 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       reviewRounds,
     );
 
-    if (settledResolution?.kind === "rejected") {
+    if (
+      settledResolution?.kind === "rejected" &&
+      evidenceWindowReachable(pullRequest.mergedAt, snapshot.repository.registeredAt)
+    ) {
       unwritableClosures.push({
         githubIssueId: issue.id,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
@@ -479,6 +489,26 @@ function resolveOpening(
     openingSourceAt: new Date(source.createdAt).toISOString(),
     mutated,
   };
+}
+
+/**
+ * An unwritable closure is a work item for a moderator, so it is worth
+ * recording only while the evidence it asks for could still be produced. Every
+ * settlement evidence window shuts at the closure — at the merge, or at the
+ * close of an issue no pull request closed — and a window that shut before
+ * Overflow was registered on the repository shut before anyone could have been
+ * asked to fill it. No label applied and no comment written today reopens it,
+ * so the row would sit in the queue forever with no action that could clear it.
+ *
+ * An instant nobody can read is not evidence the window was unreachable, so an
+ * unparseable or absent one records: leaving a real work item visible is the
+ * recoverable mistake, silently dropping one is not.
+ */
+function evidenceWindowReachable(windowClosedAt: string | null, registeredAt: string): boolean {
+  if (!validTimestamp(windowClosedAt) || !validTimestamp(registeredAt)) {
+    return true;
+  }
+  return Date.parse(windowClosedAt) >= Date.parse(registeredAt);
 }
 
 /**
