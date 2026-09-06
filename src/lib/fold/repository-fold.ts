@@ -190,6 +190,12 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  * `code` rather than one shape with two nullable columns: a consumer that
  * switches on the code gets the fields typed where they exist and is not made
  * to handle an absence that cannot happen.
+ *
+ * The accusation answers it twice over, and neither field is redundant: the two
+ * logins are STRUCTURED facts for tooling to group and filter on, and `reason`
+ * is the PROSE a moderator reads. Only the prose can carry the discriminator
+ * where an account has taken the login the sponsor's record still stores, since
+ * there the structured login is the sponsor's own and says nothing.
  */
 export type OpeningRefusal =
   | { code: "OPENING_LABEL_MISSING" }
@@ -199,6 +205,8 @@ export type OpeningRefusal =
       openingLabel: string;
       /** The login GitHub reported for the account that applied it, or `unknown`. */
       openingSourceActorLogin: string;
+      /** The same refusal in the words a moderator reads. */
+      reason: string;
     };
 
 export type FoldPolicyViolation =
@@ -606,6 +614,9 @@ function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): Ope
     // SPONSOR's stored login when the payload names no actor, which here would
     // record the sponsor as the account that applied an unauthorized label.
     openingSourceActorLogin: attributable.actorLogin?.trim() || "unknown",
+    // Shared with the settled side, so an account that took the sponsor's freed
+    // login is refused in the same words at both windows.
+    reason: labelActorRejection("opening", attributable.label, attributable.actorLogin, sponsorLogin),
   };
 }
 

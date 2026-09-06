@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import { foldRepository, type FoldResult, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 
 /**
  * The opening refusal a moderator reads is the only record of why an issue left
@@ -37,6 +37,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
     }]);
     expect(result.issues).toEqual([]);
     // The label was applied and is still on the issue — nothing is missing here,
@@ -54,6 +55,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
     }]);
     expect(result.issues).toEqual([]);
   });
@@ -63,15 +65,22 @@ describe("opening label authority", () => {
 
     const result = foldRepository(snapshot);
 
-    // The login is the payload's own text, so here it is the login the impostor
-    // holds — which happens to read like the sponsor's. The account was refused
-    // on its numeric id; the login names what a moderator will see on the event.
+    // `openingSourceActorLogin` is the payload's own text, so here it is the
+    // login the impostor holds — which reads exactly like the sponsor's. The
+    // sentence is what carries the discriminator: the ACCOUNT was refused, and
+    // the login it holds is not evidence of who it is.
     expect(result.policyViolations).toEqual([{
       code: "OPENING_LABEL_UNAUTHORIZED",
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: SPONSOR_LOGIN,
+      reason: "The opening label `M` was applied by a different GitHub account using the login "
+        + "`sponsor`, not by the repository sponsor.",
     }]);
+    // The point of that branch: a moderator must not be able to read the row as
+    // the sponsor having applied the label. The ordinary sentence would print
+    // the sponsor's own login on both sides of "rather than".
+    expect(unauthorizedReason(result)).not.toContain(`applied by \`${SPONSOR_LOGIN}\``);
     expect(result.issues).toEqual([]);
   });
 
@@ -97,6 +106,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -107,13 +117,16 @@ describe("opening label authority", () => {
 
     // `sponsorDisplayLogin` would fall back to the sponsor's stored login here,
     // which would name the sponsor as the account that applied an unauthorized
-    // label. The refusal names nobody rather than the wrong body.
+    // label. Both the field and the sentence name nobody rather than the wrong
+    // body — the sponsor appears only as the account that did NOT apply it.
     expect(result.policyViolations).toEqual([{
       code: "OPENING_LABEL_UNAUTHORIZED",
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "unknown",
+      reason: "The opening label `M` was applied by `unknown` rather than the repository sponsor `sponsor`.",
     }]);
+    expect(unauthorizedReason(result)).not.toContain(`applied by \`${SPONSOR_LOGIN}\``);
   });
 
   it("names the first candidate applied when several outsiders applied opening labels", () => {
@@ -132,6 +145,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
+      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -155,6 +169,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "S",
       openingSourceActorLogin: "maintainer",
+      reason: "The opening label `S` was applied by `maintainer` rather than the repository sponsor.",
     }]);
   });
 
@@ -258,6 +273,17 @@ describe("opening label authority", () => {
     })]);
   });
 });
+
+/** The recorded sentence, narrowed off the violation union so a test can read it alone. */
+function unauthorizedReason(result: FoldResult): string {
+  const violation = result.policyViolations.find(
+    (candidate) => candidate.code === "OPENING_LABEL_UNAUTHORIZED",
+  );
+  if (violation?.code !== "OPENING_LABEL_UNAUTHORIZED") {
+    throw new Error("no OPENING_LABEL_UNAUTHORIZED violation was recorded");
+  }
+  return violation.reason;
+}
 
 /** A second opening-catalog application, so a refusal has more than one candidate to choose from. */
 function applyOpeningLabel(

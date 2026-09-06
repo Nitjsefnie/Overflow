@@ -245,6 +245,8 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
         githubIssueId: impostorIssueGitHubId,
         openingLabel: "M",
         openingSourceActorLogin: STORED_SPONSOR_LOGIN,
+        reason: "The opening label `M` was applied by a different GitHub account using the login "
+          + "`owner-old`, not by the repository sponsor.",
       },
     }]);
     // Pinned to the literal, not to `removals.length`: a defect that recorded
