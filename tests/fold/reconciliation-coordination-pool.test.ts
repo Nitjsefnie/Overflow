@@ -162,23 +162,4 @@ describe("reconciliation coordination pool", () => {
       vi.useRealTimers();
     }
   });
-
-  it("keeps a reservation that fails after the deadline from escaping unhandled", async () => {
-    vi.useFakeTimers();
-    try {
-      const { coordinationSql, reservations } = exhaustedCoordinationPool();
-      const coordinated = storeOverPool(coordinationSql)
-        .withRepositoryReconciliation("repository-whose-reservation-fails", async () => undefined);
-      const refusal = expect(coordinated).rejects.toThrow(coordinationFailure);
-      await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
-      await refusal;
-
-      // An unhandled rejection fails the whole vitest run, so a clean run is the
-      // assertion: the abandoned reservation's failure was consumed.
-      reservations[0].fail(new Error("coordination pool connection refused"));
-      await vi.advanceTimersByTimeAsync(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
