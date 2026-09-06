@@ -19,6 +19,8 @@ export type ReconciliationSweepSchedule = {
   runSweep(): Promise<unknown>;
   schedule?(callback: () => void, everyMs: number): void;
   intervalMs?: number;
+  /** Reports a sweep that rejected as a whole; defaults to console.error. */
+  onFailure?(error: unknown): void;
 };
 
 export const RECONCILIATION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -95,10 +97,17 @@ export async function sweepReconciliations(
  * A tick that arrives while the previous sweep is still running is dropped, not
  * queued: sweeps are idempotent, so a slow one only needs to finish, never to
  * be run twice over.
+ *
+ * A sweep that rejects outright is reported here rather than left to the
+ * caller: the scheduler owns every promise it starts, and nobody is awaiting
+ * them. An unhandled rejection terminates the process under Node's default, and
+ * the first sweep runs at startup, so a database that cannot list the
+ * repositories would kill the server as it boots.
  */
 export function startReconciliationSweep(schedule: ReconciliationSweepSchedule): void {
   const everyMs = schedule.intervalMs ?? RECONCILIATION_SWEEP_INTERVAL_MS;
   const scheduleTick = schedule.schedule ?? defaultSchedule;
+  const reportFailure = schedule.onFailure ?? defaultReportFailure;
   let running = false;
 
   const sweep = () => {
@@ -106,13 +115,24 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
       return;
     }
     running = true;
-    void schedule.runSweep().finally(() => {
-      running = false;
-    });
+    void (async () => {
+      try {
+        await schedule.runSweep();
+      } catch (error) {
+        reportFailure(error);
+      } finally {
+        // Cleared on rejection as well, or one failed sweep drops every later tick.
+        running = false;
+      }
+    })();
   };
 
   sweep();
   scheduleTick(sweep, everyMs);
+}
+
+function defaultReportFailure(error: unknown): void {
+  console.error("Reconciliation sweep failed", error);
 }
 
 function defaultSchedule(callback: () => void, everyMs: number): void {
