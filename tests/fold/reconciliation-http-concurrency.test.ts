@@ -8,8 +8,9 @@ const pageInfo = { hasNextPage: false, endCursor: null };
 
 it("bounds actual HTTP requests across worker cohorts and both review paginators", async () => {
   const count = 9;
-  // One issue page, two review pages, two dismissal pages and a diff per PR.
-  const total = 46;
+  // One issue page, one timeline read per issue, two review pages, two dismissal
+  // pages and a diff per PR.
+  const total = 55;
   const gates = Array.from({ length: total }, signal);
   const starts = Array.from({ length: total }, signal);
   const calls: Array<{ operation: string; number: number | null; cursor: string | null }> = [];
@@ -43,6 +44,11 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
         } } } });
       }
       if (operation === "diff") return new Response(`diff ${number}`);
+      if (operation === "IssueTimeline") {
+        return Response.json({ data: { repository: { issue: {
+          timelineItems: issueTimeline(request.variables.issueNumber),
+        } } } });
+      }
       expect(cursor).toBeOneOf([null, "next"]);
       const nextPage = cursor === null ? { hasNextPage: true, endCursor: "next" } : pageInfo;
       if (operation === "PullRequestReviews") {
@@ -128,15 +134,18 @@ function signal() {
   return { promise, resolve };
 }
 
+function issueTimeline(number: number) {
+  return { nodes: [{
+    __typename: "LabeledEvent", id: `opening-${number}`, actor: { login: "sponsor" },
+    createdAt: "2026-09-01T08:00:00.000Z", label: { name: "M" },
+  }], pageInfo };
+}
+
 function issueNode(number: number) {
   return {
     databaseId: 100 + number, number, title: `Issue ${number}`, body: "", state: "CLOSED",
     url: `https://github.com/sponsor/repository/issues/${number}`, createdAt: "2026-09-01T07:00:00.000Z",
     author: { login: "sponsor" }, labels: { nodes: [{ name: "M" }], pageInfo }, assignees: { nodes: [] },
-    timelineItems: { nodes: [{
-      __typename: "LabeledEvent", id: `opening-${number}`, actor: { login: "sponsor" },
-      createdAt: "2026-09-01T08:00:00.000Z", label: { name: "M" },
-    }], pageInfo },
     closedByPullRequestsReferences: { nodes: [{
       databaseId: 200 + number, number, title: `PR ${number}`, body: "", state: "MERGED",
       url: `https://github.com/sponsor/repository/pull/${number}`, mergedAt: "2026-09-01T12:00:00.000Z",

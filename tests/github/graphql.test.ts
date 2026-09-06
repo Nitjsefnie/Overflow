@@ -421,18 +421,10 @@ describe("GitHubGateway GraphQL source adapter", () => {
     }
   });
 
-  it.each([
-    { connection: "labels", first: 20, total: 25, operation: "IssueLabels" },
-    { connection: "timelineItems", first: 50, total: 60, operation: "IssueTimeline" },
-  ])("assembles all $total $connection from a smaller nested page and its remainder", async ({ connection, first, total, operation }) => {
+  it("assembles all 25 labels from the smaller nested page and its remainder", async () => {
     const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
     const queries: string[] = [];
-    const nodes = Array.from({ length: total }, (_, index) => connection === "labels"
-      ? { name: `label-${index}` }
-      : {
-          __typename: "LabeledEvent", id: `event-${index}`, actor: { login: "owner" },
-          createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(), label: { name: `label-${index}` },
-        });
+    const nodes = Array.from({ length: 25 }, (_, index) => ({ name: `label-${index}` }));
     const gateway = new GitHubGateway({
       accessToken: "test-token",
       fetch: async (_input, init) => {
@@ -442,25 +434,68 @@ describe("GitHubGateway GraphQL source adapter", () => {
         queries.push(query);
         if (requestedOperation === "RepositoryIssues") {
           return Response.json({ data: { repository: { issues: {
-            nodes: [{ ...issueNode(101, 1, "Overflow"), [connection]: {
-              nodes: nodes.slice(0, first), pageInfo: { hasNextPage: true, endCursor: "nested-next" },
+            nodes: [{ ...issueNode(101, 1, "Overflow"), labels: {
+              nodes: nodes.slice(0, 20), pageInfo: { hasNextPage: true, endCursor: "nested-next" },
             } }],
             pageInfo: { hasNextPage: false, endCursor: null },
           } } } });
         }
-        return Response.json({ data: { repository: { issue: { [connection]: {
-          nodes: nodes.slice(first), pageInfo: { hasNextPage: false, endCursor: null },
+        if (requestedOperation === "IssueTimeline") {
+          return timelineResponse();
+        }
+        return Response.json({ data: { repository: { issue: { labels: {
+          nodes: nodes.slice(20), pageInfo: { hasNextPage: false, endCursor: null },
         } } } } });
       },
     });
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
-    expect(connection === "labels" ? issue?.labels : issue?.history.map((event) => event.id))
-      .toEqual(Array.from({ length: total }, (_, index) => `${connection === "labels" ? "label" : "event"}-${index}`));
+    expect(issue?.labels).toEqual(Array.from({ length: 25 }, (_, index) => `label-${index}`));
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
-      { operation, variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: "nested-next" } },
+      // The timeline is asked for unconditionally, so it is issued before the
+      // label continuation the nested page only sometimes needs.
+      { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: null } },
+      { operation: "IssueLabels", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: "nested-next" } },
     ]);
-    expect(queries[0]).toMatch(new RegExp(`${connection}\\(\\s*first: ${first}\\b`));
+    expect(queries[0]).toMatch(/labels\(\s*first: 20\b/);
+  });
+
+  it("assembles all 60 timeline events from the per-issue first page and its remainder", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const queries: string[] = [];
+    const nodes = Array.from({ length: 60 }, (_, index) => ({
+      __typename: "LabeledEvent", id: `event-${index}`, actor: { login: "owner" },
+      createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(), label: { name: `label-${index}` },
+    }));
+    const gateway = new GitHubGateway({
+      accessToken: "test-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const requestedOperation = /query (\w+)/.exec(query)![1]!;
+        requests.push({ operation: requestedOperation, variables });
+        queries.push(query);
+        if (requestedOperation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: {
+            nodes: [issueNode(101, 1, "Overflow")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } });
+        }
+        return variables.cursor === null
+          ? timelineResponse(nodes.slice(0, 50), { hasNextPage: true, endCursor: "timeline-next" })
+          : timelineResponse(nodes.slice(50));
+      },
+    });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+    expect(issue?.history.map((event) => event.id))
+      .toEqual(Array.from({ length: 60 }, (_, index) => `event-${index}`));
+    expect(requests).toEqual([
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
+      { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: null } },
+      { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: "timeline-next" } },
+    ]);
+    for (const query of queries.slice(1)) {
+      expect(query).toMatch(/timelineItems\(\s*first: 100\b/);
+    }
   });
 
   it.each([21, 121])("appends %i closing references after the nested twenty in order", async (total) => {
@@ -482,6 +517,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
             } }],
             pageInfo: { hasNextPage: false, endCursor: null },
           } } } });
+        }
+        if (operation === "IssueTimeline") {
+          return timelineResponse();
         }
         if (operation !== "ClosingPullRequests" || variables.issueNumber !== 1 ||
             (variables.cursor !== "closing-next" && !(total === 121 && variables.cursor === "closing-last"))) {
@@ -509,6 +547,9 @@ describe("GitHubGateway GraphQL source adapter", () => {
     })));
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
+      { operation: "IssueTimeline", variables: {
+        owner: "octo", name: "overflow", issueNumber: 1, cursor: null,
+      } },
       { operation: "ClosingPullRequests", variables: {
         owner: "octo", name: "overflow", issueNumber: 1, cursor: "closing-next",
       } },
@@ -539,18 +580,6 @@ describe("GitHubGateway GraphQL source adapter", () => {
                       ...issueNode(101, 1, "History issue"),
                       createdAt: "2026-08-30T09:00:00.000Z",
                       author: { login: "owner" },
-                      timelineItems: {
-                        nodes: [
-                          {
-                            __typename: "LabeledEvent",
-                            id: "label-event-1",
-                            createdAt: "2026-08-30T10:00:00.000Z",
-                            actor: { login: "owner" },
-                            label: { name: "size/M" },
-                          },
-                        ],
-                        pageInfo: { hasNextPage: true, endCursor: "history-cursor-2" },
-                      },
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -561,6 +590,28 @@ describe("GitHubGateway GraphQL source adapter", () => {
         }
 
         historyCursors.push(request.variables.cursor);
+        if (request.variables.cursor === null) {
+          return Response.json({
+            data: {
+              repository: {
+                issue: {
+                  timelineItems: {
+                    nodes: [
+                      {
+                        __typename: "LabeledEvent",
+                        id: "label-event-1",
+                        createdAt: "2026-08-30T10:00:00.000Z",
+                        actor: { login: "owner" },
+                        label: { name: "size/M" },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: true, endCursor: "history-cursor-2" },
+                  },
+                },
+              },
+            },
+          });
+        }
         return Response.json({
           data: {
             repository: {
@@ -628,8 +679,12 @@ describe("GitHubGateway GraphQL source adapter", () => {
         },
       ],
     });
-    expect(historyCursors).toEqual(["history-cursor-2"]);
-    for (const query of queries) {
+    expect(historyCursors).toEqual([null, "history-cursor-2"]);
+    // Only the per-issue timeline document selects comments now; the bulk issue
+    // query deliberately carries no timeline connection at all.
+    const timelineQueries = queries.filter((query) => query.includes("query IssueTimeline"));
+    expect(timelineQueries).toHaveLength(2);
+    for (const query of timelineQueries) {
       expect(query).toMatch(/\.\.\. on IssueComment \{[^}]*lastEditedAt/);
     }
   });
@@ -640,30 +695,30 @@ describe("GitHubGateway GraphQL source adapter", () => {
   ])("maps $response lastEditedAt to null for an unedited issue comment", async ({ editField }) => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async () => Response.json({
-        data: {
-          repository: {
-            issues: {
-              nodes: [{
-                ...issueNode(101, 1, "Unedited comment"),
-                timelineItems: {
-                  nodes: [{
-                    __typename: "IssueComment",
-                    id: "unedited-comment",
-                    databaseId: 502,
-                    createdAt: "2026-09-01T11:30:00.000Z",
-                    ...editField,
-                    author: { login: "owner" },
-                    body: "Owner rationale for delivered/6.",
-                  }],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
-              }],
-              pageInfo: { hasNextPage: false, endCursor: null },
+      fetch: async (_input, init) => {
+        const { query } = JSON.parse(String(init?.body));
+        if (query.includes("query IssueTimeline")) {
+          return timelineResponse([{
+            __typename: "IssueComment",
+            id: "unedited-comment",
+            databaseId: 502,
+            createdAt: "2026-09-01T11:30:00.000Z",
+            ...editField,
+            author: { login: "owner" },
+            body: "Owner rationale for delivered/6.",
+          }]);
+        }
+        return Response.json({
+          data: {
+            repository: {
+              issues: {
+                nodes: [issueNode(101, 1, "Unedited comment")],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
             },
           },
-        },
-      }),
+        });
+      },
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
@@ -681,8 +736,12 @@ describe("GitHubGateway GraphQL source adapter", () => {
       fetch: async (input, init) => {
         expect(String(input)).toBe("https://api.github.com/graphql");
         const request = JSON.parse(String(init?.body)) as {
+          query: string;
           variables: { cursor: string | null };
         };
+        if (request.query.includes("query IssueTimeline")) {
+          return timelineResponse();
+        }
         cursors.push(request.variables.cursor);
 
         if (request.variables.cursor === null) {
@@ -755,7 +814,11 @@ describe("GitHubGateway GraphQL source adapter", () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
-        query = (JSON.parse(String(init?.body)) as { query: string }).query;
+        const sent = (JSON.parse(String(init?.body)) as { query: string }).query;
+        if (sent.includes("query IssueTimeline")) {
+          return timelineResponse();
+        }
+        query = sent;
         return Response.json({
           data: {
             repository: {
@@ -786,7 +849,11 @@ describe("GitHubGateway GraphQL source adapter", () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
-        query = (JSON.parse(String(init?.body)) as { query: string }).query;
+        const sent = (JSON.parse(String(init?.body)) as { query: string }).query;
+        if (sent.includes("query IssueTimeline")) {
+          return timelineResponse();
+        }
+        query = sent;
         return Response.json({
           data: {
             repository: {
@@ -841,6 +908,10 @@ describe("GitHubGateway GraphQL source adapter", () => {
               },
             },
           });
+        }
+
+        if (request.query.includes("query IssueTimeline")) {
+          return timelineResponse();
         }
 
         labelRequests.push({
@@ -1389,57 +1460,58 @@ describe("GitHubGateway GraphQL source adapter", () => {
 describe("GitHubGateway GraphQL account identities", () => {
   const commentBody = "Owner rationale for delivered/6.";
 
-  function timelinePage(nodes: unknown[]) {
-    return { nodes, pageInfo: { hasNextPage: false, endCursor: null } };
-  }
-
-  function gatewayReturningIssue(node: Record<string, unknown>): GitHubGateway {
+  function gatewayReturningIssue(node: Record<string, unknown>, timeline: unknown[] = []): GitHubGateway {
     return new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async () => Response.json({
-        data: {
-          repository: {
-            issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+      fetch: async (_input, init) => {
+        const { query } = JSON.parse(String(init?.body));
+        if (query.includes("query IssueTimeline")) {
+          return timelineResponse(timeline);
+        }
+        return Response.json({
+          data: {
+            repository: {
+              issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
           },
-        },
-      }),
+        });
+      },
     });
   }
 
   it("carries the numeric account id of every timeline actor that is a GitHub user", async () => {
     const gateway = gatewayReturningIssue({
       ...issueNode(101, 1, "Identity issue"),
-      timelineItems: timelinePage([
-        {
-          __typename: "LabeledEvent",
-          id: "labeled-1",
-          createdAt: "2026-08-30T10:00:00.000Z",
-          actor: { login: "owner", databaseId: 4242 },
-          label: { name: "size/M" },
-        },
-        {
-          __typename: "UnlabeledEvent",
-          id: "unlabeled-1",
-          createdAt: "2026-08-30T11:00:00.000Z",
-          actor: { login: "owner", databaseId: 4242 },
-          label: { name: "size/M" },
-        },
-        {
-          __typename: "AssignedEvent",
-          id: "assigned-1",
-          createdAt: "2026-08-30T12:00:00.000Z",
-          actor: { login: "helper", databaseId: 909 },
-          assignee: { login: "contributor" },
-        },
-        {
-          __typename: "UnassignedEvent",
-          id: "unassigned-1",
-          createdAt: "2026-08-30T13:00:00.000Z",
-          actor: { login: "helper", databaseId: 909 },
-          assignee: { login: "contributor" },
-        },
-      ]),
-    });
+    }, [
+      {
+        __typename: "LabeledEvent",
+        id: "labeled-1",
+        createdAt: "2026-08-30T10:00:00.000Z",
+        actor: { login: "owner", databaseId: 4242 },
+        label: { name: "size/M" },
+      },
+      {
+        __typename: "UnlabeledEvent",
+        id: "unlabeled-1",
+        createdAt: "2026-08-30T11:00:00.000Z",
+        actor: { login: "owner", databaseId: 4242 },
+        label: { name: "size/M" },
+      },
+      {
+        __typename: "AssignedEvent",
+        id: "assigned-1",
+        createdAt: "2026-08-30T12:00:00.000Z",
+        actor: { login: "helper", databaseId: 909 },
+        assignee: { login: "contributor" },
+      },
+      {
+        __typename: "UnassignedEvent",
+        id: "unassigned-1",
+        createdAt: "2026-08-30T13:00:00.000Z",
+        actor: { login: "helper", databaseId: 909 },
+        assignee: { login: "contributor" },
+      },
+    ]);
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
 
@@ -1483,18 +1555,17 @@ describe("GitHubGateway GraphQL account identities", () => {
     const gateway = gatewayReturningIssue({
       ...issueNode(101, 1, "Identity issue"),
       author: { login: "owner", databaseId: 4242 },
-      timelineItems: timelinePage([
-        {
-          __typename: "IssueComment",
-          id: "comment-1",
-          databaseId: 501,
-          createdAt: "2026-09-01T11:30:00.000Z",
-          lastEditedAt: null,
-          author: { login: "sponsor", databaseId: 909 },
-          body: commentBody,
-        },
-      ]),
-    });
+    }, [
+      {
+        __typename: "IssueComment",
+        id: "comment-1",
+        databaseId: 501,
+        createdAt: "2026-09-01T11:30:00.000Z",
+        lastEditedAt: null,
+        author: { login: "sponsor", databaseId: 909 },
+        body: commentBody,
+      },
+    ]);
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
 
@@ -1516,32 +1587,31 @@ describe("GitHubGateway GraphQL account identities", () => {
     const gateway = gatewayReturningIssue({
       ...issueNode(101, 1, "Bot issue"),
       author: { login: "dependabot[bot]" },
-      timelineItems: timelinePage([
-        {
-          __typename: "LabeledEvent",
-          id: "labeled-1",
-          createdAt: "2026-08-30T10:00:00.000Z",
-          actor: { login: "github-actions[bot]" },
-          label: { name: "size/M" },
-        },
-        {
-          __typename: "UnlabeledEvent",
-          id: "unlabeled-1",
-          createdAt: "2026-08-30T11:00:00.000Z",
-          actor: null,
-          label: { name: "size/M" },
-        },
-        {
-          __typename: "IssueComment",
-          id: "comment-1",
-          databaseId: 501,
-          createdAt: "2026-09-01T11:30:00.000Z",
-          lastEditedAt: null,
-          author: { login: "dependabot[bot]" },
-          body: commentBody,
-        },
-      ]),
-    });
+    }, [
+      {
+        __typename: "LabeledEvent",
+        id: "labeled-1",
+        createdAt: "2026-08-30T10:00:00.000Z",
+        actor: { login: "github-actions[bot]" },
+        label: { name: "size/M" },
+      },
+      {
+        __typename: "UnlabeledEvent",
+        id: "unlabeled-1",
+        createdAt: "2026-08-30T11:00:00.000Z",
+        actor: null,
+        label: { name: "size/M" },
+      },
+      {
+        __typename: "IssueComment",
+        id: "comment-1",
+        databaseId: 501,
+        createdAt: "2026-09-01T11:30:00.000Z",
+        lastEditedAt: null,
+        author: { login: "dependabot[bot]" },
+        body: commentBody,
+      },
+    ]);
 
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
 
@@ -1576,25 +1646,24 @@ describe("GitHubGateway GraphQL account identities", () => {
       const gateway = gatewayReturningIssue({
         ...issueNode(101, 1, "Invalid identity issue"),
         author: { login: "owner", databaseId },
-        timelineItems: timelinePage([
-          {
-            __typename: "LabeledEvent",
-            id: "labeled-1",
-            createdAt: "2026-08-30T10:00:00.000Z",
-            actor: { login: "owner", databaseId },
-            label: { name: "size/M" },
-          },
-          {
-            __typename: "IssueComment",
-            id: "comment-1",
-            databaseId: 501,
-            createdAt: "2026-09-01T11:30:00.000Z",
-            lastEditedAt: null,
-            author: { login: "owner", databaseId },
-            body: commentBody,
-          },
-        ]),
-      });
+      }, [
+        {
+          __typename: "LabeledEvent",
+          id: "labeled-1",
+          createdAt: "2026-08-30T10:00:00.000Z",
+          actor: { login: "owner", databaseId },
+          label: { name: "size/M" },
+        },
+        {
+          __typename: "IssueComment",
+          id: "comment-1",
+          databaseId: 501,
+          createdAt: "2026-09-01T11:30:00.000Z",
+          lastEditedAt: null,
+          author: { login: "owner", databaseId },
+          body: commentBody,
+        },
+      ]);
 
       const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
 
@@ -1609,48 +1678,37 @@ describe("GitHubGateway GraphQL account identities", () => {
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as { query: string };
+        const request = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { cursor: string | null };
+        };
         queries.push(request.query);
         if (request.query.includes("query RepositoryIssues")) {
           return Response.json({
             data: {
               repository: {
                 issues: {
-                  nodes: [{
-                    ...issueNode(101, 1, "Identity issue"),
-                    timelineItems: {
-                      nodes: [],
-                      pageInfo: { hasNextPage: true, endCursor: "timeline-cursor-2" },
-                    },
-                  }],
+                  nodes: [issueNode(101, 1, "Identity issue")],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
               },
             },
           });
         }
-        return Response.json({
-          data: {
-            repository: {
-              issue: {
-                timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              },
-            },
-          },
-        });
+        return request.variables.cursor === null
+          ? timelineResponse([], { hasNextPage: true, endCursor: "timeline-cursor-2" })
+          : timelineResponse();
       },
     });
 
     await gateway.listIssues({ owner: "octo", name: "overflow" });
 
     expect(queries.some((query) => query.includes("query RepositoryIssues"))).toBe(true);
-    expect(queries.some((query) => query.includes("query IssueTimeline"))).toBe(true);
-    // Only these two documents carry a timeline. `issueLabelsQuery` and
-    // `closingPullRequestsQuery` have none, so an unfiltered loop passes only
-    // while the fixture keeps them unsent and would otherwise fail for a reason
-    // this test does not pin.
-    const timelineQueries = queries.filter((query) =>
-      query.includes("query RepositoryIssues") || query.includes("query IssueTimeline"));
+    // `issueTimelineQuery` is the only document that carries a timeline now, so
+    // an unfiltered loop would fail on the bulk query for a reason this test
+    // does not pin.
+    const timelineQueries = queries.filter((query) => query.includes("query IssueTimeline"));
+    expect(timelineQueries).toHaveLength(2);
     for (const query of timelineQueries) {
       for (const event of ["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent"]) {
         expect(query).toMatch(
@@ -1662,8 +1720,144 @@ describe("GitHubGateway GraphQL account identities", () => {
       expect(query).toMatch(
         /\.\.\.\s*on\s+IssueComment\s*\{[^}]*author\s*\{\s*login\s*\.\.\.\s*on\s+User\s*\{\s*databaseId\s*\}\s*\}/,
       );
+    }
+    // The bulk query keeps its own author selection, timeline or no timeline.
+    for (const query of queries) {
       expect(query).not.toMatch(/\b(?:author|actor)\s*\{\s*login\s*\}/);
     }
+  });
+});
+
+describe("GitHubGateway issue timeline query shape", () => {
+  const settledEvent = {
+    __typename: "LabeledEvent",
+    id: "settled-event",
+    createdAt: "2026-09-06T03:59:18.000Z",
+    actor: { login: "sponsor", databaseId: 4242 },
+    label: { name: "settled: 6" },
+  };
+  const openingEvent = (number: number) => ({
+    __typename: "LabeledEvent",
+    id: `opening-event-${number}`,
+    createdAt: "2026-09-05T08:00:00.000Z",
+    actor: { login: "sponsor", databaseId: 4242 },
+    label: { name: "size/M" },
+  });
+
+  it("keeps every timeline out of the bulk issue query and opens each one at its own first page", async () => {
+    const requests: Array<{ operation: string; variables: Record<string, unknown> }> = [];
+    const queries: string[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const operation = /query (\w+)/.exec(query)![1]!;
+        requests.push({ operation, variables });
+        queries.push(query);
+        if (operation === "RepositoryIssues") {
+          // Serve a nested timeline only where the document selects one, the way
+          // GitHub does: the failure below then names the query shape rather than
+          // a fixture the gateway happened not to read.
+          const nested = query.includes("timelineItems(")
+            ? { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+            : {};
+          return Response.json({ data: { repository: { issues: {
+            nodes: [
+              { ...issueNode(101, 1, "First issue"), ...nested },
+              { ...issueNode(102, 2, "Second issue"), ...nested },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } });
+        }
+        return Response.json({ data: { repository: { issue: {
+          timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } } });
+      },
+    });
+
+    await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    // GitHub silently truncates a timeline nested under a hundred-issue page and
+    // reports the truncation as a complete connection, so no response check can
+    // detect the loss. Not selecting the connection at all is the only guard.
+    const bulkQuery = queries.find((query) => query.includes("query RepositoryIssues"))!;
+    expect(bulkQuery).not.toContain("timelineItems");
+    expect(requests).toEqual([
+      { operation: "RepositoryIssues", variables: { owner: "octo", name: "overflow", cursor: null } },
+      { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 1, cursor: null } },
+      { operation: "IssueTimeline", variables: { owner: "octo", name: "overflow", issueNumber: 2, cursor: null } },
+    ]);
+    const timelineQuery = queries.find((query) => query.includes("query IssueTimeline"))!;
+    // A nullable $cursor is what lets the first page be asked for at all.
+    expect(timelineQuery).toMatch(/\$cursor: String[^!]/);
+    expect(timelineQuery).toMatch(/timelineItems\(\s*first: 100\b/);
+    expect(timelineQuery).toMatch(
+      /itemTypes:\s*\[LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT\]/,
+    );
+  });
+
+  it("reads a settlement event GitHub omits from a timeline nested in a hundred-issue page", async () => {
+    // The nested-connection truncation below is an OBSERVED upstream behaviour
+    // (measured against Nitjsefnie/Overflow issue 90 on 2026-09-06), not one this
+    // fake proves. It reproduces what the loss looks like from here: the omitted
+    // event, a totalCount agreeing with the shortened node list, and
+    // hasNextPage false. The shape pin above is what actually pins the repair.
+    const count = 100;
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        const operation = /query (\w+)/.exec(query)![1]!;
+        if (operation === "RepositoryIssues") {
+          const nested = (number: number) => query.includes("timelineItems(")
+            ? { timelineItems: {
+              nodes: [openingEvent(number)],
+              totalCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+            } }
+            : {};
+          return Response.json({ data: { repository: { issues: {
+            nodes: Array.from({ length: count }, (_, index) => ({
+              ...issueNode(100 + index + 1, index + 1, `Issue ${index + 1}`),
+              ...nested(index + 1),
+            })),
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } });
+        }
+        const number = variables.issueNumber as number;
+        return Response.json({ data: { repository: { issue: { timelineItems: {
+          nodes: [openingEvent(number), settledEvent],
+          totalCount: 2,
+          pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } });
+      },
+    });
+
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issues).toHaveLength(count);
+    expect(issues[89]?.number).toBe(90);
+    expect(issues[89]?.history).toEqual([
+      {
+        kind: "LABELED",
+        id: "opening-event-90",
+        actorLogin: "sponsor",
+        actorGitHubUserId: 4242,
+        label: "size/M",
+        createdAt: "2026-09-05T08:00:00.000Z",
+      },
+      {
+        kind: "LABELED",
+        id: "settled-event",
+        actorLogin: "sponsor",
+        actorGitHubUserId: 4242,
+        label: "settled: 6",
+        createdAt: "2026-09-06T03:59:18.000Z",
+      },
+    ]);
+    expect(issues.every((issue) => issue.history.some(
+      (event) => event.kind === "LABELED" && event.label === "settled: 6",
+    ))).toBe(true);
   });
 });
 
@@ -1690,11 +1884,15 @@ function issueNode(
     labels,
     assignees: { nodes: assignees },
     closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-    timelineItems: {
-      nodes: [],
-      pageInfo: { hasNextPage: false, endCursor: null },
-    },
   };
+}
+
+/** The per-issue timeline the gateway now asks for once per issue. */
+function timelineResponse(
+  nodes: unknown[] = [],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
+) {
+  return Response.json({ data: { repository: { issue: { timelineItems: { nodes, pageInfo } } } } });
 }
 
 function pullRequestNode(

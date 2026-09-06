@@ -111,6 +111,11 @@ describe("reconcileRepository", () => {
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: null } },
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: "issues-next" } },
+      // Every issue page is collected before any issue is read, so the per-issue
+      // timeline reads follow both pages, in the order the nodes arrived.
+      ...[3, 1, 2].map((issueNumber) => (
+        { operation: "IssueTimeline", variables: { owner: "octo", name: "example", issueNumber, cursor: null } }
+      )),
     ]);
   });
 
@@ -1031,6 +1036,23 @@ function pagedReconciliationGateway(
       },
     };
   };
+  const timelineNodes = (number: number) => {
+    const issue = reconciliationIssue({ id: 100 + number, number });
+    return [
+      ...issue.history.map((event) => ({
+        ...event,
+        __typename: event.kind === "ASSIGNED" ? "AssignedEvent" : "LabeledEvent",
+        actor: { login: event.actorLogin, databaseId: event.actorGitHubUserId },
+        label: { name: event.label },
+        assignee: { login: event.assigneeLogin },
+      })),
+      ...issue.comments.map((comment) => ({
+        ...comment,
+        __typename: "IssueComment",
+        author: { login: comment.authorLogin, databaseId: comment.authorGitHubUserId },
+      })),
+    ];
+  };
   const closingReferences = (number: number) => [
     ...Array.from({ length: closingReferenceCount - 1 }, (_, index) => ({
       ...pullRequestNode(number),
@@ -1067,23 +1089,6 @@ function pagedReconciliationGateway(
               author: { login: issue.authorLogin, databaseId: issue.authorGitHubUserId },
               labels: { nodes: issue.labels.map((name) => ({ name })), pageInfo },
               assignees: { nodes: [{ login: "contributor" }] },
-              timelineItems: {
-                nodes: [
-                  ...issue.history.map((event) => ({
-                    ...event,
-                    __typename: event.kind === "ASSIGNED" ? "AssignedEvent" : "LabeledEvent",
-                    actor: { login: event.actorLogin, databaseId: event.actorGitHubUserId },
-                    label: { name: event.label },
-                    assignee: { login: event.assigneeLogin },
-                  })),
-                  ...issue.comments.map((comment) => ({
-                    ...comment,
-                    __typename: "IssueComment",
-                    author: { login: comment.authorLogin, databaseId: comment.authorGitHubUserId },
-                  })),
-                ],
-                pageInfo,
-              },
               closedByPullRequestsReferences: {
                 nodes: closingReferences(number).slice(0, 20),
                 pageInfo: closingReferenceCount === 121
@@ -1096,6 +1101,11 @@ function pagedReconciliationGateway(
             nodes,
             pageInfo: variables.cursor === null ? { hasNextPage: true, endCursor: "issues-next" } : pageInfo,
           } } } });
+        }
+        if (operation === "IssueTimeline") {
+          return Response.json({ data: { repository: { issue: { timelineItems: {
+            nodes: timelineNodes(variables.issueNumber), pageInfo,
+          } } } } });
         }
         if (operation === "ClosingPullRequests") {
           assertClosingPullRequestQuery(query, operation);
