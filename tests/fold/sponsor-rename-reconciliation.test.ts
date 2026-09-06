@@ -180,6 +180,39 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
     await expect(removalChanges(second.runId)).resolves.toEqual([]);
   });
 
+  it("records non-attribution when the renamed sponsor's opening event has no account id", async () => {
+    const { repositoryId, store, ownerName } = await registerRepository({
+      githubRepositoryId: 9_410_005,
+      ownerName: "example/idless-renamed-sponsor",
+      githubWebhookId: 9_410_006,
+    });
+    const issueId = 9_420_003;
+    const issues = [openIssue({
+      id: issueId,
+      number: 1,
+      ownerName,
+      author: sponsorAfterTheRename,
+      opening: { login: RENAMED_SPONSOR_LOGIN, githubUserId: null },
+    })];
+
+    const result = await reconcile(store, gateway(ownerName, () => issues), repositoryId);
+
+    await expect(materializedIssueIds(repositoryId)).resolves.toEqual([]);
+    await expect(removalAndReasonChanges(result.runId)).resolves.toEqual([{
+      entity_kind: "POLICY_VIOLATION",
+      change_kind: "POLICY_VIOLATION",
+      pull_request_id: null,
+      before_state: null,
+      after_state: {
+        code: "OPENING_LABEL_UNAUTHORIZED",
+        githubIssueId: issueId,
+        openingLabel: "M",
+        openingSourceActorLogin: RENAMED_SPONSOR_LOGIN,
+        reason: "The application of the opening label `M` by `owner-new` could not be attributed to the repository sponsor `owner-old`.",
+      },
+    }]);
+  });
+
   it("reports and records the removal when a different account takes the sponsor's freed login", async () => {
     const { repositoryId, store, ownerName } = await registerRepository({
       githubRepositoryId: impostorRepositoryGitHubId,

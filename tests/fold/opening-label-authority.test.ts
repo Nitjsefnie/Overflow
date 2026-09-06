@@ -4,9 +4,9 @@ import { foldRepository, type FoldResult, type RepositoryFoldSnapshot } from "@/
 /**
  * The opening refusal a moderator reads is the only record of why an issue left
  * the fold, so it has to say WHICH refusal it was: no opening-catalog label was
- * ever applied, or one is standing and the account that applied it is not the
- * repository sponsor. The second is an accusation about an account and the
- * first is not, and the settled side already draws that line with
+ * applied in the window, or an application could not be attributed to the
+ * repository sponsor. The second records an authority refusal and the first
+ * does not, and the settled side already draws that line with
  * `SETTLED_LABEL_UNAUTHORIZED`.
  */
 
@@ -37,7 +37,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(result.issues).toEqual([]);
     // The label was applied and is still on the issue — nothing is missing here,
@@ -55,7 +55,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(result.issues).toEqual([]);
   });
@@ -126,7 +126,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -138,13 +138,13 @@ describe("opening label authority", () => {
     // `sponsorDisplayLogin` would fall back to the sponsor's stored login here,
     // which would name the sponsor as the account that applied an unauthorized
     // label. Both the field and the sentence name nobody rather than the wrong
-    // body — the sponsor appears only as the account that did NOT apply it.
+    // body — the sponsor appears only as the account it cannot be attributed to.
     expect(result.policyViolations).toEqual([{
       code: "OPENING_LABEL_UNAUTHORIZED",
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "unknown",
-      reason: "The opening label `M` was applied by `unknown` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `unknown` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(unauthorizedReason(result)).not.toContain(`applied by \`${SPONSOR_LOGIN}\``);
   });
@@ -165,7 +165,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -186,7 +186,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(result.issues).toEqual([]);
   });
@@ -226,7 +226,7 @@ describe("opening label authority", () => {
       githubIssueId: 101,
       openingLabel: "S",
       openingSourceActorLogin: "maintainer",
-      reason: "The opening label `S` was applied by `maintainer` rather than the repository sponsor.",
+      reason: "The application of the opening label `S` by `maintainer` could not be attributed to the repository sponsor.",
     }]);
   });
 
