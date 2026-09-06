@@ -576,12 +576,12 @@ function resolveOpening(
 }
 
 /**
- * Which refusal to record when the sponsor applied no opening-catalog label
- * inside the opening window.
+ * Which refusal to record when no opening-catalog application inside the
+ * opening window could be verified as the sponsor's.
  *
- * `OPENING_LABEL_UNAUTHORIZED` is an accusation — someone other than the sponsor
- * applied an opening-catalog label in the window — so it is reported only where
- * an account could actually be compared: GitHub named a numeric actor id, or the
+ * `OPENING_LABEL_UNAUTHORIZED` records an opening-catalog application whose
+ * actor could not be verified as the sponsor, and is reported only where an
+ * account could actually be compared: GitHub named a numeric actor id, or the
  * sponsor's stored login is there to read. Where GitHub named no id and the
  * sponsor record's login is blank, nothing was compared and nobody can be
  * accused, so the refusal stays the absence one. `resolveSettledDifficulty`
@@ -1099,11 +1099,11 @@ function repositorySponsorPhrase(raterLogin: string | null): string {
 }
 
 /**
- * Why a label's actor was not the sponsor. Where the rejected actor carries the
- * login the sponsor's record still stores — an account that took the freed login
- * after a rename — naming both sides puts the same login either side of "rather
- * than", which reads as a contradiction and names no discriminator. The
- * discriminator is the account.
+ * Why a label's actor could not be verified as the sponsor. Where the rejected
+ * actor carries the login the sponsor's record still stores — an account that
+ * took the freed login after a rename — naming both sides puts the same login
+ * either side of "rather than", which reads as a contradiction and names no
+ * discriminator. The discriminator is the account.
  *
  * Both label windows refuse an actor for the same reason and must say so the
  * same way, so the noun is a parameter rather than the sentence being written
@@ -1121,7 +1121,7 @@ function labelActorRejection(
       + `\`${actorLogin!.trim()}\`, not by the repository sponsor.`;
   }
   const sponsor = raterLogin === null ? "the repository sponsor" : `the repository sponsor \`${raterLogin}\``;
-  return `The ${labelKind} label \`${label}\` was applied by \`${actorLogin?.trim() || "unknown"}\` rather than ${sponsor}.`;
+  return `The application of the ${labelKind} label \`${label}\` by \`${actorLogin?.trim() || "unknown"}\` could not be attributed to ${sponsor}.`;
 }
 
 function validIssueHistoryEvent(event: GitHubIssueHistoryEvent): boolean {

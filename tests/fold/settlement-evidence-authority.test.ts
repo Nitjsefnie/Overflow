@@ -11,7 +11,7 @@ describe("integrated rejected settlement closure reasons", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "The settled label `delivered/6` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the settled label `delivered/6` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
@@ -173,7 +173,7 @@ describe("rating authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "contributor",
-      reason: "The opening label `M` was applied by `contributor` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
   });
 
@@ -195,7 +195,7 @@ describe("rating authority", () => {
       githubIssueId: 101,
       openingLabel: "M",
       openingSourceActorLogin: "maintainer",
-      reason: "The opening label `M` was applied by `maintainer` rather than the repository sponsor `sponsor`.",
+      reason: "The application of the opening label `M` by `maintainer` could not be attributed to the repository sponsor `sponsor`.",
     }]);
   });
 
