@@ -1383,6 +1383,47 @@ describe("scheduled reconciliation sweep", () => {
     }
   });
 
+  it("reports the defaulted cadence and then the tick that was never armed", async () => {
+    // Both seams broken at once is where the defaulted line overstates: it names
+    // a tick armed at the default while arming is still ahead of it, and the
+    // unarmed line printed next is the one that holds. The order is the
+    // assertion — the read is contained first, and what it returns is what
+    // arming is then reached with.
+    const unwired = new Error("The interval is not configured yet");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const intervals = captureIntervals();
+    let sweeps = 0;
+    const schedule = {
+      runSweep: async () => {
+        sweeps += 1;
+      },
+      get intervalMs(): number {
+        throw unwired;
+      },
+      // Uncallable rather than nullish, so this is a scheduler the caller
+      // supplied and broke, which arms nothing rather than the default.
+      schedule: 0,
+    } as unknown as ReconciliationSweepSchedule;
+
+    try {
+      expect(() => {
+        startReconciliationSweep(schedule);
+      }).not.toThrow();
+      await drain();
+
+      // Neither failure costs the startup pass, and neither leaves a tick.
+      expect(sweeps).toBe(1);
+      expect(intervals.armed).toEqual([]);
+      expect(logged.mock.calls).toEqual([
+        [DEFAULTED_INTERVAL_MESSAGE, unwired],
+        [UNARMED_MESSAGE],
+      ]);
+    } finally {
+      intervals.restore();
+      logged.mockRestore();
+    }
+  });
+
   it("stands the unarmed line alone when the failure carries no reason", async () => {
     // The reasonless line is not exclusive to a member that was never callable:
     // `undefined` is the reason that carries nothing to print, so a scheduler
