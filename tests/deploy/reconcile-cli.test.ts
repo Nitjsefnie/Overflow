@@ -10,11 +10,39 @@ import { startPostgresContainer, type StartedPostgres } from "../support/postgre
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
-const reconciliationSection = readme.split(/^## Reconciliation\r?$/m)[1]?.split(/^## /m)[0] ?? "";
-const documentedCommands = [...reconciliationSection.matchAll(/^```bash\r?\n([\s\S]*?)^```\s*$/gm)]
-  .flatMap((block) => block[1]!.split(/\r?\n/))
-  .filter((line) => /^pnpm reconcile(?:\s|$)/.test(line));
+const documentedCommands = extractReconciliationCommands(readme);
 const databaseError = "DATABASE_URL must be configured before using the database.";
+
+function extractReconciliationCommands(markdown: string): string[] {
+  const section = markdown.split(/^## Reconciliation\r?$/m)[1]?.split(/^## /m)[0] ?? "";
+  return [...section.matchAll(/^```bash\r?\n([\s\S]*?)^```\s*$/gm)]
+    .flatMap((block) => joinContinuations(block[1]!.replace(/^[ \t]*#.*$/gm, "")).split(/\r?\n/))
+    .filter((line) => /^pnpm reconcile(?:\s|$)/.test(line));
+}
+
+function joinContinuations(source: string): string {
+  let joined = "";
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index]!;
+    if (character === "\\" && quote !== "'") {
+      const newline = /^\r?\n/.exec(source.slice(index + 1));
+      if (newline !== null) {
+        index += newline[0].length;
+        continue;
+      }
+      // Preserve other escapes for the tokenizer to accept or reject; an
+      // escaped quote or backslash cannot begin a quote or a continuation.
+      joined += character;
+      if (index + 1 < source.length) joined += source[++index];
+    } else {
+      if (character === quote) quote = null;
+      else if (quote === null && (character === "'" || character === '"')) quote = character;
+      joined += character;
+    }
+  }
+  return joined;
+}
 
 function tokenizeCommand(command: string): string[] {
   const words: string[] = [];
@@ -147,6 +175,41 @@ describe("documented reconciliation CLI commands", () => {
     expect(stderr).toContain(databaseError);
     expect(stderr).not.toContain("Usage:");
   }, 120_000);
+});
+
+describe("documented command extraction", () => {
+  it("does not reinterpret a single-quoted backslash and newline as a continuation", () => {
+    const commands = extractReconciliationCommands([
+      "## Reconciliation", "```bash", "pnpm reconcile --repository 'octocat/hello-\\",
+      "world'", "```",
+    ].join("\n"));
+    expect(() => tokenizeCommand(commands[0]!)).toThrow(/Unterminated quote/);
+  });
+
+  it.each(["\n", "\r\n"])("joins backslash continuations with %j line endings before running the command", (newline) => {
+    const commands = extractReconciliationCommands([
+      "## Reconciliation", "```bash", "pnpm reconcile \\",
+      "  --repository <owner>/<name>", "pnpm reconcile", "```",
+    ].join(newline));
+    expect(commands.map(tokenizeCommand)).toEqual([
+      ["pnpm", "reconcile", "--repository", "octocat/hello-world"],
+      ["pnpm", "reconcile"],
+    ]);
+    const { status, stderr } = runCommand(commands[0]!);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain(databaseError);
+    expect(stderr).not.toContain("Usage:");
+  });
+
+  it("keeps a bare newline as a command boundary", () => {
+    const commands = extractReconciliationCommands([
+      "## Reconciliation", "```bash", "pnpm reconcile",
+      "  --repository <owner>/<name>", "pnpm reconcile", "```",
+    ].join("\n"));
+    expect(commands.map(tokenizeCommand)).toEqual([
+      ["pnpm", "reconcile"], ["pnpm", "reconcile"],
+    ]);
+  });
 });
 
 describe("documented command tokenization", () => {
