@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
   assessGraphqlBudget,
@@ -40,11 +41,43 @@ describe("readGraphqlBudgetPayload", () => {
     ["fractional remaining", { remaining: 1.5, resetAt: reset.toISOString() }],
     ["a non-string resetAt", { remaining: 1, resetAt: reset }],
     ["an empty resetAt", { remaining: 1, resetAt: "" }],
-    ["an array", []],
+    ["an array with valid budget fields", Object.assign([], rateLimit)],
     ["a scalar", 1],
     ["undefined", undefined],
   ])("refuses %s", (_name, payload) => {
     expect(readGraphqlBudgetPayload(payload, observed)).toBeNull();
+  });
+
+  it.each([
+    "September 7, 2099 11:00:00 GMT",
+    "2099-09-07",
+    "2099-09-07 11:00:00Z",
+    "2099-09-07T11:00:00",
+    "2099-09-07T11:00:00Z\n",
+  ])("refuses non-ISO reset instant %j", (resetAt) => {
+    expect(readGraphqlBudgetPayload({ ...rateLimit, resetAt }, observed)).toBeNull();
+  });
+
+  it.each([
+    "2026-09-07T11:00:00Z",
+    "2026-09-07T11:00:00.000Z",
+    "2026-09-07T11:00:00.000000Z",
+    "2026-09-07T13:00:00+02:00",
+  ])("accepts ISO reset instant %j", (resetAt) => {
+    expect(readGraphqlBudgetPayload({ ...rateLimit, resetAt }, observed)).toEqual(reading);
+  });
+
+  it.each(["remaining", "resetAt", "limit", "cost"])("contains a throwing %s getter", (field) => {
+    const payload = Object.defineProperty({ ...rateLimit }, field, {
+      get() { throw new Error("untrusted getter"); },
+    });
+    expect(readGraphqlBudgetPayload(payload, observed)).toBeNull();
+  });
+
+  it("contains a revoked proxy", () => {
+    const { proxy, revoke } = Proxy.revocable({ ...rateLimit }, {});
+    revoke();
+    expect(readGraphqlBudgetPayload(proxy, observed)).toBeNull();
   });
 
   it.each([undefined, null, "5000", NaN, Infinity, -Infinity])(
@@ -166,13 +199,52 @@ describe("GitHubGraphqlClient budget recording", () => {
 
   it("returns the data even when recording fails", async () => {
     const data = { repository: null, rateLimit };
+    const record = vi.fn(() => { throw new Error("recorder failed"); });
     const client = new GitHubGraphqlClient({
       accessToken: "test-token",
-      budget: { ...createGitHubGraphqlBudgetStore(), record() { throw new Error("recorder failed"); } },
+      budget: { ...createGitHubGraphqlBudgetStore(), record },
       fetch: async () => Response.json({ data }),
     });
 
     await expect(client.query("query { repository { id } }", {})).resolves.toEqual(data);
+    expect(record).toHaveBeenCalledExactlyOnceWith({ ...reading, observedAt: expect.any(Date) });
+  });
+
+  it.each(["reject", "pending"])("contains async recorder %s without delaying the query or crashing Node", (mode) => {
+    // A separate Node process has no Vitest rejection listener. Its exit status
+    // catches unhandled rejections, and a pending recorder catches accidental await.
+    const child = spawnSync(process.execPath, [
+      "--experimental-transform-types",
+      "--unhandled-rejections=strict",
+      "--import", "./scripts/register-path-aliases.ts",
+      "--input-type=module",
+      "--eval", `
+        import { GitHubGraphqlClient } from './src/lib/github/graphql.ts';
+        import { createGitHubGraphqlBudgetStore } from './src/lib/github/rate-limit-budget.ts';
+        const data = ${JSON.stringify({ repository: null, rateLimit })};
+        let calls = 0;
+        const budget = {
+          ...createGitHubGraphqlBudgetStore(),
+          async record() {
+            calls++;
+            await Promise.resolve();
+            if (${JSON.stringify(mode)} === 'reject') throw new Error('async recorder rejected');
+            return new Promise(() => {});
+          },
+        };
+        const client = new GitHubGraphqlClient({
+          accessToken: 'test-token', budget,
+          fetch: async () => Response.json({ data }),
+        });
+        const result = await client.query('query { rateLimit { remaining resetAt } }', {});
+        process.stdout.write(JSON.stringify({ result, calls }));
+        await new Promise(resolve => setImmediate(resolve));
+      `,
+    ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
+
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ result: { repository: null, rateLimit }, calls: 1 });
   });
 
   it.each([

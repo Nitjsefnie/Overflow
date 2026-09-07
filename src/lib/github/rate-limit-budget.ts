@@ -55,19 +55,27 @@ export function readGraphqlBudgetPayload(
   payload: unknown,
   observedAt: Date,
 ): GitHubGraphqlBudgetReading | null {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const { remaining, limit, cost, resetAt } = payload as Record<string, unknown>;
-  if (typeof remaining !== "number" || !Number.isInteger(remaining) || remaining < 0
-    || typeof resetAt !== "string") return null;
-  const reset = new Date(resetAt);
-  if (!Number.isFinite(reset.getTime())) return null;
-  return {
-    remaining,
-    limit: typeof limit === "number" && Number.isFinite(limit) ? limit : null,
-    cost: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
-    resetAt: reset,
-    observedAt,
-  };
+  try {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const { remaining, limit, cost, resetAt } = payload as Record<string, unknown>;
+    if (typeof remaining !== "number" || !Number.isInteger(remaining) || remaining < 0
+      || typeof resetAt !== "string") return null;
+    // Require an ISO instant with seconds and a timezone before using Date's
+    // parser, which also accepts unrelated text and timezone-less dates.
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(resetAt)) return null;
+    const reset = new Date(resetAt);
+    if (!Number.isFinite(reset.getTime())) return null;
+    return {
+      remaining,
+      limit: typeof limit === "number" && Number.isFinite(limit) ? limit : null,
+      cost: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+      resetAt: reset,
+      observedAt,
+    };
+  } catch {
+    // Unknown inputs can include throwing getters and revoked proxies.
+    return null;
+  }
 }
 
 export function assessGraphqlBudget(
