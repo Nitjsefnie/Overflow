@@ -905,6 +905,7 @@ function reconciliationDependencies(
       { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       { id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE" },
     ]),
+    hasDerivedRowsBelowFoldRevision: async () => false,
     beginRun: vi.fn().mockResolvedValue("run-1"),
     completeRun: vi.fn().mockResolvedValue(undefined),
     materialize: overrides.materialize ?? vi.fn().mockResolvedValue({ adds: 1, changes: 0, removals: 0 }),

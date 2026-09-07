@@ -569,10 +569,29 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.map(toFoldUser);
   }
 
-  public async beginRun(repositoryId: string): Promise<string> {
+  public async hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean> {
+    const [row] = await this.sql<{ stale: boolean }[]>`
+      select exists (
+        select 1 from settlements
+        join issues on issues.id = settlements.issue_id
+        where issues.repository_id = ${repositoryId} and settlements.fold_revision < ${revision}
+      ) or exists (
+        select 1 from self_work_calibrations
+        join issues on issues.id = self_work_calibrations.issue_id
+        where issues.repository_id = ${repositoryId} and self_work_calibrations.fold_revision < ${revision}
+      ) or exists (
+        select 1 from unwritable_closures
+        join issues on issues.id = unwritable_closures.issue_id
+        where issues.repository_id = ${repositoryId} and unwritable_closures.fold_revision < ${revision}
+      ) as stale
+    `;
+    return row.stale;
+  }
+
+  public async beginRun(repositoryId: string, options?: { rederivation: boolean }): Promise<string> {
     const [row] = await this.sql<{ id: string }[]>`
-      insert into reconciliation_runs (repository_id, status)
-      values (${repositoryId}, ${"PENDING"})
+      insert into reconciliation_runs (repository_id, status, rederivation)
+      values (${repositoryId}, ${"PENDING"}, ${options?.rederivation ?? false})
       returning id
     `;
     if (row === undefined) {

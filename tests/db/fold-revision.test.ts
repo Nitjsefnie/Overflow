@@ -33,6 +33,25 @@ describe("fold revision stamps", () => {
     else process.env.DATABASE_URL = originalDatabaseUrl;
   });
 
+  it.each(tables)("detects stale %s rows only in their own repository", async (table) => {
+    const { repositoryId, store } = await materializedFixture();
+    const other = await materializedFixture();
+    const [row] = await rowsFor(table, repositoryId);
+    await sql`update ${sql(table)} set fold_revision = ${FOLD_REVISION - 1} where id = ${row.id}`;
+    expect(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION)).toBe(true);
+    expect(await store.hasDerivedRowsBelowFoldRevision(other.repositoryId, FOLD_REVISION)).toBe(false);
+    expect(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION - 1)).toBe(false);
+    await sql`update ${sql(table)} set fold_revision = ${FOLD_REVISION} where id = ${row.id}`;
+    expect(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION)).toBe(false);
+  });
+
+  it.each([true, false, undefined])("records run rederivation=%s with an omitted option defaulting to false", async (rederivation) => {
+    const { repositoryId, store } = await materializedFixture();
+    const runId = await store.beginRun(repositoryId, rederivation === undefined ? undefined : { rederivation });
+    expect(await sql`select rederivation from reconciliation_runs where id = ${runId}`)
+      .toEqual([{ rederivation: rederivation ?? false }]);
+  });
+
   it.each(tables)("defaults a direct %s insert to the unnamed revision 0", async (table) => {
     const { repositoryId } = await materializedFixture();
     const [source] = await rowsFor(table, repositoryId);

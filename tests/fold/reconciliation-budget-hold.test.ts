@@ -53,6 +53,7 @@ function fixture(remaining?: number) {
       getReconciliationCooldown: async () => null,
       setReconciliationCooldown: async () => {},
       getGitHubAccessToken: async () => "test-token",
+      hasDerivedRowsBelowFoldRevision: async () => false,
       beginRun: vi.fn(async () => "run-1"), completeRun: async () => {},
       findUsersByGitHubUserIds: async () => [],
       materialize: async () => ({ adds: 0, changes: 0, removals: 0 }),
@@ -64,7 +65,7 @@ function fixture(remaining?: number) {
     budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),
   };
   const worker: ReconciliationWorkerDependencies = {
-    store, reconcile: (id) => reconcileRepository(fold, id),
+    store, reconcile: (id, options) => reconcileRepository(fold, id, options),
     now: () => fold.now!(), scheduleLeaseRenewal: () => () => {},
   };
   return { budgetStore, store, reconcile, onBudgetChange, fold, worker };
@@ -497,7 +498,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", resetAt);
     expect(getRepository).toHaveBeenNthCalledWith(1, "repository-1");
     expect(getRepository).toHaveBeenNthCalledWith(2, "repository-2");
-    expect(fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1");
+    expect(fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
     expect(reconcile).toHaveBeenCalledTimes(1);
   });
 
