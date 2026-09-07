@@ -114,6 +114,7 @@ function createHarness(options: {
       calls.push("getGitHubAccessToken");
       return options.accessToken;
     },
+    hasDerivedRowsBelowFoldRevision: async () => false,
     beginRun: async () => {
       calls.push("beginRun");
       return "run-1";
@@ -179,7 +180,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     const store = queueStore();
     const dependencies = {
       store,
-      reconcile: (id: string) => reconcileRepositoryAsSponsor(harness.store, id, harness.createGateway),
+      reconcile: (id: string, options: { rederive: boolean }) => reconcileRepositoryAsSponsor(harness.store, id, harness.createGateway, options),
       scheduleLeaseRenewal: () => () => {},
     };
     await expect(runNextReconciliationJob(dependencies)).resolves.toBe(outcome);
@@ -242,9 +243,9 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     store.claimNextReconciliationJob.mockClear();
     store.claimNextReconciliationJob.mockResolvedValueOnce(job).mockResolvedValueOnce({ ...job,
       id: "job-2", repositoryId: "repo-2", leaseToken: "lease-2" });
-    const worker = { store, scheduleLeaseRenewal: () => () => {}, reconcile: (id: string) => {
+    const worker = { store, scheduleLeaseRenewal: () => () => {}, reconcile: (id: string, options: { rederive: boolean }) => {
       const harness = id === "repo-1" ? a : b;
-      return reconcileRepositoryAsSponsor(harness.store, id, harness.createGateway);
+      return reconcileRepositoryAsSponsor(harness.store, id, harness.createGateway, options);
     } };
     await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
     expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);

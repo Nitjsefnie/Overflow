@@ -15,7 +15,7 @@ type LeaseRenewalCancellation = () => void | PromiseLike<unknown>;
 
 export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
-  reconcile(repositoryId: string): Promise<{ skipped?: boolean; budgetHeldUntil?: Date } | void>;
+  reconcile(repositoryId: string, options: { rederive: boolean }): Promise<{ skipped?: boolean; budgetHeldUntil?: Date } | void>;
   now?: () => Date;
   /** Setup owns its cleanup; stopping awaits even a cancellation handle delivered late. */
   scheduleLeaseRenewal?(
@@ -242,7 +242,7 @@ export async function runNextReconciliationJob(
 
     let result: { skipped?: boolean; budgetHeldUntil?: Date } | void;
     try {
-      result = await dependencies.reconcile(job.repositoryId);
+      result = await dependencies.reconcile(job.repositoryId, { rederive: job.rederivationRequestedAt !== null });
     } catch (error) {
       // One unreachable repository must not stop the worker draining the rest, so
       // the failure is recorded on its own job and never propagated to the drain.

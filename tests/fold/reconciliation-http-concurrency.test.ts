@@ -88,6 +88,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     findUsersByGitHubUserIds: async () => [{
       id: "contributor", githubUserId: 2001, githubLogin: "contributor", enforcementState: "ACTIVE",
     }],
+    hasDerivedRowsBelowFoldRevision: async () => false,
     beginRun: async () => "run", completeRun: async () => {}, failRun: async () => {}, materialize,
     recordVerifiedRepositoryIdentity: async () => {},
     markRepositoryUnavailable: async () => {},
