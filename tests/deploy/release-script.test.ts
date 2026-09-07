@@ -335,21 +335,28 @@ describe("release switch", () => {
         await symlink(old, current);
       }
       const observer = path.join(tree, "observe.mjs");
+      const observationsFile = path.join(tree, "observations.json");
       // Observe real filesystem state after every mutation, without scheduling a poll
-      // in the potentially tiny unlink/symlink gap. All operations still run on disk.
+      // in the potentially tiny unlink/symlink gap. Record failures out of band so
+      // the implementation's ENOENT handlers cannot swallow the observation.
       await writeFile(observer, `
         import fs from "node:fs/promises";
+        import { writeFileSync } from "node:fs";
         import { syncBuiltinESMExports } from "node:module";
         const current = ${JSON.stringify(current)};
+        const observations = [];
+        process.once("exit", () => {
+          writeFileSync(${JSON.stringify(observationsFile)}, JSON.stringify(observations));
+        });
         for (const name of ["symlink", "rename", "unlink", "rm"]) {
           const original = fs[name];
           fs[name] = async (...args) => {
-            const result = await original(...args);
-            const resolved = await fs.realpath(current);
-            if (![${JSON.stringify(old)}, ${JSON.stringify(directory)}].includes(resolved)) {
-              throw new Error("Unexpected live release: " + resolved);
+            try {
+              return await original(...args);
+            } finally {
+              const resolved = await fs.realpath(current).catch((error) => ({ code: error.code ?? String(error) }));
+              observations.push({ operation: name, resolved });
             }
-            return result;
           };
         }
         syncBuiltinESMExports();
@@ -360,6 +367,11 @@ describe("release switch", () => {
       });
 
       expect(result.status, result.stderr).toBe(0);
+      const observations: { operation: string; resolved: string | { code: string } }[] = JSON.parse(await readFile(observationsFile, "utf8"));
+      expect(observations.length).toBeGreaterThan(0);
+      for (const observation of observations) {
+        expect([old, directory], JSON.stringify(observation)).toContain(observation.resolved);
+      }
       expect(await realpath(current)).toBe(directory);
     },
   );
