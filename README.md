@@ -285,9 +285,17 @@ The production deployment runs the application as a dedicated unprivileged syste
 
 ## Reconciliation
 
-A repository is folded from a durable queue rather than inside the request that noticed it had fallen behind. A GitHub webhook delivery records a reconciliation job for the repository and answers immediately; an in-process worker claims that job within seconds, folds the repository, and clears the job. A fold that throws is retried on the job after a minute, five, fifteen and an hour, and a repository that exhausts those retries stays visibly failed rather than disappearing from the queue. Registering a repository records the same kind of job, because the work already in the repository predates the webhook.
+A repository is folded from a durable queue rather than inside the request that noticed it had fallen behind. A GitHub webhook delivery records a reconciliation job for the repository and answers immediately; when admission is available, an in-process worker normally claims that job within seconds, folds the repository, and clears the job. A GraphQL budget hold can defer that pass before any job is claimed. A fold that throws is retried on the job after a minute, five, fifteen and an hour, and a repository that exhausts those retries stays visibly failed rather than disappearing from the queue. Registering a repository records the same kind of job, because the work already in the repository predates the webhook.
 
-A sweep runs at startup and every six hours, and offers every active repository to that queue. A repository owns one job row, so a repository already queued keeps its place and its backoff, and one whose retries were exhausted is revived — a webhook delivery missed while the server was down, or a repository left failed by a GitHub outage, repairs itself within six hours with nobody touching it.
+A sweep runs at startup and every six hours, and offers every active repository to that queue. A repository owns one job row, so a repository already queued keeps its place and its backoff, and one whose retries were exhausted is revived. Missed webhook deliveries and repositories left failed by a GitHub outage are therefore offered for repair within six hours without manual intervention; completion can take longer because of budget holds, queued work, or further GitHub failures.
+
+`GITHUB_GRAPHQL_BUDGET_RESERVE` controls the worker's admission threshold. It defaults to 500 points; `0` disables the budget hold. Set a nonnegative integer: missing, blank or malformed values fall back to 500. A very large valid value deliberately makes the threshold restrictive, potentially holding every pass with a known current reading. Before claiming a job, the worker holds when the recorded remaining balance is below this threshold. A hold leaves jobs queued without consuming retries. An absent or expired reading, or an unavailable observer, permits admission until a usable reading is available.
+
+This is an **admission threshold, not a guaranteed remaining balance**. An admitted pass may fetch many pull requests and paginate without a point ceiling, so it can spend past the reserve. The threshold stops new passes; it does not cancel requests within an admitted pass.
+
+The GraphQL budget panel at the end of the moderator page (`/moderation`) displays the recorded remaining balance, optional limit, reserve, reset time, observation time and hold state. Observations are process-local and disappear on restart; they are not shared across application instances. The store currently combines readings from different sponsors rather than tracking each sponsor's separate quota. It retains the lowest balance in the newest observed reset window, so a low reading from any sponsor can hold other sponsors' work until rollover. Sponsor-aware admission remains a separate limitation.
+
+For the production systemd deployment, edit `GITHUB_GRAPHQL_BUDGET_RESERVE` in `/etc/overflow/overflow.env`, then run `sudo systemctl restart overflow.service` to apply the new environment. In local development, update `.env` and restart `pnpm dev`. Restarting also clears the process-local observation, so the panel initially reports an unobserved budget.
 
 Setting `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` to any non-empty value turns off the worker as well as the sweep, which is the whole of automatic reconciliation: jobs still accumulate, and nothing drains them.
 
@@ -320,6 +328,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
 | `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub webhook URL and shared secret |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
+| `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
 
