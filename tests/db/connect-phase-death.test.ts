@@ -15,33 +15,39 @@ const database = "overflow_connect_phase_death";
 const spacingSeconds = 5;
 
 /**
- * The spacing for the case that ends a client sitting between attempts. Deliberately far longer
- * than anything that case is willing to wait: a shutdown that settled by riding the next attempt
- * would take this long, so the case cannot pass by being quick.
+ * The delay the client is given in the case that ends it between attempts, and the window that
+ * case then watches. The window is deliberately LONGER than the delay — an uncancelled retry has
+ * had two and a half times its own delay to arrive by the end of it, so the window can tell a
+ * cancelled retry from one that was merely outrun. A window shorter than the delay cannot, and
+ * saying so was the defect in this file's first version of that case.
  */
-const longSpacingSeconds = 30;
+const retryDelaySeconds = 1;
+const cancelWindowMs = 2500;
 
 /**
- * The two intervals asserted across in this file are both this long, and the argument for them
- * differs by use, so both are stated rather than one being borrowed for the other.
+ * The interval the other two absence assertions in this file watch. Both of them follow a
+ * settled shutdown against a client whose `backoff` answers `promptSeconds`, so a build that
+ * wrongly rearmed would connect thirty times sooner than this window ends.
  *
- * Where the client has just been told to wait `spacingSeconds` or `longSpacingSeconds` (the
- * spacing case, and the between-attempts shutdown), this window is a small fraction of the wait
- * and a timer can fire late but never early, so a loaded box moves the observation the safe way.
- * That is the permitted shape, and the behaviour it separates from is unbounded rather than
- * marginal: Overflow issue 164 measured 32,605 connect attempts in 90 seconds with no delay
- * between them.
- *
- * Where instead the claim is that nothing is armed at all (after a shutdown has settled), the
- * window is evidence and not proof: a build that wrongly rearmed would schedule its attempt
- * `promptSeconds` out, thirty times shorter than this window, but a box stalled for a third of a
- * second could still let it slip past and read as a false green. Absence has no other observable
- * form, and lengthening the window buys a linear improvement for linear run time.
+ * It is evidence and not proof, and the difference matters in both directions. A timer fires late
+ * but never early, so on a loaded box the rearm this window exists to catch moves *out* of it and
+ * reads as a false green — unlike the spacing case, where the window is a small fraction of a
+ * five-second wait and load moves the observation the safe way. Absence has no other observable
+ * form; lengthening the window buys a linear improvement for linear run time, and the case that
+ * has to be certain (the cancelled retry, above) buys that certainty with a window longer than
+ * the delay instead.
  */
 const quietWindowMs = 300;
 
 /** Spacing for the cases that want the next attempt promptly; only its smallness matters. */
 const promptSeconds = 0.01;
+
+/**
+ * `connect_timeout` for the one case that has to reach it: the client is left holding a handshake
+ * no peer will ever answer, and this is how long that case is willing to sit there. Short only to
+ * keep the case quick; nothing is asserted about the duration.
+ */
+const handshakeTimeoutSeconds = 2;
 
 let container: StartedTestContainer | undefined;
 let databaseUrl: string;
@@ -53,13 +59,20 @@ interface DeathProxy {
   /**
    * `forward` relays real protocol traffic to the container; `acceptclose` accepts a connection
    * and sends a clean FIN once the client has spoken, which is what a pooler, a TCP load
-   * balancer, a Kubernetes service or any non-postgres listener does while the backend is gone.
+   * balancer, a Kubernetes service or any non-postgres listener does while the backend is gone;
+   * `hold` accepts and never answers, which is the peer the issue's `connect_timeout` contrast
+   * measured.
    */
-  mode: "forward" | "acceptclose";
+  mode: "forward" | "acceptclose" | "hold";
   /** Set once: FIN the client's socket instead of relaying its next chunk. */
   killOnNextData: boolean;
   /** Called synchronously after that FIN is queued, before the client can observe the close. */
   onKill: (() => void) | null;
+  /**
+   * Called with the running accept count once this connection's behaviour has been fixed, so a
+   * case can choose what the NEXT attempt meets without racing the attempt it is watching.
+   */
+  onAccept: ((accepted: number) => void) | null;
   close(): Promise<void>;
 }
 
@@ -77,6 +90,7 @@ async function startDeathProxy(target: { host: string; port: number }): Promise<
     mode: "forward",
     killOnNextData: false,
     onKill: null,
+    onAccept: null,
   } as DeathProxy;
 
   const server = net.createServer((client) => {
@@ -85,7 +99,19 @@ async function startDeathProxy(target: { host: string; port: number }): Promise<
     client.on("error", () => undefined);
     client.on("close", () => sockets.delete(client));
 
-    if (proxy.mode === "acceptclose") {
+    // Read before the hook runs, so a hook that changes the mode changes it for the next attempt
+    // and never for this one.
+    const mode = proxy.mode;
+    proxy.onAccept?.(proxy.accepted);
+
+    if (mode === "hold") {
+      // Accepted and never answered: the client's socket stays open with its StartupMessage
+      // unanswered until its own connect_timeout gives up on it.
+      client.on("data", () => undefined);
+      return;
+    }
+
+    if (mode === "acceptclose") {
       // Waiting for the client's StartupMessage before the FIN keeps this a connect-phase death
       // rather than a connection that was never really made: the attempt got as far as writing.
       client.once("data", () => client.end());
@@ -132,11 +158,20 @@ async function startDeathProxy(target: { host: string; port: number }): Promise<
 }
 
 /** A client of its own per case, reaching the container only through that case's proxy. */
-function clientThrough(proxyPort: number, backoff: (attempt: number) => number) {
+function clientThrough(
+  proxyPort: number,
+  backoff: (attempt: number) => number,
+  connectTimeoutSeconds?: number,
+) {
   const target = new URL(databaseUrl);
   target.host = `127.0.0.1:${proxyPort}`;
   // max: 1 so exactly one connection is ever in play and the proxy's accept count is unambiguous.
-  return postgres(target.toString(), { max: 1, backoff });
+  // connect_timeout is left at the library's default unless a case needs to reach it.
+  return postgres(target.toString(), {
+    max: 1,
+    backoff,
+    ...(connectTimeoutSeconds === undefined ? {} : { connect_timeout: connectTimeoutSeconds }),
+  });
 }
 
 /** Unbounded by design: the per-test timeout is the failure mechanism, not a margin asserted here. */
@@ -157,10 +192,16 @@ async function until(condition: () => boolean) {
  * shutdown at all the client keeps trying on a schedule with an advancing attempt number instead
  * of retrying flat out.
  *
- * Not covered, and not claimed: a shutdown that settles here leaves the pool free to hand this
- * connection queued work through `onclose`, which starts a fresh connect with `ending` cleared,
- * so a client with queries queued behind the opening one can re-enter the loop after `end()` has
- * resolved. That is a separate defect with its own tracker issue.
+ * Not covered, and not claimed. Two things, both with their own tracker issues and neither fixed
+ * from here. Overflow issue 223 is the pool handing this connection queued work through
+ * `onclose` after the shutdown settled, which starts a fresh connect with `ending` cleared;
+ * `tests/db/shutdown-backlog-drain.test.ts` covers the half of that the drain in `end()` closes,
+ * and the re-arm itself is not reached once the backlog is empty but is not guarded against
+ * either. And the cancel below reaches only a retry a *close* scheduled: the pool's own
+ * `connection.connect(query)` discards the handle `reconnect()` hands back, so a shutdown
+ * arriving inside that scheduled window still waits it out. Widening the cancel to cover it
+ * would reject a freshly dispatched query that every build serves today, which the last case in
+ * this file exists to prevent.
  *
  * The library client is driven directly rather than through `closeSql()`: the defect is in the
  * patched dependency, and the wrapper adds nothing to the evidence. `closeSql()` is awaited by
@@ -313,7 +354,7 @@ describe("a connection whose socket dies while it is still opening", () => {
     const attemptsAsked: number[] = [];
     const sql = clientThrough(proxy.port, (attempt) => {
       attemptsAsked.push(attempt);
-      return longSpacingSeconds;
+      return retryDelaySeconds;
     });
     const observed: string[] = [];
 
@@ -349,8 +390,7 @@ describe("a connection whose socket dies while it is still opening", () => {
       // The record that stands in for the settle latency, and the reason this case needs no
       // margin: a shutdown that settles by riding the scheduled retry can only settle after that
       // retry has been made, which the peer would accept and count. An unchanged count is
-      // therefore a settle that did not wait for it — and the wait it did not take is
-      // `longSpacingSeconds`, far longer than this whole case.
+      // therefore a settle that did not wait for it, whatever the clock says.
       await expect(shutdown).resolves.toBeUndefined();
       expect(proxy.accepted).toBe(acceptedBeforeShutdown);
 
@@ -360,9 +400,13 @@ describe("a connection whose socket dies while it is still opening", () => {
       await expect(opening).resolves.toBe("CONNECTION_DESTROYED");
       expect(observed).toEqual(["opening query rejected", "shutdown settled"]);
 
-      // The scheduled retry was cancelled rather than merely outrun: it was `longSpacingSeconds`
-      // away, so nothing may arrive in the window below, and nothing may keep the loop alive.
-      await new Promise((resolve) => setTimeout(resolve, quietWindowMs));
+      // Cancelled, not merely outrun — which is a stronger claim than the settle being quick, and
+      // needs a window LONGER than the delay rather than a fraction of it. The retry was one
+      // second out; two and a half seconds later a client that had not cancelled it has connected
+      // (the peer counts it) and been closed on again (its backoff is asked for another delay).
+      // Both records are checked, because a build that rearmed without asking for a delay would
+      // still show up in the first.
+      await new Promise((resolve) => setTimeout(resolve, cancelWindowMs));
       expect(proxy.accepted).toBe(acceptedBeforeShutdown);
       expect(attemptsAsked).toEqual([1]);
     } finally {
@@ -385,6 +429,39 @@ describe("a connection whose socket dies while it is still opening", () => {
       proxy.killOnNextData = true;
 
       await expect(opening).resolves.toEqual([{ value: 1 }]);
+      expect(proxy.accepted).toBe(2);
+    } finally {
+      await sql.end();
+      await proxy.close();
+    }
+  }, 120_000);
+
+  it("still waits out a live handshake when a shutdown arrives, even after an earlier retry", async () => {
+    const target = new URL(databaseUrl);
+    const proxy = await startDeathProxy({ host: target.hostname, port: Number(target.port) });
+    // The peer closes the first attempt and then holds the second one open in silence, so the
+    // client is mid-handshake -- socket alive, StartupMessage sent -- with a spent retry behind
+    // it. A build that recognised the between-retries state by a handle it never cleared would
+    // see this connection as idle and terminate it; this one has to leave it to connect_timeout,
+    // which is also the issue's own blackhole contrast and must not regress.
+    const sql = clientThrough(proxy.port, () => promptSeconds, handshakeTimeoutSeconds);
+
+    try {
+      const opening = sql`select 1 as value`.then(() => "resolved", (error: { code?: string }) => error.code);
+      proxy.mode = "acceptclose";
+      proxy.onAccept = (accepted) => {
+        if (accepted === 1) proxy.mode = "hold";
+      };
+
+      // The second attempt has been accepted, so the retry has fired and its handle is spent.
+      await until(() => proxy.accepted >= 2);
+      const shutdown = sql.end();
+
+      // The distinguishing record is the code, not the delay: a terminated handshake rejects with
+      // CONNECTION_DESTROYED, one left to time out with CONNECT_TIMEOUT. Awaited unbounded.
+      await expect(opening).resolves.toBe("CONNECT_TIMEOUT");
+      await expect(shutdown).resolves.toBeUndefined();
+      // And the timeout ends the client rather than starting another round.
       expect(proxy.accepted).toBe(2);
     } finally {
       await sql.end();
