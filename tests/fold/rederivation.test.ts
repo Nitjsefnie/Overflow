@@ -42,7 +42,7 @@ describe("repository re-derivation", () => {
     const { worker, store } = fixture(request);
     expect(await runNextReconciliationJob(worker)).toBe("RECONCILED");
     expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: request !== null });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1);
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: request !== null });
   });
 
@@ -104,7 +104,7 @@ describe("repository re-derivation", () => {
     await register();
     await startWorker.mock.calls[0][0].drain();
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: true });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", requestedAt);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
   });
 });
 
@@ -126,9 +126,9 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     failRun: vi.fn(async () => {}), recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
     claimNextReconciliationJob: vi.fn<ReconciliationWorkerDependencies["store"]["claimNextReconciliationJob"]>()
       .mockResolvedValueOnce({ id: "job-1", repositoryId: "repo-1", reason: "SWEEP", attemptCount,
-        leaseToken: "lease-1", rederivationRequestedAt: request }).mockResolvedValue(null),
+        leaseToken: "lease-1", rederivationRequestedAt: request, rederivationGeneration: request === null ? 0 : 1 }).mockResolvedValue(null),
     renewReconciliationJobLease: vi.fn(async () => true),
-    completeReconciliationJob: vi.fn(async () => true), deferReconciliationJob: vi.fn(async () => true),
+    completeReconciliationJob: vi.fn<ReconciliationWorkerDependencies["store"]["completeReconciliationJob"]>(async () => true), deferReconciliationJob: vi.fn(async () => true),
     retryReconciliationJob: vi.fn(async () => true), failReconciliationJob: vi.fn(async () => true),
   };
   const budgetStore = createGitHubGraphqlBudgetStore();

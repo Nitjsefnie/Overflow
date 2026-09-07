@@ -9,4 +9,5 @@ export type ClaimedReconciliationJob = {
   attemptCount: number;
   leaseToken: string;
   rederivationRequestedAt: Date | null;
+  rederivationGeneration: number;
 };
