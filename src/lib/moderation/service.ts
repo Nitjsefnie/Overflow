@@ -305,7 +305,7 @@ export class AccountModerationService {
   }
 }
 
-function requireModerator(actor: ModerationActor): void {
+export function requireModerator(actor: ModerationActor): void {
   if (actor.role !== "MODERATOR") {
     throw new ModerationServiceError("FORBIDDEN", "Moderator authorization is required.");
   }
