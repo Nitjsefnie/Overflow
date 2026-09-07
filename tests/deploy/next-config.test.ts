@@ -107,6 +107,16 @@ describe("NEXT_DIST_DIR", () => {
       },
     );
 
+    it("rejects a separator-free Windows drive-relative path before preparation", async () => {
+      prepareInvalidPathConfig("D:build", projectDir, path.win32);
+      process.env.NEXT_DIST_DIR = "D:build";
+      vi.resetModules();
+
+      const configImport = import("../../next.config");
+
+      await expectPathRefusal(configImport, "D:build");
+    });
+
     it("rejects a direct Windows symlink", async () => {
       const windowsProjectDir = "C:\\project";
       vi.spyOn(process, "cwd").mockReturnValue(windowsProjectDir);
