@@ -50,6 +50,15 @@ export type ModerationRouteDependencies = {
   createService: () => Promise<ModerationRouteService>;
 };
 
+/**
+ * What the moderator gate itself reads. A route with its own service type
+ * satisfies this without having to describe its service as this file's one.
+ */
+export type ModerationSessionDependencies = Pick<
+  ModerationRouteDependencies,
+  "getSession" | "getCurrentRole"
+>;
+
 export function createModerationPostHandler(dependencies: ModerationRouteDependencies) {
   return async function postModeration(request: Request): Promise<Response> {
     const untrusted = rejectUntrustedRequest(request);
@@ -135,7 +144,7 @@ export async function getProductionSession(): Promise<ModerationRouteSession | n
 // The role is re-read from the database rather than trusted from the session,
 // because a session issued before a revocation still carries MODERATOR.
 export async function requiredModeratorSession(
-  dependencies: ModerationRouteDependencies,
+  dependencies: ModerationSessionDependencies,
 ): Promise<AuthorizedModerationRouteSession | Response> {
   let session: ModerationRouteSession | null;
   try {

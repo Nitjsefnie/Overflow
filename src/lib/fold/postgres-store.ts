@@ -37,6 +37,20 @@ import {
 import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { decryptToken } from "@/lib/security/token-cipher";
 
+type RepositoryFoldRevisionCountsRow = {
+  repository_id: string;
+  owner_name: string;
+  rows_at_revision: number;
+  rows_below_revision: number;
+  rederivation_requested_at: Date | null;
+};
+
+type RepositoryRederivationRequestRow = {
+  repository_id: string;
+  owner_name: string;
+  rederivation_requested_at: Date | null;
+};
+
 type RepositoryRow = {
   id: string;
   github_repository_id: number | string;
@@ -276,6 +290,32 @@ function waitForRepositoryLockRetry(attempt: number, remainingMs: number): Promi
   const retryMs = Math.max(1, Math.min(remainingMs, jitteredRetryMs));
   return new Promise((resolve) => setTimeout(resolve, retryMs));
 }
+
+/**
+ * How many of one repository's derived rows carry the fold revision asked about,
+ * and how many were written by an older revision of the fold.
+ *
+ * Rows stamped above the revision asked about are in neither count: they were
+ * written by logic newer than the caller's, so calling them stale would be
+ * wrong and calling them current would hide the rollback that produced them.
+ */
+export type RepositoryFoldRevisionCounts = {
+  repositoryId: string;
+  ownerName: string;
+  rowsAtRevision: number;
+  rowsBelowRevision: number;
+  rederivationRequestedAt: Date | null;
+};
+
+/**
+ * A repository together with the re-derivation request outstanding against it,
+ * where a null timestamp means none is.
+ */
+export type RepositoryRederivationRequest = {
+  repositoryId: string;
+  ownerName: string;
+  rederivationRequestedAt: Date | null;
+};
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   public constructor(
@@ -587,6 +627,80 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       ) as stale
     `;
     return row.stale;
+  }
+
+  /**
+   * Every active repository's derived-row stamp counts, in one pass over the
+   * three derived tables rather than one read per issue: a moderator asking
+   * "what is still the output of older logic?" must not cost a query per row.
+   *
+   * Reported for every active repository, including one holding no derived rows
+   * at all, so the answer is the registered catalog rather than only the
+   * repositories that happen to have been folded.
+   */
+  public async listRepositoryFoldRevisionCounts(revision: number): Promise<RepositoryFoldRevisionCounts[]> {
+    const rows = await this.sql<RepositoryFoldRevisionCountsRow[]>`
+      select
+        repositories.id as repository_id,
+        repositories.owner_name,
+        coalesce(derived.rows_at_revision, 0)::int as rows_at_revision,
+        coalesce(derived.rows_below_revision, 0)::int as rows_below_revision,
+        jobs.rederivation_requested_at
+      from registered_repositories as repositories
+      left join (
+        select
+          issues.repository_id,
+          count(*) filter (where derived_rows.fold_revision = ${revision}) as rows_at_revision,
+          count(*) filter (where derived_rows.fold_revision < ${revision}) as rows_below_revision
+        from (
+          select issue_id, fold_revision from settlements
+          union all
+          select issue_id, fold_revision from self_work_calibrations
+          union all
+          select issue_id, fold_revision from unwritable_closures
+        ) as derived_rows
+        join issues on issues.id = derived_rows.issue_id
+        group by issues.repository_id
+      ) as derived on derived.repository_id = repositories.id
+      -- A repository owns at most one queue row, so this join cannot fan the counts out.
+      left join repository_reconciliation_jobs as jobs on jobs.repository_id = repositories.id
+      where repositories.active = true
+      order by repositories.owner_name, repositories.id
+    `;
+    return rows.map((row) => ({
+      repositoryId: row.repository_id,
+      ownerName: row.owner_name,
+      rowsAtRevision: row.rows_at_revision,
+      rowsBelowRevision: row.rows_below_revision,
+      rederivationRequestedAt: row.rederivation_requested_at,
+    }));
+  }
+
+  /**
+   * The outstanding re-derivation request for one active repository, or null
+   * when this deployment serves no such repository. Answering null is what lets
+   * a caller refuse an unknown target before writing a queue row for it.
+   */
+  public async findRepositoryRederivationRequest(
+    repositoryId: string,
+  ): Promise<RepositoryRederivationRequest | null> {
+    const [row] = await this.sql<RepositoryRederivationRequestRow[]>`
+      select
+        repositories.id as repository_id,
+        repositories.owner_name,
+        jobs.rederivation_requested_at
+      from registered_repositories as repositories
+      left join repository_reconciliation_jobs as jobs on jobs.repository_id = repositories.id
+      where repositories.id = ${repositoryId} and repositories.active = true
+    `;
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      repositoryId: row.repository_id,
+      ownerName: row.owner_name,
+      rederivationRequestedAt: row.rederivation_requested_at,
+    };
   }
 
   public async beginRun(repositoryId: string, options?: { rederivation: boolean }): Promise<string> {
