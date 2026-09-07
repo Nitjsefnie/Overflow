@@ -10,15 +10,14 @@ if (distDir) {
 
   if (!relativeDir || /[\\/]/.test(distDir)) {
     throw new Error(
-      `Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}; the tracked tsconfig.json include ` +
-      ".next/types/**/*.ts only resolves when distDir is one segment deep.",
+      `Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}; use a direct child directory beside .next.`,
     );
   }
 
   if (
     path.isAbsolute(distDir) ||
     path.win32.isAbsolute(distDir) ||
-    distDir.split(/[\\/]/).includes("..") ||
+    distDir === ".." ||
     relativeDir === ".." ||
     relativeDir.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relativeDir)
@@ -26,24 +25,19 @@ if (distDir) {
     throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
   }
 
-  let ancestor = projectDir;
-  for (const segment of path.normalize(distDir).split(path.sep)) {
-    if (!segment || segment === ".") continue;
-    ancestor = path.join(ancestor, segment);
-    let entry;
-    try {
-      entry = lstatSync(ancestor, { throwIfNoEntry: false });
-    } catch {
-      // Leave inaccessible or invalid output paths to Next's own diagnostics.
-      break;
-    }
-    if (entry?.isSymbolicLink()) {
-      throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
-    }
-    if (!entry?.isDirectory()) break;
+  let entry;
+  try {
+    entry = lstatSync(path.join(projectDir, distDir), { throwIfNoEntry: false });
+  } catch {
+    // Leave inaccessible or invalid output paths to Next's own diagnostics.
+  }
+  if (entry?.isSymbolicLink()) {
+    throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
   }
 }
 
-const nextConfig: NextConfig = distDir ? { distDir } : {};
+const nextConfig: NextConfig = distDir
+  ? { distDir, typescript: { tsconfigPath: "tsconfig.release.json" } }
+  : {};
 
 export default nextConfig;
