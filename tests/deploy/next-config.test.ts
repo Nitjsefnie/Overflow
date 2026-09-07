@@ -29,9 +29,38 @@ describe("NEXT_DIST_DIR", () => {
     });
 
     afterEach(() => {
+      vi.doUnmock("node:path");
+      vi.doUnmock("node:fs");
       vi.restoreAllMocks();
       rmSync(fixtureDir, { recursive: true, force: true });
     });
+
+    it.each(["missing", "existing"])(
+      "rejects Windows forward-slash symlink traversal with a %s leaf",
+      async (leaf) => {
+        if (leaf === "existing") {
+          mkdirSync(path.join(fixtureDir, "outside", "build-123"));
+        }
+        const windowsProjectDir = "C:\\project";
+        vi.spyOn(process, "cwd").mockReturnValue(windowsProjectDir);
+        vi.doMock("node:path", () => ({ default: path.win32 }));
+        // Map Windows paths to the real fixture; retain native symlink metadata.
+        vi.doMock("node:fs", () => ({
+          lstatSync: (target: string) => lstatSync(
+            path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
+            { throwIfNoEntry: false },
+          ),
+        }));
+        process.env.NEXT_DIST_DIR = "release-link/build-123";
+        vi.resetModules();
+
+        const configImport = import("../../next.config");
+
+        await expect(configImport).rejects.toThrowError(Error);
+        await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+        await expect(configImport).rejects.toThrow("release-link/build-123");
+      },
+    );
 
     it.each(["release-link/build-123", "release-link"])(
       "rejects an external symlink at %s",
