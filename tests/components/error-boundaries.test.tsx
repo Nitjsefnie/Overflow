@@ -1,14 +1,18 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { Children, isValidElement } from "react";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RouteError from "@/app/error";
 import GlobalError from "@/app/global-error";
 
 describe.each([
-  { name: "route", Component: RouteError },
-  { name: "global", Component: GlobalError },
-])("$name error boundary", ({ name, Component }) => {
+  { name: "route", Component: RouteError, file: "error.tsx" },
+  { name: "global", Component: GlobalError, file: "global-error.tsx" },
+])("$name error boundary", ({ name, Component, file }) => {
   let frame: HTMLIFrameElement | undefined;
 
   afterEach(() => {
@@ -75,4 +79,42 @@ describe.each([
 
     expect(view.getByText("digest-8c014f", { exact: false })).toBeVisible();
   });
+
+  it("excludes private error fields even when a digest is present", () => {
+    const error = Object.assign(new Error("private-digest-message-c9e5"), {
+      digest: "digest-overlap-83a2",
+      stack: "private-digest-stack-61d7",
+    });
+    const view = renderBoundary(error);
+
+    expect(view.getByText(error.digest, { exact: false })).toBeVisible();
+    expect(view.output()).not.toContain(error.message);
+    expect(view.output()).not.toContain(error.stack);
+  });
+
+  it("declares the required client boundary directive", () => {
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(resolve("src/app", file), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+    const directives: string[] = [];
+    for (const statement of source.statements) {
+      if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression)) break;
+      directives.push(statement.expression.text);
+    }
+
+    expect(directives).toContain("use client");
+  });
+});
+
+it("global boundary itself returns html with a direct body child", () => {
+  // Inspect the component's return before the DOM can supply document wrappers.
+  const tree = GlobalError({ error: new Error("private-document-547a"), reset: vi.fn() });
+
+  expect(tree.type).toBe("html");
+  const body = Children.only(tree.props.children);
+  expect(isValidElement(body) && body.type).toBe("body");
 });
