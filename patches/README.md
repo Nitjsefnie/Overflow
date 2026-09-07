@@ -6,26 +6,34 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Four defects. The first is a shutdown that never settles; the second is a
-`reserve()` that never settles; the third answers a dead backend's error to the
-query that replaces it; the fourth hands queued work to a connection the pool
-has already taken back. They are unrelated, and each has its own section below.
+Six defects. The first is a shutdown that never settles; the second is a
+reconnect loop that retries with no delay at all; the third is a `reserve()`
+that never settles; the fourth answers a dead backend's error to the query that
+replaces it; the fifth hands queued work to a connection the pool has already
+taken back; the sixth lets a shutdown report itself finished while work the
+pool accepted is neither run nor refused. The first two share an edit site and
+the section below; the rest are unrelated and each has its own.
 
-Eight separate edits carry them, and `git` renders those eight as seven hunks:
-`reserve()`'s rejection wrapper and `release()`'s guard sit close enough
-together in the package's `src/index.js` to share one. The sections below call
-each edit a hunk, so their counts sum to eight rather than to seven.
+Sixteen separate edits carry them, and `git` renders those sixteen as twelve
+hunks. Two hunks carry three edits each: in the package's `src/index.js`,
+`reserve()`'s refusal once the client is ending, `reserve()`'s rejection
+wrapper and `release()`'s guard sit close enough together to share one, and in
+`closed()` the connect-phase failure, the retry bookkeeping and the settle
+share another. The sections below call each edit a hunk, so their counts sum to
+sixteen rather than to twelve.
 
 ### A connection that loses its backend leaves `sql.end()` waiting
 
-Two hunks, both in the `postgres` package's own `src/connection.js` — not this
-repository's `src/`. They settle the two orders in which a connection losing
-its backend leaves `sql.end()` waiting on a message that will never arrive,
-apart from the connect-phase case *What it still does not cover* sets out
-below. `sql.end()` awaits every connection in the pool, so a single stranded
-connection stalls the whole shutdown, and with it `closeSql()` and everything
-awaiting it — `scripts/reconcile.ts` awaits it in a `finally`, so the reconcile
-script simply never exits.
+Eight hunks, all in the `postgres` package's own `src/connection.js` — not this
+repository's `src/`; `git` renders them as six, because three of them share
+one. They settle the three orders in which a connection losing its backend
+leaves `sql.end()` waiting on a message that will never arrive, they space the
+reconnect attempts the third of those orders used to issue back to back, and
+they let a shutdown that arrives between two of those attempts cancel the next
+one rather than wait for it. `sql.end()` awaits every connection in the pool,
+so a single stranded connection stalls the whole shutdown, and with it
+`closeSql()` and everything awaiting it — `scripts/reconcile.ts` awaits it in a
+`finally`, so the reconcile script simply never exits.
 
 #### The connection died, then the shutdown was registered
 
@@ -98,6 +106,96 @@ before handing the connection back to the pool. `onclose()` moves it to the
 closed queue and can immediately start reconnecting it for queued work, so
 settling first keeps the settle off a connection that is already being reused.
 
+#### The connection died while it was still opening
+
+Both orders above are settled from `closed()`, below its
+`if (initial) return reconnect()` early return — and a connection that dies
+while it is still **opening** takes that return, with `initial` still holding
+the query that opened it. Nothing below it ran: not the in-flight failure, not
+the settle, and not `closedTime`, the retry counter or `delay`.
+
+What that costs depends on how the reconnect attempts end, and one ending is
+unbounded:
+
+- An attempt that **completes** with an ordinary initial query executes that
+  query and clears `initial`; the query's `ReadyForQuery` reaches the
+  `ending ? terminate()` arm once no query remains in flight. A reservation
+  is not executed as a query: with array-type fetching off, the startup arm
+  clears `initial` and terminates an already-ending connection directly.
+  With array-type fetching on, it clears the reservation from `initial`
+  before fetching types, whose `ReadyForQuery` reaches the ending arm.
+- An attempt that raises an error reaching `errored()` — a refused connect, a
+  `CONNECT_TIMEOUT`, a startup `ErrorResponse` — nulls `initial`, so the
+  **next** `closed()` falls past the early return and is settled by the hunk
+  above.
+- An attempt that ends in a plain socket close, with no `error` event and no
+  protocol message, does neither, and nothing else ever will. That is what a
+  pooler, a TCP load balancer, a Kubernetes service or any non-postgres service
+  on the port produces while the backend is gone. Against such a peer the
+  pending `end()` was never settled at all: measured still pending at 90
+  seconds, having made 32,605 reconnect attempts in that time. Overflow issue
+  164.
+
+The third hunk fails the startup query where a shutdown is already pending,
+above the early return, with the same `CONNECTION_CLOSED` the established path
+uses. `error()` clears `initial` on its way through `errored()`, so the close
+then continues into the same tail as a death after the handshake — settle,
+then hand the connection back — rather than taking the return at all. Where no
+shutdown is pending the return survives, so a client whose database is merely
+down keeps trying.
+
+The startup query is **failed rather than replayed** on a retry, even when the
+server is reachable again by the time a retry would run. That is the contract
+the established path already has: `postgres` never re-runs a query whose socket
+died, at any phase, and a retry issued while ending is exactly the reconnect
+that keeps a shutting-down process from exiting.
+`tests/db/connect-phase-death.test.ts` holds all of it, driving the library
+client through a local TCP proxy rather than through `closeSql()`.
+
+#### The reconnect attempts were issued with no delay at all
+
+`reconnect()` schedules the next attempt at
+`closedTime ? Math.max(0, closedTime + delay - performance.now()) : 0`, and
+`closedTime`, `options.shared.retries++` and `delay` are all assigned below the
+same early return. A connect-phase death therefore left `closedTime` at its
+initial zero, the ternary took its zero branch, and every attempt went out back
+to back — the 32,605 above, in ninety seconds. The retry counter never advanced
+either, so a configured `backoff` was asked for the delay of attempt zero
+forever and could never grow one. (A connection that has lived before carries a
+previous `closedTime`, and reconnects then use the remaining backoff computed
+from that value, which is why the storm needs a connection dying in its *first*
+connect phase.)
+
+The fourth hunk records all three before returning, so attempts are scheduled
+rather than issued and the counter advances: `backoff` is asked for attempt 1,
+then 2, and so on. It advances unconditionally rather than on `hadError`,
+because the close this arm exists for is a clean FIN, where `hadError` is false
+and stock's form would never advance at all. On the one route where a socket
+error can still reach the arm with `initial` set — the multi-host fallback the
+caveat below describes, where `error()` returns before `errored()` — the two
+forms agree, as they do wherever `hadError` is true.
+
+#### The shutdown that arrives between two attempts
+
+Spacing those attempts lengthened a wait the settle above then had to sit
+through. With the next attempt scheduled rather than immediate, an `end()`
+arriving *between* attempts settled only once that attempt had been made and
+closed — up to the backoff cap, measured at 12.6 to 15.9 seconds at this
+repository's pool size where the same shape took roughly 19 milliseconds
+before. The two halves are one edit site, so the fix for one has to carry the
+other.
+
+Four hunks make the scheduled attempt cancellable: `reconnect()` hands its
+timer back, the connect-phase arm keeps the handle, `connect()` spends it, and
+`end()` clears it when nothing else is in flight — which turns *waiting to
+retry* into the same nothing-in-flight case `end()`'s fast path already
+terminates at once, with the same rejection for the startup query it strands.
+The handle is armed only by a close, never by a first connect, so a query the
+pool has just dispatched is untouched and still runs; recognising the state by
+the absence of a socket instead would reject that one too.
+`tests/db/connect-phase-death.test.ts` holds the cancel, the boundary, and a
+live handshake left to its own `connect_timeout` rather than terminated.
+
 #### Where this diverges from upstream
 
 Upstream tracks the first order as `porsager/postgres` issue 1097, and open
@@ -112,39 +210,30 @@ not resync this patch with it.
 
 Neither edit settles a pending `end()`, so upstream has nothing at all for the
 second order: issue 1097 describes only the death-then-`end()` interleaving,
-and pull request 1142 leaves `end()`, `terminate()` and `ending` alone. When a
-release does land, judge it against the tests named here rather than against
-the pull request.
+and pull request 1142 leaves `end()`, `terminate()` and `ending` alone. On the
+description above it has nothing for the third order or for the spacing either:
+its `closed()` edit is the in-flight failure, which sits below the connect-phase
+early return, and nothing in either edit moves that return or the bookkeeping
+under it. When a release does land, judge it against the tests named here rather
+than against the pull request.
 
 #### What it still does not cover
 
-A connection that dies while it is still in its **connect** phase takes
-`closed()`'s `if (initial) return reconnect()` early return, above both the
-in-flight failure and the settle, so a pending `end()` is not settled there.
-Whether that is safe depends entirely on how the reconnect attempts end:
-
-- An attempt that **completes** with an ordinary initial query executes that
-  query and clears `initial`; the query's `ReadyForQuery` reaches the
-  `ending ? terminate()` arm once no query remains in flight. A reservation
-  is not executed as a query: with array-type fetching off, the startup arm
-  clears `initial` and terminates an already-ending connection directly.
-  With array-type fetching on, it clears the reservation from `initial`
-  before fetching types, whose `ReadyForQuery` reaches the ending arm.
-- An attempt that raises an error reaching `errored()` — a refused connect, a
-  `CONNECT_TIMEOUT`, a startup `ErrorResponse` — nulls `initial`, so the
-  **next** `closed()` falls past the early return and is settled by this
-  patch's own line.
-- An attempt that ends in a plain socket close, with no `error` event and no
-  protocol message, does neither. That is what a pooler, a TCP load balancer or
-  any non-postgres service on the port produces while the backend is gone: the
-  reconnect loop is unbounded, and the pending `end()` is stranded.
-  `closedTime` is assigned below the same early return, so attempts are
-  scheduled at delay zero while it retains its initial zero. A reused
-  connection can retain a previous `closedTime`; reconnects then use the
-  remaining backoff computed from that value.
-
-That gap is Overflow issue 164, and it is why this patch must not be read as
-making `end()` always settle.
+- **The cancel reaches only a retry a *close* scheduled.** The pool's own
+  `connection.connect(query)` calls `reconnect()` and discards the handle it
+  returns, so a shutdown arriving inside *that* scheduled window still waits it
+  out — measured at 43 milliseconds on `main` against 17,099 milliseconds here,
+  because the spacing above lengthens a window that already existed. Widening
+  the cancel to cover it would reject a query the pool has just dispatched,
+  which every build serves today, so it is left alone deliberately. Overflow
+  issue 224.
+- **Two `reserve()` orderings leave `sql.end()` itself pending**: a `reserve()`
+  issued in the same turn as `end()`, which wins the race to `end()`'s own
+  `await 1`, and a reservation held across `end()` and released afterwards,
+  whose `release()` calls `onopen()` and so bypasses the
+  `ending ? terminate()` arm. Both reproduce identically on `main`: they are
+  stock, not something this patch introduced or failed to remove. Overflow
+  issue 226.
 
 #### Caveat if you reuse this patch elsewhere
 
@@ -156,10 +245,20 @@ The connection is still connecting there, so the pending work is `initial`
 rather than `query` — `connect()` assigns it at line 114, and `query` is taken
 only inside the types fetch — and a slot of either kind is enough to send
 `end()` down its slow path, so the hang survives. Unreachable here: this
-repository's `DATABASE_URL` names a single host. That also means this route is
-**unreproduced and unfiled** — it is read off the package's source, nobody here
-has run it, and no issue tracks it, so treat it differently from the claims in
-this file that a probe and a test stand behind.
+repository's `DATABASE_URL` names a single host. The route stays **unfiled**,
+and no test in this repository exercises it.
+
+One thing about it has since been run rather than read. With a comma-separated
+host list and a shutdown already pending, the route settles in 2 to 3
+milliseconds, in both orderings, two runs each — which is what the connect-phase
+hunk above predicts, because `ending` is assigned only by `end()`, and `end()`
+moves the connection out of `queues.connecting` before assigning it, so the
+early return cannot be taken with a shutdown pending. That measurement
+establishes only that the *covered* case is covered. The uncovered one — a
+multi-host connect-phase death with **no** shutdown pending, where `initial`
+survives a socket error and `closed(true)` reaches the retry arm with `hadError`
+set — is still read off the package's source rather than run, so treat it
+differently from the claims in this file that a probe and a test stand behind.
 
 ### A queued `reserve()` is dropped when the connection it waits on dies
 
@@ -451,15 +550,81 @@ Read off the package's source rather than run: nothing in this repository has
 reproduced it and no issue tracks it, so treat it differently from the claims
 above that a test stands behind.
 
+### A shutdown reports itself finished with work the pool accepted still in hand
+
+Two hunks in the package's own `src/index.js`; `git` renders the second as part
+of the hunk the `reserve()` and `release()` edits above already share.
+
+`handler()` queues a query whenever every connection is busy, and `end()`
+settles connections rather than that queue. What stock then does with the
+backlog depends on something the caller cannot see, and neither outcome is the
+shutdown being over. A connection that finishes its work during the shutdown
+takes `ending ? terminate()`, and `terminate()` nulls its `ending` — so the
+socket close behind it reaches `onclose` with the backlog still in the queue and
+**resurrects that connection to serve it**, after `sql.end()` has already
+resolved. Where the server is unreachable instead, the resurrected connection
+never completes and the same work is never settled at all: at this repository's
+pool size, five queries of fifteen were left pending permanently.
+
+The first hunk drains the queue in `end()`, with the `CONNECTION_DESTROYED` that
+`destroy()` — the path `sql.end({ timeout })` reaches when its timer wins —
+already uses on the same queue, so the two shutdown paths agree. It runs
+**before** the connections are told to end. Nothing can serve the backlog after
+that point: no connection takes queued work while it is ending, because
+`ReadyForQuery` ends in `ending ? terminate() : onopen(connection)`, and
+`handler()` refuses everything new the moment the pool's `ending` is assigned,
+which happens in the same turn with no I/O in between. Draining first rather
+than last is what keeps the disposal off the liveness of the very promise this
+section is about — a connection whose own `end()` never settles would otherwise
+take the backlog with it — and it empties the queue before any `onclose` can
+read it. Each entry is shifted out before it is rejected, exactly as `destroy()`
+does it: a queued reserve's own rejection removes it from this queue, and an
+entry already shifted out is the only kind that removal is inert on. Rejecting
+without shifting is not merely untidy — the loop reads its head each pass, so an
+entry that does not remove itself is read forever, and the drain becomes a
+synchronous spin that takes the event loop with it.
+
+The second hunk gives `reserve()` the `ending` check `handler()` already has. A
+reservation requested after the shutdown was pushed into the same queue without
+consulting that flag, and `end()` drains once and before the flag is set, so
+nothing would drain it either: against an unreachable server that left a promise
+nothing settles, and against a reachable one the pool opened a fresh socket for
+it after the shutdown had resolved. It now answers with the same
+`CONNECTION_ENDED` an ordinary query in that position already gets.
+
+`tests/db/shutdown-backlog-drain.test.ts` holds all of it: queued queries and a
+queued `reserve()` settled by an ordinary shutdown, the drain running before a
+connection that cannot finish ending, and a reservation requested afterwards
+refused beside a query that already was.
+
+This is Overflow issue 223. The visible change is that a shutdown of a perfectly
+healthy client now rejects queued work it used to run behind the caller's back —
+which is the point: a caller can tell "your query ran" from "your query never
+will", and got neither answer from a promise settled by whether a resurrected
+connection happened to reach the server.
+
+#### What it does not cover
+
+The resurrection itself is not guarded, only made unreachable. `onclose` still
+hands a connection the head of `queries` and starts a fresh connect with the
+connection's `ending` cleared; what stops it is that the queue is empty by then,
+not a check. A future edit that queues work after `end()` has drained would
+bring it back, and the only route that still can is `reserve()`, which the hunk
+above closes.
+
 ### Housekeeping
 
-- **Only the ESM build is patched.** All eight hunks land in `src/`. The package
+- **Only the ESM build is patched.** All twelve hunks land in `src/`. The package
   also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
   query in the slot in `error()`, leave `closed()` without the settle and with
-  the stale `errorResponse`, still drop a reserve that reaches the startup
-  handler with array-type fetching off, still shift the queue in `onclose`,
-  still hand `reserve()`'s pseudo-query a bare `reject`, still let a spent
-  `release()` hand a connection back to the pool, and carry no `peek` in their
+  the stale `errorResponse`, still take the connect-phase early return above
+  both of those and above the retry bookkeeping, still discard the reconnect
+  timer so no shutdown can cancel it, still drop a reserve that reaches the
+  startup handler with array-type fetching off, still shift the queue in
+  `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, still let a
+  spent `release()` hand a connection back to the pool, still leave `end()`'s
+  backlog neither run nor refused, still let `reserve()` queue into an ending
+  pool, and carry no `peek` in their
   `queue.js` — the same as on `main`, so this is a standing property of the
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
@@ -479,12 +644,14 @@ above that a test stands behind.
   `pnpm install --frozen-lockfile` fails on the mismatch. Then let
   `tests/db/closesql-connection-death.test.ts`,
   `tests/db/closesql-shutdown-before-death.test.ts`,
+  `tests/db/connect-phase-death.test.ts`,
+  `tests/db/shutdown-backlog-drain.test.ts`,
   `tests/db/pipelined-query-after-build-failure.test.ts`,
   `tests/db/reserve-contract.test.ts`,
   `tests/db/postgres-queue.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
   whether the release really carries every fix without the regression. All of
-  them: the first two name one interleaving each, and a release that settles
-  one and not the other passes a check that names only its own and reinstates
+  them: the first three name one interleaving each, and a release that settles
+  one and not the others passes a check that names only its own and reinstates
   the hang unnoticed. A release that carries only some of the fixes keeps the
   patch, minus the hunks it made redundant.
