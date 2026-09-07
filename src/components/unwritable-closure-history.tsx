@@ -31,7 +31,7 @@ export function UnwritableClosureHistory({ closures }: UnwritableClosureHistoryP
           <p className="override-reason">{closure.reason}</p>
           {closure.latestCorrection === null ? null : (
             <p className="mono-meta">
-              Correction granted · reported <time dateTime={closure.latestCorrection.requestedAt}>{closure.latestCorrection.requestedAt}</time>
+              Correction <data value={closure.latestCorrection.state}>{closure.latestCorrection.state.toLowerCase()}</data> · reported <time dateTime={closure.latestCorrection.requestedAt}>{closure.latestCorrection.requestedAt}</time>
             </p>
           )}
         </li>
