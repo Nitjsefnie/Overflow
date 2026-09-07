@@ -8,6 +8,7 @@ import {
   trustedOrigin,
   useTrustedOrigin,
 } from "../support/trusted-origin";
+import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -693,6 +694,40 @@ describe("Overflow token registration", () => {
       expect(fetchGitHub).toHaveBeenCalledTimes(0);
     },
   );
+
+  it.each(["token", "cookie"] as const)("attributes the production %s gateway to its account", async (path) => {
+    const key = Symbol.for("overflow.github.graphql-budget");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    const budget = createGitHubGraphqlBudgetStore();
+    Reflect.set(globalThis, key, budget);
+    try {
+      vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+      if (path === "cookie") readSession.mockResolvedValue({ user: tokenAccount });
+      vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-oauth-token");
+      vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+      vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+      vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
+      const request = vi.fn<typeof fetch>(async () => Response.json({ data: {
+        rateLimit: { remaining: 42, resetAt: "2026-09-07T11:00:00Z" },
+        repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      } }));
+      vi.stubGlobal("fetch", request);
+      // Exercise GraphQL on the gateway the route actually constructs, then stop
+      // registration before any persistence. This probes wiring through behavior.
+      vi.spyOn(GitHubGateway.prototype, "getRepository").mockImplementation(async function (this: GitHubGateway) {
+        await this.listIssues({ owner: "octo", name: "overflow" });
+        throw new Error("stop after gateway probe");
+      });
+      const response = await POST(path === "token" ? authorizedRequest() : jsonRequest(validInput()));
+      expect(response.status).toBe(502);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(budget.owners()).toEqual([tokenAccount.id]);
+      expect(budget.read(tokenAccount.id)?.remaining).toBe(42);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
 
   it("carries each minted account identity through bearer lookup to its own GitHub OAuth credential", async () => {
     const identities = [

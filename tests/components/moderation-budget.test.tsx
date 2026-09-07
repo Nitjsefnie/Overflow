@@ -1,13 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loaders = vi.hoisted(() => ({
   audits: vi.fn(async () => []),
   history: vi.fn(async () => []),
   recalibrating: vi.fn(async () => []),
-  moderators: vi.fn(async () => []),
+  moderators: vi.fn<() => Promise<{ accountId: string; githubLogin: string; isConfigured: boolean }[]>>(async () => []),
   candidates: vi.fn(async () => []),
   repositories: vi.fn(async () => []),
   closures: vi.fn(async () => ({ queue: [], history: [] })),
@@ -48,12 +48,13 @@ beforeEach(async () => {
   previousStore = Object.getOwnPropertyDescriptor(globalThis, storeKey);
   vi.resetModules();
   vi.clearAllMocks();
+  loaders.moderators.mockResolvedValue([]);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-09-07T14:15:00.000Z"));
   vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "600");
   const { createGitHubGraphqlBudgetStore } = await import("@/lib/github/rate-limit-budget");
   const store = createGitHubGraphqlBudgetStore();
-  store.record({
+  store.record("sponsor-1", {
     remaining: 42, limit: 5000, cost: 1,
     observedAt: new Date("2026-09-07T14:15:00.000Z"),
     resetAt: new Date("2026-09-07T15:00:00.000Z"),
@@ -110,7 +111,7 @@ describe("moderation budget integration", () => {
     const { default: ModerationPage } = await import("@/app/moderation/page");
     render(await ModerationPage());
 
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledExactlyOnceWith("sponsor-1");
     expect(screen.getByTestId("github-budget-panel")).toHaveAttribute("data-budget-state", "BELOW_RESERVE");
     expect(screen.getByTestId("github-budget-remaining")).toHaveTextContent(/^42$/);
     expect(screen.getByTestId("github-budget-limit")).toHaveTextContent(/^5000$/);
@@ -126,7 +127,7 @@ describe("moderation budget integration", () => {
     cleanup();
     vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "800");
     vi.setSystemTime(new Date("2026-09-07T15:01:00.000Z"));
-    store.record({
+    store.record("sponsor-1", {
       remaining: 4200, limit: null, cost: 1,
       observedAt: new Date("2026-09-07T15:01:00.000Z"),
       resetAt: new Date("2026-09-07T16:00:00.000Z"),
@@ -146,4 +147,49 @@ describe("moderation budget integration", () => {
     expect(secondObserved).toHaveTextContent("2026-09-07T15:01:00.000Z");
     expect(secondObserved).toHaveAttribute("datetime", "2026-09-07T15:01:00.000Z");
   });
+  it("attributes each reading and distinguishes no owners from a known unobserved owner", async () => {
+    const { gitHubGraphqlBudget, createGitHubGraphqlBudgetStore } = await import("@/lib/github/rate-limit-budget");
+    const store = gitHubGraphqlBudget();
+    store.record("sponsor-2", { remaining: 4200, limit: null, cost: 1,
+      resetAt: new Date("2026-09-07T16:00:00Z"), observedAt: new Date("2026-09-07T14:16:00Z") });
+    store.noteState("sponsor-3", "UNKNOWN");
+    const { default: ModerationPage } = await import("@/app/moderation/page");
+    render(await ModerationPage());
+    const panels = screen.getAllByTestId("github-budget-panel");
+    expect(panels).toHaveLength(3);
+    for (const [index, owner, state, remaining] of [
+      [0, "sponsor-1", "BELOW_RESERVE", "42"],
+      [1, "sponsor-2", "AVAILABLE", "4200"],
+      [2, "sponsor-3", "UNKNOWN", null],
+    ] as const) {
+      const panel = panels[index];
+      expect(panel).toHaveAttribute("data-budget-owner", owner);
+      expect(panel).toHaveAttribute("data-budget-state", state);
+      expect(within(panel).getByTestId("github-budget-owner")).toHaveTextContent(owner);
+      expect(within(panel).getByTestId("github-budget-owner")).toBeVisible();
+      if (remaining === null) expect(within(panel).queryByTestId("github-budget-remaining")).toBeNull();
+      else expect(within(panel).getByTestId("github-budget-remaining").textContent).toBe(remaining);
+    }
+    cleanup();
+    Reflect.set(globalThis, storeKey, createGitHubGraphqlBudgetStore());
+    render(await ModerationPage());
+    expect(screen.queryByTestId("github-budget-panel")).toBeNull();
+    const empty = screen.getByTestId("github-budget-empty");
+    expect(empty).toBeVisible();
+    expect(empty).toHaveAttribute("data-budget-state", "UNKNOWN");
+    expect((empty.textContent ?? "").trim()).not.toBe("");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("uses a login already loaded by the roster while retaining the account identity", async () => {
+    loaders.moderators.mockResolvedValue([{ accountId: "sponsor-1", githubLogin: "octocat", isConfigured: false }]);
+    const { default: ModerationPage } = await import("@/app/moderation/page");
+    render(await ModerationPage());
+    const panel = screen.getByTestId("github-budget-panel");
+    expect(panel).toHaveAttribute("data-budget-owner", "sponsor-1");
+    expect(within(panel).getByTestId("github-budget-owner")).toHaveTextContent(/^octocat$/);
+    expect(within(panel).getByTestId("github-budget-owner")).toBeVisible();
+    expect(loaders.moderators).toHaveBeenCalledTimes(1);
+  });
+
 });

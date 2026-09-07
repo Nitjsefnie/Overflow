@@ -26,9 +26,12 @@ const reading = {
 
 describe("GitHub budget panel", () => {
   it("renders the available budget figures and both instants", () => {
-    render(<GitHubBudgetPanel assessment={{ state: "AVAILABLE", reading, reserve: 500 }} />);
+    render(<GitHubBudgetPanel owner="account-42" assessment={{ state: "AVAILABLE", reading, reserve: 500 }} />);
 
     expect(screen.getByTestId("github-budget-panel")).toHaveAttribute("data-budget-state", "AVAILABLE");
+    expect(screen.getByTestId("github-budget-owner")).toHaveTextContent(/^account-42$/);
+    expect(screen.getByTestId("github-budget-owner")).toBeVisible();
+    expect(screen.getByTestId("github-budget-panel")).toHaveAttribute("data-budget-owner", "account-42");
     expect(screen.getByTestId("github-budget-remaining")).toHaveTextContent(/^4200$/);
     expect(screen.getByTestId("github-budget-remaining")).toBeVisible();
     expect(screen.getByTestId("github-budget-limit")).toHaveTextContent(/^5000$/);
@@ -46,7 +49,7 @@ describe("GitHub budget panel", () => {
   });
 
   it.each([42, 0])("marks a held budget of %i and omits an absent limit", (remaining) => {
-    render(<GitHubBudgetPanel assessment={{
+    render(<GitHubBudgetPanel owner="account-42" assessment={{
       state: "BELOW_RESERVE", reading: { ...reading, remaining, limit: null }, reserve: 500,
     }} />);
 
@@ -69,7 +72,7 @@ describe("GitHub budget panel", () => {
   });
 
   it("distinguishes an unobserved budget from an exhausted reading", () => {
-    render(<GitHubBudgetPanel assessment={{ state: "UNKNOWN", reading: null, reserve: 500 }} />);
+    render(<GitHubBudgetPanel owner="account-42" assessment={{ state: "UNKNOWN", reading: null, reserve: 500 }} />);
 
     expect(screen.getByTestId("github-budget-panel")).toHaveAttribute("data-budget-state", "UNKNOWN");
     const indicator = screen.getByTestId("github-budget-panel").querySelector(":scope > p");
@@ -89,14 +92,14 @@ describe("GitHub budget panel", () => {
     const assessment: GitHubGraphqlBudgetAssessment = {
       state: "UNKNOWN", reading: { ...reading, remaining: 42 }, reserve: 500,
     };
-    const first = render(<GitHubBudgetPanel assessment={assessment} />);
+    const first = render(<GitHubBudgetPanel owner="account-42" assessment={assessment} />);
     expect(screen.getByTestId("github-budget-panel")).toHaveAttribute("data-budget-state", "UNKNOWN");
     expect(screen.queryByRole("status")).toBeNull();
     const output = first.container.innerHTML;
     cleanup();
 
-    store.record({ ...reading, remaining: 1 });
-    const second = render(<GitHubBudgetPanel assessment={assessment} />);
+    store.record("account-42", { ...reading, remaining: 1 });
+    const second = render(<GitHubBudgetPanel owner="account-42" assessment={assessment} />);
     expect(second.container.innerHTML).toBe(output);
     expect(read).not.toHaveBeenCalled();
   });
@@ -118,12 +121,12 @@ describe("GitHub budget panel", () => {
     const assessment: GitHubGraphqlBudgetAssessment = {
       state: "BELOW_RESERVE", reading: { ...reading, remaining: 42 }, reserve: 500,
     };
-    const first = render(<GitHubBudgetPanel assessment={assessment} />);
+    const first = render(<GitHubBudgetPanel owner="account-42" assessment={assessment} />);
     const output = first.container.innerHTML;
     cleanup();
 
     vi.setSystemTime(new Date("2026-09-07T15:00:00.001Z"));
-    const second = render(<GitHubBudgetPanel assessment={assessment} />);
+    const second = render(<GitHubBudgetPanel owner="account-42" assessment={assessment} />);
     expect(second.container.innerHTML).toBe(output);
     expect(clockReads).not.toHaveBeenCalled();
   });

@@ -36,13 +36,15 @@ export default async function ModerationPage() {
   let history: EnforcementHistoryProjection[] | null = null;
   let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
-  let githubBudget: GitHubGraphqlBudgetAssessment | null;
+  let githubBudget: { owner: string; assessment: GitHubGraphqlBudgetAssessment }[] | null;
   try {
     const { assessGraphqlBudget, gitHubGraphqlBudget, readGraphqlBudgetReserve } = await import("@/lib/github/rate-limit-budget");
-    githubBudget = assessGraphqlBudget(gitHubGraphqlBudget().read(), {
-      reserve: readGraphqlBudgetReserve(process.env),
-      now: new Date(),
-    });
+    const store = gitHubGraphqlBudget();
+    const reserve = readGraphqlBudgetReserve(process.env);
+    const now = new Date();
+    githubBudget = store.owners().map((owner) => ({
+      owner, assessment: assessGraphqlBudget(store.read(owner), { reserve, now }),
+    }));
   } catch {
     githubBudget = null;
   }
@@ -222,9 +224,13 @@ export default async function ModerationPage() {
         <h2 id="github-budget-heading">GitHub GraphQL budget</h2>
         {githubBudget === null ? (
           <p>The GitHub GraphQL budget could not be loaded.</p>
-        ) : (
-          <GitHubBudgetPanel assessment={githubBudget} />
-        )}
+        ) : githubBudget.length === 0 ? (
+          <p data-testid="github-budget-empty" data-budget-state="UNKNOWN">No account budgets have been observed yet.</p>
+        ) : githubBudget.map(({ owner, assessment }) => (
+          <GitHubBudgetPanel key={owner} owner={owner}
+            label={moderators?.find((account) => account.accountId === owner)?.githubLogin}
+            assessment={assessment} />
+        ))}
       </section>
     </AppShell>
   );

@@ -104,28 +104,28 @@ describe("readGraphqlBudgetPayload", () => {
 describe("GitHubGraphqlBudgetStore", () => {
   it("starts empty and keeps the lowest reading within the same reset window", () => {
     const budget = createGitHubGraphqlBudgetStore();
-    expect(budget.read()).toBeNull();
-    budget.record(reading);
-    expect(budget.read()).toEqual(reading);
+    expect(budget.read("sponsor-1")).toBeNull();
+    budget.record("sponsor-1", reading);
+    expect(budget.read("sponsor-1")).toEqual(reading);
     const newer = { ...reading, remaining: 10, observedAt: new Date("2026-09-07T10:01:00.000Z") };
-    budget.record(newer);
-    budget.record(reading);
-    budget.record({ ...newer, remaining: 20 });
-    expect(budget.read()).toEqual(newer);
+    budget.record("sponsor-1", newer);
+    budget.record("sponsor-1", reading);
+    budget.record("sponsor-1", { ...newer, remaining: 20 });
+    expect(budget.read("sponsor-1")).toEqual(newer);
   });
 
   it("reports the first verdict and each change, but not repeats", () => {
     const budget = createGitHubGraphqlBudgetStore();
-    expect(budget.readState()).toBe("UNKNOWN");
-    expect(budget.noteState("UNKNOWN")).toBe(true);
-    expect(budget.noteState("UNKNOWN")).toBe(false);
-    expect(budget.noteState("AVAILABLE")).toBe(true);
-    expect(budget.readState()).toBe("AVAILABLE");
-    expect(budget.noteState("AVAILABLE")).toBe(false);
-    expect(budget.noteState("BELOW_RESERVE")).toBe(true);
-    expect(budget.readState()).toBe("BELOW_RESERVE");
-    expect(budget.noteState("UNKNOWN")).toBe(true);
-    expect(budget.readState()).toBe("UNKNOWN");
+    expect(budget.readState("sponsor-1")).toBe("UNKNOWN");
+    expect(budget.noteState("sponsor-1", "UNKNOWN")).toBe(true);
+    expect(budget.noteState("sponsor-1", "UNKNOWN")).toBe(false);
+    expect(budget.noteState("sponsor-1", "AVAILABLE")).toBe(true);
+    expect(budget.readState("sponsor-1")).toBe("AVAILABLE");
+    expect(budget.noteState("sponsor-1", "AVAILABLE")).toBe(false);
+    expect(budget.noteState("sponsor-1", "BELOW_RESERVE")).toBe(true);
+    expect(budget.readState("sponsor-1")).toBe("BELOW_RESERVE");
+    expect(budget.noteState("sponsor-1", "UNKNOWN")).toBe(true);
+    expect(budget.readState("sponsor-1")).toBe("UNKNOWN");
   });
 
   it("shares the symbol-backed store across separately loaded modules", async () => {
@@ -156,15 +156,15 @@ describe("GitHubGraphqlBudgetStore", () => {
     Reflect.set(globalThis, key, value);
     try {
       const first = gitHubGraphqlBudget();
-      first.record(reading);
-      expect(first.noteState("BELOW_RESERVE")).toBe(true);
+      first.record("sponsor-1", reading);
+      expect(first.noteState("sponsor-1", "BELOW_RESERVE")).toBe(true);
       vi.resetModules();
       const otherBundle = await import("@/lib/github/rate-limit-budget");
       expect(otherBundle.gitHubGraphqlBudget).not.toBe(gitHubGraphqlBudget);
       const second = otherBundle.gitHubGraphqlBudget();
       expect(second).toBe(first);
-      expect(second.read()).toEqual(reading);
-      expect(second.readState()).toBe("BELOW_RESERVE");
+      expect(second.read("sponsor-1")).toEqual(reading);
+      expect(second.readState("sponsor-1")).toBe("BELOW_RESERVE");
     } finally {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
@@ -177,16 +177,16 @@ describe("GitHubGraphqlBudgetStore", () => {
     vi.resetModules();
     const otherBundle = await import("@/lib/github/rate-limit-budget");
     const existing = otherBundle.createGitHubGraphqlBudgetStore();
-    existing.record(reading);
-    existing.noteState("BELOW_RESERVE");
+    existing.record("sponsor-1", reading);
+    existing.noteState("sponsor-1", "BELOW_RESERVE");
     Reflect.set(globalThis, key, existing);
     try {
       const budget = gitHubGraphqlBudget();
       expect(budget).toBe(existing);
-      expect(budget.read()).toEqual(reading);
-      expect(budget.readState()).toBe("BELOW_RESERVE");
-      budget.noteState("AVAILABLE");
-      expect(otherBundle.gitHubGraphqlBudget().readState()).toBe("AVAILABLE");
+      expect(budget.read("sponsor-1")).toEqual(reading);
+      expect(budget.readState("sponsor-1")).toBe("BELOW_RESERVE");
+      budget.noteState("sponsor-1", "AVAILABLE");
+      expect(otherBundle.gitHubGraphqlBudget().readState("sponsor-1")).toBe("AVAILABLE");
     } finally {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
@@ -259,7 +259,7 @@ describe("GitHubGraphqlClient budget recording", () => {
       const early = deferredResponse();
       const responses = [delayed.promise, early.promise];
       const client = new GitHubGraphqlClient({
-        accessToken: "test-token", budget, fetch: () => responses.shift()!,
+        owner: "sponsor-1", accessToken: "test-token", budget, fetch: () => responses.shift()!,
       });
       const delayedQuery = client.query("query { rateLimit { remaining resetAt } }", {});
       const earlyQuery = client.query("query { rateLimit { remaining resetAt } }", {});
@@ -267,7 +267,7 @@ describe("GitHubGraphqlClient budget recording", () => {
         ...rateLimit, remaining: scenario.early, resetAt: scenario.earlyReset,
       } } }));
       await earlyQuery;
-      expect(gate.check(new Date("2026-09-07T10:00:00Z"))).toMatchObject({
+      expect(gate.check("sponsor-1", new Date("2026-09-07T10:00:00Z"))).toMatchObject({
         state: scenario.early === 500 ? "AVAILABLE" : "BELOW_RESERVE",
         reading: { remaining: scenario.early, resetAt: new Date(scenario.earlyReset) },
       });
@@ -277,7 +277,7 @@ describe("GitHubGraphqlClient budget recording", () => {
         ...rateLimit, remaining: scenario.late, resetAt: scenario.lateReset,
       } } }));
       await delayedQuery;
-      expect(gate.check(new Date(scenario.laterNow))).toMatchObject({
+      expect(gate.check("sponsor-1", new Date(scenario.laterNow))).toMatchObject({
         state: scenario.state,
         reading: { remaining: scenario.expected,
           resetAt: new Date(scenario.state === "AVAILABLE" ? scenario.lateReset : scenario.earlyReset) },
@@ -291,11 +291,11 @@ describe("GitHubGraphqlClient budget recording", () => {
     const budget = createGitHubGraphqlBudgetStore();
     const data = { repository: null, rateLimit };
     const client = new GitHubGraphqlClient({
-      accessToken: "test-token", budget, fetch: async () => Response.json({ data }),
+      owner: "sponsor-1", accessToken: "test-token", budget, fetch: async () => Response.json({ data }),
     });
 
     expect(await client.query("query { repository { id } }", {})).toEqual(data);
-    expect(budget.read()).toEqual({ ...reading, observedAt: expect.any(Date) });
+    expect(budget.read("sponsor-1")).toEqual({ ...reading, observedAt: expect.any(Date) });
   });
 
   it.each([
@@ -305,24 +305,24 @@ describe("GitHubGraphqlClient budget recording", () => {
   ])("does not invent a reading from data %j", async (data) => {
     const budget = createGitHubGraphqlBudgetStore();
     const client = new GitHubGraphqlClient({
-      accessToken: "test-token", budget, fetch: async () => Response.json({ data }),
+      owner: "sponsor-1", accessToken: "test-token", budget, fetch: async () => Response.json({ data }),
     });
 
     expect(await client.query("query { repository { id } }", {})).toEqual(data);
-    expect(budget.read()).toBeNull();
+    expect(budget.read("sponsor-1")).toBeNull();
   });
 
   it("returns the data even when recording fails", async () => {
     const data = { repository: null, rateLimit };
     const record = vi.fn(() => { throw new Error("recorder failed"); });
     const client = new GitHubGraphqlClient({
-      accessToken: "test-token",
+      owner: "sponsor-1", accessToken: "test-token",
       budget: { ...createGitHubGraphqlBudgetStore(), record },
       fetch: async () => Response.json({ data }),
     });
 
     await expect(client.query("query { repository { id } }", {})).resolves.toEqual(data);
-    expect(record).toHaveBeenCalledExactlyOnceWith({ ...reading, observedAt: expect.any(Date) });
+    expect(record).toHaveBeenCalledExactlyOnceWith("sponsor-1", { ...reading, observedAt: expect.any(Date) });
   });
 
   it.each(["reject", "pending"])("contains async recorder %s without delaying the query or crashing Node", (mode) => {
@@ -348,7 +348,7 @@ describe("GitHubGraphqlClient budget recording", () => {
           },
         };
         const client = new GitHubGraphqlClient({
-          accessToken: 'test-token', budget,
+          owner: 'sponsor-1', accessToken: 'test-token', budget,
           fetch: async () => Response.json({ data }),
         });
         const result = await client.query('query { rateLimit { remaining resetAt } }', {});
@@ -368,11 +368,11 @@ describe("GitHubGraphqlClient budget recording", () => {
   ])("does not record a failed request with HTTP %i", async (status, payload) => {
     const budget = createGitHubGraphqlBudgetStore();
     const client = new GitHubGraphqlClient({
-      accessToken: "test-token", budget, fetch: async () => Response.json(payload, { status }),
+      owner: "sponsor-1", accessToken: "test-token", budget, fetch: async () => Response.json(payload, { status }),
     });
 
     await expect(client.query("query { repository { id } }", {})).rejects.toBeInstanceOf(Error);
-    expect(budget.read()).toBeNull();
+    expect(budget.read("sponsor-1")).toBeNull();
   });
 
   it("uses the global store when none is injected", async () => {
@@ -382,10 +382,10 @@ describe("GitHubGraphqlClient budget recording", () => {
     Reflect.set(globalThis, key, budget);
     try {
       const client = new GitHubGraphqlClient({
-        accessToken: "test-token", fetch: async () => Response.json({ data: { rateLimit } }),
+        owner: "sponsor-1", accessToken: "test-token", fetch: async () => Response.json({ data: { rateLimit } }),
       });
       await client.query("query { rateLimit { remaining resetAt } }", {});
-      expect(budget.read()?.remaining).toBe(42);
+      expect(budget.read("sponsor-1")?.remaining).toBe(42);
     } finally {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
@@ -400,7 +400,7 @@ describe("GitHubGraphqlClient budget recording", () => {
     const data = { repository: null, rateLimit };
     const request = vi.fn(async () => Response.json({ data }));
     try {
-      const client = new GitHubGraphqlClient({ accessToken: "test-token", fetch: request });
+      const client = new GitHubGraphqlClient({ owner: "sponsor-1", accessToken: "test-token", fetch: request });
       expect(fault).not.toHaveBeenCalled();
       await expect(client.query("query { rateLimit { remaining resetAt } }", {})).resolves.toEqual(data);
       expect(request).toHaveBeenCalledTimes(1);
@@ -409,7 +409,7 @@ describe("GitHubGraphqlClient budget recording", () => {
       Reflect.deleteProperty(globalThis, key);
       await expect(client.query("query { rateLimit { remaining resetAt } }", {})).resolves.toEqual(data);
       expect(request).toHaveBeenCalledTimes(2);
-      expect(gitHubGraphqlBudget().read()).toMatchObject({ remaining: 42, resetAt: reset });
+      expect(gitHubGraphqlBudget().read("sponsor-1")).toMatchObject({ remaining: 42, resetAt: reset });
     } finally {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
@@ -420,7 +420,7 @@ describe("GitHubGraphqlClient budget recording", () => {
     const budget = createGitHubGraphqlBudgetStore();
     const queries: string[] = [];
     const gateway = new GitHubGateway({
-      accessToken: "test-token", budget,
+      owner: "sponsor-1", accessToken: "test-token", budget,
       fetch: async (_input, init) => {
         queries.push(JSON.parse(String(init?.body)).query);
         return Response.json({ data: {
@@ -431,7 +431,7 @@ describe("GitHubGraphqlClient budget recording", () => {
     });
 
     expect(await gateway.listIssues({ owner: "octo", name: "overflow" })).toEqual([]);
-    expect(budget.read()?.remaining).toBe(42);
+    expect(budget.read("sponsor-1")?.remaining).toBe(42);
     expect(queries).toHaveLength(1);
     expect(queries[0]).toMatch(/query RepositoryIssues\([^)]*\)\s*\{\s*rateLimit\s*\{\s*cost\s+limit\s+remaining\s+resetAt\s*\}/);
   });
@@ -457,7 +457,7 @@ describe("GitHubGraphqlClient budget recording", () => {
       PullRequestReviewDismissals: { repository: { pullRequest: { timelineItems: page } } },
     };
     const gateway = new GitHubGateway({
-      accessToken: "test-token", budget: createGitHubGraphqlBudgetStore(),
+      owner: "sponsor-1", accessToken: "test-token", budget: createGitHubGraphqlBudgetStore(),
       fetch: async (_input, init) => {
         const { query } = JSON.parse(String(init?.body)) as { query: string };
         const operation = /query\s+(\w+)/.exec(query)?.[1];
@@ -480,5 +480,41 @@ describe("GitHubGraphqlClient budget recording", () => {
       expect(queries.get(operation), `${operation} must request the full budget as its first selection`)
         .toMatch(new RegExp(`query\\s+${operation}\\([^)]*\\)\\s*\\{\\s*rateLimit\\s*\\{\\s*cost\\s+limit\\s+remaining\\s+resetAt\\s*\\}`));
     }
+  });
+});
+
+
+describe("quota ownership", () => {
+  it("isolates readings, reset-window merges, and transitions by account id", () => {
+    const store = createGitHubGraphqlBudgetStore();
+    store.record("a", { ...reading, remaining: 42 });
+    store.record("b", { ...reading, remaining: 4200 });
+    store.record("a", { ...reading, remaining: 500 });
+    expect(store.read("a")?.remaining).toBe(42);
+    expect(store.read("b")?.remaining).toBe(4200);
+    expect(store.read("c")).toBeNull();
+    expect(store.noteState("a", "BELOW_RESERVE")).toBe(true);
+    expect(store.noteState("b", "AVAILABLE")).toBe(true);
+    expect(store.noteState("a", "BELOW_RESERVE")).toBe(false);
+    expect(store.readState("a")).toBe("BELOW_RESERVE");
+    expect(store.readState("b")).toBe("AVAILABLE");
+    expect(store.owners()).toEqual(["a", "b"]);
+    store.record("b", { ...reading, remaining: 1, resetAt: new Date("2026-09-07T10:00:00Z") });
+    store.record("a", { ...reading, remaining: 4900, resetAt: new Date("2026-09-07T12:00:00Z") });
+    expect(store.read("a")?.remaining).toBe(4900);
+    expect(store.read("b")?.remaining).toBe(4200);
+  });
+
+  it("records nothing from an unowned gateway, including with an injected store", async () => {
+    const budget = createGitHubGraphqlBudgetStore();
+    const record = vi.spyOn(budget, "record");
+    const gateway = new GitHubGateway({ accessToken: "test-token", budget,
+      fetch: async () => Response.json({ data: { rateLimit,
+        repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      } }),
+    });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" })).resolves.toEqual([]);
+    expect(record).not.toHaveBeenCalled();
+    expect(budget.owners()).toEqual([]);
   });
 });

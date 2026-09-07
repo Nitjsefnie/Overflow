@@ -15,35 +15,37 @@ export type GitHubGraphqlBudgetAssessment = {
 };
 
 export type GitHubGraphqlBudgetStore = {
+  owners(): string[];
   /** Keeps the lowest remaining balance in the newest reset window. */
-  record(reading: GitHubGraphqlBudgetReading): void;
-  read(): GitHubGraphqlBudgetReading | null;
+  record(owner: string, reading: GitHubGraphqlBudgetReading): void;
+  read(owner: string): GitHubGraphqlBudgetReading | null;
   /** Records the latest verdict and answers whether it differs from the one before. */
-  noteState(state: GraphqlBudgetState): boolean;
-  readState(): GraphqlBudgetState;
+  noteState(owner: string, state: GraphqlBudgetState): boolean;
+  readState(owner: string): GraphqlBudgetState;
 };
 
 export function createGitHubGraphqlBudgetStore(): GitHubGraphqlBudgetStore {
-  let reading: GitHubGraphqlBudgetReading | null = null;
-  let state: GraphqlBudgetState | null = null;
+  const readings = new Map<string, GitHubGraphqlBudgetReading>();
+  const states = new Map<string, GraphqlBudgetState>();
   return {
-    record(next) {
-      // Receipt time cannot order concurrent responses. A later reset window
-      // supersedes an earlier one; within a window only a lower balance wins.
-      // This shared slot currently conflates sponsors, so retaining any low
-      // balance until rollover is also the conservative choice across sponsors.
-      if (reading === null || next.resetAt.getTime() > reading.resetAt.getTime()
+    owners: () => [...new Set([...readings.keys(), ...states.keys()])],
+    record(owner, next) {
+      const reading = readings.get(owner);
+      // Receipt time cannot order concurrent responses. For this owner a later
+      // reset window supersedes an earlier one; within a window only a lower
+      // balance wins. Other sponsors' windows and balances never participate.
+      if (reading === undefined || next.resetAt.getTime() > reading.resetAt.getTime()
         || (next.resetAt.getTime() === reading.resetAt.getTime() && next.remaining < reading.remaining)) {
-        reading = next;
+        readings.set(owner, next);
       }
     },
-    read: () => reading,
-    noteState(next) {
-      const changed = next !== state;
-      state = next;
+    read: (owner) => readings.get(owner) ?? null,
+    noteState(owner, next) {
+      const changed = next !== states.get(owner);
+      states.set(owner, next);
       return changed;
     },
-    readState: () => state ?? "UNKNOWN",
+    readState: (owner) => states.get(owner) ?? "UNKNOWN",
   };
 }
 
@@ -56,7 +58,7 @@ export function gitHubGraphqlBudget(): GitHubGraphqlBudgetStore {
   try {
     const existing = shared[budgetKey] as Partial<GitHubGraphqlBudgetStore> | null | undefined;
     if (existing !== null && (typeof existing === "object" || typeof existing === "function")
-      && typeof existing.record === "function" && typeof existing.read === "function"
+      && typeof existing.owners === "function" && typeof existing.record === "function" && typeof existing.read === "function"
       && typeof existing.noteState === "function" && typeof existing.readState === "function") {
       return existing as GitHubGraphqlBudgetStore;
     }
