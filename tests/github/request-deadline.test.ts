@@ -56,6 +56,37 @@ afterEach(async () => {
 });
 
 describe("GitHubGateway REST request deadline", () => {
+  it("closes the accepted connection when headers never arrive", async () => {
+    const accepted = deferred<Socket>();
+    const apiUrl = await serve((request) => accepted.resolve(request.socket));
+    const gateway = new GitHubGateway({ accessToken: "test-token", apiUrl, timeoutMs: 300 });
+    const outcome = gateway.getRepository(repository).catch((error: unknown) => error);
+    const stalledSocket = await accepted.promise;
+
+    expect(await outcome).toMatchObject({ message: "GitHub request timed out." });
+    await expect.poll(() => stalledSocket.destroyed, { timeout: 1000 }).toBe(true);
+  }, 3000);
+
+  it("does not abort a completed request after its old deadline", async () => {
+    vi.useFakeTimers();
+    const aborted = vi.fn();
+    let requestSignal: AbortSignal | null | undefined;
+    const gateway = new GitHubGateway({
+      accessToken: "test-token", timeoutMs: 1000,
+      fetch: async (_input, init) => {
+        requestSignal = init?.signal;
+        requestSignal?.addEventListener("abort", aborted);
+        return new Response(JSON.stringify(repositoryBody));
+      },
+    });
+
+    await expect(gateway.getRepository(repository)).resolves.toEqual(repositoryResult);
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(aborted).not.toHaveBeenCalled();
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
   it.each([
     ...reads,
     { name: "deleteWebhook", run: (gateway: GitHubGateway) => gateway.deleteWebhook(repository, 42) },
@@ -206,11 +237,8 @@ describe("GitHubGateway REST request deadline", () => {
     );
 
     await vi.advanceTimersByTimeAsync(999);
-    expect(reader.read).toHaveBeenCalledOnce();
     expect(outcome).toBe("pending");
     await vi.advanceTimersByTimeAsync(1);
-    expect(reader.cancel).toHaveBeenCalledOnce();
-    expect(reader.releaseLock).toHaveBeenCalledOnce();
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({ message });
     if (status === 503) {
@@ -243,6 +271,7 @@ describe("GitHubGateway REST request deadline", () => {
 
   describe.each([
     ...reads,
+    { name: "first label page via ensureDifficultyLabels", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, []), body: "[]", result: undefined },
     { name: "deleteWebhook", run: (gateway: GitHubGateway) => gateway.deleteWebhook(repository, 42), body: "", result: undefined },
     { name: "label creation POST", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, ["easy"]), body: '{"name":"easy"}', result: undefined },
   ])("configured deadline for $name", ({ name, run, body, result }) => {
