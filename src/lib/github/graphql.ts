@@ -139,14 +139,14 @@ export class GitHubGraphqlClient {
   private readonly endpoint: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly timeoutMs: number;
-  private readonly budget: GitHubGraphqlBudgetStore;
+  private readonly budget: GitHubGraphqlBudgetStore | undefined;
 
   public constructor(options: GitHubGraphqlClientOptions) {
     this.accessToken = options.accessToken;
     this.endpoint = options.endpoint ?? defaultGraphqlEndpoint;
     this.fetchImplementation = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-    this.budget = options.budget ?? gitHubGraphqlBudget();
+    this.budget = options.budget;
   }
 
   public async query<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
@@ -191,7 +191,9 @@ export class GitHubGraphqlClient {
         if (reading !== null) {
           // A void-typed recorder can still be async; consume its rejection
           // without making the query wait for observation to finish.
-          void Promise.resolve(this.budget.record(reading)).catch(() => {});
+          // Acquire the default here too: a broken observer must not prevent
+          // requests, and the next response must retry acquisition after recovery.
+          void Promise.resolve((this.budget ?? gitHubGraphqlBudget()).record(reading)).catch(() => {});
         }
       } catch {
         // Budget observation must never fail an otherwise successful query.
