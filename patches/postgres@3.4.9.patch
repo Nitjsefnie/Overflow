@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89dce370d7f38d3cf47632c3c1fc1e52dd0b30ce 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03dfacdd9ac 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -28,21 +28,51 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89dce370d7f38d3cf47632c3c1fc1e52
      clearImmediate(nextWriteTimer)
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
-@@ -451,6 +463,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +459,42 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     socket.removeAllListeners()
+     socket = null
+ 
+-    if (initial)
++    // A connect-phase death with a shutdown already pending has no other route to settle it. The
++    // startup query keeps `initial` set, so that end() took its slow path, and terminate(), the
++    // only other caller of ended(), is out of reach -- while the return this replaces handed the
++    // whole close to reconnect() before any of that could happen. Rejecting the startup query is
++    // what error() does, and clearing `initial` is part of it (errored() nulls it), so the close
++    // then continues down the shared path below and settles, spaces and reports exactly as a
++    // death after the handshake does. Rejected rather than replayed on a retry, even when the
++    // server is reachable again: this library never re-runs a query whose socket died, and a
++    // retry issued while ending is the armed reconnect that stops a shutting-down process from
++    // exiting. Overflow issue 164.
++    if (initial && ending)
++      error(Errors.connection('CONNECTION_CLOSED', options, socket))
++
++    if (initial) {
++      // Still opening, with nothing waiting on a shutdown, so this connection keeps trying -- but
++      // on a schedule. Stock returns above without recording any of this, leaving closedTime at
++      // its initial 0, which is the branch of reconnect() that schedules with no delay at all:
++      // attempts go out back to back for as long as the peer keeps accepting and closing them.
++      // The counter is advanced unconditionally rather than on hadError, because every close that
++      // reaches here is error-free -- a socket error runs error() first, which clears `initial`
++      // -- so the hadError form below would be dead code here and a backoff function would be
++      // asked for the delay of attempt zero forever. Overflow issue 164.
++      closedTime = performance.now()
++      options.shared.retries++
++      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
        return reconnect()
++    }
  
      !hadError && (query || sent.length) && error(Errors.connection('CONNECTION_CLOSED', options, socket))
 +    // A socket that has gone away brings no ReadyForQuery, and end() hands back the ending it
 +    // already made rather than retaking its fast path, so terminate(), which is what would
 +    // otherwise invoke ended(), is out of reach from here and that end() would never settle.
 +    // Settled before onclose(), the conservative order, in case onclose() hands this connection
-+    // a new query. A connection still in its connect phase takes the return above and is not
-+    // covered — patches/README.md carries that rule, and Overflow issue 164 tracks it.
++    // a new query. A connection still in its connect phase reaches this line through the ending
++    // arm above, whose error() call rejects the startup query and clears `initial`.
 +    ended && (ended(), ending = ended = null)
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +583,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +608,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
