@@ -3530,10 +3530,10 @@ describe("initial PostgreSQL materialization", () => {
     const requestedAt = "2026-09-05T12:00:00.000Z";
     const closureIds: string[] = [];
 
-    for (const [pullRequest, state] of [
-      [grantedPullRequest, "GRANTED"],
-      [declinedPullRequest, "DECLINED"],
-      [openPullRequest, "OPEN"],
+    for (const [pullRequest, state, requestIdSuffix] of [
+      [grantedPullRequest, "GRANTED", "000000000001"],
+      [declinedPullRequest, "DECLINED", "000000000002"],
+      [openPullRequest, "OPEN", "000000000003"],
     ] as const) {
       await sql`update issues set state = 'CLOSED' where id = ${pullRequest.issueId}`;
       const [closure] = await sql<{ id: string }[]>`
@@ -3545,13 +3545,21 @@ describe("initial PostgreSQL materialization", () => {
       closureIds.push(closure.id);
       await sql`
         insert into settlement_override_requests (
-          issue_id, requester_id, reason, state, settled_points,
+          id, issue_id, requester_id, reason, state, settled_points,
           decided_by_id, decision_reason, created_at, decided_at
         ) values (
+          gen_random_uuid(),
           ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Correct the refused evidence',
           'GRANTED', 6, ${moderatorId}, 'Earlier correction granted',
           '2026-09-04T12:00:00.000Z', '2026-09-04T13:00:00.000Z'
         ), (
+          ${`00000000-0000-4000-8000-${requestIdSuffix}`},
+          ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Request tied on time with the latest',
+          ${state === "GRANTED" ? "DECLINED" : "GRANTED"}, ${state === "GRANTED" ? null : 6},
+          ${moderatorId}, 'Lower UUID must lose the tie',
+          ${requestedAt}, '2026-09-05T13:00:00.000Z'
+        ), (
+          ${`ffffffff-ffff-4fff-bfff-${requestIdSuffix}`},
           ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Review the latest evidence',
           ${state}, ${state === "GRANTED" ? 7 : null}, ${state === "OPEN" ? null : moderatorId},
           ${state === "OPEN" ? null : "Latest correction decision"},

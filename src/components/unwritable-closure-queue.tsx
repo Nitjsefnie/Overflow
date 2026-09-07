@@ -80,7 +80,7 @@ function LatestCorrection({ correction }: { correction: UnwritableClosureProject
   }
   return (
     <p className="mono-meta">
-      Correction {correction.state.toLowerCase()} · reported {correction.requestedAt}
+      Correction <data value={correction.state}>{correction.state.toLowerCase()}</data> · reported <time dateTime={correction.requestedAt}>{correction.requestedAt}</time>
     </p>
   );
 }
