@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e18653dd66565 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5318225a1e25e136a4e50977873e7f71f681cb88 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -96,6 +96,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -42,7 +42,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -411,12 +421,27 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -411,12 +421,29 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function end() {
@@ -63,10 +63,12 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
 +    // spacing those retries is what made the interval long in the first place. Cancelling the
 +    // scheduled attempt instead turns this into the same nothing-in-flight case as a
 +    // connection that never opened, which terminate() settles at once, rejecting the startup
-+    // query it strands exactly as it does everywhere else. Only a close arms this handle,
-+    // never a first connect, so a query the pool has just handed to a fresh connection --
-+    // socketless and holding it as `initial` in the same way -- is untouched and still runs.
-+    // Overflow issue 164.
++    // query it strands exactly as it does everywhere else. Only a close arms this handle:
++    // the pool's own connection.connect() discards what reconnect() hands back, so a query
++    // it has just dispatched -- socketless and holding it as `initial` in the same way -- is
++    // untouched and still runs, and a shutdown arriving inside THAT scheduled window still
++    // waits it out. Covering it here would reject the freshly dispatched query along with
++    // it, so it is left to its own issue. Overflow issue 164.
 +    const scheduled = retryTimer !== null && !connection.reserved && !query && sent.length === 0
 +    scheduled && (clearTimeout(retryTimer), retryTimer = null)
 +
@@ -76,7 +78,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
    }
  
    function terminate() {
-@@ -437,6 +462,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -437,6 +464,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      incoming = Buffer.alloc(0)
      remaining = 0
      incomings = null
@@ -90,7 +92,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
      clearImmediate(nextWriteTimer)
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
-@@ -447,10 +479,54 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +481,54 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      socket.removeAllListeners()
      socket = null
  
@@ -147,7 +149,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +640,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +642,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -166,7 +168,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e1865
      }
  
 diff --git a/src/index.js b/src/index.js
-index c7fba3dace20173f4cb13f3f138bb6d213b43683..e67184588053b7cd31570e4c8e9a05f599ada000 100644
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..0e38b9bb3132bb6232e831290aecdce0ed9a46a9 100644
 --- a/src/index.js
 +++ b/src/index.js
 @@ -205,19 +205,37 @@ function Postgres(a, b) {
@@ -209,7 +211,32 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..e67184588053b7cd31570e4c8e9a05f5
        c.reserved = null
        onopen(c)
      }
-@@ -423,7 +441,11 @@ function Postgres(a, b) {
+@@ -368,6 +386,24 @@ function Postgres(a, b) {
+ 
+     await 1
+     let timer
++    // Work the pool accepted and never dispatched is settled here, with the disposition
++    // destroy() already uses, so the two shutdown paths agree. Nothing after this point can
++    // serve it: no connection takes queued work while it is ending, because ReadyForQuery
++    // ends in `ending ? terminate() : onopen(connection)`, and handler() refuses everything
++    // new the moment `ending` below is assigned. Stock leaves the queue alone, which is not
++    // the same as leaving it pending: terminate() nulls a connection's `ending`, so the
++    // close that follows reaches onclose with the backlog still in it and RESURRECTS the
++    // connection to serve it, after this shutdown has already resolved -- and where the
++    // server is unreachable, the same work is never settled at all. Drained before the
++    // connections are told to end, not after, so the disposal cannot be lost to a connection
++    // whose own end() never settles; nothing can serve the backlog in between, since no I/O
++    // runs between here and the map below. Each entry is shifted out before it is rejected,
++    // exactly as destroy() does it: a queued reserve's rejection removes itself from this
++    // queue, and an entry already shifted out is the only kind that removal is inert on.
++    // Overflow issue 223.
++    while (queries.length)
++      queries.shift().reject(Errors.connection('CONNECTION_DESTROYED', options))
++
+     return ending = Promise.race([
+       new Promise(r => timeout !== null && (timer = setTimeout(destroy, timeout * 1000, r))),
+       Promise.all(connections.map(c => c.end()).concat(
+@@ -423,7 +459,11 @@ function Postgres(a, b) {
      c.reserved = null
      c.onclose && (c.onclose(e), c.onclose = null)
      options.onclose && options.onclose(c.id)

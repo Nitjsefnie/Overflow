@@ -237,14 +237,21 @@ describe("the client's reserve contract", () => {
     // The reservation opens the pool's first connection, so it is that connection's startup
     // query; end() is called before the handshake finishes, so the pool is already shutting down
     // when the connection becomes ready. Handing it to the reserve instead of terminating it
-    // leaves end() waiting on a connection nothing will close.
+    // leaves end() waiting on a connection nothing will close, which is what the unbounded await
+    // below would then hang on.
     const reserved = sql.reserve().then(() => "reserved", () => "refused");
 
     // A graceful end, so nothing tears the connection down on a deadline: it settles only once
     // every connection the pool holds has closed.
     await sql.end();
 
-    expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("still queued");
+    // Refused rather than reserved, and no longer left queued: `end()` disposes of the work the
+    // pool accepted and can no longer serve, with the same `CONNECTION_DESTROYED` `destroy()`
+    // uses. This case used to assert that the reservation was *still pending* after the shutdown
+    // had resolved — true of the build it was written against, and the shape Overflow issue 223
+    // exists to remove, since a caller cannot act on a promise that never settles. What the case
+    // is for is unchanged: a pool that opened its connection for this reservation must still end.
+    expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("refused");
   });
 
   it("does not dispatch queued work to a connection the pool has already reclaimed", async () => {
