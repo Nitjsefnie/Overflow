@@ -177,6 +177,48 @@ describe("GitHubGateway REST request deadline", () => {
     await cancelled.promise;
   }, 3000);
 
+  it.each([
+    { status: 200, message: "GitHub request timed out." },
+    { status: 503, message: "GitHub API request failed with status 503." },
+  ])("bounds an uncooperative injected body reader for HTTP $status", async ({ status, message }) => {
+    vi.useFakeTimers();
+    // Unlike a native stream, this reader never settles read(), even after
+    // cancel() or releaseLock(). Only the request's body race can bound it.
+    const reader = {
+      read: vi.fn(() => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {})),
+      cancel: vi.fn(() => new Promise<void>(() => {})),
+      releaseLock: vi.fn(),
+    };
+    const response = {
+      ok: status === 200,
+      status,
+      headers: new Headers(),
+      body: { getReader: () => reader },
+    } as unknown as Response;
+    const gateway = new GitHubGateway({
+      accessToken: "test-token", timeoutMs: 1000,
+      fetch: async () => response,
+    });
+    let outcome: unknown = "pending";
+    void gateway.getRepository(repository).then(
+      (value) => { outcome = { resolved: value }; },
+      (error: unknown) => { outcome = error; },
+    );
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(reader.read).toHaveBeenCalledOnce();
+    expect(outcome).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reader.cancel).toHaveBeenCalledOnce();
+    expect(reader.releaseLock).toHaveBeenCalledOnce();
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).toMatchObject({ message });
+    if (status === 503) {
+      expect(outcome).toBeInstanceOf(GitHubApiError);
+      expect(outcome).toMatchObject({ status: 503, body: null });
+    }
+  });
+
   it("bounds a body whose read stalls and whose cancellation never settles", async () => {
     vi.useFakeTimers();
     let cancelled = false;
