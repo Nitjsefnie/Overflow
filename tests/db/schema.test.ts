@@ -3522,6 +3522,56 @@ describe("initial PostgreSQL materialization", () => {
     });
   });
 
+  it("partitions stored closures by their latest correction state and request time", async () => {
+    const grantedPullRequest = await insertPullRequest(sql);
+    const declinedPullRequest = await insertPullRequest(sql);
+    const moderatorId = await insertUser(sql);
+    const requestedAt = "2026-09-05T12:00:00.000Z";
+    const closureIds: string[] = [];
+
+    for (const [pullRequest, state] of [
+      [grantedPullRequest, "GRANTED"],
+      [declinedPullRequest, "DECLINED"],
+    ] as const) {
+      await sql`update issues set state = 'CLOSED' where id = ${pullRequest.issueId}`;
+      const [closure] = await sql<{ id: string }[]>`
+        insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+        values (${pullRequest.issueId}, ${pullRequest.id}, 'SETTLEMENT_EVIDENCE_REJECTED',
+          'The settled label was applied after the evidence window.')
+        returning id
+      `;
+      closureIds.push(closure.id);
+      await sql`
+        insert into settlement_override_requests (
+          issue_id, requester_id, reason, state, settled_points,
+          decided_by_id, decision_reason, created_at, decided_at
+        ) values (
+          ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Correct the refused evidence',
+          'GRANTED', 6, ${moderatorId}, 'Earlier correction granted',
+          '2026-09-04T12:00:00.000Z', '2026-09-04T13:00:00.000Z'
+        ), (
+          ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Review the latest evidence',
+          ${state}, ${state === "GRANTED" ? 7 : null}, ${moderatorId}, 'Latest correction decision',
+          ${requestedAt}, '2026-09-05T13:00:00.000Z'
+        )
+      `;
+    }
+
+    const closures = await listUnwritableClosures();
+    const grantedClosure = { id: closureIds[0] };
+    const declinedClosure = { id: closureIds[1] };
+    expect(closures.history).toEqual(expect.arrayContaining([expect.objectContaining({
+      ...grantedClosure,
+      latestCorrection: { state: "GRANTED", requestedAt },
+    })]));
+    expect(closures.queue).not.toEqual(expect.arrayContaining([expect.objectContaining(grantedClosure)]));
+    expect(closures.queue).toEqual(expect.arrayContaining([expect.objectContaining({
+      ...declinedClosure,
+      latestCorrection: { state: "DECLINED", requestedAt },
+    })]));
+    expect(closures.history).not.toEqual(expect.arrayContaining([expect.objectContaining(declinedClosure)]));
+  });
+
   it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
     const store = new PostgresFoldStore(sql);
     const delivery = {
