@@ -57,9 +57,10 @@ function runCommand(command: string, databaseUrl?: string) {
   const environment = { ...process.env };
   delete environment.DATABASE_URL;
   // Node preloads/flags and pnpm's lifecycle options must not repair the command
-  // under test. Custom shell startup files can inject the same flags as well.
+  // under test. Alternate runtimes, config files and shell startup files can
+  // inject the same flags as well.
   for (const name of Object.keys(environment)) {
-    if (/^(node_options|node_path|npm_config_(node_options|script_shell|shell_emulator)|bash_env|env)$/.test(
+    if (/^(node_options|node_path|npm_config_(node_options|script_shell|shell_emulator|use_node_version|userconfig|globalconfig)|bash_env|env)$/.test(
       name.toLowerCase().replaceAll("-", "_"),
     )) delete environment[name];
   }
