@@ -17,6 +17,8 @@
     "test": "vitest",
     "test:watch": "vitest --watch",
     "db:migrate": "node scripts/migrate.ts",
+    "release:switch": "node scripts/release.ts switch",
+    "release:prune": "node scripts/release.ts prune",
     "reconcile": "node scripts/reconcile.ts"
   },
   "dependencies": {
