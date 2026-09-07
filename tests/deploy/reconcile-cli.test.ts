@@ -108,7 +108,7 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
     writeFileSync(npmConfig, "");
     // Allowlist only: host Node flags, pnpm hooks and shell startup settings
     // must not supply behavior missing from the documented package script.
-    const environment: NodeJS.ProcessEnv = {
+    const environment: Record<string, string | undefined> = {
       PATH: process.env.PATH, // Find the installed pnpm and Node executables.
       HOME: configDirectory,
       XDG_CONFIG_HOME: configDirectory,
@@ -133,7 +133,9 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
     if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
     const result = spawnSync(executable!, argumentsList, {
       cwd,
-      env: environment,
+      // Next requires NODE_ENV on ProcessEnv, but Node accepts an environment
+      // without it. Keep the child's allowlist independent of that augmentation.
+      env: environment as NodeJS.ProcessEnv,
       encoding: "utf8",
       timeout: 60_000,
     });
