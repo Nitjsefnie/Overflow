@@ -115,8 +115,13 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * folds, and while those folds succeed their requests total at most sixteen.
  * That is not a bound on all in-flight HTTP requests: a failed concurrent map
  * returns before its other requests settle, so requests from a failed fold
- * outlive it while its drain starts more work. The true in-flight request count
- * remains unbounded until issue 209 is fixed. Raising the drain bound still
+ * outlive it while its drain starts more work (issue 209). This constant does
+ * not bound those requests. Where the client's request deadline applies
+ * (ten seconds by default), orphan accumulation scales roughly with the fold
+ * failure rate times that deadline, rather than growing forever. This is not
+ * a bound enforced here: the REST diff body can outlive its header timeout
+ * (issue 203), and review pagination uses separately timed GraphQL requests.
+ * Raising the drain bound still
  * spends more GitHub budget as well as more coordination connections.
  *
  * The atomic leased row claim keeps concurrent drains from claiming the same
