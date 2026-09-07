@@ -6,11 +6,15 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Four defects, eight hunks. The first is a shutdown that never settles; the
-second is a `reserve()` that never settles; the third answers a dead backend's
-error to the query that replaces it; the fourth hands queued work to a
-connection the pool has already taken back. They are unrelated, and each has
-its own section below.
+Four defects. The first is a shutdown that never settles; the second is a
+`reserve()` that never settles; the third answers a dead backend's error to the
+query that replaces it; the fourth hands queued work to a connection the pool
+has already taken back. They are unrelated, and each has its own section below.
+
+Eight separate edits carry them, and `git` renders those eight as seven hunks:
+`reserve()`'s rejection wrapper and `release()`'s guard sit close enough
+together in the package's `src/index.js` to share one. The sections below call
+each edit a hunk, so their counts sum to eight rather than to seven.
 
 ### A connection that loses its backend leaves `sql.end()` waiting
 
@@ -389,11 +393,16 @@ against and makes it inert unless it still holds it.
 #### Why not at the write, which is where it throws
 
 A null check in `nextWrite` is the obvious repair and it is not enough. It stops
-the throw and leaves the pool wedged: `closed()` clears the pending flush with
-`clearImmediate` but leaves `nextWriteTimer` holding the spent handle, and
-`nextWrite` throws on its own first line before reaching the
-`chunk = nextWriteTimer = null` at its end, so both the buffered bytes and the
-non-null handle outlive the socket. `write()` arms a flush only while that
+the throw and leaves the pool wedged, and the order is what does it. The flush
+that throws here is armed **after** `closed()` has already run: the dispatch
+`release()` causes is what calls `write()`, which buffers the query's bytes into
+`chunk` and, finding `nextWriteTimer` null, sets it. `closed()`'s own
+`clearImmediate(nextWriteTimer)` ran before any of that and is a no-op on this
+path — it clears a flush still pending at the close, which is a real shape but a
+different one. What survives is then whatever `nextWrite` leaves: it throws on
+its own first line, before reaching the `chunk = nextWriteTimer = null` at its
+end, so a null check that returns there leaves both the buffered bytes and the
+non-null handle set with the socket gone. `write()` arms a flush only while that
 handle is null, so nothing is ever scheduled again: the reconnect's
 `StartupMessage` is appended behind the dead query's bytes and never sent, the
 server answers a connection that never introduced itself, and `connect_timeout`
@@ -444,12 +453,15 @@ above that a test stands behind.
 
 ### Housekeeping
 
-- **Only the ESM build is patched.** All six hunks land in `src/`. The package
-  also ships `cjs/src/` and `cf/src/` copies, and both still shift the queue in
-  `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, carry no
-  `peek` in their `queue.js`, and leave `closed()` without the settle — the
-  same as on `main`, so this is a standing property of the patch rather than
-  something a release regressed. It does not bite today: the package's
+- **Only the ESM build is patched.** All eight hunks land in `src/`. The package
+  also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
+  query in the slot in `error()`, leave `closed()` without the settle and with
+  the stale `errorResponse`, still drop a reserve that reaches the startup
+  handler with array-type fetching off, still shift the queue in `onclose`,
+  still hand `reserve()`'s pseudo-query a bare `reject`, still let a spent
+  `release()` hand a connection back to the pool, and carry no `peek` in their
+  `queue.js` — the same as on `main`, so this is a standing property of the
+  patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
   into every server chunk that reaches the `postgres` client, the edge chunk
   included. Reaching `postgres` through `require` (`default` →
