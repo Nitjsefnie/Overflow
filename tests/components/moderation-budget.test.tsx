@@ -115,7 +115,13 @@ describe("moderation budget integration", () => {
     expect(screen.getByTestId("github-budget-remaining")).toHaveTextContent(/^42$/);
     expect(screen.getByTestId("github-budget-limit")).toHaveTextContent(/^5000$/);
     expect(screen.getByTestId("github-budget-reserve")).toHaveTextContent(/^600$/);
-    expect(screen.getByText("2026-09-07T14:15:00.000Z")).toBeVisible();
+    const [firstReset, firstObserved] = screen.getByTestId("github-budget-panel").querySelectorAll("dl > dd > time");
+    expect(firstReset).toBeVisible();
+    expect(firstReset).toHaveTextContent("2026-09-07T15:00:00.000Z");
+    expect(firstReset).toHaveAttribute("datetime", "2026-09-07T15:00:00.000Z");
+    expect(firstObserved).toBeVisible();
+    expect(firstObserved).toHaveTextContent("2026-09-07T14:15:00.000Z");
+    expect(firstObserved).toHaveAttribute("datetime", "2026-09-07T14:15:00.000Z");
 
     cleanup();
     vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "800");
@@ -132,6 +138,12 @@ describe("moderation budget integration", () => {
     expect(screen.getByTestId("github-budget-remaining")).toHaveTextContent(/^4200$/);
     expect(screen.getByTestId("github-budget-reserve")).toHaveTextContent(/^800$/);
     expect(screen.queryByTestId("github-budget-limit")).toBeNull();
-    expect(screen.getByText("2026-09-07T14:16:00.000Z")).toBeVisible();
+    const [secondReset, secondObserved] = screen.getByTestId("github-budget-panel").querySelectorAll("dl > dd > time");
+    expect(secondReset).toBeVisible();
+    expect(secondReset).toHaveTextContent("2026-09-07T15:00:00.000Z");
+    expect(secondReset).toHaveAttribute("datetime", "2026-09-07T15:00:00.000Z");
+    expect(secondObserved).toBeVisible();
+    expect(secondObserved).toHaveTextContent("2026-09-07T14:16:00.000Z");
+    expect(secondObserved).toHaveAttribute("datetime", "2026-09-07T14:16:00.000Z");
   });
 });
