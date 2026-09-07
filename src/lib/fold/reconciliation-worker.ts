@@ -1,5 +1,4 @@
 import { callGuarded } from "@/lib/fold/guarded-callback";
-import type { ReconciliationBudgetCheck, ReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 
 export type ReconciliationWorkerStore = {
@@ -16,12 +15,8 @@ type LeaseRenewalCancellation = () => void | PromiseLike<unknown>;
 
 export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
-  reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
+  reconcile(repositoryId: string): Promise<{ skipped?: boolean; budgetHeldUntil?: Date } | void>;
   now?: () => Date;
-  /** Consulted before a job is claimed. Omit it to reconcile without a budget gate. */
-  budget?: ReconciliationBudgetGate;
-  /** Reports entering and leaving a hold — once per transition, never once per poll. */
-  onBudgetChange?(check: ReconciliationBudgetCheck): void;
   /** Setup owns its cleanup; stopping awaits even a cancellation handle delivered late. */
   scheduleLeaseRenewal?(
     callback: () => Promise<void>,
@@ -179,7 +174,7 @@ export type ReconciliationJobOutcome =
   | "RETRY_SCHEDULED"
   | "FAILED"
   // Holding trades freshness for enough budget to keep reconciliation possible.
-  // It is an outcome, not a failure: no job is claimed and nothing retries it.
+  // The claimed job releases its lease and returns at its sponsor's reset time.
   | "BUDGET_HELD";
 
 /**
@@ -215,33 +210,6 @@ const inFlightRepositoriesByStore = new WeakMap<ReconciliationWorkerStore, Set<s
 export async function runNextReconciliationJob(
   dependencies: ReconciliationWorkerDependencies,
 ): Promise<ReconciliationJobOutcome> {
-  let check: ReconciliationBudgetCheck | undefined;
-  let budgetHeld = false;
-  try {
-    const budget = dependencies.budget;
-    if (budget) {
-      const now = dependencies.now ?? (() => new Date());
-      check = budget.check(now());
-      budgetHeld = check.state === "BELOW_RESERVE";
-    }
-  } catch {
-    // Acquisition and observation failures mean UNKNOWN, which admits work.
-    // Queue-store failures below remain failures of the drain.
-    check = undefined;
-  }
-  try {
-    if (check?.changed) {
-      callGuarded(
-        dependencies,
-        () => dependencies.onBudgetChange ?? (() => {}),
-        [check],
-        reportBudgetHookFailure,
-      );
-    }
-  } catch {
-    // Even reading transition metadata must not discard a known low verdict.
-  }
-  if (budgetHeld) return "BUDGET_HELD";
   const { store } = dependencies;
   const job = await store.claimNextReconciliationJob();
   if (job === null) {
@@ -272,7 +240,7 @@ export async function runNextReconciliationJob(
     stopRenewal = startLeaseRenewal(dependencies, job);
     const now = dependencies.now ?? (() => new Date());
 
-    let result: { skipped?: boolean } | void;
+    let result: { skipped?: boolean; budgetHeldUntil?: Date } | void;
     try {
       result = await dependencies.reconcile(job.repositoryId);
     } catch (error) {
@@ -296,9 +264,9 @@ export async function runNextReconciliationJob(
       await store.deferReconciliationJob(
         job.id,
         job.leaseToken,
-        await deferralTime(store, job.repositoryId, now()),
+        result.budgetHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
       );
-      return "DEFERRED";
+      return result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }
 
     await store.completeReconciliationJob(job.id, job.leaseToken);
@@ -308,19 +276,6 @@ export async function runNextReconciliationJob(
       await stopRenewal?.();
     } finally {
       inFlightRepositories.delete(job.repositoryId);
-    }
-  }
-}
-
-function reportBudgetHookFailure(error: unknown): void {
-  const message = "Reconciliation budget transition hook failed";
-  try {
-    console.error(message, error);
-  } catch {
-    try {
-      console.error(message);
-    } catch {
-      // Budget diagnostics cannot reject a poll or a detached hook handler.
     }
   }
 }
@@ -433,7 +388,6 @@ export async function drainReconciliationJobs(
       break;
     }
     outcomes.push(outcome);
-    if (outcome === "BUDGET_HELD") break;
   }
 
   return outcomes;

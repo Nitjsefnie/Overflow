@@ -27,6 +27,8 @@ export type GitHubGatewayOptions = {
   fetch?: typeof fetch;
   timeoutMs?: number;
   budget?: GitHubGraphqlBudgetStore;
+  /** Account id owning the OAuth quota; never a credential. Unowned reads are not recorded. */
+  owner?: string;
 };
 
 /** Omit these options to read every timeline exactly. Supplying them opts into
@@ -80,6 +82,7 @@ export class GitHubGateway {
       fetch: this.fetchImplementation,
       timeoutMs: this.timeoutMs,
       budget: options.budget,
+      owner: options.owner,
     });
   }
 

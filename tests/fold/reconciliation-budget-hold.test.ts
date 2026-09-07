@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
+import { reconcileRepository, type ReconciliationDependencies } from "@/lib/fold/reconcile";
+import { validDifficultyScheme } from "../support/difficulty-scheme";
 import {
   drainReconciliationJobs,
   runNextReconciliationJob,
@@ -12,10 +14,8 @@ import { GitHubGateway } from "@/lib/github/client";
 
 const now = new Date("2026-09-07T10:00:00Z");
 const resetAt = new Date("2026-09-07T11:00:00Z");
-
 afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+  vi.restoreAllMocks(); vi.unstubAllEnvs();
   vi.doUnmock("@/lib/fold/reconciliation-worker");
   vi.doUnmock("@/lib/fold/sweep");
   vi.doUnmock("@/lib/fold/postgres-store");
@@ -28,7 +28,7 @@ function reading(remaining: number, observedAt = now): budgets.GitHubGraphqlBudg
 
 function fixture(remaining?: number) {
   const budgetStore = budgets.createGitHubGraphqlBudgetStore();
-  if (remaining !== undefined) budgetStore.record(reading(remaining));
+  if (remaining !== undefined) budgetStore.record("sponsor-1", reading(remaining));
   const store = {
     claimNextReconciliationJob: vi.fn(async () => ({
       id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
@@ -41,179 +41,134 @@ function fixture(remaining?: number) {
     failReconciliationJob: vi.fn(async () => true),
     getReconciliationCooldown: vi.fn(async () => null),
   } satisfies ReconciliationWorkerStore;
-  const reconcile = vi.fn<ReconciliationWorkerDependencies["reconcile"]>(async () => {});
+  // This spy observes admitted GitHub work; every test goes through the real fold.
+  const reconcile = vi.fn<ReconciliationDependencies["github"]["getRepositoryById"]>(async () => null);
   const onBudgetChange = vi.fn();
-  const dependencies: ReconciliationWorkerDependencies = {
-    store, reconcile, onBudgetChange,
-    now: () => now,
-    scheduleLeaseRenewal: () => () => {},
+  const fold: ReconciliationDependencies = {
+    store: {
+      withRepositoryReconciliation: async (_id, work) => work(),
+      getRepository: async () => ({ id: "repository-1", githubRepositoryId: 4242, ownerName: "octo/overflow",
+        registeredAt: "2026-09-07T09:00:00Z", active: true, difficultyScheme: validDifficultyScheme(),
+        sponsor: { id: "sponsor-1", githubUserId: 1, githubLogin: "octo", enforcementState: "ACTIVE" } }),
+      getReconciliationCooldown: async () => null,
+      setReconciliationCooldown: async () => {},
+      getGitHubAccessToken: async () => "test-token",
+      beginRun: vi.fn(async () => "run-1"), completeRun: async () => {},
+      findUsersByGitHubUserIds: async () => [],
+      materialize: async () => ({ adds: 0, changes: 0, removals: 0 }),
+      failRun: async () => {}, recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+    },
+    github: { getRepositoryById: reconcile, listIssues: async () => [],
+      getPullRequestReviews: async () => [], getPullRequestDiff: async () => "" },
+    onBudgetChange, now: () => now,
     budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),
   };
-  return { budgetStore, store, reconcile, onBudgetChange, dependencies };
+  const worker: ReconciliationWorkerDependencies = {
+    store, reconcile: (id) => reconcileRepository(fold, id),
+    now: () => fold.now!(), scheduleLeaseRenewal: () => () => {},
+  };
+  return { budgetStore, store, reconcile, onBudgetChange, fold, worker };
 }
 
-describe("reconciliation budget holds", () => {
-  it.each(["null result", "non-callable check"])("continues both polls after a native admission TypeError from %s", (mode) => {
-    // A strict child with no rejection/exception listeners proves a malformed
-    // gate cannot leave a detached rejection hidden by the test runner.
+describe("reconciliation budget holds under the repository lock", () => {
+  it.each(["null result", "non-callable check"])("contains native admission TypeError from %s in strict Node", (mode) => {
     const child = spawnSync(process.execPath, [
       "--experimental-transform-types", "--unhandled-rejections=strict",
       "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
-        import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
-        let claimed = 0, reconciled = 0, hookCalls = 0;
+        import { reconciliationBudgetHoldUntil } from './src/lib/fold/reconciliation-budget.ts';
+        let hookCalls = 0;
         const dependencies = {
           budget: { check: ${mode === "null result" ? "() => null" : "42"} },
-          now: () => new Date('2026-09-07T10:00:00Z'),
-          scheduleLeaseRenewal: () => () => {},
-          store: {
-            async claimNextReconciliationJob() {
-              claimed++;
-              return { id: 'job-1', repositoryId: 'repository-1', reason: 'SWEEP',
-                attemptCount: 1, leaseToken: 'lease-1' };
-            },
-            async renewReconciliationJobLease() { return true; },
-            async completeReconciliationJob() { return true; },
-            async deferReconciliationJob() { return true; },
-            async retryReconciliationJob() { return true; },
-            async failReconciliationJob() { return true; },
-            async getReconciliationCooldown() { return null; },
-          },
-          async reconcile() { reconciled++; },
           onBudgetChange() { hookCalls++; },
         };
-        const outcomes = [
-          await runNextReconciliationJob(dependencies),
-          await runNextReconciliationJob(dependencies),
-        ];
+        const now = () => new Date('2026-09-07T10:00:00Z');
+        const outcomes = [reconciliationBudgetHoldUntil(dependencies, 'sponsor-1', now),
+          reconciliationBudgetHoldUntil(dependencies, 'sponsor-1', now)];
         await new Promise(resolve => setImmediate(resolve));
-        process.stdout.write(JSON.stringify({ outcomes, claimed, reconciled, hookCalls }));
+        process.stdout.write(JSON.stringify({ outcomes, hookCalls }));
       `,
     ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({
-      outcomes: ["RECONCILED", "RECONCILED"], claimed: 2, reconciled: 2, hookCalls: 0,
-    });
+    expect(JSON.parse(child.stdout)).toEqual({ outcomes: [null, null], hookCalls: 0 });
   });
 
-  it.each(["sync", "async"])("survives a %s hook when native console inspection and stream access both fail", (mode) => {
+  it.each([
+    { mode: "sync", brokenStream: false }, { mode: "async", brokenStream: false },
+    { mode: "sync", brokenStream: true }, { mode: "async", brokenStream: true },
+  ])("preserves admission under $mode hook inspection failure (stream fault: $brokenStream)", ({ mode, brokenStream }) => {
     const child = spawnSync(process.execPath, [
-      "--experimental-transform-types", "--unhandled-rejections=strict",
+      "--no-warnings", "--experimental-transform-types", "--unhandled-rejections=strict",
       "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
-        import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
-        import { createReconciliationBudgetGate } from './src/lib/fold/reconciliation-budget.ts';
+        import { reconciliationBudgetHoldUntil, createReconciliationBudgetGate } from './src/lib/fold/reconciliation-budget.ts';
         import { createGitHubGraphqlBudgetStore } from './src/lib/github/rate-limit-budget.ts';
-        const budgetStore = createGitHubGraphqlBudgetStore();
-        budgetStore.record({ remaining: 1, limit: 5000, cost: 1,
+        const store = createGitHubGraphqlBudgetStore();
+        store.record('sponsor-1', { remaining: 1, limit: 5000, cost: 1,
           observedAt: new Date('2026-09-07T10:00:00Z'), resetAt: new Date('2026-09-07T11:00:00Z') });
         const nativeError = console.error;
         const stderrDescriptor = Object.getOwnPropertyDescriptor(console, '_stderr');
-        let inspected = 0, streamAccesses = 0, claimed = 0, reconciled = 0;
+        let inspected = 0, streamAccesses = 0;
         const failure = { [Symbol.for('nodejs.util.inspect.custom')]() {
           inspected++;
-          Object.defineProperty(console, '_stderr', { configurable: true, get() {
+          if (${brokenStream}) Object.defineProperty(console, '_stderr', { configurable: true, get() {
             streamAccesses++; throw new Error('native console stream unavailable');
           }});
           throw new Error('cannot inspect hook failure');
         }};
         const fail = () => { throw failure; };
         const dependencies = {
-          budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),
-          now: () => new Date('2026-09-07T10:00:00Z'),
-          store: { async claimNextReconciliationJob() { claimed++; return null; } },
-          async reconcile() { reconciled++; },
+          budget: createReconciliationBudgetGate({ store, reserve: 500 }),
           onBudgetChange: ${mode === "async" ? "async () => { await Promise.resolve(); fail(); }" : "fail"},
         };
-        const outcomes = [await runNextReconciliationJob(dependencies)];
-        // Settle the async hook and its reporter, then restore the stream so
-        // Node can print any unhandled rejection when this turn ends.
-        await Promise.resolve();
-        await Promise.resolve();
+        const now = () => new Date('2026-09-07T10:00:00Z');
+        const outcomes = [reconciliationBudgetHoldUntil(dependencies, 'sponsor-1', now)];
+        await Promise.resolve(); await Promise.resolve();
         Object.defineProperty(console, '_stderr', stderrDescriptor);
         await new Promise(resolve => setImmediate(resolve));
-        outcomes.push(await runNextReconciliationJob(dependencies));
-        process.stdout.write(JSON.stringify({
-          outcomes, inspected, streamAccesses, claimed, reconciled,
-          nativeErrorUnchanged: console.error === nativeError,
-        }));
+        outcomes.push(reconciliationBudgetHoldUntil(dependencies, 'sponsor-1', now));
+        process.stdout.write(JSON.stringify({ outcomes, inspected, streamAccesses, nativeErrorUnchanged: console.error === nativeError }));
       `,
     ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({
-      outcomes: ["BUDGET_HELD", "BUDGET_HELD"],
-      inspected: 1, streamAccesses: 1, claimed: 0, reconciled: 0,
-      nativeErrorUnchanged: true,
+      outcomes: [resetAt.toISOString(), resetAt.toISOString()], inspected: 1,
+      streamAccesses: brokenStream ? 1 : 0, nativeErrorUnchanged: true,
     });
-  });
-
-  it.each(["sync", "async"])("survives a %s hook whose rejection breaks native console inspection", (mode) => {
-    // Suppress runtime warnings so nonblank stderr proves diagnostic delivery.
-    const child = spawnSync(process.execPath, [
-      "--no-warnings",
-      "--experimental-transform-types", "--unhandled-rejections=strict",
-      "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
-        import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
-        import { createReconciliationBudgetGate } from './src/lib/fold/reconciliation-budget.ts';
-        import { createGitHubGraphqlBudgetStore } from './src/lib/github/rate-limit-budget.ts';
-        const store = createGitHubGraphqlBudgetStore();
-        store.record({ remaining: 1, limit: 5000, cost: 1,
-          observedAt: new Date('2026-09-07T10:00:00Z'), resetAt: new Date('2026-09-07T11:00:00Z') });
-        let inspected = 0, claimed = 0, reconciled = 0;
-        const failure = { [Symbol.for('nodejs.util.inspect.custom')]() {
-          inspected++; throw new Error('cannot inspect hook failure');
-        }};
-        const fail = () => { throw failure; };
-        const dependencies = {
-          budget: createReconciliationBudgetGate({ store, reserve: 500 }),
-          now: () => new Date('2026-09-07T10:00:00Z'),
-          store: { async claimNextReconciliationJob() { claimed++; return null; } },
-          async reconcile() { reconciled++; },
-          onBudgetChange: ${mode === "async" ? "async () => { await Promise.resolve(); fail(); }" : "fail"},
-        };
-        const outcomes = [await runNextReconciliationJob(dependencies)];
-        await new Promise(resolve => setImmediate(resolve));
-        outcomes.push(await runNextReconciliationJob(dependencies));
-        process.stdout.write(JSON.stringify({ outcomes, inspected, claimed, reconciled }));
-      `,
-    ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
-    expect(child.error).toBeUndefined();
-    expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({
-      outcomes: ["BUDGET_HELD", "BUDGET_HELD"], inspected: 1, claimed: 0, reconciled: 0,
-    });
-    expect(child.stderr.trim()).not.toBe("");
-    expect(child.stderr.trim().split("\n")).toHaveLength(1);
+    if (!brokenStream) {
+      expect(child.stderr.trim()).not.toBe("");
+      expect(child.stderr.trim().split("\n")).toHaveLength(1);
+    }
   });
 
   it("contains failure of the primitive-only reporting fallback too", async () => {
-    const { dependencies, store, reconcile } = fixture(499);
-    dependencies.onBudgetChange = () => { throw new Error("hook failed"); };
+    const { fold, store, reconcile, worker } = fixture(499);
+    fold.onBudgetChange = () => { throw new Error("hook failed"); };
     const logged = vi.spyOn(console, "error").mockImplementation(() => { throw new Error("console failed"); });
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(logged).toHaveBeenCalledTimes(2);
     expect(logged.mock.calls[0]).toEqual([expect.any(String), expect.any(Error)]);
     expect(logged.mock.calls[1]).toEqual([expect.any(String)]);
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
     expect(reconcile).not.toHaveBeenCalled();
   });
 
   it.each(["budget getter", "check getter", "check call", "state getter"])(
     "continues consecutive polls after an unreadable %s",
     async (boundary) => {
-      const { dependencies, store, reconcile } = fixture();
+      const { fold, store, reconcile, worker } = fixture();
       const fault = vi.fn(() => { throw new Error(boundary); });
-      if (boundary === "budget getter") Object.defineProperty(dependencies, "budget", { get: fault });
-      if (boundary === "check getter") Object.defineProperty(dependencies.budget!, "check", { get: fault });
-      if (boundary === "check call") dependencies.budget = { check: fault };
-      if (boundary === "state getter") dependencies.budget = {
+      if (boundary === "budget getter") Object.defineProperty(fold, "budget", { get: fault });
+      if (boundary === "check getter") Object.defineProperty(fold.budget!, "check", { get: fault });
+      if (boundary === "check call") fold.budget = { check: fault };
+      if (boundary === "state getter") fold.budget = {
         check: () => Object.defineProperty({
-          state: "UNKNOWN" as const, reading: null, reserve: 500, changed: false,
+          owner: "sponsor-1", state: "UNKNOWN" as const, reading: null, reserve: 500, changed: false,
         }, "state", { get: fault }),
       };
       for (let poll = 0; poll < 2; poll += 1) {
-        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+        await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       }
       expect(fault).toHaveBeenCalledTimes(2);
       expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
@@ -222,32 +177,32 @@ describe("reconciliation budget holds", () => {
   );
 
   it("retrieves the budget member once per poll", async () => {
-    const { dependencies } = fixture(499);
-    const gate = dependencies.budget;
+    const { fold, worker } = fixture(499);
+    const gate = fold.budget;
     const acquired = vi.fn(() => gate);
-    Object.defineProperty(dependencies, "budget", { get: acquired });
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
+    Object.defineProperty(fold, "budget", { get: acquired });
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(acquired).toHaveBeenCalledTimes(1);
   });
 
   it.each(["read getter", "read call", "resetAt getter", "remaining getter"])(
     "normalizes an unreadable assessment at %s and continues polls",
     async (boundary) => {
-      const { dependencies, budgetStore, store, reconcile, onBudgetChange } = fixture(499);
+      const { budgetStore, store, reconcile, onBudgetChange, worker } = fixture(499);
       const fault = vi.fn(() => { throw new Error(boundary); });
       if (boundary === "read getter") Object.defineProperty(budgetStore, "read", { get: fault });
       if (boundary === "read call") budgetStore.read = fault;
       if (boundary === "resetAt getter" || boundary === "remaining getter") {
-        Object.defineProperty(budgetStore.read()!, boundary.split(" ")[0], { get: fault });
+        Object.defineProperty(budgetStore.read("sponsor-1")!, boundary.split(" ")[0], { get: fault });
       }
       for (let poll = 0; poll < 2; poll += 1) {
-        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+        await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       }
       expect(fault).toHaveBeenCalledTimes(2);
       expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
       expect(reconcile).toHaveBeenCalledTimes(2);
       expect(onBudgetChange).toHaveBeenCalledExactlyOnceWith({
-        state: "UNKNOWN", reading: null, reserve: 500, changed: true,
+        owner: "sponsor-1", state: "UNKNOWN", reading: null, reserve: 500, changed: true,
       });
     },
   );
@@ -255,20 +210,20 @@ describe("reconciliation budget holds", () => {
   it.each(["noteState getter", "noteState call", "changed getter"])(
     "preserves a low assessment when %s fails and continues held polls",
     async (boundary) => {
-      const { dependencies, budgetStore, store, reconcile } = fixture(499);
+      const { fold, budgetStore, store, reconcile, worker } = fixture(499);
       const fault = vi.fn(() => { throw new Error(boundary); });
       if (boundary === "noteState getter") Object.defineProperty(budgetStore, "noteState", { get: fault });
       if (boundary === "noteState call") budgetStore.noteState = fault;
-      if (boundary === "changed getter") dependencies.budget = {
+      if (boundary === "changed getter") fold.budget = {
         check: () => Object.defineProperty({
-          state: "BELOW_RESERVE" as const, reading: reading(499), reserve: 500, changed: false,
+          owner: "sponsor-1", state: "BELOW_RESERVE" as const, reading: reading(499), reserve: 500, changed: false,
         }, "changed", { get: fault }),
       };
       for (let poll = 0; poll < 2; poll += 1) {
-        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
+        await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
       }
       expect(fault).toHaveBeenCalledTimes(2);
-      expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+      expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
       expect(reconcile).not.toHaveBeenCalled();
     },
   );
@@ -276,16 +231,16 @@ describe("reconciliation budget holds", () => {
   it.each(["store option", "reserve option", "shared-store default", "reserve default"])(
     "contains factory acquisition failure at %s and retries on the next poll",
     async (boundary) => {
-      const { dependencies, store, reconcile } = fixture();
+      const { fold, store, reconcile, worker } = fixture();
       const fault = vi.fn(() => { throw new Error(boundary); });
       const options = {};
       if (boundary === "store option") Object.defineProperty(options, "store", { get: fault });
       if (boundary === "reserve option") Object.defineProperty(options, "reserve", { get: fault });
       if (boundary === "shared-store default") vi.spyOn(budgets, "gitHubGraphqlBudget").mockImplementation(fault);
       if (boundary === "reserve default") vi.spyOn(budgets, "readGraphqlBudgetReserve").mockImplementation(fault);
-      dependencies.budget = createReconciliationBudgetGate(options);
+      fold.budget = createReconciliationBudgetGate(options);
       for (let poll = 0; poll < 2; poll += 1) {
-        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+        await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       }
       expect(fault).toHaveBeenCalledTimes(2);
       expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
@@ -299,10 +254,10 @@ describe("reconciliation budget holds", () => {
     const fault = vi.fn(() => { throw new Error("shared store cannot be assigned"); });
     Object.defineProperty(globalThis, key, { configurable: true, get: () => undefined, set: fault });
     try {
-      const { dependencies, store, reconcile } = fixture();
-      dependencies.budget = createReconciliationBudgetGate();
+      const { fold, store, reconcile, worker } = fixture();
+      fold.budget = createReconciliationBudgetGate();
       for (let poll = 0; poll < 2; poll += 1) {
-        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+        await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       }
       expect(fault).toHaveBeenCalledTimes(2);
       expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
@@ -323,25 +278,26 @@ describe("reconciliation budget holds", () => {
       repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
     } }));
     try {
-      const { dependencies, store, reconcile } = fixture();
-      dependencies.budget = createReconciliationBudgetGate();
+      const { fold, store, reconcile, worker } = fixture();
+      fold.budget = createReconciliationBudgetGate();
       let gateway: GitHubGateway | undefined;
       const results: unknown[] = [];
       reconcile.mockImplementation(async () => {
-        gateway ??= new GitHubGateway({ accessToken: "test-token", fetch: request });
+        gateway ??= new GitHubGateway({ owner: "sponsor-1", accessToken: "test-token", fetch: request });
         results.push(await gateway.listIssues({ owner: "octo", name: "overflow" }));
+        return null;
       });
-      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       expect(request).toHaveBeenCalledTimes(1);
       expect(fault).toHaveBeenCalledTimes(2);
 
       Reflect.deleteProperty(globalThis, key);
-      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
       expect(request).toHaveBeenCalledTimes(2);
       expect(results).toEqual([[], []]);
-      expect(budgets.gitHubGraphqlBudget().read()).toMatchObject({ remaining: 499, resetAt });
-      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-      expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
+      expect(budgets.gitHubGraphqlBudget().read("sponsor-1")).toMatchObject({ remaining: 499, resetAt });
+      await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+      expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(3);
       expect(store.completeReconciliationJob).toHaveBeenCalledTimes(2);
       expect(store.retryReconciliationJob).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledTimes(2);
@@ -357,7 +313,7 @@ describe("reconciliation budget holds", () => {
     let check;
     try {
       Object.defineProperty(process, "env", { configurable: true, get: fault });
-      check = createReconciliationBudgetGate({ store: budgets.createGitHubGraphqlBudgetStore() }).check(now);
+      check = createReconciliationBudgetGate({ store: budgets.createGitHubGraphqlBudgetStore() }).check("sponsor-1", now);
     } finally {
       Object.defineProperty(process, "env", previous);
     }
@@ -366,72 +322,72 @@ describe("reconciliation budget holds", () => {
   });
 
   it("keeps a queue-store claim failure outside budget containment", async () => {
-    const { dependencies, store, reconcile } = fixture();
+    const { store, reconcile, worker } = fixture();
     const failure = new Error("queue unavailable");
     store.claimNextReconciliationJob.mockRejectedValue(failure);
-    await expect(runNextReconciliationJob(dependencies)).rejects.toBe(failure);
+    await expect(runNextReconciliationJob(worker)).rejects.toBe(failure);
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("holds below the reserve before claiming or reconciling", async () => {
-    const { dependencies, store, reconcile } = fixture(499);
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+  it("defers a claimed job below the reserve without starting a run or reaching GitHub", async () => {
+    const { store, reconcile, worker } = fixture(499);
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
     expect(reconcile).not.toHaveBeenCalled();
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
   });
 
   it("claims and reconciles at exactly the reserve", async () => {
-    const { dependencies, store, reconcile } = fixture(500);
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+    const { store, reconcile, worker } = fixture(500);
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
-    expect(reconcile).toHaveBeenCalledWith("repository-1");
+    expect(reconcile).toHaveBeenCalledWith(4242);
     expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1");
   });
 
   it("claims when there has been no budget reading", async () => {
-    const { dependencies, store } = fixture();
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+    const { store, worker } = fixture();
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
   });
 
   it("releases a hold exactly at resetAt", async () => {
-    const { dependencies, store, onBudgetChange } = fixture(0);
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-    dependencies.now = () => resetAt;
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
-    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
+    const { fold, store, onBudgetChange, worker } = fixture(0);
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    fold.now = () => resetAt;
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
+    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
     expect(onBudgetChange).toHaveBeenLastCalledWith(expect.objectContaining({
       state: "UNKNOWN", changed: true,
     }));
   });
 
-  it("keeps existing callers working without a gate", async () => {
-    const { dependencies, store } = fixture(0);
-    delete dependencies.budget;
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+  it("uses an unknown default observation when no gate is injected", async () => {
+    const { fold, store, worker } = fixture(0);
+    delete fold.budget;
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
   });
 
   it("reports only entering and leaving a hold across fresh drains", async () => {
-    const { dependencies, budgetStore, store, onBudgetChange } = fixture(499);
+    const { fold, budgetStore, store, onBudgetChange, worker } = fixture(499);
     for (let poll = 0; poll < 3; poll += 1) {
-      dependencies.budget = createReconciliationBudgetGate({ store: budgetStore, reserve: 500 });
-      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["BUDGET_HELD"]);
+      fold.budget = createReconciliationBudgetGate({ store: budgetStore, reserve: 500 });
+      await expect(drainReconciliationJobs(worker, { maxJobs: 1 })).resolves.toEqual(["BUDGET_HELD"]);
     }
     expect(onBudgetChange).toHaveBeenCalledTimes(1);
     expect(onBudgetChange).toHaveBeenLastCalledWith({
-      state: "BELOW_RESERVE", reading: reading(499), reserve: 500, changed: true,
+      owner: "sponsor-1", state: "BELOW_RESERVE", reading: reading(499), reserve: 500, changed: true,
     });
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
 
-    budgetStore.record({ ...reading(1000, new Date("2026-09-07T11:01:00Z")),
+    budgetStore.record("sponsor-1", { ...reading(1000, new Date("2026-09-07T11:01:00Z")),
       resetAt: new Date("2026-09-07T12:00:00Z") });
-    dependencies.now = () => new Date("2026-09-07T11:01:00Z");
-    dependencies.budget = createReconciliationBudgetGate({ store: budgetStore, reserve: 500 });
-    await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
-    await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+    fold.now = () => new Date("2026-09-07T11:01:00Z");
+    fold.budget = createReconciliationBudgetGate({ store: budgetStore, reserve: 500 });
+    await expect(drainReconciliationJobs(worker, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+    await expect(drainReconciliationJobs(worker, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
     expect(onBudgetChange).toHaveBeenCalledTimes(2);
     expect(onBudgetChange).toHaveBeenLastCalledWith(expect.objectContaining({
       state: "AVAILABLE", changed: true,
@@ -439,107 +395,102 @@ describe("reconciliation budget holds", () => {
   });
 
   it("contains and reports a throwing transition hook", async () => {
-    const { dependencies, store } = fixture(499);
+    const { fold, store, worker } = fixture(499);
     const failure = new Error("reporter unavailable");
-    dependencies.onBudgetChange = () => { throw failure; };
+    fold.onBudgetChange = () => { throw failure; };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
     expect(logged).toHaveBeenCalledWith(expect.any(String), failure);
   });
 
   it("allows an omitted transition hook", async () => {
-    const { dependencies } = fixture(499);
-    delete dependencies.onBudgetChange;
+    const { fold, worker } = fixture(499);
+    delete fold.onBudgetChange;
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(logged).not.toHaveBeenCalled();
   });
 
-  it("stops a held drain after one check and includes the hold outcome", async () => {
-    const { dependencies, store, reconcile } = fixture(499);
-    const check = vi.spyOn(dependencies.budget!, "check");
-    await expect(drainReconciliationJobs(dependencies)).resolves.toEqual(["BUDGET_HELD"]);
-    expect(check).toHaveBeenCalledExactlyOnceWith(now);
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
+  it("continues a drain after a held job and records the deferral", async () => {
+    const { fold, worker, store, reconcile } = fixture(499);
+    const check = vi.spyOn(fold.budget!, "check");
+    await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["BUDGET_HELD", "BUDGET_HELD"]);
+    expect(check).toHaveBeenNthCalledWith(1, "sponsor-1", now);
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
+    expect(store.deferReconciliationJob).toHaveBeenCalledTimes(2);
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("stops before another claim when budget falls during the preceding fold", async () => {
-    const { dependencies, budgetStore, store, reconcile } = fixture(500);
+  it("defers the next claimed repository when its budget falls during the preceding fold", async () => {
+    const { worker, budgetStore, store, reconcile } = fixture(500);
     reconcile.mockImplementation(async () => {
-      budgetStore.record(reading(499, new Date("2026-09-07T10:01:00Z")));
+      budgetStore.record("sponsor-1", reading(499, new Date("2026-09-07T10:01:00Z")));
+      return null;
     });
-    await expect(drainReconciliationJobs(dependencies)).resolves.toEqual(["RECONCILED", "BUDGET_HELD"]);
-    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
+    await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["RECONCILED", "BUDGET_HELD"]);
+    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
     expect(reconcile).toHaveBeenCalledTimes(1);
   });
 
   it("defaults to the shared budget and configured reserve", async () => {
-    const { dependencies, budgetStore, store } = fixture(600);
+    const { fold, budgetStore, store, worker } = fixture(600);
     vi.spyOn(budgets, "gitHubGraphqlBudget").mockReturnValue(budgetStore);
     vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
-    dependencies.budget = createReconciliationBudgetGate();
-    await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
-    expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
-    expect(budgetStore.readState()).toBe("BELOW_RESERVE");
+    fold.budget = createReconciliationBudgetGate();
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(budgetStore.readState("sponsor-1")).toBe("BELOW_RESERVE");
   });
 
-  it("wires transition logs without logging every held drain", async () => {
-    const { budgetStore, dependencies, store, reconcile } = fixture();
-    vi.spyOn(budgets, "gitHubGraphqlBudget").mockReturnValue(budgetStore);
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
-    vi.stubEnv("NEXT_RUNTIME", "nodejs");
-    vi.stubEnv("NEXT_PHASE", "");
-    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+  it("logs per-owner transitions once while journaling each claimed deferral", async () => {
+    const { budgetStore, fold, worker, store } = fixture();
+    delete fold.onBudgetChange;
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
+    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "UNKNOWN", remaining: undefined, reserve: 500, resetAt: undefined,
+    });
+    informed.mockClear();
+    budgetStore.record("sponsor-1", reading(499));
+    for (let pass = 0; pass < 3; pass += 1) {
+      await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    }
+    expect(warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "BELOW_RESERVE", remaining: 499, reserve: 500, resetAt,
+    });
+    expect(informed).not.toHaveBeenCalled();
+    expect(store.deferReconciliationJob).toHaveBeenCalledTimes(3);
+    fold.now = () => resetAt;
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
+    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "UNKNOWN", remaining: 499, reserve: 500, resetAt,
+    });
+  });
+  it("journals held job outcomes from the production scheduler", async () => {
+    const { fold, worker, store } = fixture(42);
     const startWorker = vi.fn();
-    const drain = vi.fn<typeof drainReconciliationJobs>(async (wired) => drainReconciliationJobs({
-      ...wired, store, reconcile,
-      now: dependencies.now,
-      scheduleLeaseRenewal: dependencies.scheduleLeaseRenewal,
-    }, { maxJobs: 1 }));
     vi.doMock("@/lib/fold/reconciliation-worker", () => ({
-      startReconciliationWorker: startWorker, drainReconciliationJobs: drain,
+      startReconciliationWorker: startWorker,
+      drainReconciliationJobs: (wired: ReconciliationWorkerDependencies) => drainReconciliationJobs({
+        ...wired, ...worker,
+      }, { maxJobs: 1 }),
     }));
-    vi.doMock("@/lib/fold/sweep", () => ({
-      shouldStartReconciliationBackground: () => true,
-      startReconciliationSweep: vi.fn(), sweepReconciliations: vi.fn(),
-    }));
+    vi.doMock("@/lib/fold/sweep", () => ({ shouldStartReconciliationBackground: () => true,
+      startReconciliationSweep: vi.fn(), sweepReconciliations: vi.fn() }));
     vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class {} }));
     vi.doMock("@/lib/fold/reconcile-as-sponsor", () => ({ reconcileRepositoryAsSponsor: vi.fn() }));
-    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     const informed = vi.spyOn(console, "info").mockImplementation(() => {});
     const { register } = await import("@/instrumentation");
     await register();
     const schedule = startWorker.mock.calls[0][0] as { drain(): Promise<unknown> };
-    await expect(schedule.drain()).resolves.toEqual(["RECONCILED"]);
-    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), { RECONCILED: 1 });
-    informed.mockClear();
-    budgetStore.record(reading(499));
-    for (let poll = 0; poll < 3; poll += 1) {
-      await expect(schedule.drain()).resolves.toEqual(["BUDGET_HELD"]);
-    }
-    expect(informed).not.toHaveBeenCalled();
-    expect(warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
-      remaining: 499, reserve: 500, resetAt,
-    });
-    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
-    expect(reconcile).toHaveBeenCalledTimes(1);
-
-    const recoveredAt = new Date("2026-09-07T11:01:00Z");
-    budgetStore.record({ ...reading(700, recoveredAt), resetAt: new Date("2026-09-07T12:00:00Z") });
-    dependencies.now = () => recoveredAt;
-    for (let poll = 0; poll < 3; poll += 1) {
-      await expect(schedule.drain()).resolves.toEqual(["RECONCILED"]);
-    }
-    expect(informed.mock.calls).toEqual([
-      [expect.any(String), { state: "AVAILABLE" }],
-      [expect.any(String), { RECONCILED: 1 }],
-      [expect.any(String), { RECONCILED: 1 }],
-      [expect.any(String), { RECONCILED: 1 }],
-    ]);
-    expect(warned).toHaveBeenCalledTimes(1);
-    expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(4);
-    expect(reconcile).toHaveBeenCalledTimes(4);
+    await expect(schedule.drain()).resolves.toEqual(["BUDGET_HELD"]);
+    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), { BUDGET_HELD: 1 });
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(fold.store.beginRun).not.toHaveBeenCalled();
   });
+
 });

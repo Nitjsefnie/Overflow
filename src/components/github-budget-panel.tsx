@@ -1,13 +1,14 @@
 import type { JSX } from "react";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 
-export type GitHubBudgetPanelProps = { assessment: GitHubGraphqlBudgetAssessment };
+export type GitHubBudgetPanelProps = { owner: string; label?: string; assessment: GitHubGraphqlBudgetAssessment };
 
-export function GitHubBudgetPanel({ assessment }: GitHubBudgetPanelProps): JSX.Element {
+export function GitHubBudgetPanel({ owner, label, assessment }: GitHubBudgetPanelProps): JSX.Element {
   const { state, reading, reserve } = assessment;
 
   return (
-    <div data-testid="github-budget-panel" data-budget-state={state}>
+    <div data-testid="github-budget-panel" data-budget-state={state} data-budget-owner={owner}>
+      <h3 data-testid="github-budget-owner">{label ?? owner}</h3>
       {reading === null ? (
         <p>The GitHub GraphQL budget has not been observed yet.</p>
       ) : state === "UNKNOWN" ? (

@@ -1,3 +1,4 @@
+import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } from "@/lib/fold/reconciliation-budget";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
@@ -65,7 +66,7 @@ export type ReconciliationStore = {
   }): Promise<void>;
 };
 
-export type ReconciliationDependencies = {
+export type ReconciliationDependencies = ReconciliationBudgetDependencies & {
   store: ReconciliationStore;
   github: ReconciliationGateway;
   now?: () => Date;
@@ -76,7 +77,7 @@ export type ReconciliationSummary = ReconciliationDeltas & {
   added: number;
   changed: number;
   removed: number;
-} & ({ skipped: false; runId: string } | { skipped: true; runId: null });
+} & ({ skipped: false; runId: string } | { skipped: true; runId: null; budgetHeldUntil?: Date });
 
 export async function reconcileRepository(
   dependencies: ReconciliationDependencies,
@@ -102,6 +103,14 @@ async function reconcileRepositoryWhileCoordinated(
   // Read under the repository lock so a queued webhook sees the previous run's cooldown.
   if (notBefore !== null && notBefore.getTime() > now().getTime()) {
     return { repositoryId, runId: null, skipped: true, adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
+  }
+
+  // The repository lock and sponsor identity scope admission for every fold caller.
+  const budgetHeldUntil = repository.active
+    ? reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now) : null;
+  if (budgetHeldUntil !== null) {
+    return { repositoryId, runId: null, skipped: true, budgetHeldUntil,
+      adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
   }
 
   const runId = await dependencies.store.beginRun(repositoryId);

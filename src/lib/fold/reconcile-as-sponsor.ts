@@ -27,8 +27,8 @@ import {
 export function reconcileRepositoryAsSponsor(
   store: ReconciliationStore,
   repositoryId: string,
-  createGateway: (accessToken: string) => ReconciliationGateway = (accessToken) =>
-    new GitHubGateway({ accessToken }),
+  createGateway: (accessToken: string, owner: string) => ReconciliationGateway = (accessToken, owner) =>
+    new GitHubGateway({ accessToken, owner }),
 ): Promise<ReconciliationSummary> {
   return reconcileRepository(
     { store, github: sponsorGateway(store, repositoryId, createGateway) },
@@ -48,7 +48,7 @@ export function reconcileRepositoryAsSponsor(
 function sponsorGateway(
   store: ReconciliationStore,
   repositoryId: string,
-  createGateway: (accessToken: string) => ReconciliationGateway,
+  createGateway: (accessToken: string, owner: string) => ReconciliationGateway,
 ): ReconciliationGateway {
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
@@ -61,7 +61,7 @@ function sponsorGateway(
       if (accessToken === null) {
         throw new Error("GitHub access token was not available.");
       }
-      return createGateway(accessToken);
+      return createGateway(accessToken, repository.sponsor.id);
     })();
     return resolving;
   };
