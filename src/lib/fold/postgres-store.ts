@@ -138,6 +138,7 @@ type ReconciliationJobLeaseRow = {
   attempt_count: number;
   lease_token: string;
   rederivation_requested_at: Date | null;
+  rederivation_generation: string;
 };
 
 type SelfWorkCalibrationRow = {
@@ -763,25 +764,30 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       insert into repository_reconciliation_jobs (repository_id, reason)
       values (${repositoryId}, ${reason})
       on conflict (repository_id) do update
-      set state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
-          follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
-          attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
-          run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end
+      set ${this.reconciliationJobConflictUpdate()}
     `;
   }
 
   public async requestRepositoryRederivation(repositoryId: string, at: Date): Promise<void> {
-    // Match enqueue's revival, backoff and in-flight follow-up policy. Only the
-    // request timestamp is additional: older arrivals cannot erase newer work.
+    // The generation names each request even when its informational timestamp
+    // is equal to or earlier than an existing request's.
     await this.sql`
-      insert into repository_reconciliation_jobs (repository_id, reason, rederivation_requested_at)
-      values (${repositoryId}, 'REDERIVATION', ${at})
+      insert into repository_reconciliation_jobs (repository_id, reason, rederivation_requested_at, rederivation_generation)
+      values (${repositoryId}, 'REDERIVATION', ${at}, 1)
       on conflict (repository_id) do update
-      set state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
+      set ${this.reconciliationJobConflictUpdate()},
+          rederivation_requested_at = greatest(coalesce(repository_reconciliation_jobs.rederivation_requested_at, ${at}), ${at}),
+          rederivation_generation = repository_reconciliation_jobs.rederivation_generation + 1
+    `;
+  }
+
+  /** Shared lifecycle policy for ordinary events and explicit re-derivation requests. */
+  private reconciliationJobConflictUpdate() {
+    return this.sql`
+      state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
           follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
           attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
-          run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end,
-          rederivation_requested_at = greatest(coalesce(repository_reconciliation_jobs.rederivation_requested_at, ${at}), ${at})
+          run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end
     `;
   }
 
@@ -823,7 +829,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repository_reconciliation_jobs.reason,
         repository_reconciliation_jobs.attempt_count,
         repository_reconciliation_jobs.lease_token::text as lease_token,
-        repository_reconciliation_jobs.rederivation_requested_at
+        repository_reconciliation_jobs.rederivation_requested_at,
+        repository_reconciliation_jobs.rederivation_generation
     `;
     const [row] = rows;
     return row === undefined
@@ -835,6 +842,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           attemptCount: row.attempt_count,
           leaseToken: row.lease_token,
           rederivationRequestedAt: row.rederivation_requested_at,
+          rederivationGeneration: Number(row.rederivation_generation),
         };
   }
 
@@ -857,18 +865,18 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   public async completeReconciliationJob(
     jobId: string,
     leaseToken: string,
-    rederivationRequestedAt: Date | null,
+    rederivationGeneration: number,
   ): Promise<boolean> {
     // An event that arrived during the fold may not be reflected in it, so a job
     // that took a follow-up becomes a fresh PENDING job instead of disappearing.
     // The row is locked for the decision so that an enqueue cannot set the flag
     // between reading it and acting on it, which would drop that event silently.
-    // Compare requests in PostgreSQL, including null equality, under that same
-    // lock. An uncaptured request must survive both the update and delete paths.
+    // Compare request generations under that same lock; timestamps are only
+    // informational. Uncaptured work must survive both update and delete paths.
     return this.sql.begin(async (transaction) => {
       const [row] = await transaction<{ follow_up_requested: boolean; request_matches: boolean }[]>`
         select follow_up_requested,
-               rederivation_requested_at is not distinct from ${rederivationRequestedAt}::timestamptz as request_matches
+               rederivation_generation = ${rederivationGeneration} as request_matches
         from repository_reconciliation_jobs
         where id = ${jobId}
           and state = ${"RUNNING"}

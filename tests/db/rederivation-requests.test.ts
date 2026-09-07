@@ -64,7 +64,7 @@ describe("durable repository re-derivation requests", () => {
       set attempt_count = 3, run_after = ${runAfter}, follow_up_requested = true`;
     const [before] = await rows();
     await store.requestRepositoryRederivation(repositoryId, first);
-    expect(await rows()).toEqual([{ ...before, rederivation_requested_at: first }]);
+    expect(await rows()).toEqual([{ ...before, rederivation_requested_at: first, rederivation_generation: "1" }]);
   });
 
   it("requests the same follow-up as an ordinary enqueue while retaining the active lease", async () => {
@@ -72,9 +72,9 @@ describe("durable repository re-derivation requests", () => {
     await claim();
     const [before] = await rows();
     await store.requestRepositoryRederivation(repositoryId, first);
-    expect(await rows()).toEqual([{ ...before, follow_up_requested: true, rederivation_requested_at: first }]);
+    expect(await rows()).toEqual([{ ...before, follow_up_requested: true, rederivation_requested_at: first, rederivation_generation: "1" }]);
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
-    expect(await rows()).toEqual([{ ...before, follow_up_requested: true, rederivation_requested_at: first }]);
+    expect(await rows()).toEqual([{ ...before, follow_up_requested: true, rederivation_requested_at: first, rederivation_generation: "1" }]);
   });
 
   it("moves a request forward but never backwards", async () => {
@@ -83,6 +83,40 @@ describe("durable repository re-derivation requests", () => {
     expect((await rows())[0].rederivation_requested_at).toEqual(later);
     await store.requestRepositoryRederivation(repositoryId, earlier);
     expect((await rows())[0].rederivation_requested_at).toEqual(later);
+  });
+
+  it.each([
+    { second: first, timestamp: first, generation: 2 },
+    { second: earlier, timestamp: first, generation: 2 },
+    { second: later, timestamp: later, generation: 2 },
+    { second: null, timestamp: null, generation: 1 },
+  ])("completes only the captured generation with second request $second", async ({ second, timestamp, generation }) => {
+    await store.requestRepositoryRederivation(repositoryId, first);
+    const job = await claim();
+    expect(job.rederivationGeneration).toBe(1);
+    if (second) await store.requestRepositoryRederivation(repositoryId, second);
+    // Keep the row so that discharge and the retained generation are observable.
+    else await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration)).toBe(true);
+    expect((await rows())[0]).toMatchObject({
+      state: "PENDING", rederivation_requested_at: timestamp, rederivation_generation: String(generation),
+    });
+  });
+
+  it("increments every request and preserves the generation after completion", async () => {
+    for (const [at, generation] of [[first, 1], [first, 2], [earlier, 3]] as const) {
+      await store.requestRepositoryRederivation(repositoryId, at);
+      expect((await rows())[0]).toMatchObject({
+        rederivation_requested_at: first, rederivation_generation: String(generation),
+      });
+    }
+    const job = await claim();
+    expect(job.rederivationGeneration).toBe(3);
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration)).toBe(true);
+    expect((await rows())[0]).toMatchObject({ rederivation_requested_at: null, rederivation_generation: "3" });
+    await store.requestRepositoryRederivation(repositoryId, earlier);
+    expect((await rows())[0]).toMatchObject({ rederivation_requested_at: earlier, rederivation_generation: "4" });
   });
 
   it.each(["WEBHOOK", "REGISTRATION", "SWEEP"] as const)("keeps a request across an ordinary %s enqueue", async (reason) => {
@@ -101,7 +135,7 @@ describe("durable repository re-derivation requests", () => {
     await store.requestRepositoryRederivation(repositoryId, first);
     const job = await claim();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
-    expect(await store.completeReconciliationJob(job.id, job.leaseToken, first)).toBe(true);
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration)).toBe(true);
     expect(await rows()).toEqual([expect.objectContaining({
       state: "PENDING", rederivation_requested_at: null, follow_up_requested: false,
       lease_token: null, lease_expires_at: null,
@@ -113,7 +147,7 @@ describe("durable repository re-derivation requests", () => {
     else await store.enqueueReconciliationJob(repositoryId, "SWEEP");
     const job = await claim();
     await store.requestRepositoryRederivation(repositoryId, later);
-    expect(await store.completeReconciliationJob(job.id, job.leaseToken, captured)).toBe(true);
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration)).toBe(true);
     expect(await rows()).toEqual([expect.objectContaining({
       state: "PENDING", rederivation_requested_at: later, follow_up_requested: false,
     })]);
@@ -123,7 +157,7 @@ describe("durable repository re-derivation requests", () => {
   it("retains an uncaptured request even without an ordinary follow-up flag", async () => {
     await store.requestRepositoryRederivation(repositoryId, later);
     const job = await claim();
-    expect(await store.completeReconciliationJob(job.id, job.leaseToken, first)).toBe(true);
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, 0)).toBe(true);
     expect(await rows()).toEqual([expect.objectContaining({ state: "PENDING", rederivation_requested_at: later })]);
   });
 
@@ -131,7 +165,7 @@ describe("durable repository re-derivation requests", () => {
     await store.requestRepositoryRederivation(repositoryId, first);
     const job = await claim();
     expect(job.rederivationRequestedAt).toEqual(first);
-    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationRequestedAt)).toBe(true);
+    expect(await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration)).toBe(true);
     expect(await rows()).toEqual([]);
   });
 
@@ -146,6 +180,7 @@ describe("durable repository re-derivation requests", () => {
     expect(released).toBe(true);
     expect((await rows())[0]).toMatchObject({
       state: outcome === "fail" ? "FAILED" : "PENDING", rederivation_requested_at: first,
+      rederivation_generation: "1",
       lease_token: null, lease_expires_at: null,
     });
   });

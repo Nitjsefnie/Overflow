@@ -216,6 +216,7 @@ describe("initial PostgreSQL materialization", () => {
       "022_fold_revision_stamps.sql",
       "023_rederivation_requests.sql",
       "024_reconciliation_run_rederivation.sql",
+      "025_rederivation_generation.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
