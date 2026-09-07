@@ -1,6 +1,7 @@
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 export { GitHubApiError } from "@/lib/github/errors";
 import type {
   GitHubIssue,
@@ -25,6 +26,7 @@ export type GitHubGatewayOptions = {
   apiUrl?: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  budget?: GitHubGraphqlBudgetStore;
 };
 
 /** Omit these options to read every timeline exactly. Supplying them opts into
@@ -77,6 +79,7 @@ export class GitHubGateway {
       endpoint: `${this.apiUrl}/graphql`,
       fetch: this.fetchImplementation,
       timeoutMs: this.timeoutMs,
+      budget: options.budget,
     });
   }
 
@@ -340,7 +343,7 @@ export class GitHubGateway {
   ): Promise<GitHubGraphqlPage<GitHubGraphqlIssueNode>> {
     const data = await this.graphql.query<{
       repository: { issues: GitHubGraphqlPage<GitHubGraphqlIssueNode> } | null;
-      rateLimit?: { cost: number; remaining: number } | null;
+      rateLimit?: { cost: number; limit: number; remaining: number; resetAt: string } | null;
     }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor });
     if (process.env.DEBUG_GITHUB_COST && data.rateLimit != null) {
       console.info("GitHub RepositoryIssues cost", {
@@ -673,7 +676,7 @@ type GitHubGraphqlReviewDismissedEventNode = {
 
 const issuesQuery = `
   query RepositoryIssues($owner: String!, $name: String!, $cursor: String) {
-    rateLimit { cost remaining }
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       issues(first: 100, after: $cursor) {
         nodes {
@@ -734,6 +737,7 @@ const issuesQuery = `
 
 const closingPullRequestsQuery = `
   query ClosingPullRequests($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String) {
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         closedByPullRequestsReferences(first: 100, includeClosedPrs: true, after: $cursor) {
@@ -761,6 +765,7 @@ const closingPullRequestsQuery = `
 
 const issueLabelsQuery = `
   query IssueLabels($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String!) {
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         labels(first: 100, after: $cursor) {
@@ -774,6 +779,7 @@ const issueLabelsQuery = `
 
 const issueTimelineQuery = `
   query IssueTimeline($owner: String!, $name: String!, $issueNumber: Int!, $cursor: String) {
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         timelineItems(
@@ -798,6 +804,7 @@ const issueTimelineQuery = `
 
 const pullRequestReviewsQuery = `
   query PullRequestReviews($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String) {
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       pullRequest(number: $pullRequestNumber) {
         reviews(first: 100, after: $cursor) {
@@ -811,6 +818,7 @@ const pullRequestReviewsQuery = `
 
 const pullRequestReviewDismissalsQuery = `
   query PullRequestReviewDismissals($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String) {
+    rateLimit { cost limit remaining resetAt }
     repository(owner: $owner, name: $name) {
       pullRequest(number: $pullRequestNumber) {
         timelineItems(first: 100, after: $cursor, itemTypes: [REVIEW_DISMISSED_EVENT]) {
