@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import type {
   AuditCandidateProjection,
   EnforcementHistoryProjection,
@@ -24,6 +25,7 @@ export default async function ModerationPage() {
   const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
   const { OpenAuditForm } = await import("@/components/open-audit-form");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
+  const { GitHubBudgetPanel } = await import("@/components/github-budget-panel");
   const { SettlementOverrideQueue } = await import("@/components/settlement-override-queue");
   const { UnwritableClosureQueue } = await import("@/components/unwritable-closure-queue");
   const { UnwritableClosureHistory } = await import("@/components/unwritable-closure-history");
@@ -34,6 +36,16 @@ export default async function ModerationPage() {
   let history: EnforcementHistoryProjection[] | null = null;
   let recalibratingAccounts: RecalibratingAccountProjection[] | null = null;
   let moderators: { accountId: string; githubLogin: string; isConfigured: boolean }[] | null = null;
+  let githubBudget: GitHubGraphqlBudgetAssessment | null;
+  try {
+    const { assessGraphqlBudget, gitHubGraphqlBudget, readGraphqlBudgetReserve } = await import("@/lib/github/rate-limit-budget");
+    githubBudget = assessGraphqlBudget(gitHubGraphqlBudget().read(), {
+      reserve: readGraphqlBudgetReserve(process.env),
+      now: new Date(),
+    });
+  } catch {
+    githubBudget = null;
+  }
   const settlementCorrections = await listSettlementCorrections(session.user);
   const unwritableClosures = await loadUnwritableClosures();
   try {
@@ -187,6 +199,14 @@ export default async function ModerationPage() {
           <p role="alert">The closure correction history could not be loaded.</p>
         ) : (
           <UnwritableClosureHistory closures={unwritableClosures.history} />
+        )}
+      </section>
+      <section className="surface" aria-labelledby="github-budget-heading">
+        <h2 id="github-budget-heading">GitHub GraphQL budget</h2>
+        {githubBudget === null ? (
+          <p>The GitHub GraphQL budget could not be loaded.</p>
+        ) : (
+          <GitHubBudgetPanel assessment={githubBudget} />
         )}
       </section>
       <section className="surface" aria-labelledby="enforcement-history-heading">
