@@ -201,14 +201,6 @@ export default async function ModerationPage() {
           <UnwritableClosureHistory closures={unwritableClosures.history} />
         )}
       </section>
-      <section className="surface" aria-labelledby="github-budget-heading">
-        <h2 id="github-budget-heading">GitHub GraphQL budget</h2>
-        {githubBudget === null ? (
-          <p>The GitHub GraphQL budget could not be loaded.</p>
-        ) : (
-          <GitHubBudgetPanel assessment={githubBudget} />
-        )}
-      </section>
       <section className="surface" aria-labelledby="enforcement-history-heading">
         <h2 id="enforcement-history-heading">Enforcement history</h2>
         {history === null ? (
@@ -224,6 +216,14 @@ export default async function ModerationPage() {
               </li>
             ))}
           </ol>
+        )}
+      </section>
+      <section className="surface" aria-labelledby="github-budget-heading">
+        <h2 id="github-budget-heading">GitHub GraphQL budget</h2>
+        {githubBudget === null ? (
+          <p>The GitHub GraphQL budget could not be loaded.</p>
+        ) : (
+          <GitHubBudgetPanel assessment={githubBudget} />
         )}
       </section>
     </AppShell>

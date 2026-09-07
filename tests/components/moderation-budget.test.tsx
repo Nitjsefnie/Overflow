@@ -10,7 +10,7 @@ const loaders = vi.hoisted(() => ({
   moderators: vi.fn(async () => []),
   candidates: vi.fn(async () => []),
   repositories: vi.fn(async () => []),
-  closures: vi.fn(async () => []),
+  closures: vi.fn(async () => ({ queue: [], history: [] })),
   corrections: vi.fn(async () => []),
 }));
 
@@ -81,8 +81,8 @@ describe("moderation budget integration", () => {
     expect(Array.from(container.querySelectorAll("section"), node => node.getAttribute("aria-labelledby"))).toEqual([
       "moderation-title", "open-audit-heading", "no-audits-heading",
       "settlement-corrections-heading", "unwritable-closures-heading",
-      "recalibrating-heading", "moderators-heading", "github-budget-heading",
-      "enforcement-history-heading",
+      "recalibrating-heading", "moderators-heading", "unwritable-closure-history-heading",
+      "enforcement-history-heading", "github-budget-heading",
     ]);
     expect(screen.queryByTestId("github-budget-panel")).toBeNull();
     const indicator = container.querySelector('[aria-labelledby="github-budget-heading"] > p');
