@@ -91,6 +91,25 @@ describe("repository re-derivation status", () => {
     });
   });
 
+  // The counts name one revision each. A row written by logic NEWER than the
+  // caller's — what a rollback leaves behind — is neither current nor stale, and
+  // an at-count widened to `>=` would silently claim it had been recomputed.
+  it("counts a row stamped above the revision as neither current nor stale", async () => {
+    const { repositoryId } = await materializeRepositoryFixture(sql);
+    const [row] = await sql<{ id: string }[]>`
+      select settlements.id from settlements
+      join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${repositoryId}
+    `;
+
+    await sql`update settlements set fold_revision = ${FOLD_REVISION + 1} where id = ${row.id}`;
+
+    expect(await statusFor(repositoryId)).toMatchObject({
+      rowsAtCurrentRevision: 2,
+      rowsBelowCurrentRevision: 0,
+    });
+  });
+
   it("lists a repository holding no derived rows at all", async () => {
     const { repositoryId } = await materializeRepositoryFixture(sql);
     for (const table of tables) {
