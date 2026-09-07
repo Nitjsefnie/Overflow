@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -7,13 +7,14 @@ const releaseNamePattern = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 const usage =
   "Usage: node scripts/release.ts switch <tree> <releaseDir>\n" +
   "       node scripts/release.ts check <tree> <releaseDir>\n" +
-  "       node scripts/release.ts prepare <tree>\n" +
+  "       node scripts/release.ts prepare <tree> <releaseDir>\n" +
   "       node scripts/release.ts prune <tree> [--keep N]";
 
 async function main(): Promise<void> {
   const [command, tree, ...args] = process.argv.slice(2);
-  if (command === "prepare" && tree && args.length === 0) {
-    await prepareTypeScript(tree);
+  const [releaseDir] = args;
+  if (command === "prepare" && tree && releaseDir && args.length === 1) {
+    await prepareTypeScript(tree, releaseDir);
     return;
   }
   if (command === "prune" && tree) {
@@ -21,13 +22,12 @@ async function main(): Promise<void> {
       throw new Error(usage);
     }
     const keep = args.length === 0 ? "3" : args[1];
-    if (!/^\d+$/.test(keep) || Number(keep) <= 0) {
+    if (!keep || !/^\d+$/.test(keep) || Number(keep) <= 0) {
       throw new Error(`--keep must be a positive integer: ${keep}`);
     }
     await pruneReleases(tree, Number(keep));
     return;
   }
-  const [releaseDir] = args;
   if ((command !== "switch" && command !== "check") || !tree || !releaseDir || args.length !== 1) {
     throw new Error(usage);
   }
@@ -38,14 +38,41 @@ async function main(): Promise<void> {
   await switchRelease(tree, releaseDir);
 }
 
-async function prepareTypeScript(tree: string): Promise<void> {
-  const config = JSON.parse(await readFile(path.join(tree, "tsconfig.json"), "utf8"));
+async function prepareTypeScript(tree: string, releaseDir: string): Promise<void> {
+  const distDir = releaseDir.trim();
+  if (!distDir || distDir === "." || distDir === ".." || /[\\/]/.test(distDir) || path.win32.isAbsolute(distDir)) {
+    throw new Error(`Invalid release directory: ${releaseDir}; expected a direct child directory beside .next.`);
+  }
+  const source = await readFile(path.join(tree, "tsconfig.json"), "utf8");
+  const ts = await import("typescript");
+  const parsed = ts.parseConfigFileTextToJson("tsconfig.json", source);
+  if (parsed.error) {
+    throw new Error(`Invalid tsconfig.json: TS${parsed.error.code}: ${ts.flattenDiagnosticMessageText(parsed.error.messageText, "\n")}`);
+  }
+  const config = parsed.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("tsconfig.json must contain a configuration object.");
+  }
+  for (const property of ["extends", "references", "releaseConfig"]) {
+    if (property in config) {
+      throw new Error(`Unsupported tsconfig.json property: ${property}; release preparation requires a self-contained config without preparation metadata.`);
+    }
+  }
+  if (!Array.isArray(config.include) || !config.include.every((entry: unknown) => typeof entry === "string")) {
+    throw new Error("tsconfig.json must specify include as an array of source glob strings for release preparation.");
+  }
   // Next 16.3 skips automatic type includes for configs with `extends`, so copy
   // the tracked options and let Next append only this build's generated types.
   config.include = config.include.filter((entry: string) =>
-    !entry.split(/[\\/]/).some((segment) => segment.startsWith(".next")),
+    !entry.split(/[\\/]/).some((segment) => segment.startsWith(".next")) &&
+    entry !== `${distDir}/types/**/*.ts` && entry !== `${distDir}/dev/types/**/*.ts`,
   );
-  const filename = path.join(tree, "tsconfig.release.json");
+  config.releaseConfig = {
+    distDir,
+    sourceHash: createHash("sha256").update(source).digest("hex"),
+    configHash: createHash("sha256").update(JSON.stringify(config)).digest("hex"),
+  };
+  const filename = path.join(tree, `${distDir}.tsconfig.json`);
   await writeFile(filename, JSON.stringify(config, null, 2) + "\n");
   console.log(filename);
 }
