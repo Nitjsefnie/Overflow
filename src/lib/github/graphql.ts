@@ -188,7 +188,11 @@ export class GitHubGraphqlClient {
 
       try {
         const reading = readGraphqlBudgetPayload((payload.data as { rateLimit?: unknown }).rateLimit, new Date());
-        if (reading !== null) this.budget.record(reading);
+        if (reading !== null) {
+          // A void-typed recorder can still be async; consume its rejection
+          // without making the query wait for observation to finish.
+          void Promise.resolve(this.budget.record(reading)).catch(() => {});
+        }
       } catch {
         // Budget observation must never fail an otherwise successful query.
       }
