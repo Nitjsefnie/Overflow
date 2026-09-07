@@ -17,14 +17,16 @@ if (distDir) {
   }
 
   if (
-    // Absolute paths contain a separator, so the earlier rule rejects them.
-    // Keep the absolute checks as redundant defence in depth: their rejection
-    // paths are unreachable here and cannot be tested independently.
+    // These two input-absolute checks are unreachable: absolute inputs contain
+    // a separator and are rejected above. Retain them as defence in depth.
     path.isAbsolute(distDir) ||
     path.win32.isAbsolute(distDir) ||
     distDir === ".." ||
     relativeDir === ".." ||
     relativeDir.startsWith(`..${path.sep}`) ||
+    // This check is load-bearing on Windows: separator-free drive-relative
+    // inputs (D:build from C:) can resolve onto another drive, making relativeDir
+    // absolute. Separator-bearing inputs are already rejected above.
     path.isAbsolute(relativeDir)
   ) {
     throw new Error(`Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}`);
