@@ -162,6 +162,21 @@ describe("NEXT_DIST_DIR", () => {
     await expectPathRefusal(configImport, value);
   });
 
+  it.each(["..", " \t..\n "])("rejects a whole parent segment %j before preparation", async (value) => {
+    const { tree, filename } = prepareConfig("build-output");
+    // Retarget the real prepared file: without the parent guard, preparation
+    // must succeed so it cannot mask acceptance of the project parent.
+    const config = JSON.parse(readFileSync(filename, "utf8"));
+    config.releaseConfig.distDir = "..";
+    writeFileSync(path.join(tree, "...tsconfig.json"), JSON.stringify(config));
+    process.env.NEXT_DIST_DIR = value;
+    vi.resetModules();
+
+    const configImport = import("../../next.config");
+
+    await expectPathRefusal(configImport, value);
+  });
+
   it("trims surrounding whitespace from a relative path", async () => {
     prepareConfig();
     process.env.NEXT_DIST_DIR = " \t.next-release-20260907T101500Z-abc1234\n ";
