@@ -61,12 +61,10 @@ describe("unwritable closure queue", () => {
     expect(screen.queryByRole("list")).toBeNull();
   });
 
-  it.each([
-    ["OPEN", "open"],
-    ["DECLINED", "declined"],
-  ] as const)("shows rejected evidence with its settlement path and %s correction", (state, label) => {
+  it.each(["OPEN", "DECLINED"] as const)("shows rejected evidence with its settlement path and %s correction", (state) => {
+    const correction = { state, requestedAt: "2026-09-05T12:00:00.000Z" };
     render(<UnwritableClosureQueue closures={[closure({
-      latestCorrection: { state, requestedAt: "2026-09-05T12:00:00.000Z" },
+      latestCorrection: correction,
     })]} />);
 
     const entry = within(screen.getByRole("listitem"));
@@ -77,7 +75,15 @@ describe("unwritable closure queue", () => {
     expect(entry.getByRole("link", { name: "#" + "18 Repair the gate" })).toHaveAttribute("href", "https://github.com/co-op/harbour/pull/18");
     expect(entry.getByText("The settled label was applied after the evidence window.")).toHaveClass("override-reason");
     expect(entry.getByRole("link", { name: "Open the settlement to request a correction" })).toHaveAttribute("href", "/settlements/settlement-1");
-    expect(entry.getByText(`Correction ${label} · reported 2026-09-05T12:00:00.000Z`)).toBeVisible();
+    const item = screen.getByRole("listitem");
+    const status = item.querySelector("data");
+    const time = item.querySelector("time");
+    expect(status).toBeVisible();
+    expect(status).toHaveAttribute("value", correction.state);
+    expect(status?.textContent).toBe(correction.state.toLowerCase());
+    expect(time).toBeVisible();
+    expect(time).toHaveAttribute("dateTime", correction.requestedAt);
+    expect(time?.textContent).toBe(correction.requestedAt);
   });
 
   it("offers the settlement correction path when no correction has been requested", () => {
@@ -147,11 +153,20 @@ describe("self-worked closure in the queue", () => {
   });
 
   it("shows the latest correction against a self-worked closure", () => {
+    const correction = { state: "DECLINED", requestedAt: "2026-09-05T12:00:00.000Z" } as const;
     render(<UnwritableClosureQueue closures={[selfWorked({
-      latestCorrection: { state: "DECLINED", requestedAt: "2026-09-05T12:00:00.000Z" },
+      latestCorrection: correction,
     })]} />);
 
-    expect(screen.getByText("Correction declined · reported 2026-09-05T12:00:00.000Z")).toBeVisible();
+    const item = screen.getByRole("listitem");
+    const status = item.querySelector("data");
+    const time = item.querySelector("time");
+    expect(status).toBeVisible();
+    expect(status).toHaveAttribute("value", correction.state);
+    expect(status?.textContent).toBe(correction.state.toLowerCase());
+    expect(time).toBeVisible();
+    expect(time).toHaveAttribute("dateTime", correction.requestedAt);
+    expect(time?.textContent).toBe(correction.requestedAt);
   });
 });
 
@@ -266,7 +281,11 @@ describe("moderation closure section", () => {
 
     render(await ModerationPage());
 
-    expect(screen.getByText("The closure queue could not be loaded.")).toBeVisible();
+    const queue = screen.getAllByRole("region").find(
+      (region) => region.getAttribute("aria-labelledby") === "unwritable-closures-heading",
+    )!;
+    expect(within(queue).getByRole("alert")).toBeVisible();
+    expect(within(queue).getByRole("alert")).not.toBeEmptyDOMElement();
     expect(screen.getByText(/A moderator who is not a party cannot open either page\./)).toBeVisible();
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
