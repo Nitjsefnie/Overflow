@@ -76,13 +76,14 @@ describe("NEXT_DIST_DIR", () => {
       },
     );
 
-    it("accepts a new nested build directory without creating it", async () => {
+    it("rejects a new nested build directory without creating it", async () => {
       process.env.NEXT_DIST_DIR = "releases/new/build-123";
       vi.resetModules();
 
-      const { default: config } = await import("../../next.config");
+      const configImport = import("../../next.config");
 
-      expect(config.distDir).toBe("releases/new/build-123");
+      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+      await expect(configImport).rejects.toThrow("releases/new/build-123");
       expect(lstatSync(path.join(projectDir, "releases"), { throwIfNoEntry: false })).toBeUndefined();
     });
   });
@@ -107,12 +108,34 @@ describe("NEXT_DIST_DIR", () => {
   });
 
   it("trims surrounding whitespace from a relative path", async () => {
-    process.env.NEXT_DIST_DIR = " \t.next-releases/20260907T101500Z-abc1234\n ";
+    process.env.NEXT_DIST_DIR = " \t.next-release-20260907T101500Z-abc1234\n ";
     vi.resetModules();
 
     const { default: config } = await import("../../next.config");
 
-    expect(config.distDir).toBe(".next-releases/20260907T101500Z-abc1234");
+    expect(config.distDir).toBe(".next-release-20260907T101500Z-abc1234");
+  });
+
+  it.each([
+    ".next-releases/20260907T101500Z-abc1234",
+    " \t.next-releases/20260907T101500Z-abc1234\n ",
+    ".next-releases\\20260907T101500Z-abc1234",
+    "build outputs/release 1",
+    "release..candidate/build",
+    "./build-output",
+    "build-output/",
+  ])("rejects path separators in %j with the type-include depth reason", async (value) => {
+    process.env.NEXT_DIST_DIR = value;
+    vi.resetModules();
+
+    const configImport = import("../../next.config");
+
+    await expect(configImport).rejects.toThrowError(Error);
+    await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+    await expect(configImport).rejects.toThrow(value);
+    await expect(configImport).rejects.toThrow("tsconfig.json");
+    await expect(configImport).rejects.toThrow(".next/types/**/*.ts");
+    await expect(configImport).rejects.toThrow("one segment");
   });
 
   it.each([
@@ -134,10 +157,9 @@ describe("NEXT_DIST_DIR", () => {
 
   it.each([
     ["a simple relative path", "build-output"],
-    ["a path with interior whitespace", "build outputs/release 1"],
-    ["a filename containing two dots", "release..candidate/build"],
-    ["a path with a leading dot segment", "./build-output"],
-    ["a nested release path", ".next-releases/20260907T101500Z-abc1234"],
+    ["a path with interior whitespace", "build output 1"],
+    ["a filename containing two dots", "release..candidate"],
+    ["a single-segment release path", ".next-release-20260907T101500Z-abc1234"],
   ])("uses %s unchanged", async (_description, value) => {
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
