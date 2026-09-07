@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd481f1d2257 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89dce370d7f38d3cf47632c3c1fc1e52dd0b30ce 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -14,7 +14,21 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd48
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -451,6 +456,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -437,6 +442,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     incoming = Buffer.alloc(0)
+     remaining = 0
+     incomings = null
++    // A postgres error is held until the ReadyForQuery that ends the query it belongs to, and a
++    // backend that dies mid-query sends its FATAL and then goes away without sending one. Left
++    // set, it is read by the first ReadyForQuery to arrive on the NEXT socket -- the handshake's
++    // -- and rejects that connection's startup query, which is the pool's oldest queued work, with
++    // the error of a backend it never reached. Reset beside the other per-socket parse state
++    // rather than below, so the connect-phase close that returns early is covered too.
++    errorResponse = null
+     clearImmediate(nextWriteTimer)
+     socket.removeListener('data', data)
+     socket.removeListener('connect', connected)
+@@ -451,6 +463,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        return reconnect()
  
      !hadError && (query || sent.length) && error(Errors.connection('CONNECTION_CLOSED', options, socket))
@@ -28,7 +42,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd48
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +576,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +583,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -47,10 +61,10 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..89fb19ac5704bd987b847c20faedbd48
      }
  
 diff --git a/src/index.js b/src/index.js
-index c7fba3dace20173f4cb13f3f138bb6d213b43683..077c81191622b937a049cf4170886c3ee449f033 100644
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..e67184588053b7cd31570e4c8e9a05f599ada000 100644
 --- a/src/index.js
 +++ b/src/index.js
-@@ -205,7 +205,10 @@ function Postgres(a, b) {
+@@ -205,19 +205,37 @@ function Postgres(a, b) {
      const c = open.length
        ? open.shift()
        : await new Promise((resolve, reject) => {
@@ -62,7 +76,35 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..077c81191622b937a049cf4170886c3e
          queries.push(query)
          closed.length && connect(closed.shift(), query)
        })
-@@ -423,7 +426,11 @@ function Postgres(a, b) {
+ 
+     move(c, reserved)
+-    c.reserved = () => queue.length
++    const reservation = c.reserved = () => queue.length
+       ? c.execute(queue.shift())
+       : move(c, reserved)
+     c.reserved.release = true
+ 
+     const sql = Sql(handler)
+     sql.release = () => {
++      // The pool takes a reservation back on its own in onclose, by nulling `c.reserved`, and it
++      // does that while the connection has no socket. Handing it back a second time from here runs
++      // onopen on it, which dispatches queued work whose write lands in a setImmediate that reads
++      // `socket.write` off null and throws where no caller can catch it -- the process exits.
++      // Guarded here rather than at that write because a guard there stops only the throw: the
++      // buffered bytes and the scheduled-write handle both survive the close, and write() arms a
++      // flush only while that handle is null, so the reconnect's StartupMessage is appended behind
++      // them and never sent -- the pool then refuses everything queued on it with CONNECT_TIMEOUT.
++      // Compared by identity rather than truthiness, because `c.reserved` is also how a *later*
++      // reserve() or a begin() marks this same connection as its own: a spent release seeing one
++      // of those would cancel a reservation it does not hold and hand one backend to two callers
++      // that each believe it is theirs alone. Nulling it is what makes a second release inert too.
++      if (c.reserved !== reservation)
++        return
++
+       c.reserved = null
+       onopen(c)
+     }
+@@ -423,7 +441,11 @@ function Postgres(a, b) {
      c.reserved = null
      c.onclose && (c.onclose(e), c.onclose = null)
      options.onclose && options.onclose(c.id)

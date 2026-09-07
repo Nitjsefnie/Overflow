@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   postgres@3.4.9:
-    hash: 0b626ecebcc2ababaac606b3b955d342bc50a11dfdb94e2510cb524bc357b76e
+    hash: e8ed387a77637a0d78ef93bace7753568172d8aa6e9dd8bb83063269f029a8bf
     path: patches/postgres@3.4.9.patch
 
 importers:
@@ -21,7 +21,7 @@ importers:
         version: 5.0.0-beta.32(next@16.3.4(@babel/core@7.29.7)(@types/node@26.4.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       postgres:
         specifier: 3.4.9
-        version: 3.4.9(patch_hash=0b626ecebcc2ababaac606b3b955d342bc50a11dfdb94e2510cb524bc357b76e)
+        version: 3.4.9(patch_hash=e8ed387a77637a0d78ef93bace7753568172d8aa6e9dd8bb83063269f029a8bf)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -5510,7 +5510,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  postgres@3.4.9(patch_hash=0b626ecebcc2ababaac606b3b955d342bc50a11dfdb94e2510cb524bc357b76e): {}
+  postgres@3.4.9(patch_hash=e8ed387a77637a0d78ef93bace7753568172d8aa6e9dd8bb83063269f029a8bf): {}
 
   preact-render-to-string@6.5.11(preact@10.24.3):
     dependencies:
