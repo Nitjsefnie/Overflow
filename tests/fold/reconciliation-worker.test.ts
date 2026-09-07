@@ -5,6 +5,7 @@ import {
   RECONCILIATION_RETRY_DELAYS_MS,
   RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS,
   RECONCILIATION_WORKER_POLL_INTERVAL_MS,
+  RECONCILIATION_WORKER_MAX_CONCURRENCY,
   runNextReconciliationJob,
   startReconciliationWorker,
   type ReconciliationWorkerStore,
@@ -31,6 +32,85 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("defers an in-flight repository before heartbeat setup while unrelated work continues", async () => {
+    const held = signal();
+    const entered = signal();
+    const { store, calls } = createFakeStore({ jobs: [
+      job(),
+      job({ leaseToken: "reclaimed" }),
+      job({ id: "job-b", repositoryId: "repo-b" }),
+      job({ leaseToken: "after-release" }),
+    ] });
+    const folded: string[] = [];
+    let heartbeats = 0;
+    const dependencies = {
+      store,
+      now: () => new Date("2030-01-02T03:04:05.000Z"),
+      reconcile: async (repositoryId: string) => {
+        folded.push(repositoryId);
+        if (folded.length === 1) { entered.resolve(); await held.promise; }
+      },
+      scheduleLeaseRenewal: () => { heartbeats += 1; return () => {}; },
+    };
+    const first = drainReconciliationJobs(dependencies, { maxJobs: 1 });
+    try {
+      await entered.promise;
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["DEFERRED"]);
+      expect(heartbeats).toBe(1);
+      expect(folded).toEqual(["repo-a"]);
+      expect(calls).toContainEqual({
+        method: "defer",
+        args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z")],
+      });
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+      expect(folded).toEqual(["repo-a", "repo-b"]);
+      held.resolve();
+      await first;
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+      expect(folded).toEqual(["repo-a", "repo-b", "repo-a"]);
+    } finally {
+      held.resolve();
+      await first;
+    }
+  });
+
+  it.each(["fold rejection", "outcome rejection", "heartbeat setup throw"] as const)(
+    "releases repository exclusion after %s",
+    async (failurePath) => {
+      const { store } = createFakeStore({ jobs: [job(), job()] });
+      const failure = new Error("job failed");
+      let failing = true;
+      let folded = 0;
+      const complete = store.completeReconciliationJob;
+      store.completeReconciliationJob = async (...args) => {
+        if (failing && failurePath === "outcome rejection") throw failure;
+        return complete(...args);
+      };
+      const dependencies = {
+        store,
+        now: () => {
+          if (failing && failurePath === "heartbeat setup throw") throw failure;
+          return new Date();
+        },
+        reconcile: async () => {
+          if (failing && failurePath === "fold rejection") throw failure;
+          folded += 1;
+        },
+        scheduleLeaseRenewal: () => () => {},
+        onFailure: () => {},
+      };
+      if (failurePath === "fold rejection") {
+        await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RETRY_SCHEDULED");
+      } else {
+        await expect(runNextReconciliationJob(dependencies)).rejects.toBe(failure);
+      }
+      failing = false;
+      const before = folded;
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      expect(folded).toBe(before + 1);
+    },
+  );
+
   it("reports an idle queue without reconciling anything", async () => {
     const { store, calls } = createFakeStore();
 
@@ -888,22 +968,83 @@ describe("draining the reconciliation queue", () => {
 });
 
 describe("the scheduled reconciliation worker", () => {
-  it("runs the default scheduler at the real poll interval", async () => {
+  it.each(["shared", "distinct"] as const)("scopes repository exclusion to %s worker stores", async (scope) => {
+    const firstStore = createFakeStore({ jobs: [job(), job()] }).store;
+    const secondStore = scope === "shared" ? firstStore : createFakeStore({ jobs: [job()] }).store;
+    const held = signal();
+    const completed: unknown[][] = [[], []];
+    let folded = 0;
+    for (const [index, store] of [firstStore, secondStore].entries()) {
+      startReconciliationWorker({
+        concurrency: 1,
+        schedule: createTimer().schedule,
+        drain: async () => {
+          completed[index] = await drainReconciliationJobs({
+            store,
+            reconcile: async () => { folded += 1; await held.promise; },
+            scheduleLeaseRenewal: () => () => {},
+          }, { maxJobs: 1 });
+        },
+      });
+    }
+    await settle();
+    expect(folded).toBe(scope === "shared" ? 1 : 2);
+    expect(completed[1]).toEqual(scope === "shared" ? ["DEFERRED"] : []);
+  });
+
+  it.each([
+    [undefined, RECONCILIATION_WORKER_POLL_INTERVAL_MS],
+    [250, 250],
+  ] as const)("runs the default scheduler on every interval with override %s", async (intervalMs, everyMs) => {
     vi.useFakeTimers();
     let started = 0;
 
     startReconciliationWorker({
       drain: async () => { started += 1; },
       concurrency: 1,
+      intervalMs,
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(started).toBe(1);
-    await vi.advanceTimersByTimeAsync(RECONCILIATION_WORKER_POLL_INTERVAL_MS - 1);
-    expect(started).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(started).toBe(2);
-    await vi.advanceTimersByTimeAsync(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
-    expect(started).toBe(3);
+    for (let poll = 1; poll <= 12; poll += 1) {
+      await vi.advanceTimersByTimeAsync(everyMs - 1);
+      expect(started).toBe(poll);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(started).toBe(poll + 1);
+    }
+  });
+
+  it("claims once for every free slot on every consecutive poll", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const pending: ClaimedReconciliationJob[] = [];
+    const { store } = createFakeStore();
+    const claims: Array<string | null> = [];
+    let folding = false;
+    store.claimNextReconciliationJob = async () => {
+      const claimed = pending.shift() ?? null;
+      claims.push(claimed?.repositoryId ?? null);
+      return claimed;
+    };
+    startReconciliationWorker({
+      drain: () => drainReconciliationJobs({
+        store,
+        reconcile: async () => { folding = true; await held.promise; folding = false; },
+        scheduleLeaseRenewal: () => () => {},
+      }),
+      schedule: timer.schedule,
+    });
+    await timer.settle();
+    expect(claims).toEqual([null, null, null, null]);
+    // First all four slots are free; the third poll claims B and leaves three
+    // free slots on every later poll. Check the full per-poll query budget.
+    for (const [index, available] of [4, 4, 4, 3, 3, 3, 3, 3].entries()) {
+      if (index === 2) pending.push(job({ repositoryId: "repo-b" }));
+      const before = claims.length;
+      await timer.tick();
+      expect(claims.slice(before)).toHaveLength(available);
+    }
+    expect(folding).toBe(true);
   });
 
   it("drains once on start and again on every tick at capacity one", async () => {
@@ -975,7 +1116,7 @@ describe("the scheduled reconciliation worker", () => {
     expect(bFolding).toBe(true);
   });
 
-  it.each([undefined, 1, 2, 6])("fills startup to concurrency %s and drops ticks at capacity", async (concurrency) => {
+  it.each([undefined, 1, 2, 6, RECONCILIATION_WORKER_MAX_CONCURRENCY])("fills startup to concurrency %s and drops ticks at capacity", async (concurrency) => {
     const timer = createTimer();
     const held = signal();
     let started = 0;
@@ -1017,6 +1158,31 @@ describe("the scheduled reconciliation worker", () => {
     expect(started).toBe(6);
     await timer.tick();
     expect(started).toBe(6);
+  });
+
+  it("keeps healthy drain slots occupied when another drain throws synchronously", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const failure = new Error("synchronous failure beside healthy folds");
+    const reported: unknown[] = [];
+    let attempted = 0;
+    let live = 0;
+    startReconciliationWorker({
+      drain: () => {
+        attempted += 1;
+        if (attempted === 2) throw failure;
+        live += 1;
+        return held.promise.finally(() => { live -= 1; });
+      },
+      schedule: timer.schedule,
+      onFailure: (error) => { reported.push(error); },
+    });
+    expect(live).toBe(3);
+    expect(reported).toEqual([failure]);
+    await timer.tick();
+    expect(live).toBe(4);
+    await timer.tick();
+    expect(live).toBe(4);
   });
 
   it("snapshots free slots so a synchronously throwing drain terminates each fill", async () => {
@@ -1154,6 +1320,9 @@ describe("the scheduled reconciliation worker", () => {
     ["number 1.5", 1.5],
     ["number NaN", NaN],
     ["number Infinity", Infinity],
+    ["number 1e100", 1e100],
+    ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+    ["number 17", RECONCILIATION_WORKER_MAX_CONCURRENCY + 1],
     ['string "2"', "2"],
   ])("reports invalid concurrency %s and uses the default capacity", async (_label, concurrency) => {
     const timer = createTimer();
@@ -1192,6 +1361,25 @@ describe("the scheduled reconciliation worker", () => {
     expect(started).toBe(4);
     for (let tick = 0; tick < 4; tick += 1) await timer.tick();
     expect(started).toBe(4);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("reads a changing nullish capacity accessor only once", async () => {
+    const timer = createTimer();
+    const held = signal();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let reads = 0;
+    let started = 0;
+    startReconciliationWorker({
+      drain: async () => { started += 1; await held.promise; },
+      get concurrency() { reads += 1; return reads === 1 ? undefined : 1; },
+      schedule: timer.schedule,
+    });
+    expect(started).toBe(4);
+    expect(reads).toBe(1);
+    await timer.tick();
+    expect(started).toBe(4);
+    expect(reads).toBe(1);
     expect(logged).not.toHaveBeenCalled();
   });
 

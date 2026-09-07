@@ -60,7 +60,7 @@ export const RECONCILIATION_RETRY_DELAYS_MS: readonly number[] = [
  * can fold concurrently, but pickup still waits when every worker slot is
  * occupied; the lease and poll do not bound that capacity wait.
  *
- * Advisory locking still serializes a spurious reclaim behind the original fold.
+ * A surviving advisory-lock session serializes a reclaim behind the original fold.
  * Its cost is one redundant idempotent fold only if the original releases the
  * lock within the reclaimer's sixty-second acquisition deadline. Otherwise the
  * claim has already consumed an attempt and lock timeout causes durable retry
@@ -80,7 +80,8 @@ export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
  * is an admission limit, not the instant the lease ends.
  *
  * This surrenders the job; it does not unwedge the fold or rescue its repository.
- * A hung fold still holds the advisory lock. A reclaimer hits the sixty-second
+ * If its lock session survives, a hung fold still holds the advisory lock.
+ * An external reclaimer hits the sixty-second
  * lock deadline and enters retry backoff, eventually reaching FAILED after
  * enough attempts, with a visible last_failure_at. That is the same end state
  * as under the old lease, reached sooner instead of renewing RUNNING forever.
@@ -120,11 +121,24 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  *
  * The atomic leased row claim keeps concurrent drains from claiming the same
  * live lease. If a lease expires during a fold, the repository advisory lock
- * still serializes that repository's folds. Different repositories can proceed
- * independently, but a due job behind four occupied slots still waits for
+ * serializes that repository's folds while its session survives. Local
+ * repository exclusion also prevents same-store self-reclaim, but neither
+ * mechanism fences writes after session loss; that belongs to issue 210.
+ * Different repositories can proceed independently, but a due job behind four
+ * occupied slots still waits for
  * capacity; this bound does not promise unconditional poll-bounded pickup.
  */
 export const RECONCILIATION_WORKER_CONCURRENCY = 4;
+
+/**
+ * Bounds synchronous fill work even for a mistyped or hostile capacity.
+ *
+ * Sixteen is above the coordination pool's ten connections, so this ceiling
+ * does not constrain a capacity that pool could serve. It is a startup
+ * termination guard, not the recommended fold concurrency. Keep it independent
+ * of src/lib/db/client.ts so this worker does not load the postgres client.
+ */
+export const RECONCILIATION_WORKER_MAX_CONCURRENCY = 16;
 
 const DEFAULT_DRAIN_MAX_JOBS = 50;
 
@@ -153,12 +167,29 @@ export type ReconciliationJobOutcome =
   | "FAILED";
 
 /**
+ * Excludes a worker's own competing publisher after its lock session is lost.
+ *
+ * All job runners sharing a store share this record; different stores do not.
+ * This is not a write fence and does not fix issue 210, where fencing belongs.
+ * A separate process bypasses it entirely, and scripts/reconcile.ts folds
+ * directly without claiming a queue lease, so a manual run is outside it too.
+ *
+ * A genuinely hung fold keeps its entry and defers that repository as long as
+ * it hangs: exclusion costs recovery for that one repository. Before this
+ * branch, a hung fold blocked the whole worker instead, so this is not a
+ * regression against main. A duplicate claim costs one extra deferral UPDATE;
+ * ordinary work costs a set lookup, add and delete, with no extra database call.
+ */
+const inFlightRepositoriesByStore = new WeakMap<ReconciliationWorkerStore, Set<string>>();
+
+/**
  * Claims one job, folds its repository, and records the outcome on the job.
  *
  * Each drain takes one job at a time, while other drains may fold different
  * repositories concurrently. The atomic leased claim excludes another claim
- * of the same live job; the repository advisory lock still serializes folds of
- * the same repository if an expired lease permits a reclaim.
+ * of the same live job. If an expired lease permits a reclaim, the local
+ * store-scoped record defers it before heartbeat setup or folding; it does not
+ * rely on the original advisory-lock session still being alive.
  */
 export async function runNextReconciliationJob(
   dependencies: ReconciliationWorkerDependencies,
@@ -169,9 +200,26 @@ export async function runNextReconciliationJob(
     return "IDLE";
   }
 
-  const stopRenewal = startLeaseRenewal(dependencies, job);
+  let inFlightRepositories = inFlightRepositoriesByStore.get(store);
+  if (inFlightRepositories === undefined) {
+    inFlightRepositories = new Set();
+    inFlightRepositoriesByStore.set(store, inFlightRepositories);
+  }
+  if (inFlightRepositories.has(job.repositoryId)) {
+    const now = dependencies.now ?? (() => new Date());
+    await store.deferReconciliationJob(
+      job.id,
+      job.leaseToken,
+      new Date(now().getTime() + RECONCILIATION_WORKER_POLL_INTERVAL_MS),
+    );
+    return "DEFERRED";
+  }
+  // Claim ownership synchronously before setup or any other awaited work.
+  inFlightRepositories.add(job.repositoryId);
+  let stopRenewal: (() => Promise<void>) | undefined;
 
   try {
+    stopRenewal = startLeaseRenewal(dependencies, job);
     const now = dependencies.now ?? (() => new Date());
 
     let result: { skipped?: boolean } | void;
@@ -206,7 +254,11 @@ export async function runNextReconciliationJob(
     await store.completeReconciliationJob(job.id, job.leaseToken);
     return "RECONCILED";
   } finally {
-    await stopRenewal();
+    try {
+      await stopRenewal?.();
+    } finally {
+      inFlightRepositories.delete(job.repositoryId);
+    }
   }
 }
 
@@ -405,6 +457,7 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
     })();
   };
 
+  /** The snapshot bounds attempts per invocation, not across nested re-entrant invocations. */
   const fillFreeSlots = () => {
     const available = capacity - inFlight;
     for (let slot = 0; slot < available; slot += 1) drain();
@@ -419,7 +472,9 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
 /**
  * Reads the capacity injection seam after startup, containing a lazily wired
  * accessor just as readDrainInterval does. A nullish value is no choice and
- * needs no report; any supplied value must be a positive integer.
+ * needs no report; a supplied value must be a safe integer from one through
+ * RECONCILIATION_WORKER_MAX_CONCURRENCY. Integer-valued numbers such as 1e100
+ * would otherwise keep the synchronous startup fill running indefinitely.
  *
  * This guard protects admission as well as tuning: zero can stop every later
  * drain, while NaN defeats the comparison and admits unbounded work. A broken
@@ -435,7 +490,9 @@ function readDrainConcurrency(schedule: ReconciliationWorkerSchedule): number {
     return RECONCILIATION_WORKER_CONCURRENCY;
   }
   if (value == null) return RECONCILIATION_WORKER_CONCURRENCY;
-  if (Number.isInteger(value) && value >= 1) return value;
+  if (Number.isSafeInteger(value) && value >= 1 && value <= RECONCILIATION_WORKER_MAX_CONCURRENCY) {
+    return value;
+  }
   logDefaultedConcurrency(value);
   return RECONCILIATION_WORKER_CONCURRENCY;
 }
