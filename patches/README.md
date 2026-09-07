@@ -320,7 +320,11 @@ The hunk resets `errorResponse` at the top of `closed()`, beside the parse state
 the function already clears. **Not** lower down beside this patch's other
 `closed()` line: `closed()` returns early for a connection still in its connect
 phase (`if (initial) return reconnect()`), and that connection is reused by the
-very same route, so a reset below the early return would miss it. Not in
+very same route, so a reset below the early return would miss it. A connect-phase
+close really can carry a stored error, because the connect phase runs real
+queries of its own: `fetchArrayTypes()` and `fetchState()` both go out while
+`initial` is still set, so an `ErrorResponse` arriving for either is stored
+rather than failed, exactly as it is for a caller's query. Not in
 `ReadyForQuery` either — clearing it there is what already happens, and it is
 the *read* that is too late rather than the write.
 
@@ -332,6 +336,18 @@ and nothing is stored — `ErrorResponse` takes its no-query arm and calls
 `errored()` immediately — which is why the neighbouring case that queues work
 behind an idle reserved connection passes without this hunk and says nothing
 about it.
+
+The **placement** is held by a second case in the same file, *clears a
+connect-phase error before the socket that replaces it reports ready*. A proxy
+in front of the backend answers the array-type fetch with a `FATAL` and closes
+the socket with a FIN — a reset would reach the client as an `error` event and
+fail `initial` on the way past, which is a different path — so the close arrives
+with the error stored and `initial` still set, and takes the early return. The
+caller's query must still be served by the socket that replaces it. Relocating
+the reset to immediately below the early return fails that case alone, with the
+caller refused `57P01`, and leaves the other nine in the file green: deleting
+the line is not the mutation that asks this question, and before that case
+existed nothing here would have noticed a later regeneration moving it.
 
 #### What it does not cover
 
