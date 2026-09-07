@@ -14,6 +14,7 @@ import {
   type OutstandingRederivationRequest,
   type RederivationOverview,
 } from "@/lib/moderation/rederivation-service";
+import type { ModerationActor } from "@/lib/moderation/service";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 const rederivationRequestSchema = z
@@ -22,12 +23,10 @@ const rederivationRequestSchema = z
   })
   .strict();
 
-export type RederivationRouteActor = { id: string; role: UserRole };
-
 export type RederivationRouteService = {
-  listRederivationStatus(actor: RederivationRouteActor): Promise<RederivationOverview>;
+  listRederivationStatus(actor: ModerationActor): Promise<RederivationOverview>;
   requestRederivation(
-    actor: RederivationRouteActor,
+    actor: ModerationActor,
     repositoryId: string,
   ): Promise<OutstandingRederivationRequest>;
 };
