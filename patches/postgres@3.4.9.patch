@@ -1,8 +1,36 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03dfacdd9ac 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4eafd3f2ae7c2b5e95a5ab93e46e18653dd66565 100644
 --- a/src/connection.js
 +++ b/src/connection.js
-@@ -383,6 +383,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -96,6 +96,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     , serverSignature = null
+     , nextWriteTimer = null
+     , terminated = false
++    , retryTimer = null
+     , incomings = null
+     , results = null
+     , initial = null
+@@ -333,6 +334,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   async function connect() {
++    // Spent: whether this ran from a retry a close scheduled or straight from the pool, there
++    // is no longer an attempt pending for end() to cancel.
++    retryTimer = null
+     terminated = false
+     backendParameters = {}
+     socket || (socket = await createSocket())
+@@ -359,7 +363,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function reconnect() {
+-    setTimeout(connect, closedTime ? Math.max(0, closedTime + delay - performance.now()) : 0)
++    // Returned so a caller can keep the handle; end() cancels a retry that a close scheduled.
++    return setTimeout(connect, closedTime ? Math.max(0, closedTime + delay - performance.now()) : 0)
+   }
+ 
+   function connected() {
+@@ -383,6 +388,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        return
  
      errored(err)
@@ -14,7 +42,41 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03d
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -437,6 +442,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -411,12 +421,27 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function end() {
+-    return ending || (
+-      !connection.reserved && onend(connection),
+-      !connection.reserved && !initial && !query && sent.length === 0
+-        ? (terminate(), new Promise(r => socket && socket.readyState !== 'closed' ? socket.once('close', r) : r()))
+-        : ending = new Promise(r => ended = r)
+-    )
++    if (ending)
++      return ending
++
++    !connection.reserved && onend(connection)
++
++    // A connection between retries has no socket, so a shutdown taking the slow path below
++    // would have nothing to ride on but the attempt already scheduled: it would settle only
++    // once that attempt had been made and closed, a whole backoff interval later -- and
++    // spacing those retries is what made the interval long in the first place. Cancelling the
++    // scheduled attempt instead turns this into the same nothing-in-flight case as a
++    // connection that never opened, which terminate() settles at once, rejecting the startup
++    // query it strands exactly as it does everywhere else. Only a close arms this handle,
++    // never a first connect, so a query the pool has just handed to a fresh connection --
++    // socketless and holding it as `initial` in the same way -- is untouched and still runs.
++    // Overflow issue 164.
++    const scheduled = retryTimer !== null && !connection.reserved && !query && sent.length === 0
++    scheduled && (clearTimeout(retryTimer), retryTimer = null)
++
++    return !connection.reserved && (scheduled || !initial) && !query && sent.length === 0
++      ? (terminate(), new Promise(r => socket && socket.readyState !== 'closed' ? socket.once('close', r) : r()))
++      : ending = new Promise(r => ended = r)
+   }
+ 
+   function terminate() {
+@@ -437,6 +462,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      incoming = Buffer.alloc(0)
      remaining = 0
      incomings = null
@@ -28,21 +90,29 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03d
      clearImmediate(nextWriteTimer)
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
-@@ -447,10 +459,42 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +479,54 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      socket.removeAllListeners()
      socket = null
  
 -    if (initial)
+-      return reconnect()
 +    // A connect-phase death with a shutdown already pending has no other route to settle it. The
 +    // startup query keeps `initial` set, so that end() took its slow path, and terminate(), the
 +    // only other caller of ended(), is out of reach -- while the return this replaces handed the
-+    // whole close to reconnect() before any of that could happen. Rejecting the startup query is
-+    // what error() does, and clearing `initial` is part of it (errored() nulls it), so the close
-+    // then continues down the shared path below and settles, spaces and reports exactly as a
-+    // death after the handshake does. Rejected rather than replayed on a retry, even when the
-+    // server is reachable again: this library never re-runs a query whose socket died, and a
-+    // retry issued while ending is the armed reconnect that stops a shutting-down process from
-+    // exiting. Overflow issue 164.
++    // whole close to reconnect() before any of that could happen. error() rejects the startup
++    // query through errored(), which nulls `initial` on its way, so the close then continues
++    // down the shared path below and settles, spaces and reports exactly as a death after the
++    // handshake does. Reaching errored() is not general: error() returns ahead of it on the
++    // multi-host route, where the connection is still in queues.connecting and another host is
++    // configured. That route cannot be taken with `ending` set, because only end() assigns
++    // `ending` and it moves the connection out of queues.connecting first -- the one case it
++    // skips that move for is a connection the pool is holding as a reservation, which one
++    // still in its connect phase never is. A multi-host connect-phase death with no shutdown
++    // pending is left exactly as stock leaves it, the unreproduced multi-host case
++    // patches/README.md already records. Rejected rather than replayed on a retry, even when
++    // the server is reachable again: this library never re-runs a query whose socket died, and
++    // a retry issued while ending is the armed reconnect that stops a shutting-down process
++    // from exiting. Overflow issue 164.
 +    if (initial && ending)
 +      error(Errors.connection('CONNECTION_CLOSED', options, socket))
 +
@@ -51,14 +121,19 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03d
 +      // on a schedule. Stock returns above without recording any of this, leaving closedTime at
 +      // its initial 0, which is the branch of reconnect() that schedules with no delay at all:
 +      // attempts go out back to back for as long as the peer keeps accepting and closing them.
-+      // The counter is advanced unconditionally rather than on hadError, because every close that
-+      // reaches here is error-free -- a socket error runs error() first, which clears `initial`
-+      // -- so the hadError form below would be dead code here and a backoff function would be
-+      // asked for the delay of attempt zero forever. Overflow issue 164.
++      // The counter is advanced unconditionally rather than on hadError, because the close this
++      // arm exists for is a clean FIN, where hadError is false and stock's hadError form would
++      // never advance at all: a backoff function would be asked for the delay of attempt zero
++      // forever. A socket error usually clears `initial` through error() before its close is
++      // seen, so hadError is rarely true here at all; where it can be -- the multi-host route,
++      // where error() returns before errored() -- the two forms agree, as they do wherever
++      // hadError is set. Overflow issue 164.
 +      closedTime = performance.now()
 +      options.shared.retries++
 +      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-       return reconnect()
++      // The handle is kept so that a shutdown arriving while this attempt is still only
++      // scheduled can cancel it rather than wait the delay out; see end().
++      return (retryTimer = reconnect())
 +    }
  
      !hadError && (query || sent.length) && error(Errors.connection('CONNECTION_CLOSED', options, socket))
@@ -72,7 +147,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4c452621183d95947c3e4468b463b03d
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +608,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +640,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
