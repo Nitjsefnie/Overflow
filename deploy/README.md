@@ -132,7 +132,7 @@ set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
-node scripts/release.ts prepare /srv/overflow
+node scripts/release.ts prepare /srv/overflow "$release"
 NEXT_DIST_DIR="$release" pnpm build
 ```
 
@@ -169,20 +169,37 @@ local `pnpm build` still uses `.next`. Do not export
 `NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
 
-Before each release build, `node scripts/release.ts prepare <tree>` generates
-the ignored `tsconfig.release.json` from the tracked `tsconfig.json`, preserving
-its compiler settings and source includes while removing all `.next*` includes.
-With `NEXT_DIST_DIR` set, `next.config.ts` selects this file through
-`typescript.tsconfigPath`. Next appends only the current release's type entries
-to it and type-checks those validators. Regenerate it for every build so it never
-includes types from a previous release, including one whose routes were removed.
-The script copies the config rather than using `extends` because Next 16.3.4
-skips automatic type-include updates on configs with `extends` or `references`.
+Before each release build, run
+`node scripts/release.ts prepare <tree> <releaseDir>` with the same release name
+used for `NEXT_DIST_DIR`. It generates the ignored `<releaseDir>.tsconfig.json`
+beside the release directory, preserving the tracked `tsconfig.json` compiler
+settings and source includes while removing all `.next*` includes. Each release
+has its own config; for example, `.next-release-20260907T101500Z-abc1234` uses
+`.next-release-20260907T101500Z-abc1234.tsconfig.json` at the tree root.
+
+**Skipping preparation now fails loudly.** With `NEXT_DIST_DIR` set,
+`next.config.ts` refuses a missing, stale or invalid generated config before
+Next can create defaults or consume it for type checking. The error prints the
+preparation command to run. A config left by a previous release cannot satisfy
+this check. The generated file must be a regular file, name the intended release,
+and match fingerprints of both the tracked input and the prepared configuration.
+Changing tracked compiler options after preparation or editing the generated
+settings requires running preparation again.
+
+Next uses the checked file through `typescript.tsconfigPath`, appends the current
+release's type entries, and type-checks those validators. The fingerprint allows
+those specific additions. Preparation accepts TypeScript config comments and
+trailing commas using the installed TypeScript parser. It requires an explicit
+`include` array of strings and rejects `extends` and `references` with a diagnostic
+naming the unsupported property: Next 16.3.4 skips automatic type-include updates
+for those shapes. Keep the tracked config self-contained. `releaseConfig` is
+reserved for the generated preparation metadata.
 
 Next also regenerates the ignored `next-env.d.ts`. Release builds leave the
 tracked `tsconfig.json` untouched, including on failure, so no restore step is
-needed. With `NEXT_DIST_DIR` unset, local development keeps using the tracked
-config. Start a deploy with a clean tracked tree.
+needed. With `NEXT_DIST_DIR` unset or blank, the preparation check does no
+filesystem work; local development uses the tracked config and the running
+service continues to use `.next`. Start a deploy with a clean tracked tree.
 
 Then set the ownership the unit assumes. The tree is root-owned and readable by
 the `overflow` group; nothing in it is group-writable.
@@ -529,7 +546,7 @@ set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
-node scripts/release.ts prepare /srv/overflow
+node scripts/release.ts prepare /srv/overflow "$release"
 NEXT_DIST_DIR="$release" pnpm build
 previous_release=$(readlink -f /srv/overflow/.next)
 serving_cache="$previous_release/cache"
@@ -549,9 +566,11 @@ curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-The generated deploy config excludes serving and retained release validators;
-Next adds the new release's types to that file. The tracked config stays clean,
-and `set -e` stops a failed preparation or build before the switch.
+The generated config belongs to `$release` and excludes serving and retained
+release validators; Next adds the new release's types to that file. Omitting
+preparation makes the build fail with the command needed to prepare this release.
+The tracked config stays clean, and `set -e` stops a failed preparation or build
+before the switch.
 
 The ownership reset keeps code root-owned and group-readable while preserving
 the serving cache's Unix permissions. Resolve `.next` before resetting ownership:
