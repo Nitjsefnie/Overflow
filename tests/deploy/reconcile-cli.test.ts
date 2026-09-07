@@ -14,11 +14,22 @@ const documentedCommands = [...reconciliationSection.matchAll(/^```bash\r?\n([\s
   .filter((line) => /^pnpm reconcile(?:\s|$)/.test(line));
 const databaseError = "DATABASE_URL must be configured before using the database.";
 
+function tokenizeCommand(command: string): string[] {
+  return command.replaceAll("<owner>/<name>", "octocat/hello-world").split(/\s+/);
+}
+
 function runCommand(command: string, databaseUrl?: string) {
   // Replace the README's owner/name placeholder with a syntactically valid repository.
-  const [executable, ...argumentsList] = command.replaceAll("<owner>/<name>", "octocat/hello-world").split(/\s+/);
+  const [executable, ...argumentsList] = tokenizeCommand(command);
   const environment = { ...process.env };
   delete environment.DATABASE_URL;
+  // Node preloads/flags and pnpm's lifecycle options must not repair the command
+  // under test. Custom shell startup files can inject the same flags as well.
+  for (const name of Object.keys(environment)) {
+    if (/^(node_options|node_path|npm_config_(node_options|script_shell|shell_emulator)|bash_env|env)$/.test(
+      name.toLowerCase().replaceAll("-", "_"),
+    )) delete environment[name];
+  }
   if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
   const result = spawnSync(executable!, argumentsList, {
     cwd: repositoryRoot,
@@ -34,8 +45,14 @@ function runCommand(command: string, databaseUrl?: string) {
 }
 
 describe("documented reconciliation CLI commands", () => {
-  it("extracts at least two commands from the Reconciliation bash block", () => {
-    expect(documentedCommands.length).toBeGreaterThanOrEqual(2);
+  it("extracts exactly one all-repositories and one selected-repository invocation", () => {
+    expect(documentedCommands, "No reconciliation commands found in the README bash block").not.toHaveLength(0);
+    const argumentShapes = documentedCommands.map((command) => tokenizeCommand(command).slice(2));
+    expect(argumentShapes).toHaveLength(2);
+    expect(argumentShapes).toEqual(expect.arrayContaining([
+      [],
+      ["--repository", expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/)],
+    ]));
   });
 
   it.each(documentedCommands)("loads and parses %s before requiring a database", (command) => {
