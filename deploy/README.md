@@ -120,15 +120,46 @@ there. Populate the file before section 5 — its migration step reads
 
 Clone, install, migrate and build as root, with the production settings loaded
 from the environment file so `pnpm db:migrate` reaches the right database.
+Run these blocks in Bash and stop on a failed command; `set -e` makes a pasted
+block stop too, before a failed build can be switched into service.
 
 ```bash
+set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
 cd /srv/overflow
 pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
-pnpm build
+mkdir -p .next-releases
+release=".next-releases/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+mkdir "$release"
+build_status=0
+NEXT_DIST_DIR="$release" pnpm build || build_status=$?
+git restore -- tsconfig.json
+test "$build_status" -eq 0
 ```
+
+Each build gets a new directory under `.next-releases`; the UTC timestamp makes
+the names sort in deployment order, and the SHA identifies the source revision.
+The second `mkdir` deliberately has no `-p`: a collision must stop the deploy,
+not reuse an existing build. Never build into `.next` on a serving host, or
+reuse a release directory, even to retry a failed build.
+
+`next.config.ts` reads `NEXT_DIST_DIR` for this build only. It trims the value
+and rejects absolute paths, `..` components and existing symlink components in
+the output path. Use a relative path inside the tree, as above. With the variable
+unset or blank, local `pnpm build` still uses `.next`. Do not export
+`NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
+`next start` uses `.next` at runtime, with the variable unset.
+
+A custom output directory does not contain all of Next's build writes. Next
+regenerates the ignored `next-env.d.ts` and appends release-specific entries to
+the tracked `tsconfig.json`. `git restore -- tsconfig.json` removes that generated
+edit so the next deploy's `git pull --ff-only` does not fail on a dirty tree.
+Keep this command: it is needed after every build, including a failed one.
+`build_status` preserves the build's failure through the restore, so cleanup
+cannot turn a failed build into a successful deploy. Start with a clean tracked
+tree; the restore would also discard a hand edit to `tsconfig.json`.
 
 Then set the ownership the unit assumes. The tree is root-owned and readable by
 the `overflow` group; nothing in it is group-writable.
@@ -140,14 +171,69 @@ chmod -R u=rwX,g=rX,o= /srv/overflow
 
 `next start` writes inside `.next/cache` — the image optimizer's output and the
 `.previewinfo` and `.rscinfo` files — and that directory is the only one the
-unit makes writable. It must exist before the service starts: `ReadWritePaths`
-naming a missing path is a start failure.
+unit makes writable. The cache now lives inside the new release. Create it and
+hand it to `overflow` before switching and starting the service: `ReadWritePaths`
+naming a missing path is a start failure, and a root-owned cache is not writable
+by the service account.
 
 ```bash
-mkdir -p /srv/overflow/.next/cache
-chown -R overflow:overflow /srv/overflow/.next/cache
-chmod -R u=rwX,g=rX,o= /srv/overflow/.next/cache
+mkdir -p "$release/cache"
+chown -R overflow:overflow "$release/cache"
+chmod -R u=rwX,g=rX,o= "$release/cache"
+pnpm release:switch /srv/overflow "$release"
 ```
+
+`pnpm release:switch <tree> <releaseDir>` runs
+`node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
+is relative to the tree. The script requires a real `BUILD_ID` file and a real
+`cache` directory, refuses symlinks for those two markers, then renames a
+temporary relative symlink over `.next` and prints the resolved release path.
+That rename keeps an existing `.next` symlink resolvable throughout the swap.
+The marker checks do not validate every manifest or prove that a build succeeded;
+the successful build and the service verification remain required.
+
+The unit stays unchanged for this layout. Every path it names still reads
+`/srv/overflow/...`, including `ReadWritePaths=/srv/overflow/.next/cache`.
+On this host, `next start` served routes, static assets and RSC requests with
+HTTP `200` and no missing-manifest errors through the `.next` symlink, with
+`NEXT_DIST_DIR` unset at runtime. systemd resolved the writable cache path through
+the symlink too: the sandboxed process could write in that cache and got `EROFS`
+everywhere else. No service environment change or unit edit is needed.
+
+### One-time migration from a real .next directory
+
+An existing host has a real `/srv/overflow/.next` directory. A symlink cannot
+be renamed over a real directory; `scripts/release.ts switch` refuses it with a
+one-time migration message rather than deleting the serving build silently.
+
+For that host, follow section 10 through the build, `tsconfig.json` restore,
+ownership reset and new cache handover. Leave the old `.next` alone while those
+steps run. Then replace section 10's switch and restart lines with this block,
+in the same shell so `$release` still names the completed new build:
+
+```bash
+set -e
+cd /srv/overflow
+test -d /srv/overflow/.next
+test ! -L /srv/overflow/.next
+test -f "${release:?}/BUILD_ID"
+test ! -L "$release/BUILD_ID"
+test -d "$release/cache"
+test ! -L "$release/cache"
+rm -rf -- /srv/overflow/.next
+pnpm release:switch /srv/overflow "$release"
+systemctl restart overflow.service
+```
+
+This one deploy still hits the old missing-build window: removing the real
+`.next` can break requests until the symlink is installed and the service
+restarted. It is the last deploy that needs that removal; later builds leave
+the serving release in place. Build and prepare the new release first to keep
+this window to the removal, switch and restart, rather than the whole build.
+The removed directory provides no release-level rollback. If switching fails
+after removal, keep the completed new release, correct the reported failure
+and rerun the switch and restart; do not start another build into `.next`.
+Continue with section 10's verification before pruning.
 
 ## 6. Install the unit and switch onto it
 
@@ -291,9 +377,7 @@ is an assumption.
 
 ## 9. Rolling back
 
-If the hardened unit fails to start, capture why before restoring — the restored
-state runs the application as root again, which is the state this procedure
-exists to leave behind, so the failure has to be fixed rather than forgotten.
+If a deploy fails, capture why before restoring anything:
 
 ```bash
 systemctl status overflow.service --no-pager
@@ -303,7 +387,9 @@ journalctl -u overflow.service -n 100 --no-pager
 The failures this configuration produces:
 
 - `ReadWritePaths` names a path that does not exist — `/srv/overflow/.next/cache`
-  was not created, or a rebuild replaced `.next` without it.
+  now resolves through the `.next` symlink into the selected release. A missing
+  or dangling link, or a missing `cache` inside that release, prevents startup.
+  The cache must also be owned by `overflow` for runtime writes to work.
 - `/etc/overflow/overflow.env` does not exist — section 4 was skipped. Its mode
   is not a start failure: systemd reads the file as root, before the drop to
   `User=overflow`, so `0600 root:root` is correct and a service that cannot
@@ -314,45 +400,153 @@ The failures this configuration produces:
 - `/usr/local/bin/node` is missing or is a dangling symlink into `/root`.
 - The tree is unreadable to the group, so `next` cannot load its own build.
 
-Check section 8's three preconditions, then restore with the same commands.
-`systemctl is-active` reporting `active` and the HTTP check returning `200` are
-the evidence the rollback worked; a journal that shows the process starting as
-`root:root` is what tells you the old unit — not the new one — is the one now
-running.
-
-The rollback decays with every deploy, and neither of those two checks reports
-it. Section 10 migrates the production database and does not touch
-`/root/overflow`, so from the first revision deploy onwards the saved unit runs
-older code against a newer schema. Once the hardened service is trusted, stop
-treating the old checkout as the rollback: roll back by revision instead, with
-`/srv/overflow` checked out at the previously deployed SHA and rebuilt.
-
-## 10. Deploying a new revision
-
-Install, migrate and build run as root inside the tree. Only the service runs as
-`overflow`, and the ownership reset afterwards is what keeps it that way: a
-build writes new files as root, and `.next/cache` has to be handed back.
+For a failed release, switch back to the retained previous build and restart
+the same hardened unit. Section 10 prints the previous release path before
+switching; record it with the deploy. Replace the value below with that recorded
+path, and confirm the directory still exists. The ownership reset on a later
+deploy also resets retained caches, so hand the previous cache back before the
+restart, even if it was writable when that release last ran.
 
 ```bash
+set -e
 cd /srv/overflow
-git pull --ff-only origin main
-pnpm install --frozen-lockfile
-set -a; . /etc/overflow/overflow.env; set +a
-pnpm db:migrate
-pnpm build
-chown -R root:overflow /srv/overflow
-chmod -R u=rwX,g=rX,o= /srv/overflow
-mkdir -p /srv/overflow/.next/cache
-chown -R overflow:overflow /srv/overflow/.next/cache
-chmod -R u=rwX,g=rX,o= /srv/overflow/.next/cache
+previous_release='.next-releases/REPLACE-WITH-RECORDED-RELEASE'
+test -f "$previous_release/BUILD_ID"
+test -d "$previous_release/cache"
+chown -R overflow:overflow "$previous_release/cache"
+chmod -R u=rwX,g=rX,o= "$previous_release/cache"
+pnpm release:switch /srv/overflow "$previous_release"
 systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-A merge changes nothing a user can see until that rebuild and restart. If the
-revision includes a change to `overflow.service`, repeat section 6 as well:
+Expect `active` and HTTP `200`, then exercise the application and inspect its
+journal as in section 7. Restart immediately after switching: a process running
+across the swap retains its old writable cache mount, while the fresh start
+picks up the selected release's cache. A symlink switch alone is not a deploy
+or a rollback.
+
+This rolls back the build, not the revision. The checkout and `node_modules`
+are shared with the current revision, and database migrations are not undone.
+The retained build must work with those dependencies, configuration and schema;
+the switch script does not check compatibility. If those need reverting too,
+restore the intended revision and its dependencies and build it into a new
+release using section 10's build, ownership, switch and verification steps;
+assess the database schema separately.
+
+If the hardened unit itself is broken and needs the old unit restored, check
+section 8's three preconditions, then restore with the same commands. That
+restored state runs the application as root again, which is the state this
+procedure exists to leave behind, so fix the failure rather than forgetting it.
+`systemctl is-active` reporting `active` and the HTTP check returning `200` are
+the evidence the rollback worked; a journal that shows the process starting as
+`root:root` is what tells you the old unit — not the new one — is the one now
+running.
+
+The old-unit rollback decays with every deploy, and neither of those two checks
+reports it. Section 10 migrates the production database and does not touch
+`/root/overflow`, so from the first revision deploy onwards the saved unit runs
+older code against a newer schema. Once the hardened service is trusted, stop
+treating the old checkout as the rollback. Retaining previous releases partially
+restores the path: a compatible previous build can be selected without rebuilding
+or returning to the root-run unit. It does not preserve the old checkout,
+dependencies or database schema, so a revision rollback still needs those
+considered explicitly.
+
+## 10. Deploying a new revision
+
+Install, migrate and build run as root inside the tree. Only the service runs as
+`overflow`, and the ownership reset afterwards is what keeps it that way: a
+build writes new files as root, and the cache has to be handed back. Build into
+a new release directory every time so Next cannot rewrite the serving build's
+manifests, chunks and fallback error page during the build. Run one deploy at a
+time; concurrent installs, restores, switches or prunes share the same tree.
+On a host whose `.next` is still a real directory, use section 5's one-time
+migration block at the switch step.
+
+```bash
+set -e
+cd /srv/overflow
+git pull --ff-only origin main
+pnpm install --frozen-lockfile
+set -a; . /etc/overflow/overflow.env; set +a
+pnpm db:migrate
+mkdir -p .next-releases
+release=".next-releases/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+mkdir "$release"
+build_status=0
+NEXT_DIST_DIR="$release" pnpm build || build_status=$?
+git restore -- tsconfig.json
+test "$build_status" -eq 0
+chown -R root:overflow /srv/overflow
+chmod -R u=rwX,g=rX,o= /srv/overflow
+mkdir -p "$release/cache"
+chown -R overflow:overflow "$release/cache"
+chmod -R u=rwX,g=rX,o= "$release/cache"
+previous_release=$(readlink -f /srv/overflow/.next)
+printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
+pnpm release:switch /srv/overflow "$release"
+systemctl restart overflow.service
+systemctl is-active overflow.service
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+```
+
+Keep the `tsconfig.json` restore even though the build output lives elsewhere:
+Next appends the release's generated type paths to this tracked file. Leaving
+that change behind makes the next `git pull --ff-only` fail. The saved build
+status ensures a failed build is restored too and then stops before the switch.
+
+The ownership reset keeps code root-owned and group-readable. The cache the
+unit needs now lives at `/srv/overflow/$release/cache`, so create and hand over
+that directory before the switch and restart. The unit still names
+`/srv/overflow/.next/cache` and resolves it through the symlink. A running process
+keeps its old writable mount across a swap; the immediate restart picks up the
+new release's cache and is what makes that mount lifetime a non-issue.
+
+Expect `active` and HTTP `200`, then exercise the application and inspect the
+journal as in section 7. Only prune after those checks succeed. Before pruning,
+list the retained directories and confirm the recorded previous release is
+among the three greatest names; if it is older, raise `--keep` enough to include
+it or skip pruning. Failed build directories count too, and a rollback can
+make the previously served release older than the normal retention window.
+The one-time migration has no previous release directory to retain.
+
+```bash
+LC_ALL=C ls -1 /srv/overflow/.next-releases
+```
+
+```bash
+pnpm release:prune /srv/overflow --keep 3
+```
+
+`pnpm release:prune <tree> [--keep N]` runs
+`node scripts/release.ts prune <tree> [--keep N]`; pass the arguments directly,
+without an extra `--` separator, for both pnpm release commands. `--keep` must
+be a positive integer and defaults to `3`. The script keeps the newest N
+directory names in descending lexical order, not by modification time or build
+success. It also protects the release `.next` resolves to and directories needed
+to resolve its symlink chain, even outside that N. It prints each removed
+directory, or a no-op line if nothing was removed. A missing or dangling `.next`
+is reported but protects no release and does not prevent deletion; do not prune
+to recover from a failed switch. Pruning knows the symlink target, not which
+build a still-running process has loaded, which is another reason to restart
+and verify first.
+
+Release-directory builds fix the build's writes under the serving output path;
+they do not isolate `git pull` or `pnpm install`, which still change the live
+checkout and `node_modules`. Testing on this host found that a same-lockfile
+install and a live `git checkout` did not disturb a running server: all
+application entry points are loaded at startup. That does not cover every lazy
+internal dependency. With one compiled package removed, a cold `/_next/image`
+request returned HTTP `500` with `MODULE_NOT_FOUND` and recovered once the package
+was restored. These results do not guarantee that dependency changes during an
+install are safe. This procedure also retains the restart interruption; it is
+not a zero-downtime deployment scheme.
+
+If the revision includes a change to `overflow.service`, repeat section 6 as well:
 `git pull` updates the copy in the tree, not the one systemd reads. Nothing
 here refreshes `/root/overflow.service.pre-hardening` or the checkout it starts
 from, which is what the last paragraph of section 9 is about.
