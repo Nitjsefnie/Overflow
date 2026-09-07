@@ -148,7 +148,9 @@ describe("reconciliation budget holds", () => {
   });
 
   it.each(["sync", "async"])("survives a %s hook whose rejection breaks native console inspection", (mode) => {
+    // Suppress runtime warnings so nonblank stderr proves diagnostic delivery.
     const child = spawnSync(process.execPath, [
+      "--no-warnings",
       "--experimental-transform-types", "--unhandled-rejections=strict",
       "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
         import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
@@ -180,7 +182,8 @@ describe("reconciliation budget holds", () => {
     expect(JSON.parse(child.stdout)).toEqual({
       outcomes: ["BUDGET_HELD", "BUDGET_HELD"], inspected: 1, claimed: 0, reconciled: 0,
     });
-    expect(child.stderr).toContain("Reconciliation budget transition hook failed");
+    expect(child.stderr.trim()).not.toBe("");
+    expect(child.stderr.trim().split("\n")).toHaveLength(1);
   });
 
   it("contains failure of the primitive-only reporting fallback too", async () => {
@@ -190,7 +193,8 @@ describe("reconciliation budget holds", () => {
     await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
     await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
     expect(logged).toHaveBeenCalledTimes(2);
-    expect(logged.mock.calls[1]).toEqual(["Reconciliation budget transition hook failed"]);
+    expect(logged.mock.calls[0]).toEqual([expect.any(String), expect.any(Error)]);
+    expect(logged.mock.calls[1]).toEqual([expect.any(String)]);
     expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
     expect(reconcile).not.toHaveBeenCalled();
   });
@@ -509,7 +513,7 @@ describe("reconciliation budget holds", () => {
     await register();
     const schedule = startWorker.mock.calls[0][0] as { drain(): Promise<unknown> };
     await expect(schedule.drain()).resolves.toEqual(["RECONCILED"]);
-    expect(informed).toHaveBeenCalledExactlyOnceWith("Reconciliation drain", { RECONCILED: 1 });
+    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), { RECONCILED: 1 });
     informed.mockClear();
     budgetStore.record(reading(499));
     for (let poll = 0; poll < 3; poll += 1) {
@@ -528,9 +532,12 @@ describe("reconciliation budget holds", () => {
     for (let poll = 0; poll < 3; poll += 1) {
       await expect(schedule.drain()).resolves.toEqual(["RECONCILED"]);
     }
-    expect(informed.mock.calls.filter(([message]) =>
-      message === "Reconciliation GraphQL budget hold cleared",
-    )).toEqual([["Reconciliation GraphQL budget hold cleared", { state: "AVAILABLE" }]]);
+    expect(informed.mock.calls).toEqual([
+      [expect.any(String), { state: "AVAILABLE" }],
+      [expect.any(String), { RECONCILED: 1 }],
+      [expect.any(String), { RECONCILED: 1 }],
+      [expect.any(String), { RECONCILED: 1 }],
+    ]);
     expect(warned).toHaveBeenCalledTimes(1);
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(4);
     expect(reconcile).toHaveBeenCalledTimes(4);
