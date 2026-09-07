@@ -8,12 +8,51 @@ let container: StartedTestContainer | undefined;
 let databaseUrl: string;
 let observer: Sql | undefined;
 
+interface ErrorResponseFields {
+  readonly code: string;
+  readonly message: string;
+}
+
 interface SwitchableProxy {
   readonly port: number;
   /** Later connections are accepted and never answered — what a restarting postgres looks like. */
   blackHole(): void;
   forward(): void;
+  /**
+   * Arms a one-shot interruption: the first client-to-server chunk carrying `needle` is swallowed,
+   * `error` goes back to the client as a wire-format `ErrorResponse`, and the socket is closed with
+   * a FIN. The FIN is the point — a reset arrives at the client as an `error` event, which fails
+   * the startup query on the way past instead of leaving it in flight across the close.
+   *
+   * The returned promise settles when the interruption fires, so a case can wait for it rather
+   * than assume it did.
+   */
+  interrupt(needle: string, error: ErrorResponseFields): Promise<void>;
   close(): Promise<void>;
+}
+
+/** One `code`-tagged, null-terminated field of an `ErrorResponse` body. */
+function errorField(code: string, value: string): Buffer {
+  return Buffer.concat([Buffer.from(code + value, "utf8"), Buffer.of(0)]);
+}
+
+/**
+ * The wire-format `ErrorResponse` a backend sends on its way out: severity, code and message,
+ * terminated by an empty field. The client stores rather than fails it while a query is in
+ * flight, because a postgres error is not final until the `ReadyForQuery` that ends that query.
+ */
+function errorResponse({ code, message }: ErrorResponseFields): Buffer {
+  const body = Buffer.concat([
+    errorField("S", "FATAL"),
+    errorField("V", "FATAL"),
+    errorField("C", code),
+    errorField("M", message),
+    Buffer.of(0),
+  ]);
+  const header = Buffer.alloc(5);
+  header.write("E", 0, "latin1");
+  header.writeUInt32BE(body.length + 4, 1);
+  return Buffer.concat([header, body]);
 }
 
 /**
@@ -23,6 +62,7 @@ interface SwitchableProxy {
  */
 async function startSwitchableProxy(target: { host: string; port: number }): Promise<SwitchableProxy> {
   let forwarding = true;
+  let interruption: { needle: string; error: ErrorResponseFields; fired: () => void } | undefined;
   const sockets = new Set<net.Socket>();
 
   const server = net.createServer((client) => {
@@ -32,13 +72,28 @@ async function startSwitchableProxy(target: { host: string; port: number }): Pro
     if (!forwarding) return;
 
     const upstream = net.connect(target);
+    let interrupted = false;
     sockets.add(upstream);
     upstream.on("error", () => client.destroy());
     upstream.on("close", () => {
       sockets.delete(upstream);
       client.destroy();
     });
-    client.pipe(upstream);
+    client.on("data", (chunk) => {
+      const armed = interruption;
+      if (armed && chunk.includes(armed.needle)) {
+        interruption = undefined;
+        interrupted = true;
+        armed.fired();
+        // Upstream is left alone until the client has closed: ending it here would close it back
+        // through the handler above, and that destroy reaches the client as a reset.
+        client.end(errorResponse(armed.error));
+        return;
+      }
+      upstream.write(chunk);
+    });
+    client.on("end", () => !interrupted && upstream.end());
+    client.on("close", () => interrupted && upstream.destroy());
     upstream.pipe(client);
   });
 
@@ -52,6 +107,9 @@ async function startSwitchableProxy(target: { host: string; port: number }): Pro
     forward: () => {
       forwarding = true;
     },
+    interrupt: (needle, error) => new Promise<void>((resolve) => {
+      interruption = { needle, error, fired: resolve };
+    }),
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -289,6 +347,44 @@ describe("the client's reserve contract", () => {
       expect([await held, await queued]).toEqual(["held: CONNECTION_CLOSED", "queued: 1"]);
     } finally {
       await sql.end({ timeout: 0 });
+    }
+  });
+
+  it("clears a connect-phase error before the socket that replaces it reports ready", async () => {
+    const upstream = new URL(databaseUrl);
+    const proxy = await startSwitchableProxy({ host: upstream.hostname, port: Number(upstream.port) });
+    upstream.host = `127.0.0.1:${proxy.port}`;
+    // Array-type fetching left on: it is what runs a real query on a connection that is still in
+    // its connect phase, and an in-flight query is what makes ErrorResponse store rather than fail.
+    const sql = postgres(upstream.toString(), { max: 1 });
+    const record: string[] = [];
+
+    try {
+      // The caller's query is handed to the opening connection as its `initial`, so `initial` is
+      // still set when the array-type fetch goes out. Answering that fetch with a FATAL and then
+      // closing leaves the error stored across a close that takes closed()'s
+      // `if (initial) return reconnect()` early return -- the path a reset below that return
+      // never reaches.
+      const interrupted = proxy.interrupt("typcategory", {
+        code: "57P01",
+        message: "terminating connection due to administrator command",
+      });
+
+      const answered = sql<{ value: number }[]>`select 1::integer as value`.execute().then(
+        ([row]) => `served: ${row!.value}`,
+        (error: { code?: string }) => `refused: ${error.code}`,
+      );
+
+      await interrupted;
+      record.push("connect phase answered with a FATAL");
+      record.push(await answered);
+
+      // The reconnect reaches a live backend, and the caller's query never reached the one that
+      // died, so the handshake's own ReadyForQuery must not answer it with that backend's error.
+      expect(record).toEqual(["connect phase answered with a FATAL", "served: 1"]);
+    } finally {
+      await sql.end({ timeout: 0 });
+      await proxy.close();
     }
   });
 
