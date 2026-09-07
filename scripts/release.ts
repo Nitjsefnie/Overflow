@@ -29,6 +29,13 @@ async function main(): Promise<void> {
 async function switchRelease(tree: string, releaseDir: string): Promise<void> {
   tree = await realpath(tree);
   const requested = path.resolve(tree, releaseDir);
+  const relative = path.relative(tree, requested);
+  if (!relative || relative === ".." || /[\\/]/.test(relative) || path.isAbsolute(relative)) {
+    throw new Error(
+      `Invalid release directory: ${releaseDir}; the tracked tsconfig.json include ` +
+      ".next/types/**/*.ts only resolves when distDir is one segment deep.",
+    );
+  }
   if (!(await stat(requested)).isDirectory()) {
     throw new Error(`Release is not a directory: ${requested}`);
   }
@@ -63,7 +70,7 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
 }
 
 async function pruneReleases(tree: string, keep: number): Promise<void> {
-  const releases = path.resolve(tree, ".next-releases");
+  const releases = path.resolve(tree);
   const current = path.resolve(tree, ".next");
   const served = await realpath(current).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
@@ -75,7 +82,7 @@ async function pruneReleases(tree: string, keep: number): Promise<void> {
     return [];
   });
   const names = entries
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.name.startsWith(".next-release-") && entry.isDirectory())
     .map((entry) => entry.name)
     .sort()
     .reverse();
