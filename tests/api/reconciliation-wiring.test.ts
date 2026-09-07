@@ -200,6 +200,7 @@ function createQueueingStore() {
         reason: job.reason,
         attemptCount: 1,
         leaseToken: job.leaseToken,
+        rederivationRequestedAt: null,
       };
     },
     async renewReconciliationJobLease(jobId, leaseToken) {
@@ -207,7 +208,9 @@ function createQueueingStore() {
         (job) => `job-${job.repositoryId}` === jobId && job.leaseToken === leaseToken,
       );
     },
-    async completeReconciliationJob(jobId, leaseToken) {
+    async completeReconciliationJob(jobId, leaseToken, rederivationRequestedAt) {
+      // This webhook-only queue never creates a re-derivation request.
+      expect(rederivationRequestedAt).toBeNull();
       const index = pending.findIndex(
         (job) => `job-${job.repositoryId}` === jobId && job.leaseToken === leaseToken,
       );

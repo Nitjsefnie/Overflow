@@ -136,6 +136,7 @@ type ReconciliationJobLeaseRow = {
   reason: ReconciliationJobReason;
   attempt_count: number;
   lease_token: string;
+  rederivation_requested_at: Date | null;
 };
 
 type SelfWorkCalibrationRow = {
@@ -749,6 +750,21 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     `;
   }
 
+  public async requestRepositoryRederivation(repositoryId: string, at: Date): Promise<void> {
+    // Match enqueue's revival, backoff and in-flight follow-up policy. Only the
+    // request timestamp is additional: older arrivals cannot erase newer work.
+    await this.sql`
+      insert into repository_reconciliation_jobs (repository_id, reason, rederivation_requested_at)
+      values (${repositoryId}, 'REDERIVATION', ${at})
+      on conflict (repository_id) do update
+      set state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
+          follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
+          attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
+          run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end,
+          rederivation_requested_at = greatest(coalesce(repository_reconciliation_jobs.rederivation_requested_at, ${at}), ${at})
+    `;
+  }
+
   public async claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null> {
     const leaseToken = randomUUID();
     // The claim increments `attempt_count` so that a worker which dies mid-fold
@@ -786,7 +802,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repository_reconciliation_jobs.repository_id::text as repository_id,
         repository_reconciliation_jobs.reason,
         repository_reconciliation_jobs.attempt_count,
-        repository_reconciliation_jobs.lease_token::text as lease_token
+        repository_reconciliation_jobs.lease_token::text as lease_token,
+        repository_reconciliation_jobs.rederivation_requested_at
     `;
     const [row] = rows;
     return row === undefined
@@ -797,6 +814,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           reason: row.reason,
           attemptCount: row.attempt_count,
           leaseToken: row.lease_token,
+          rederivationRequestedAt: row.rederivation_requested_at,
         };
   }
 
@@ -816,14 +834,21 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.length === 1;
   }
 
-  public async completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean> {
+  public async completeReconciliationJob(
+    jobId: string,
+    leaseToken: string,
+    rederivationRequestedAt: Date | null,
+  ): Promise<boolean> {
     // An event that arrived during the fold may not be reflected in it, so a job
     // that took a follow-up becomes a fresh PENDING job instead of disappearing.
     // The row is locked for the decision so that an enqueue cannot set the flag
     // between reading it and acting on it, which would drop that event silently.
+    // Compare requests in PostgreSQL, including null equality, under that same
+    // lock. An uncaptured request must survive both the update and delete paths.
     return this.sql.begin(async (transaction) => {
-      const [row] = await transaction<{ follow_up_requested: boolean }[]>`
-        select follow_up_requested
+      const [row] = await transaction<{ follow_up_requested: boolean; request_matches: boolean }[]>`
+        select follow_up_requested,
+               rederivation_requested_at is not distinct from ${rederivationRequestedAt}::timestamptz as request_matches
         from repository_reconciliation_jobs
         where id = ${jobId}
           and state = ${"RUNNING"}
@@ -833,7 +858,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       if (row === undefined) {
         return false;
       }
-      if (row.follow_up_requested) {
+      if (row.follow_up_requested || !row.request_matches) {
         await transaction`
           update repository_reconciliation_jobs
           set state = ${"PENDING"},
@@ -841,6 +866,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
               run_after = now(),
               last_failure_at = null,
               follow_up_requested = false,
+              rederivation_requested_at = case when ${row.request_matches} then null else rederivation_requested_at end,
               lease_token = null,
               lease_duration_ms = null,
               lease_expires_at = null

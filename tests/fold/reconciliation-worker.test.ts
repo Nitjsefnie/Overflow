@@ -32,6 +32,15 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("passes the request timestamp captured at claim time to completion", async () => {
+    const captured = new Date("2026-09-01T10:00:00.123Z");
+    const { store, calls } = createFakeStore({ jobs: [job({ rederivationRequestedAt: captured })] });
+    expect(await runNextReconciliationJob({
+      store, reconcile: async () => {}, scheduleLeaseRenewal: () => () => {},
+    })).toBe("RECONCILED");
+    expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", captured] });
+  });
+
   it("keeps repository exclusion after a lost-lease heartbeat stops", async () => {
     const { store } = createFakeStore({ jobs: [job(), job()] });
     const timer = createRenewalTimer();
@@ -277,7 +286,7 @@ describe("running the next reconciliation job", () => {
     expect(reconciled).toEqual(["repo-a"]);
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "complete", args: ["job-1", "lease-1"] },
+      { method: "complete", args: ["job-1", "lease-1", null] },
     ]);
   });
 
@@ -728,7 +737,7 @@ describe("reconciliation lease heartbeat", () => {
     const write = signal();
     const enteredWrite = signal();
     const original = store[writer].bind(store);
-    store[writer] = async (id: string, token: string, runAfter?: Date) => {
+    store[writer] = async (id: string, token: string, runAfter?: Date | null) => {
       enteredWrite.resolve();
       await write.promise;
       return Reflect.apply(original, store, [id, token, runAfter]);
@@ -820,7 +829,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(timer.cancellations).toBe(0);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
-      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", null] });
       expect(timer.cancellations).toBe(1);
     } finally {
       fold.resolve();
@@ -837,7 +846,7 @@ describe("reconciliation lease heartbeat", () => {
     const renew = store.renewReconciliationJobLease.bind(store);
     store.renewReconciliationJobLease = async (id, token, deadline) => { await renew(id, token, deadline); return false; };
     const complete = store.completeReconciliationJob.bind(store);
-    store.completeReconciliationJob = async (id, token) => { await complete(id, token); return false; };
+    store.completeReconciliationJob = async (id, token, rederivationRequestedAt) => { await complete(id, token, rederivationRequestedAt); return false; };
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
       await timer.armed;
@@ -847,7 +856,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(1);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
-      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1"] });
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", null] });
       expect(timer.cancellations).toBe(1);
     } finally {
       fold.resolve();
@@ -966,8 +975,8 @@ describe("reconciliation lease heartbeat", () => {
     const setup = signal();
     const written = signal();
     const complete = store.completeReconciliationJob.bind(store);
-    store.completeReconciliationJob = async (id, token) => {
-      const result = await complete(id, token);
+    store.completeReconciliationJob = async (id, token, rederivationRequestedAt) => {
+      const result = await complete(id, token, rederivationRequestedAt);
       written.resolve();
       return result;
     };
@@ -1906,6 +1915,7 @@ function job(overrides: Partial<ClaimedReconciliationJob> = {}): ClaimedReconcil
     reason: "WEBHOOK",
     attemptCount: 1,
     leaseToken: "lease-1",
+    rederivationRequestedAt: null,
     ...overrides,
   };
 }
@@ -1936,8 +1946,8 @@ function createFakeStore(
       record("renew", [jobId, leaseToken]);
       return true;
     },
-    completeReconciliationJob: async (jobId, leaseToken) => {
-      record("complete", [jobId, leaseToken]);
+    completeReconciliationJob: async (jobId, leaseToken, rederivationRequestedAt) => {
+      record("complete", [jobId, leaseToken, rederivationRequestedAt]);
       return true;
     },
     deferReconciliationJob: async (jobId, leaseToken, runAfter) => {
