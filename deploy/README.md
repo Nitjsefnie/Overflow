@@ -130,19 +130,19 @@ cd /srv/overflow
 pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
-release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
-build_status=0
-NEXT_DIST_DIR="$release" pnpm build || build_status=$?
-git restore -- tsconfig.json
-test "$build_status" -eq 0
+node scripts/release.ts prepare /srv/overflow
+NEXT_DIST_DIR="$release" pnpm build
 ```
 
 Each build gets a new directory at the tree root, alongside `.next`, named
 `.next-release-<YYYYMMDDTHHMMSSZ>-<7 to 40 lowercase hex characters>`.
 The UTC timestamp makes the names sort in deployment order, and the SHA
-identifies the source revision. `prune` deletes directories, so it only touches
-names matching this grammar to be certain they are ones the deployment procedure
+identifies the source revision. The explicit `--short=7` requests at least seven
+hexadecimal characters even when `core.abbrev` is shorter. `prune` deletes
+directories, so it only touches names matching this grammar to be certain they
+are ones the deployment procedure
 created. A directory named `.next-release-notes` is safe beside the releases:
 `prune` ignores it entirely, including when counting retention slots. Reserve
 matching names for releases; the name check does not prove a build succeeded.
@@ -156,29 +156,33 @@ with relative imports back to the project's `src` directory. TypeScript resolves
 those imports lexically through the `.next` include, without following the
 symlink. A nested layout such as `.next-releases/<id>` generates `../../../src/...`
 imports, which land one directory above the project when read as
-`.next/types/validator.ts`. The first ordinary deploy after migration then fails
-with `TS2307`, even though the migration build succeeded. Keeping the release
-beside `.next` gives both paths the same depth; two successive builds with this
-layout passed with `.next` still pointing at the first release during the second.
+`.next/types/validator.ts`. Keeping the release beside `.next` gives both paths
+the same depth. Release builds also isolate their generated types as described
+below, so a validator from the serving release cannot prevent a route from
+being removed.
 
 `next.config.ts` reads `NEXT_DIST_DIR` for this build only. It trims the value
 and rejects either path separator (`/` or `\`), absolute paths, `.` (zero depth),
-`..` and existing symlinks in the output path. Use a single directory name inside
+`..` and an existing symlink at the output path. Use a single directory name inside
 the tree, as above, with no `./` prefix or trailing slash. With the variable unset or blank,
 local `pnpm build` still uses `.next`. Do not export
 `NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
 
-A custom output directory does not contain all of Next's build writes. Next
-regenerates the ignored `next-env.d.ts` and appends release-specific entries to
-the tracked `tsconfig.json`. `git restore -- tsconfig.json` removes that generated
-edit so the next deploy's `git pull --ff-only` does not fail on a dirty tree.
-Keep this command: it is needed after every build, including a failed one.
-Skipping it on a host with `pull.rebase=true` made the next `git pull --ff-only`
-exit 128 with `cannot pull with rebase: You have unstaged changes`.
-`build_status` preserves the build's failure through the restore, so cleanup
-cannot turn a failed build into a successful deploy. Start with a clean tracked
-tree; the restore would also discard a hand edit to `tsconfig.json`.
+Before each release build, `node scripts/release.ts prepare <tree>` generates
+the ignored `tsconfig.release.json` from the tracked `tsconfig.json`, preserving
+its compiler settings and source includes while removing all `.next*` includes.
+With `NEXT_DIST_DIR` set, `next.config.ts` selects this file through
+`typescript.tsconfigPath`. Next appends only the current release's type entries
+to it and type-checks those validators. Regenerate it for every build so it never
+includes types from a previous release, including one whose routes were removed.
+The script copies the config rather than using `extends` because Next 16.3.4
+skips automatic type-include updates on configs with `extends` or `references`.
+
+Next also regenerates the ignored `next-env.d.ts`. Release builds leave the
+tracked `tsconfig.json` untouched, including on failure, so no restore step is
+needed. With `NEXT_DIST_DIR` unset, local development keeps using the tracked
+config. Start a deploy with a clean tracked tree.
 
 Then set the ownership the unit assumes. The tree is root-owned and readable by
 the `overflow` group; nothing in it is group-writable.
@@ -212,8 +216,8 @@ pnpm release:switch /srv/overflow "$release"
 `node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
 is relative to the tree. The resolved directory must be a direct child of the
 canonical tree, whether the argument is relative, absolute or a symlink alias.
-A symlink to a nested or outside build is refused with the type-include depth
-explanation above; an alias resolving to a valid direct child is accepted.
+A symlink to a nested or outside build is refused; an alias resolving to a
+valid direct child is accepted.
 `switch` also refuses a resolved directory name that does not match the release
 grammar above. Inventing a name therefore produces a clear failure instead of
 selecting a release that silently accumulates because `prune` cannot manage it.
@@ -223,6 +227,13 @@ symlinks for those two markers, then renames a temporary relative symlink over
 That rename keeps an existing `.next` symlink resolvable throughout the swap.
 The marker checks do not validate every manifest or prove that a build succeeded;
 the successful build and the service verification remain required.
+
+`node scripts/release.ts check <tree> <releaseDir>` runs the same candidate
+checks as `switch`: resolved depth, release name, `BUILD_ID` file and `cache`
+directory, without following symlinks for either marker. It prints the resolved
+path and changes nothing on disk. It can check a candidate while `.next` is
+still a real directory; `switch` continues to require the one-time migration
+below before replacing that directory.
 
 The unit stays unchanged for this layout. Every path it names still reads
 `/srv/overflow/...`, including `ReadWritePaths=/srv/overflow/.next/cache`.
@@ -239,7 +250,7 @@ be renamed over a real directory; `scripts/release.ts switch` refuses it with a
 one-time migration message rather than deleting the serving build silently.
 
 **Use the same Bash shell for section 10's preparation and this migration block.**
-Follow section 10 through the build, `tsconfig.json` restore, ownership reset,
+Follow section 10 through config preparation, the build, ownership reset,
 new cache handover and previous/new build printout, stopping before its switch
 and restart lines. The reset excludes the serving cache, which is still in the
 real `.next` directory on this host; leave that directory in place while
@@ -253,15 +264,14 @@ set -e
 cd /srv/overflow
 test -d /srv/overflow/.next
 test ! -L /srv/overflow/.next
-test -f "${release:?}/BUILD_ID"
-test ! -L "$release/BUILD_ID"
-test -d "$release/cache"
-test ! -L "$release/cache"
+node scripts/release.ts check /srv/overflow "${release:?}"
 rm -rf -- /srv/overflow/.next
 pnpm release:switch /srv/overflow "$release"
 systemctl restart overflow.service
 ```
 
+The candidate check must succeed before removal, so a malformed name, wrong
+depth or invalid build marker leaves the serving directory in place.
 This one deploy still hits the old missing-build window: removing the real
 `.next` can break requests until the symlink is installed and the service
 restarted. It is the last deploy that needs that removal; later builds leave
@@ -505,8 +515,8 @@ Install, migrate and build run as root inside the tree. Only the service runs as
 build writes new files as root, and the new cache has to be handed back while
 the serving cache stays writable. Build into a new release directory every time
 so Next cannot rewrite the serving build's manifests, chunks and fallback error
-page during the build. Run one deploy at a time; concurrent installs, restores,
-switches or prunes share the same tree.
+page during the build. Run one deploy at a time; concurrent installs, config
+generation, switches or prunes share the same tree.
 On a host whose `.next` is still a real directory, use section 5's one-time
 migration block at the switch step.
 
@@ -517,12 +527,10 @@ git pull --ff-only origin main
 pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
-release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
-build_status=0
-NEXT_DIST_DIR="$release" pnpm build || build_status=$?
-git restore -- tsconfig.json
-test "$build_status" -eq 0
+node scripts/release.ts prepare /srv/overflow
+NEXT_DIST_DIR="$release" pnpm build
 previous_release=$(readlink -f /srv/overflow/.next)
 serving_cache="$previous_release/cache"
 test -d "$serving_cache"
@@ -541,10 +549,9 @@ curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-Keep the `tsconfig.json` restore even though the build output lives elsewhere:
-Next appends the release's generated type paths to this tracked file. Leaving
-that change behind makes the next `git pull --ff-only` fail. The saved build
-status ensures a failed build is restored too and then stops before the switch.
+The generated deploy config excludes serving and retained release validators;
+Next adds the new release's types to that file. The tracked config stays clean,
+and `set -e` stops a failed preparation or build before the switch.
 
 The ownership reset keeps code root-owned and group-readable while preserving
 the serving cache's Unix permissions. Resolve `.next` before resetting ownership:

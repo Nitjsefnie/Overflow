@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { lstat, readdir, readlink, realpath, rename, rm, stat, symlink, unlink } from "node:fs/promises";
+import { lstat, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const releaseNamePattern = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 
 const usage =
   "Usage: node scripts/release.ts switch <tree> <releaseDir>\n" +
+  "       node scripts/release.ts check <tree> <releaseDir>\n" +
+  "       node scripts/release.ts prepare <tree>\n" +
   "       node scripts/release.ts prune <tree> [--keep N]";
 
 async function main(): Promise<void> {
   const [command, tree, ...args] = process.argv.slice(2);
+  if (command === "prepare" && tree && args.length === 0) {
+    await prepareTypeScript(tree);
+    return;
+  }
   if (command === "prune" && tree) {
     if (args.length !== 0 && (args.length !== 2 || args[0] !== "--keep")) {
       throw new Error(usage);
@@ -22,13 +28,29 @@ async function main(): Promise<void> {
     return;
   }
   const [releaseDir] = args;
-  if (command !== "switch" || !tree || !releaseDir || args.length !== 1) {
+  if ((command !== "switch" && command !== "check") || !tree || !releaseDir || args.length !== 1) {
     throw new Error(usage);
+  }
+  if (command === "check") {
+    console.log((await checkRelease(tree, releaseDir)).directory);
+    return;
   }
   await switchRelease(tree, releaseDir);
 }
 
-async function switchRelease(tree: string, releaseDir: string): Promise<void> {
+async function prepareTypeScript(tree: string): Promise<void> {
+  const config = JSON.parse(await readFile(path.join(tree, "tsconfig.json"), "utf8"));
+  // Next 16.3 skips automatic type includes for configs with `extends`, so copy
+  // the tracked options and let Next append only this build's generated types.
+  config.include = config.include.filter((entry: string) =>
+    !entry.split(/[\\/]/).some((segment) => segment.startsWith(".next")),
+  );
+  const filename = path.join(tree, "tsconfig.release.json");
+  await writeFile(filename, JSON.stringify(config, null, 2) + "\n");
+  console.log(filename);
+}
+
+async function checkRelease(tree: string, releaseDir: string) {
   tree = await realpath(tree);
   const requested = path.resolve(tree, releaseDir);
   // Resolve aliases before validating the directory that will replace .next.
@@ -36,14 +58,13 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
   const relative = path.relative(tree, directory);
   if (!relative || relative === ".." || /[\\/]/.test(relative) || path.isAbsolute(relative)) {
     throw new Error(
-      `Invalid release directory: ${releaseDir}; the tracked tsconfig.json include ` +
-      ".next/types/**/*.ts only resolves when distDir is one segment deep.",
+      `Invalid release directory: ${releaseDir}; expected a direct child of ${tree} beside .next.`,
     );
   }
   if (!releaseNamePattern.test(relative)) {
     throw new Error(
       `Invalid release directory name: ${relative}; expected ` +
-      ".next-release-<YYYYMMDDTHHMMSSZ>-<7 to 40 lowercase hex characters>.",
+      ".next-release-<YYYYMMDDTHHMMSSZ>-<lowercase hex SHA of length 7..40>.",
     );
   }
   if (!(await stat(directory)).isDirectory()) {
@@ -56,7 +77,12 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
       throw new Error(`Expected ${isDirectory ? "directory" : "file"}: ${marker}`);
     }
   }
-  const current = path.join(tree, ".next");
+  return { tree, directory, relative };
+}
+
+async function switchRelease(tree: string, releaseDir: string): Promise<void> {
+  const { tree: canonicalTree, directory, relative } = await checkRelease(tree, releaseDir);
+  const current = path.join(canonicalTree, ".next");
   const existing = await lstat(current).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
     return undefined;
@@ -66,7 +92,7 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
       `One-time migration: remove the existing ${current} directory by hand before switching.`,
     );
   }
-  const temporary = path.join(tree, `.next-switch-${process.pid}-${randomUUID()}`);
+  const temporary = path.join(canonicalTree, `.next-switch-${process.pid}-${randomUUID()}`);
   await symlink(relative, temporary, "dir");
   try {
     await rename(temporary, current);

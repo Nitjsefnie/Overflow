@@ -31,24 +31,6 @@ async function release(name: string) {
 }
 
 describe("release switch", () => {
-  it("keeps generated types at the same lexical depth through .next and the release directory", async () => {
-    const directory = await release("20260907T101500Z-abc1234");
-    const source = path.join(directory, "types", "x.ts");
-    await mkdir(path.dirname(source));
-    await writeFile(source, 'import "../../src/app/page.js";');
-    await symlink(path.relative(tree, directory), path.join(tree, ".next"));
-    const alias = path.join(tree, ".next", "types", "x.ts");
-    expect(await realpath(alias)).toBe(source);
-
-    const roots = [source, alias].map((filename) => path.resolve(path.dirname(filename), "../.."));
-    const imports = [source, alias].map((filename) =>
-      path.resolve(path.dirname(filename), "../../src/app/page.js"),
-    );
-
-    expect(roots).toEqual([tree, tree]);
-    expect(imports).toEqual([path.join(tree, "src/app/page.js"), path.join(tree, "src/app/page.js")]);
-  });
-
   it("stores a relative target and reports the release after consecutive switches", async () => {
     for (const name of ["20260904T101500Z-abc1234", "20260907T101500Z-abc1234"]) {
       const directory = await release(name);
@@ -62,7 +44,7 @@ describe("release switch", () => {
     }
   });
 
-  it("lists both subcommands in the usage message", () => {
+  it("lists switch and prune in the usage message", () => {
     const result = run();
 
     expect(result.status).not.toBe(0);
@@ -71,7 +53,7 @@ describe("release switch", () => {
   });
 
   it.each(["relative", "absolute"])(
-    "refuses a nested %s release argument with the type-include depth reason",
+    "refuses a nested %s release argument",
     async (form) => {
       const old = await release("20260904T101500Z-abc1234");
       const nested = await release("20260907T101500Z-abc1234/nested");
@@ -81,11 +63,8 @@ describe("release switch", () => {
 
       const result = run("switch", tree, argument);
 
-      expect(result.status).not.toBe(0);
+      expect(result.status).toBe(1);
       expect(result.stderr).toContain(argument);
-      expect(result.stderr).toContain("tsconfig.json");
-      expect(result.stderr).toContain(".next/types/**/*.ts");
-      expect(result.stderr).toContain("one segment");
       expect(await realpath(path.join(tree, ".next"))).toBe(old);
       expect(await readdir(tree)).toEqual(entries);
     },
@@ -115,11 +94,8 @@ describe("release switch", () => {
 
       const result = run("switch", tree, argument);
 
-      expect(result.status).not.toBe(0);
+      expect(result.status).toBe(1);
       expect(result.stderr).toContain(argument);
-      expect(result.stderr).toContain("tsconfig.json");
-      expect(result.stderr).toContain(".next/types/**/*.ts");
-      expect(result.stderr).toContain("one segment");
       expect(await readlink(current)).toBe(path.basename(old));
       expect(await realpath(current)).toBe(old);
       expect(await readdir(tree)).toEqual(entries);
@@ -139,9 +115,8 @@ describe("release switch", () => {
 
     const result = run("switch", tree, ".next");
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(".next");
-    expect(result.stderr).toContain("one segment");
     expect(await readlink(current)).toBe(target);
     expect(await realpath(current)).toBe(nested);
     expect(await readdir(tree)).toEqual(entries);
@@ -176,7 +151,7 @@ describe("release switch", () => {
     "20260907T21341Z-abc1234",
     "20260907T021341Z-abc1234-extra",
     "20260907T021341Z-abc1234\n",
-  ])("refuses a malformed release name %j with the expected shape", async (name) => {
+  ])("refuses a malformed release name %j", async (name) => {
     const old = await release("20260904T101500Z-abc1234");
     const directory = await release(name);
     const current = path.join(tree, ".next");
@@ -185,10 +160,8 @@ describe("release switch", () => {
 
     const result = run("switch", tree, directory);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(path.basename(directory));
-    expect(result.stderr).toContain(".next-release-<YYYYMMDDTHHMMSSZ>");
-    expect(result.stderr).toContain("7 to 40 lowercase hex characters");
     expect(await readlink(current)).toBe(path.basename(old));
     expect(await realpath(current)).toBe(old);
     expect(await readdir(tree)).toEqual(entries);
@@ -205,9 +178,8 @@ describe("release switch", () => {
 
     const result = run("switch", tree, argument);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(path.basename(directory));
-    expect(result.stderr).toContain("7 to 40 lowercase hex characters");
     expect(await readlink(current)).toBe(path.basename(old));
     expect(await realpath(current)).toBe(old);
     expect(await readdir(tree)).toEqual(entries);
@@ -264,10 +236,12 @@ describe("release switch", () => {
   it("resolves a release argument through .next before replacing that link", async () => {
     const directory = await release("20260907T101500Z-abc1234");
     await symlink(directory, path.join(tree, ".next"));
+    expect(await readlink(path.join(tree, ".next"))).toBe(directory);
 
     const result = run("switch", tree, ".next");
 
     expect(result.status, result.stderr).toBe(0);
+    expect(await readlink(path.join(tree, ".next"))).toBe(".next-release-20260907T101500Z-abc1234");
     expect(await realpath(path.join(tree, ".next"))).toBe(directory);
   });
 

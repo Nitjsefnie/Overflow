@@ -35,36 +35,11 @@ describe("NEXT_DIST_DIR", () => {
       rmSync(fixtureDir, { recursive: true, force: true });
     });
 
-    it.each(["missing", "existing"])(
-      "rejects Windows forward-slash symlink traversal with a %s leaf",
-      async (leaf) => {
-        if (leaf === "existing") {
-          mkdirSync(path.join(fixtureDir, "outside", "build-123"));
-        }
-        const windowsProjectDir = "C:\\project";
-        vi.spyOn(process, "cwd").mockReturnValue(windowsProjectDir);
-        vi.doMock("node:path", () => ({ default: path.win32 }));
-        // Map Windows paths to the real fixture; retain native symlink metadata.
-        vi.doMock("node:fs", () => ({
-          lstatSync: (target: string) => lstatSync(
-            path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
-            { throwIfNoEntry: false },
-          ),
-        }));
-        process.env.NEXT_DIST_DIR = "release-link/build-123";
-        vi.resetModules();
-
-        const configImport = import("../../next.config");
-
-        await expect(configImport).rejects.toThrowError(Error);
-        await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-        await expect(configImport).rejects.toThrow("release-link/build-123");
-      },
-    );
-
-    it.each(["release-link/build-123", "release-link"])(
-      "rejects an external symlink at %s",
+    it.each(["release-link/build-123", "release-link\\build-123"])(
+      "rejects a Windows path separator in %s",
       async (value) => {
+        vi.spyOn(process, "cwd").mockReturnValue("C:\\project");
+        vi.doMock("node:path", () => ({ default: path.win32 }));
         process.env.NEXT_DIST_DIR = value;
         vi.resetModules();
 
@@ -75,6 +50,38 @@ describe("NEXT_DIST_DIR", () => {
         await expect(configImport).rejects.toThrow(value);
       },
     );
+
+    it("rejects a direct Windows symlink", async () => {
+      const windowsProjectDir = "C:\\project";
+      vi.spyOn(process, "cwd").mockReturnValue(windowsProjectDir);
+      vi.doMock("node:path", () => ({ default: path.win32 }));
+      // Map Windows paths to the real fixture; retain native symlink metadata.
+      vi.doMock("node:fs", () => ({
+        lstatSync: (target: string) => lstatSync(
+          path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
+          { throwIfNoEntry: false },
+        ),
+      }));
+      process.env.NEXT_DIST_DIR = "release-link";
+      vi.resetModules();
+
+      const configImport = import("../../next.config");
+
+      await expect(configImport).rejects.toThrowError(Error);
+      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+      await expect(configImport).rejects.toThrow("release-link");
+    });
+
+    it("rejects a direct external symlink", async () => {
+      process.env.NEXT_DIST_DIR = "release-link";
+      vi.resetModules();
+
+      const configImport = import("../../next.config");
+
+      await expect(configImport).rejects.toThrowError(Error);
+      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+      await expect(configImport).rejects.toThrow("release-link");
+    });
 
     it("rejects a new nested build directory without creating it", async () => {
       process.env.NEXT_DIST_DIR = "releases/new/build-123";
@@ -114,9 +121,10 @@ describe("NEXT_DIST_DIR", () => {
     const { default: config } = await import("../../next.config");
 
     expect(config.distDir).toBe(".next-release-20260907T101500Z-abc1234");
+    expect(config.typescript?.tsconfigPath).toBe("tsconfig.release.json");
   });
 
-  it.each([".", " \t.\n "])("rejects zero-depth %j with the type-include depth reason", async (value) => {
+  it.each([".", " \t.\n "])("rejects zero-depth %j", async (value) => {
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
 
@@ -125,9 +133,6 @@ describe("NEXT_DIST_DIR", () => {
     await expect(configImport).rejects.toThrowError(Error);
     await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
     await expect(configImport).rejects.toThrow(value);
-    await expect(configImport).rejects.toThrow("tsconfig.json");
-    await expect(configImport).rejects.toThrow(".next/types/**/*.ts");
-    await expect(configImport).rejects.toThrow("one segment");
   });
 
   it.each([
@@ -138,7 +143,7 @@ describe("NEXT_DIST_DIR", () => {
     "release..candidate/build",
     "./build-output",
     "build-output/",
-  ])("rejects path separators in %j with the type-include depth reason", async (value) => {
+  ])("rejects path separators in %j", async (value) => {
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
 
@@ -147,9 +152,6 @@ describe("NEXT_DIST_DIR", () => {
     await expect(configImport).rejects.toThrowError(Error);
     await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
     await expect(configImport).rejects.toThrow(value);
-    await expect(configImport).rejects.toThrow("tsconfig.json");
-    await expect(configImport).rejects.toThrow(".next/types/**/*.ts");
-    await expect(configImport).rejects.toThrow("one segment");
   });
 
   it.each([
@@ -167,6 +169,7 @@ describe("NEXT_DIST_DIR", () => {
     const { default: config } = await import("../../next.config");
 
     expect(config).not.toHaveProperty("distDir");
+    expect(config.typescript?.tsconfigPath).toBeUndefined();
   });
 
   it.each([
