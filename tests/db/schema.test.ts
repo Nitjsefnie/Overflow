@@ -3525,6 +3525,7 @@ describe("initial PostgreSQL materialization", () => {
   it("partitions stored closures by their latest correction state and request time", async () => {
     const grantedPullRequest = await insertPullRequest(sql);
     const declinedPullRequest = await insertPullRequest(sql);
+    const openPullRequest = await insertPullRequest(sql);
     const moderatorId = await insertUser(sql);
     const requestedAt = "2026-09-05T12:00:00.000Z";
     const closureIds: string[] = [];
@@ -3532,6 +3533,7 @@ describe("initial PostgreSQL materialization", () => {
     for (const [pullRequest, state] of [
       [grantedPullRequest, "GRANTED"],
       [declinedPullRequest, "DECLINED"],
+      [openPullRequest, "OPEN"],
     ] as const) {
       await sql`update issues set state = 'CLOSED' where id = ${pullRequest.issueId}`;
       const [closure] = await sql<{ id: string }[]>`
@@ -3551,8 +3553,9 @@ describe("initial PostgreSQL materialization", () => {
           '2026-09-04T12:00:00.000Z', '2026-09-04T13:00:00.000Z'
         ), (
           ${pullRequest.issueId}, ${pullRequest.sponsorId}, 'Review the latest evidence',
-          ${state}, ${state === "GRANTED" ? 7 : null}, ${moderatorId}, 'Latest correction decision',
-          ${requestedAt}, '2026-09-05T13:00:00.000Z'
+          ${state}, ${state === "GRANTED" ? 7 : null}, ${state === "OPEN" ? null : moderatorId},
+          ${state === "OPEN" ? null : "Latest correction decision"},
+          ${requestedAt}, ${state === "OPEN" ? null : "2026-09-05T13:00:00.000Z"}
         )
       `;
     }
@@ -3560,6 +3563,7 @@ describe("initial PostgreSQL materialization", () => {
     const closures = await listUnwritableClosures();
     const grantedClosure = { id: closureIds[0] };
     const declinedClosure = { id: closureIds[1] };
+    const openClosure = { id: closureIds[2] };
     expect(closures.history).toEqual(expect.arrayContaining([expect.objectContaining({
       ...grantedClosure,
       latestCorrection: { state: "GRANTED", requestedAt },
@@ -3570,6 +3574,11 @@ describe("initial PostgreSQL materialization", () => {
       latestCorrection: { state: "DECLINED", requestedAt },
     })]));
     expect(closures.history).not.toEqual(expect.arrayContaining([expect.objectContaining(declinedClosure)]));
+    expect(closures.queue).toEqual(expect.arrayContaining([expect.objectContaining({
+      ...openClosure,
+      latestCorrection: { state: "OPEN", requestedAt },
+    })]));
+    expect(closures.history).not.toEqual(expect.arrayContaining([expect.objectContaining(openClosure)]));
   });
 
   it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
