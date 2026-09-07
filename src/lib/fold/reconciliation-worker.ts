@@ -215,19 +215,33 @@ const inFlightRepositoriesByStore = new WeakMap<ReconciliationWorkerStore, Set<s
 export async function runNextReconciliationJob(
   dependencies: ReconciliationWorkerDependencies,
 ): Promise<ReconciliationJobOutcome> {
-  if (dependencies.budget) {
-    const now = dependencies.now ?? (() => new Date());
-    const check = dependencies.budget.check(now());
-    if (check.changed) {
+  let check: ReconciliationBudgetCheck | undefined;
+  let budgetHeld = false;
+  try {
+    const budget = dependencies.budget;
+    if (budget) {
+      const now = dependencies.now ?? (() => new Date());
+      check = budget.check(now());
+      budgetHeld = check.state === "BELOW_RESERVE";
+    }
+  } catch {
+    // Acquisition and observation failures mean UNKNOWN, which admits work.
+    // Queue-store failures below remain failures of the drain.
+    check = undefined;
+  }
+  try {
+    if (check?.changed) {
       callGuarded(
         dependencies,
         () => dependencies.onBudgetChange ?? (() => {}),
         [check],
-        (error) => { console.error("Reconciliation budget transition hook failed", error); },
+        reportBudgetHookFailure,
       );
     }
-    if (check.state === "BELOW_RESERVE") return "BUDGET_HELD";
+  } catch {
+    // Even reading transition metadata must not discard a known low verdict.
   }
+  if (budgetHeld) return "BUDGET_HELD";
   const { store } = dependencies;
   const job = await store.claimNextReconciliationJob();
   if (job === null) {
@@ -294,6 +308,19 @@ export async function runNextReconciliationJob(
       await stopRenewal?.();
     } finally {
       inFlightRepositories.delete(job.repositoryId);
+    }
+  }
+}
+
+function reportBudgetHookFailure(error: unknown): void {
+  const message = "Reconciliation budget transition hook failed";
+  try {
+    console.error(message, error);
+  } catch {
+    try {
+      console.error(message);
+    } catch {
+      // Budget diagnostics cannot reject a poll or a detached hook handler.
     }
   }
 }
