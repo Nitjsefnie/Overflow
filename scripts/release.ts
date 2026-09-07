@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { lstat, readdir, readlink, realpath, rename, rm, stat, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
 
+const releaseNamePattern = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
+
 const usage =
   "Usage: node scripts/release.ts switch <tree> <releaseDir>\n" +
   "       node scripts/release.ts prune <tree> [--keep N]";
@@ -29,25 +31,31 @@ async function main(): Promise<void> {
 async function switchRelease(tree: string, releaseDir: string): Promise<void> {
   tree = await realpath(tree);
   const requested = path.resolve(tree, releaseDir);
-  const relative = path.relative(tree, requested);
+  // Resolve aliases before validating the directory that will replace .next.
+  const directory = await realpath(requested);
+  const relative = path.relative(tree, directory);
   if (!relative || relative === ".." || /[\\/]/.test(relative) || path.isAbsolute(relative)) {
     throw new Error(
       `Invalid release directory: ${releaseDir}; the tracked tsconfig.json include ` +
       ".next/types/**/*.ts only resolves when distDir is one segment deep.",
     );
   }
-  if (!(await stat(requested)).isDirectory()) {
-    throw new Error(`Release is not a directory: ${requested}`);
+  if (!releaseNamePattern.test(relative)) {
+    throw new Error(
+      `Invalid release directory name: ${relative}; expected ` +
+      ".next-release-<YYYYMMDDTHHMMSSZ>-<7 to 40 lowercase hex characters>.",
+    );
   }
-  for (const [name, directory] of [["BUILD_ID", false], ["cache", true]] as const) {
-    const marker = path.join(requested, name);
+  if (!(await stat(directory)).isDirectory()) {
+    throw new Error(`Release is not a directory: ${directory}`);
+  }
+  for (const [name, isDirectory] of [["BUILD_ID", false], ["cache", true]] as const) {
+    const marker = path.join(directory, name);
     const info = await lstat(marker);
-    if (directory ? !info.isDirectory() : !info.isFile()) {
-      throw new Error(`Expected ${directory ? "directory" : "file"}: ${marker}`);
+    if (isDirectory ? !info.isDirectory() : !info.isFile()) {
+      throw new Error(`Expected ${isDirectory ? "directory" : "file"}: ${marker}`);
     }
   }
-  // Resolve aliases before replacing .next, including a release argument through .next itself.
-  const directory = await realpath(requested);
   const current = path.join(tree, ".next");
   const existing = await lstat(current).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
@@ -59,7 +67,7 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
     );
   }
   const temporary = path.join(tree, `.next-switch-${process.pid}-${randomUUID()}`);
-  await symlink(path.relative(tree, directory) || ".", temporary, "dir");
+  await symlink(relative, temporary, "dir");
   try {
     await rename(temporary, current);
   } catch (error) {
@@ -82,7 +90,7 @@ async function pruneReleases(tree: string, keep: number): Promise<void> {
     return [];
   });
   const names = entries
-    .filter((entry) => entry.name.startsWith(".next-release-") && entry.isDirectory())
+    .filter((entry) => releaseNamePattern.test(entry.name) && entry.isDirectory())
     .map((entry) => entry.name)
     .sort()
     .reverse();

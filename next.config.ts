@@ -8,7 +8,7 @@ if (distDir) {
   const projectDir = process.cwd();
   const relativeDir = path.relative(projectDir, path.resolve(projectDir, distDir));
 
-  if (/[\\/]/.test(distDir)) {
+  if (!relativeDir || /[\\/]/.test(distDir)) {
     throw new Error(
       `Invalid NEXT_DIST_DIR: ${process.env.NEXT_DIST_DIR}; the tracked tsconfig.json include ` +
       ".next/types/**/*.ts only resolves when distDir is one segment deep.",
