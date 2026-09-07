@@ -8,7 +8,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
-import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
+import { drainReconciliationJobs, RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -640,6 +640,50 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.lease_expires_at).toBeNull();
     expect(job.lease_duration_ms).toBeNull();
     expect((await claimOrFail()).id).toBe(job.id);
+  });
+
+  it("defers a same-store reclaim without spending an attempt while its original fold is held", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    const held = signal();
+    const entered = signal();
+    const folded: string[] = [];
+    let heartbeats = 0;
+    const dependencies = {
+      store,
+      now: () => new Date("2030-01-02T03:04:05.000Z"),
+      reconcile: async (id: string) => {
+        folded.push(id);
+        if (folded.length === 1) { entered.resolve(); await held.promise; }
+      },
+      scheduleLeaseRenewal: () => { heartbeats += 1; return () => {}; },
+    };
+    const first = drainReconciliationJobs(dependencies, { maxJobs: 1 });
+    try {
+      await entered.promise;
+      const original = await onlyJobFor(repositoryId);
+      expect(original.attempt_count).toBe(1);
+      await expireLease(original.id);
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["DEFERRED"]);
+      const deferred = await onlyJobFor(repositoryId);
+      expect(deferred.state).toBe("PENDING");
+      expect(deferred.attempt_count).toBe(1);
+      expect(deferred.run_after.toISOString()).toBe("2030-01-02T03:04:10.000Z");
+      expect(deferred.due_now).toBe(false);
+      expect(heartbeats).toBe(1);
+      const unrelated = await insertRepository();
+      await store.enqueueReconciliationJob(unrelated, "WEBHOOK");
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+      expect(folded).toEqual([repositoryId, unrelated]);
+      held.resolve();
+      await first;
+      await sql`update repository_reconciliation_jobs set run_after = now() - interval '1 second' where id = ${original.id}`;
+      await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
+      expect(folded).toEqual([repositoryId, unrelated, repositoryId]);
+    } finally {
+      held.resolve();
+      await first;
+    }
   });
 
   it("returns a deferred job to PENDING at the given time and gives back the claim's attempt", async () => {
