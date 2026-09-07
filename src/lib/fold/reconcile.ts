@@ -3,6 +3,7 @@ import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
+import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
@@ -50,7 +51,8 @@ export type ReconciliationStore = {
   setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
   findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]>;
-  beginRun(repositoryId: string): Promise<string>;
+  hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean>;
+  beginRun(repositoryId: string, options?: { rederivation: boolean }): Promise<string>;
   completeRun(runId: string): Promise<void>;
   materialize(input: { repositoryId: string; runId: string; fold: FoldResult }): Promise<ReconciliationDeltas>;
   failRun(runId: string, errorMessage: string): Promise<void>;
@@ -82,16 +84,18 @@ export type ReconciliationSummary = ReconciliationDeltas & {
 export async function reconcileRepository(
   dependencies: ReconciliationDependencies,
   repositoryId: string,
+  options?: { rederive?: boolean },
 ): Promise<ReconciliationSummary> {
   return dependencies.store.withRepositoryReconciliation(
     repositoryId,
-    () => reconcileRepositoryWhileCoordinated(dependencies, repositoryId),
+    () => reconcileRepositoryWhileCoordinated(dependencies, repositoryId, options),
   );
 }
 
 async function reconcileRepositoryWhileCoordinated(
   dependencies: ReconciliationDependencies,
   repositoryId: string,
+  options?: { rederive?: boolean },
 ): Promise<ReconciliationSummary> {
   const repository = await dependencies.store.getRepository(repositoryId);
   if (repository === null) {
@@ -113,7 +117,13 @@ async function reconcileRepositoryWhileCoordinated(
       adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
   }
 
-  const runId = await dependencies.store.beginRun(repositoryId);
+  // Every GitHub fetch is unconditionally full today: each pass re-reads every
+  // issue, so this flag cannot change what is fetched. Issue 196 introduces an
+  // incremental fetch keyed on a per-repository watermark; this flag will tell
+  // that fetch to ignore the watermark. For now it records the run's intent.
+  const rederive = options?.rederive === true
+    || await dependencies.store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION);
+  const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
   try {
     if (!repository.active) {
       await dependencies.store.completeRun(runId);

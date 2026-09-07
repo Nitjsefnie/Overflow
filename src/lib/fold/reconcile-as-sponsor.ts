@@ -29,10 +29,12 @@ export function reconcileRepositoryAsSponsor(
   repositoryId: string,
   createGateway: (accessToken: string, owner: string) => ReconciliationGateway = (accessToken, owner) =>
     new GitHubGateway({ accessToken, owner }),
+  options?: { rederive?: boolean },
 ): Promise<ReconciliationSummary> {
   return reconcileRepository(
     { store, github: sponsorGateway(store, repositoryId, createGateway) },
     repositoryId,
+    options,
   );
 }
 

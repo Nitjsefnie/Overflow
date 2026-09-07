@@ -27,7 +27,7 @@ export async function register(): Promise<void> {
         // webhook route reads it — the worker has no actor of its own. Which token
         // and whether one is needed at all belong to the fold, so this is wiring
         // and nothing else.
-        reconcile: (repositoryId) => reconcileRepositoryAsSponsor(store, repositoryId),
+        reconcile: (repositoryId, options) => reconcileRepositoryAsSponsor(store, repositoryId, undefined, options),
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of
           // a repository that keeps failing to fold.

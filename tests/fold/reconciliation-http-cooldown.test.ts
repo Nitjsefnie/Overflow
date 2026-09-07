@@ -135,7 +135,7 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
     if (address === null || typeof address === "string") throw new Error("Missing HTTP listener address");
     const store = new PostgresFoldStore(sql, key);
     const github = new GitHubGateway({ accessToken: token, apiUrl: `http://127.0.0.1:${address.port}` });
-    const reconcile = (id: string) => reconcileRepository({ store, github, now: () => instant }, id);
+    const reconcile = (id: string, options?: { rederive: boolean }) => reconcileRepository({ store, github, now: () => instant }, id, options);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // Seed through the same real stack, including immutable user resolution and ledger writes.
@@ -169,7 +169,7 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
         const folded: string[] = [];
         const outcome = await runNextReconciliationJob({
           store, now: () => instant,
-          reconcile: (repositoryId) => { folded.push(repositoryId); return reconcile(repositoryId); },
+          reconcile: (repositoryId, options) => { folded.push(repositoryId); return reconcile(repositoryId, options); },
         });
         return { outcome, folded };
       };

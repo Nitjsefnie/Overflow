@@ -47,9 +47,9 @@ describe("persisted reconciliation cooldown", () => {
       now,
       // Recorded so the assertions below stand on this repository's own job
       // rather than on whichever job the worker happened to claim.
-      reconcile: async (id) => {
+      reconcile: async (id, options) => {
         folded.push(id);
-        return reconcileRepository({ store, github, now }, id);
+        return reconcileRepository({ store, github, now }, id, options);
       },
     });
     expect(folded).toEqual([repositoryId]);
@@ -74,9 +74,9 @@ describe("persisted reconciliation cooldown", () => {
     const result = await runNextReconciliationJob({
       store,
       now,
-      reconcile: (id) => {
+      reconcile: (id, options) => {
         folded.push(id);
-        return reconcileRepository({ store, github, now }, id);
+        return reconcileRepository({ store, github, now }, id, options);
       },
     });
     expect(folded).toEqual([repositoryId]);
@@ -118,9 +118,9 @@ describe("persisted reconciliation cooldown", () => {
       contender = runNextReconciliationJob({
         store,
         now,
-        reconcile: (id) => {
+        reconcile: (id, options) => {
           folded.push(id);
-          return reconcileRepository({ store: contenderStore, github, now }, id);
+          return reconcileRepository({ store: contenderStore, github, now }, id, options);
         },
       });
       await Promise.race([
