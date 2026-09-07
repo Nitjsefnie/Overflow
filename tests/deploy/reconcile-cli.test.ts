@@ -16,16 +16,25 @@ const databaseError = "DATABASE_URL must be configured before using the database
 function extractReconciliationCommands(markdown: string): string[] {
   const section = markdown.split(/^## Reconciliation\r?$/m)[1]?.split(/^## /m)[0] ?? "";
   return [...section.matchAll(/^```bash\r?\n([\s\S]*?)^```\s*$/gm)]
-    .flatMap((block) => joinContinuations(block[1]!.replace(/^[ \t]*#.*$/gm, "")).split(/\r?\n/))
+    .flatMap((block) => joinContinuations(block[1]!).split(/\r?\n/))
     .filter((line) => /^pnpm reconcile(?:\s|$)/.test(line));
 }
 
 function joinContinuations(source: string): string {
   let joined = "";
   let quote: "'" | '"' | null = null;
+  let wordStarted = false;
+  let comment = false;
   for (let index = 0; index < source.length; index++) {
     const character = source[index]!;
-    if (character === "\\" && quote !== "'") {
+    if (comment) {
+      // Quotes and backslashes in a comment cannot affect the next command.
+      joined += character;
+      if (character === "\n") {
+        comment = false;
+        wordStarted = false;
+      }
+    } else if (character === "\\" && quote !== "'") {
       const newline = /^\r?\n/.exec(source.slice(index + 1));
       if (newline !== null) {
         index += newline[0].length;
@@ -35,9 +44,16 @@ function joinContinuations(source: string): string {
       // escaped quote or backslash cannot begin a quote or a continuation.
       joined += character;
       if (index + 1 < source.length) joined += source[++index];
+      wordStarted = true;
     } else {
       if (character === quote) quote = null;
-      else if (quote === null && (character === "'" || character === '"')) quote = character;
+      else if (quote === null) {
+        // Joining a continuation does not start a new word; only unquoted
+        // whitespace makes a following hash start a comment.
+        if (character === "#" && !wordStarted) comment = true;
+        if (character === "'" || character === '"') quote = character;
+        wordStarted = !" \t\r\n".includes(character);
+      }
       joined += character;
     }
   }
@@ -71,8 +87,10 @@ function tokenizeCommand(command: string): string[] {
       if (wordStarted) words.push(word);
       word = "";
       wordStarted = false;
+    } else if (character === "#" && !wordStarted) {
+      break;
     } else {
-      if ("$`\\;&|<>(){}*?[]~#!".includes(character) || /\s/.test(character)) unsupported();
+      if ("$`\\;&|<>(){}*?[]~!".includes(character) || /\s/.test(character)) unsupported();
       word += character;
       wordStarted = true;
     }
@@ -194,6 +212,34 @@ describe("documented reconciliation CLI commands", () => {
 });
 
 describe("documented command extraction", () => {
+  it.each(["\n", "\r\n"])("strips trailing comments after continuations with %j line endings before running the command", (newline) => {
+    const commands = extractReconciliationCommands([
+      "## Reconciliation", "```bash", "pnpm reconcile \\",
+      "  --repository cli/second # selected ' \" \\", "pnpm reconcile", "```",
+    ].join(newline));
+    expect(commands.map(tokenizeCommand)).toEqual([
+      ["pnpm", "reconcile", "--repository", "cli/second"], ["pnpm", "reconcile"],
+    ]);
+    const { status, stderr } = runCommand(commands[0]!);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain(databaseError);
+    expect(stderr).not.toContain("Usage:");
+  });
+
+  it.each(["\n", "\r\n"])("keeps a continuation-joined hash inside a repository word with %j line endings", (newline) => {
+    const commands = extractReconciliationCommands([
+      "## Reconciliation", "```bash", "pnpm reconcile --repository cli/second\\",
+      "#oops", "```",
+    ].join(newline));
+    expect(commands.map(tokenizeCommand)).toEqual([
+      ["pnpm", "reconcile", "--repository", "cli/second#oops"],
+    ]);
+    const { status, stderr } = runCommand(commands[0]!);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("Usage: pnpm reconcile [--repository owner/name]");
+    expect(stderr).not.toContain(databaseError);
+  });
+
   it("does not reinterpret a single-quoted backslash and newline as a continuation", () => {
     const commands = extractReconciliationCommands([
       "## Reconciliation", "```bash", "pnpm reconcile --repository 'octocat/hello-\\",
@@ -235,6 +281,8 @@ describe("documented command tokenization", () => {
     { command: `pnpm reconcile --repo"sitory" octocat/'hello-world'`, words: ["pnpm", "reconcile", "--repository", "octocat/hello-world"] },
     { command: `pnpm reconcile "two words" ''`, words: ["pnpm", "reconcile", "two words", ""] },
     { command: `pnpm reconcile '$HOME;*'`, words: ["pnpm", "reconcile", "$HOME;*"] },
+    { command: `pnpm reconcile '# literal' "# literal"`, words: ["pnpm", "reconcile", "# literal", "# literal"] },
+    { command: `pnpm reconcile ''#literal cli/second#literal`, words: ["pnpm", "reconcile", "#literal", "cli/second#literal"] },
   ])("preserves literal shell words in $command", ({ command, words }) => {
     expect(tokenizeCommand(command)).toEqual(words);
   });
@@ -242,7 +290,7 @@ describe("documented command tokenization", () => {
   it.each([
     '"unterminated', "'unterminated", "$OWNER/name", '"$OWNER/name"', "$(pwd)", "`pwd`",
     "owner/*", "owner/{one,two}", "owner/name; true", "owner/name | cat", "> output",
-    "owner/\\name", '"owner/\\name"', "owner/name # comment",
+    "owner/\\name", '"owner/\\name"',
   ])("rejects unsupported shell syntax: %s", (argument) => {
     expect(() => tokenizeCommand(`pnpm reconcile --repository ${argument}`))
       .toThrow(/Unsupported shell syntax|Unterminated quote/);
