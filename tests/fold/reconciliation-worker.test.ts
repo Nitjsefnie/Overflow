@@ -888,7 +888,25 @@ describe("draining the reconciliation queue", () => {
 });
 
 describe("the scheduled reconciliation worker", () => {
-  it("drains once on start and again on every tick", async () => {
+  it("runs the default scheduler at the real poll interval", async () => {
+    vi.useFakeTimers();
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => { started += 1; },
+      concurrency: 1,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toBe(1);
+    await vi.advanceTimersByTimeAsync(RECONCILIATION_WORKER_POLL_INTERVAL_MS - 1);
+    expect(started).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(started).toBe(2);
+    await vi.advanceTimersByTimeAsync(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
+    expect(started).toBe(3);
+  });
+
+  it("drains once on start and again on every tick at capacity one", async () => {
     const timer = createTimer();
     let drains = 0;
 
@@ -897,6 +915,7 @@ describe("the scheduled reconciliation worker", () => {
         drains += 1;
       },
       schedule: timer.schedule,
+      concurrency: 1,
     });
     await timer.settle();
 
@@ -910,26 +929,53 @@ describe("the scheduled reconciliation worker", () => {
     expect(drains).toBe(3);
   });
 
-  it("starts a second drain on a poll while another is still folding (issue 202)", async () => {
+  it("claims a newly due repository on a later poll while another fold is held (issue 202)", async () => {
     const timer = createTimer();
-    let started = 0;
     const held = signal();
+    const pending = [job({ id: "job-b", repositoryId: "repo-b" })];
+    const claims: Array<{ phase: string; repositoryId: string | null }> = [];
+    const { store } = createFakeStore();
+    let phase = "startup";
+    let bFolding = false;
 
     startReconciliationWorker({
-      drain: async () => {
-        started += 1;
-        await held.promise;
-      },
+      drain: () => drainReconciliationJobs({
+        store: {
+          ...store,
+          claimNextReconciliationJob: async () => {
+            const claimed = pending.shift() ?? null;
+            claims.push({ phase, repositoryId: claimed?.repositoryId ?? null });
+            return claimed;
+          },
+        },
+        reconcile: async (repositoryId) => {
+          if (repositoryId === "repo-b") {
+            bFolding = true;
+            await held.promise;
+            bFolding = false;
+          }
+        },
+        scheduleLeaseRenewal: () => () => {},
+      }),
       schedule: timer.schedule,
     });
     await timer.settle();
-    expect(started).toBe(1);
+    expect(bFolding).toBe(true);
+    expect(claims).toContainEqual({ phase: "startup", repositoryId: "repo-b" });
 
+    phase = "early poll";
     await timer.tick();
-    expect(started).toBe(2);
+    // The idle drain completes before A becomes due; the later pickup must
+    // come from recurring admission, not the first overlap at startup.
+    phase = "later poll";
+    pending.push(job({ id: "job-a", repositoryId: "repo-a" }));
+    await timer.tick();
+    expect(claims).toContainEqual({ phase: "later poll", repositoryId: "repo-a" });
+    expect(claims).toContainEqual({ phase: "early poll", repositoryId: null });
+    expect(bFolding).toBe(true);
   });
 
-  it.each([undefined, 1, 2, 6])("admits ticks up to concurrency %s and drops ticks at capacity", async (concurrency) => {
+  it.each([undefined, 1, 2, 6])("fills startup to concurrency %s and drops ticks at capacity", async (concurrency) => {
     const timer = createTimer();
     const held = signal();
     let started = 0;
@@ -943,14 +989,54 @@ describe("the scheduled reconciliation worker", () => {
       schedule: timer.schedule,
       concurrency,
     });
-    expect(started).toBe(1);
-    for (let expected = 2; expected <= capacity; expected += 1) {
-      await timer.tick();
-      expect(started).toBe(expected);
-    }
+    expect(started).toBe(capacity);
     await timer.tick();
     await timer.tick();
     expect(started).toBe(capacity);
+  });
+
+  it("fills only the slots freed since the last tick", async () => {
+    const timer = createTimer();
+    const held = Array.from({ length: 4 }, () => signal());
+    const replacements = signal();
+    let started = 0;
+
+    startReconciliationWorker({
+      drain: async () => {
+        const index = started++;
+        await (held[index] ?? replacements).promise;
+      },
+      schedule: timer.schedule,
+    });
+    expect(started).toBe(4);
+    held[0].resolve();
+    held[2].resolve();
+    await timer.settle();
+    expect(started).toBe(4);
+    await timer.tick();
+    expect(started).toBe(6);
+    await timer.tick();
+    expect(started).toBe(6);
+  });
+
+  it("snapshots free slots so a synchronously throwing drain terminates each fill", async () => {
+    const timer = createTimer();
+    const failure = new Error("synchronous store failure");
+    const reported: unknown[] = [];
+    let attempted = 0;
+
+    startReconciliationWorker({
+      drain: () => { attempted += 1; throw failure; },
+      schedule: timer.schedule,
+      onFailure: (error) => { reported.push(error); },
+    });
+    // One protected startup attempt, then one bounded fill of four free slots.
+    expect(attempted).toBe(5);
+    expect(reported).toEqual(Array(5).fill(failure));
+    expect(timer.intervalMs).toBe(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
+    await timer.tick();
+    expect(attempted).toBe(9);
+    expect(reported).toEqual(Array(9).fill(failure));
   });
 
   it.each(["resolves", "rejects"] as const)("releases exactly one slot when a drain %s", async (outcome) => {
@@ -991,6 +1077,42 @@ describe("the scheduled reconciliation worker", () => {
     expect(started).toBe(3);
   });
 
+  it.each(["throwing accessor", "not callable", "synchronous throw", "non-promise"] as const)(
+    "repairs a hostile drain (%s) without leaking or over-releasing a slot",
+    async (kind) => {
+      const timer = createTimer();
+      const held = signal();
+      const failure = new Error("drain is not wired yet");
+      const reported: unknown[] = [];
+      let repaired = false;
+      let started = 0;
+
+      startReconciliationWorker({
+        get drain(): unknown {
+          if (repaired) return async () => { started += 1; await held.promise; };
+          if (kind === "throwing accessor") throw failure;
+          if (kind === "not callable") return "not a function";
+          if (kind === "synchronous throw") return () => { throw failure; };
+          return () => undefined;
+        },
+        concurrency: 1,
+        schedule: timer.schedule,
+        onFailure: (error: unknown) => { reported.push(error); },
+      } as unknown as Parameters<typeof startReconciliationWorker>[0]);
+      await timer.settle();
+      expect(started).toBe(0);
+      if (kind === "non-promise") expect(reported).toEqual([]);
+      else if (kind === "not callable") expect(reported[0]).toBeInstanceOf(TypeError);
+      else expect(reported).toContain(failure);
+
+      repaired = true;
+      await timer.tick();
+      expect(started).toBe(1);
+      await timer.tick();
+      expect(started).toBe(1);
+    },
+  );
+
   it("contains a throwing concurrency accessor and keeps the default capacity and poll", async () => {
     const timer = createTimer();
     const held = signal();
@@ -1003,7 +1125,7 @@ describe("the scheduled reconciliation worker", () => {
       schedule: timer.schedule,
       get concurrency(): number { throw unreadable; },
     });
-    expect(started).toBe(1);
+    expect(started).toBe(4);
     expect(timer.intervalMs).toBe(RECONCILIATION_WORKER_POLL_INTERVAL_MS);
     expect(logged.mock.calls).toEqual([[DEFAULTED_CONCURRENCY_MESSAGE, unreadable]]);
     for (let tick = 0; tick < 4; tick += 1) await timer.tick();
@@ -1026,7 +1148,14 @@ describe("the scheduled reconciliation worker", () => {
     expect(order).toEqual(["drained", "read concurrency", "read interval", "read scheduler"]);
   });
 
-  it.each([0, -1, 1.5, NaN, Infinity, "2"])("reports invalid concurrency %s and uses the default capacity", async (concurrency) => {
+  it.each([
+    ["number 0", 0],
+    ["number -1", -1],
+    ["number 1.5", 1.5],
+    ["number NaN", NaN],
+    ["number Infinity", Infinity],
+    ['string "2"', "2"],
+  ])("reports invalid concurrency %s and uses the default capacity", async (_label, concurrency) => {
     const timer = createTimer();
     const held = signal();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1042,17 +1171,25 @@ describe("the scheduled reconciliation worker", () => {
     expect(started).toBe(4);
   });
 
-  it.each([null, undefined])("uses the default capacity silently for nullish concurrency %s", async (concurrency) => {
+  it.each([
+    ["data", null],
+    ["data", undefined],
+    ["accessor", null],
+    ["accessor", undefined],
+  ] as const)("uses the default capacity silently for nullish concurrency (%s: %s)", async (kind, concurrency) => {
     const timer = createTimer();
     const held = signal();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let started = 0;
 
-    startReconciliationWorker({
+    const schedule = {
       drain: async () => { started += 1; await held.promise; },
       schedule: timer.schedule,
-      concurrency,
-    } as unknown as Parameters<typeof startReconciliationWorker>[0]);
+    };
+    Object.defineProperty(schedule, "concurrency",
+      kind === "accessor" ? { get: () => concurrency } : { value: concurrency });
+    startReconciliationWorker(schedule);
+    expect(started).toBe(4);
     for (let tick = 0; tick < 4; tick += 1) await timer.tick();
     expect(started).toBe(4);
     expect(logged).not.toHaveBeenCalled();
@@ -1092,6 +1229,7 @@ describe("the scheduled reconciliation worker", () => {
 
     try {
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           drains += 1;
         },
@@ -1122,6 +1260,7 @@ describe("the scheduled reconciliation worker", () => {
 
     try {
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           order.push("drained");
         },
@@ -1149,6 +1288,7 @@ describe("the scheduled reconciliation worker", () => {
 
     try {
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           drains += 1;
         },
@@ -1169,6 +1309,7 @@ describe("the scheduled reconciliation worker", () => {
   it("arms nothing and reports when the scheduler is not callable", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const schedule = {
+      concurrency: 1,
       drain: async () => {},
       schedule: "every five seconds",
     } as unknown as Parameters<typeof startReconciliationWorker>[0];
@@ -1198,6 +1339,7 @@ describe("the scheduled reconciliation worker", () => {
 
     try {
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {},
         schedule: null,
       } as unknown as Parameters<typeof startReconciliationWorker>[0]);
@@ -1215,6 +1357,7 @@ describe("the scheduled reconciliation worker", () => {
     const timer = createTimer();
 
     startReconciliationWorker({
+      concurrency: 1,
       drain: async () => {},
       schedule: timer.schedule,
       intervalMs: 250,
@@ -1232,6 +1375,7 @@ describe("the scheduled reconciliation worker", () => {
       const reported: unknown[] = [];
 
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           throw failure;
         },
@@ -1259,6 +1403,7 @@ describe("the scheduled reconciliation worker", () => {
       let drains = 0;
 
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           drains += 1;
           throw undrained;
@@ -1291,6 +1436,7 @@ describe("the scheduled reconciliation worker", () => {
       // The same lazily wired reporter, on the schedule this time: reading the
       // member throws, which no guard around the call can contain.
       const schedule = {
+        concurrency: 1,
         drain: async () => {
           drains.push("drained");
           throw undrained;
@@ -1331,6 +1477,7 @@ describe("the scheduled reconciliation worker", () => {
       const reports: unknown[] = [];
 
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           throw undrained;
         },
@@ -1362,6 +1509,7 @@ describe("the scheduled reconciliation worker", () => {
       const drains: string[] = [];
 
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           drains.push("drained");
           throw new Error("PostgreSQL is unreachable");
@@ -1393,6 +1541,7 @@ describe("the scheduled reconciliation worker", () => {
       let failing = true;
 
       startReconciliationWorker({
+        concurrency: 1,
         drain: async () => {
           if (failing) {
             failing = false;

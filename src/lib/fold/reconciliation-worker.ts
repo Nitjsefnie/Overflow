@@ -90,7 +90,7 @@ export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 /**
  * How often the worker looks for a job.
  *
- * Each tick admits another drain while a slot is free, so one repository's fold
+ * Each tick fills every free drain slot, so one repository's fold
  * does not stop pickup for another. When all slots are occupied the tick is
  * dropped, and a due job still waits for capacity before a later tick can pick
  * it up. Each claim is one indexed query against a table holding one row per
@@ -99,7 +99,7 @@ export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
 
 /**
- * How many drains this worker may keep in flight, admitted one per poll.
+ * How many drains this worker may keep in flight, filling free slots per poll.
  *
  * Four lets unrelated repositories make progress while a long fold occupies
  * one slot, without treating the database and GitHub as unbounded resources.
@@ -110,9 +110,13 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * callers; it is not a reservation against their own concurrent work.
  *
  * src/lib/fold/reconcile.ts already allows reconciliationConcurrency (four)
- * concurrent GitHub requests inside each fold. N folds can therefore put 4N
- * requests in flight: four drains allow sixteen, and raising this bound spends
- * more GitHub budget as well as more coordination connections.
+ * concurrent GitHub requests inside each fold. Four drains bound concurrent
+ * folds, and while those folds succeed their requests total at most sixteen.
+ * That is not a bound on all in-flight HTTP requests: a failed concurrent map
+ * returns before its other requests settle, so requests from a failed fold
+ * outlive it while its drain starts more work. The true in-flight request count
+ * remains unbounded until issue 209 is fixed. Raising the drain bound still
+ * spends more GitHub budget as well as more coordination connections.
  *
  * The atomic leased row claim keeps concurrent drains from claiming the same
  * live lease. If a lease expires during a fold, the repository advisory lock
@@ -344,10 +348,21 @@ async function deferralTime(
  * The immediate drain is what picks up the jobs enqueued while the server was
  * down, which is the whole point of a durable queue.
  *
- * Each tick admits one more drain until capacity is occupied. Only ticks at
+ * Each tick fills the slots that are free when it starts. Only ticks at
  * capacity are dropped rather than queued: the durable jobs remain for a later
  * tick after a slot is released. One long fold no longer blocks other
  * repositories' pickup, but a worker at capacity still does.
+ *
+ * Snapshot the available count once: a drain member can throw synchronously,
+ * releasing its slot before drain() returns. A loop that merely waited for
+ * inFlight to reach capacity would then spin forever. A failed store instead
+ * costs up to four attempts per poll at the default, and retries stay poll-paced.
+ *
+ * An idle poll now makes up to capacity indexed claim queries against the
+ * table's one row per repository: forty-eight a minute at the default, rather
+ * than twelve. That small query cost buys prompt use of free slots. Work starts
+ * in a burst; peak fold concurrency and coordination connections stay at four
+ * at the default, but claims and lease renewals become more synchronized.
  *
  * A drain that rejects — the store itself being briefly unreachable is the
  * ordinary case — is reported and swallowed. Node throws on an unhandled
@@ -362,7 +377,9 @@ async function deferralTime(
  * `schedule`. Capacity starts at the module default so startup can run before
  * any of those reads; every valid chosen capacity is at least one, so that
  * startup drain fits even when the caller lowers the bound. The ordering keeps
- * configuration failures from costing the startup pickup.
+ * configuration failures from costing the startup pickup. Only after
+ * readDrainConcurrency validates the bound do we fill the remaining slots,
+ * so a caller choosing a lower capacity is never overshot.
  *
  * A broken capacity or cadence falls back and the tick is armed anyway; a
  * broken arming mechanism is replaced by nothing and leaves nothing armed.
@@ -388,9 +405,15 @@ export function startReconciliationWorker(schedule: ReconciliationWorkerSchedule
     })();
   };
 
+  const fillFreeSlots = () => {
+    const available = capacity - inFlight;
+    for (let slot = 0; slot < available; slot += 1) drain();
+  };
+
   drain();
   capacity = readDrainConcurrency(schedule);
-  armDrainInterval(schedule, drain, readDrainInterval(schedule));
+  fillFreeSlots();
+  armDrainInterval(schedule, fillFreeSlots, readDrainInterval(schedule));
 }
 
 /**
