@@ -52,6 +52,49 @@ function fixture(remaining?: number) {
 }
 
 describe("reconciliation budget holds", () => {
+  it.each(["null result", "non-callable check"])("continues both polls after a native admission TypeError from %s", (mode) => {
+    // A strict child with no rejection/exception listeners proves a malformed
+    // gate cannot leave a detached rejection hidden by the test runner.
+    const child = spawnSync(process.execPath, [
+      "--experimental-transform-types", "--unhandled-rejections=strict",
+      "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
+        import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
+        let claimed = 0, reconciled = 0, hookCalls = 0;
+        const dependencies = {
+          budget: { check: ${mode === "null result" ? "() => null" : "42"} },
+          now: () => new Date('2026-09-07T10:00:00Z'),
+          scheduleLeaseRenewal: () => () => {},
+          store: {
+            async claimNextReconciliationJob() {
+              claimed++;
+              return { id: 'job-1', repositoryId: 'repository-1', reason: 'SWEEP',
+                attemptCount: 1, leaseToken: 'lease-1' };
+            },
+            async renewReconciliationJobLease() { return true; },
+            async completeReconciliationJob() { return true; },
+            async deferReconciliationJob() { return true; },
+            async retryReconciliationJob() { return true; },
+            async failReconciliationJob() { return true; },
+            async getReconciliationCooldown() { return null; },
+          },
+          async reconcile() { reconciled++; },
+          onBudgetChange() { hookCalls++; },
+        };
+        const outcomes = [
+          await runNextReconciliationJob(dependencies),
+          await runNextReconciliationJob(dependencies),
+        ];
+        await new Promise(resolve => setImmediate(resolve));
+        process.stdout.write(JSON.stringify({ outcomes, claimed, reconciled, hookCalls }));
+      `,
+    ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({
+      outcomes: ["RECONCILED", "RECONCILED"], claimed: 2, reconciled: 2, hookCalls: 0,
+    });
+  });
+
   it.each(["sync", "async"])("survives a %s hook when native console inspection and stream access both fail", (mode) => {
     const child = spawnSync(process.execPath, [
       "--experimental-transform-types", "--unhandled-rejections=strict",
