@@ -3,16 +3,14 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
-import { claimGitHubIdentity, PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
-import type { FoldResult } from "@/lib/fold/repository-fold";
-import { validDifficultyScheme } from "../support/difficulty-scheme";
+import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
 const tables = ["settlements", "self_work_calibrations", "unwritable_closures"] as const;
 let container: StartedTestContainer | undefined;
 let sql: Sql;
-let externalId = 1_000_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 describe("fold revision stamps", () => {
@@ -34,8 +32,8 @@ describe("fold revision stamps", () => {
   });
 
   it.each(tables)("detects stale %s rows only in their own repository", async (table) => {
-    const { repositoryId, store } = await materializedFixture();
-    const other = await materializedFixture();
+    const { repositoryId, store } = await materializeRepositoryFixture(sql);
+    const other = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor(table, repositoryId);
     await sql`update ${sql(table)} set fold_revision = ${FOLD_REVISION - 1} where id = ${row.id}`;
     expect(await store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION)).toBe(true);
@@ -46,14 +44,14 @@ describe("fold revision stamps", () => {
   });
 
   it.each([true, false, undefined])("records run rederivation=%s with an omitted option defaulting to false", async (rederivation) => {
-    const { repositoryId, store } = await materializedFixture();
+    const { repositoryId, store } = await materializeRepositoryFixture(sql);
     const runId = await store.beginRun(repositoryId, rederivation === undefined ? undefined : { rederivation });
     expect(await sql`select rederivation from reconciliation_runs where id = ${runId}`)
       .toEqual([{ rederivation: rederivation ?? false }]);
   });
 
   it.each(tables)("defaults a direct %s insert to the unnamed revision 0", async (table) => {
-    const { repositoryId } = await materializedFixture();
+    const { repositoryId } = await materializeRepositoryFixture(sql);
     const [source] = await rowsFor(table, repositoryId);
     // Reinsert the same valid business fields, explicitly omitting the revision.
     // The database must supply 0 even after materializers start supplying revision 1.
@@ -64,7 +62,7 @@ describe("fold revision stamps", () => {
   });
 
   it.each(tables)("stamps materialized %s inserts with the current revision", async (table) => {
-    const { repositoryId, deltas } = await materializedFixture();
+    const { repositoryId, deltas } = await materializeRepositoryFixture(sql);
     expect(deltas).toEqual({ adds: 3, changes: 0, removals: 0 });
     expect(await rowsFor(table, repositoryId)).toEqual([
       expect.objectContaining({ fold_revision: FOLD_REVISION }),
@@ -72,7 +70,7 @@ describe("fold revision stamps", () => {
   });
 
   it.each(tables)("refreshes only a stale %s stamp without deltas or change records", async (table) => {
-    const { repositoryId, store, fold } = await materializedFixture();
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor(table, repositoryId);
     await sql`update ${sql(table)} set fold_revision = ${FOLD_REVISION - 1} where id = ${row.id}`;
     const [before] = await rowsFor(table, repositoryId);
@@ -105,7 +103,7 @@ describe("fold revision stamps", () => {
       entity: "UNWRITABLE_CLOSURE", stateKey: "reason" },
   ] as const)("rewrites and stamps changed $table while recording its CHANGE", async (testCase) => {
     const { table, column, stale, entity, stateKey } = testCase;
-    const { repositoryId, store, fold } = await materializedFixture();
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor(table, repositoryId);
     const desired = table === "settlements" ? fold.settlements[0].creditorGitHubLogin : testCase.desired;
     await sql`
@@ -127,7 +125,7 @@ describe("fold revision stamps", () => {
   });
 
   it("preserves the revision and values of a settlement updated by an identity claim", async () => {
-    const { repositoryId, fold } = await materializedFixture();
+    const { repositoryId, fold } = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor("settlements", repositoryId);
     await sql`
       update settlements set creditor_id = null, status = 'UNCLAIMED',
@@ -147,7 +145,7 @@ describe("fold revision stamps", () => {
     { sourceRevision: 0, existingRevision: 1 },
     { sourceRevision: 1, existingRevision: 0 },
   ])("preserves self-work provenance on an identity claim (source: $sourceRevision, existing: $existingRevision)", async ({ sourceRevision, existingRevision }) => {
-    const { repositoryId, fold } = await materializedFixture();
+    const { repositoryId, fold } = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor("settlements", repositoryId);
     const sponsorId = fold.settlements[0].debtorId;
     const sponsorGitHubId = fold.pullRequests[1].authorGitHubUserId!;
@@ -188,83 +186,4 @@ function rowsFor(table: typeof tables[number], repositoryId: string) {
     join issues on issues.id = derived.issue_id
     where issues.repository_id = ${repositoryId}
   `;
-}
-
-async function materializedFixture() {
-  const sponsorGitHubId = externalId++;
-  const contributorGitHubId = externalId++;
-  const [sponsor] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
-    values (${sponsorGitHubId}, ${`sponsor-${sponsorGitHubId}`}) returning id
-  `;
-  const [contributor] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
-    values (${contributorGitHubId}, ${`contributor-${contributorGitHubId}`}) returning id
-  `;
-  const repositoryGitHubId = externalId++;
-  const [repository] = await sql<{ id: string }[]>`
-    insert into registered_repositories (
-      github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme
-    ) values (
-      ${repositoryGitHubId}, ${`owner/repo-${repositoryGitHubId}`}, ${sponsor.id}, 'PUBLIC',
-      ${externalId++}, ${sql.json(validDifficultyScheme())}
-    ) returning id
-  `;
-  const issueIds = [externalId++, externalId++, externalId++];
-  const pullRequestIds = [externalId++, externalId++];
-  const mergedAt = "2026-09-01T12:00:00.000Z";
-  const mergeCommitOid = "a".repeat(40);
-  const proofSha256 = repositoryGitHubId.toString(16).padStart(64, "0");
-  const settledEvidence = {
-    settledLabel: "delivered/6", settledPoints: 6,
-    settledLabelEventId: "actual", settledLabelActorLogin: `sponsor-${sponsorGitHubId}`,
-    settledLabelAppliedAt: "2026-09-01T11:00:00.000Z",
-    settledRationaleCommentId: "rationale", settledRationaleActorLogin: `sponsor-${sponsorGitHubId}`,
-    settledRationaleCommentedAt: "2026-09-01T11:30:00.000Z",
-  };
-  // A literal materializer input keeps this suite focused on storing the fold's
-  // output. Each derived kind has its own issue, as it would in a real fold.
-  const fold: FoldResult = {
-    issues: issueIds.map((githubIssueId, index) => ({
-      githubIssueId, number: index + 1, title: "Revision fixture", body: "", url: "https://example.test/issue",
-      state: "CLOSED", openingLabel: "M", openingComparisonPoints: 5, openingReservePoints: 5,
-      ownerGitHubLogin: `sponsor-${sponsorGitHubId}`, openingSourceEventId: `opening-${githubIssueId}`,
-      openingSourceActorLogin: `sponsor-${sponsorGitHubId}`, openingSourceAt: "2026-09-01T08:00:00.000Z",
-      claimAssigneeGitHubLogin: null, ...settledEvidence,
-    })),
-    pullRequests: pullRequestIds.map((githubPullRequestId, index) => ({
-      githubPullRequestId, number: index + 11, title: "Revision fixture", body: "", url: "https://example.test/pr",
-      state: "MERGED", mergedAt, mergeCommitOid, finalCommitAt: "2026-09-01T10:00:00.000Z",
-      authorId: index === 0 ? contributor.id : sponsor.id,
-      authorGitHubLogin: index === 0 ? `contributor-${contributorGitHubId}` : `sponsor-${sponsorGitHubId}`,
-      authorGitHubUserId: index === 0 ? contributorGitHubId : sponsorGitHubId,
-      proofSha256, githubIssueIds: [issueIds[index]], reviewRounds: [],
-    })),
-    settlements: [{
-      githubIssueId: issueIds[0], githubPullRequestId: pullRequestIds[0], creditorId: contributor.id,
-      creditorGitHubLogin: `contributor-${contributorGitHubId}`, creditorGitHubUserId: contributorGitHubId,
-      debtorId: sponsor.id, openingComparisonPoints: 5, ...settledEvidence,
-      mergeCommitOid, mergedAt, reviewRounds: 0, credits: 6, proofSha256, status: "SETTLED",
-    }],
-    selfWorkCalibrations: [{
-      githubIssueId: issueIds[1], githubPullRequestId: pullRequestIds[1], userId: sponsor.id,
-      openingComparisonPoints: 5, actualLabel: settledEvidence.settledLabel, actualPoints: 6,
-      actualLabelEventId: settledEvidence.settledLabelEventId,
-      actualLabelActorLogin: settledEvidence.settledLabelActorLogin,
-      actualLabelAppliedAt: settledEvidence.settledLabelAppliedAt,
-      rationaleCommentId: settledEvidence.settledRationaleCommentId,
-      rationaleActorLogin: settledEvidence.settledRationaleActorLogin,
-      rationaleCommentedAt: settledEvidence.settledRationaleCommentedAt, mergeCommitOid, mergedAt,
-    }],
-    unwritableClosures: [{
-      githubIssueId: issueIds[2], githubPullRequestId: null, kind: "NO_CLOSING_PULL_REQUEST",
-      reason: "No closing pull request.",
-    }],
-    policyViolations: [], ledgerEntries: [],
-  };
-  const store = new PostgresFoldStore(sql);
-  const repositoryId = repository.id;
-  const runId = await store.beginRun(repositoryId);
-  const deltas = await store.materialize({ repositoryId, runId, fold });
-  return { repositoryId, store, fold, runId, deltas };
 }
