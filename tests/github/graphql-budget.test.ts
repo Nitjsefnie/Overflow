@@ -128,6 +128,63 @@ describe("GitHubGraphqlBudgetStore", () => {
     const otherBundle = await import("@/lib/github/rate-limit-budget");
     expect(otherBundle.gitHubGraphqlBudget()).toBe(budget);
   });
+
+  it.each([
+    ["zero", 0],
+    ["false", false],
+    ["a string", "occupied by a non-store"],
+    ["an empty object", {}],
+    ["a partial store", { record() {} }],
+    ["a throwing method getter", Object.defineProperty({}, "record", {
+      get() { throw new Error("unreadable store"); },
+    })],
+    ["a non-callable read", { ...createGitHubGraphqlBudgetStore(), read: 0 }],
+    ["a non-callable noteState", { ...createGitHubGraphqlBudgetStore(), noteState: false }],
+    ["a non-callable readState", { ...createGitHubGraphqlBudgetStore(), readState: null }],
+    ["null", null],
+    ["undefined", undefined],
+  ])("replaces %s with a usable store shared across modules", async (_name, value) => {
+    const key = Symbol.for("overflow.github.graphql-budget");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    Reflect.set(globalThis, key, value);
+    try {
+      const first = gitHubGraphqlBudget();
+      first.record(reading);
+      expect(first.noteState("BELOW_RESERVE")).toBe(true);
+      vi.resetModules();
+      const otherBundle = await import("@/lib/github/rate-limit-budget");
+      expect(otherBundle.gitHubGraphqlBudget).not.toBe(gitHubGraphqlBudget);
+      const second = otherBundle.gitHubGraphqlBudget();
+      expect(second).toBe(first);
+      expect(second.read()).toEqual(reading);
+      expect(second.readState()).toBe("BELOW_RESERVE");
+    } finally {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+
+  it("preserves a valid store supplied by another module", async () => {
+    const key = Symbol.for("overflow.github.graphql-budget");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    vi.resetModules();
+    const otherBundle = await import("@/lib/github/rate-limit-budget");
+    const existing = otherBundle.createGitHubGraphqlBudgetStore();
+    existing.record(reading);
+    existing.noteState("BELOW_RESERVE");
+    Reflect.set(globalThis, key, existing);
+    try {
+      const budget = gitHubGraphqlBudget();
+      expect(budget).toBe(existing);
+      expect(budget.read()).toEqual(reading);
+      expect(budget.readState()).toBe("BELOW_RESERVE");
+      budget.noteState("AVAILABLE");
+      expect(otherBundle.gitHubGraphqlBudget().readState()).toBe("AVAILABLE");
+    } finally {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
 });
 
 describe("assessGraphqlBudget", () => {
@@ -295,5 +352,51 @@ describe("GitHubGraphqlClient budget recording", () => {
     expect(budget.read()?.remaining).toBe(42);
     expect(queries).toHaveLength(1);
     expect(queries[0]).toMatch(/query RepositoryIssues\([^)]*\)\s*\{\s*rateLimit\s*\{\s*cost\s+limit\s+remaining\s+resetAt\s*\}/);
+  });
+
+  it("requests the full budget first in all six gateway operations", async () => {
+    const queries = new Map<string, string>();
+    const page = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const repository = { owner: "octo", name: "overflow" };
+    const responses: Record<string, unknown> = {
+      RepositoryIssues: { repository: { issues: {
+        ...page,
+        nodes: [{
+          databaseId: 101, number: 1, title: "Issue", body: "", url: "https://github.com/octo/overflow/issues/1",
+          state: "OPEN", createdAt: observed.toISOString(), closedAt: null, author: null,
+          labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "next-labels" } },
+          assignees: { nodes: [] }, closedByPullRequestsReferences: page,
+        }],
+      } } },
+      ClosingPullRequests: { repository: { issue: { closedByPullRequestsReferences: page } } },
+      IssueLabels: { repository: { issue: { labels: page } } },
+      IssueTimeline: { repository: { issue: { timelineItems: page } } },
+      PullRequestReviews: { repository: { pullRequest: { reviews: page } } },
+      PullRequestReviewDismissals: { repository: { pullRequest: { timelineItems: page } } },
+    };
+    const gateway = new GitHubGateway({
+      accessToken: "test-token", budget: createGitHubGraphqlBudgetStore(),
+      fetch: async (_input, init) => {
+        const { query } = JSON.parse(String(init?.body)) as { query: string };
+        const operation = /query\s+(\w+)/.exec(query)?.[1];
+        if (operation === undefined || !(operation in responses)) throw new Error(`Unexpected operation: ${operation}`);
+        queries.set(operation, query);
+        return Response.json({ data: responses[operation] });
+      },
+    });
+
+    await gateway.listIssues(repository);
+    await gateway.getIssueClosingPullRequests(repository, 1);
+    await gateway.getPullRequestReviews(repository, 2);
+
+    const operations = [
+      "RepositoryIssues", "ClosingPullRequests", "IssueLabels", "IssueTimeline",
+      "PullRequestReviews", "PullRequestReviewDismissals",
+    ];
+    expect([...queries.keys()].sort()).toEqual([...operations].sort());
+    for (const operation of operations) {
+      expect(queries.get(operation), `${operation} must request the full budget as its first selection`)
+        .toMatch(new RegExp(`query\\s+${operation}\\([^)]*\\)\\s*\\{\\s*rateLimit\\s*\\{\\s*cost\\s+limit\\s+remaining\\s+resetAt\\s*\\}`));
+    }
   });
 });
