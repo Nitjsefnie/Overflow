@@ -132,19 +132,43 @@ describe("fold re-derivation status API", () => {
     expect(requestRederivation).not.toHaveBeenCalled();
   });
 
+  // The gate belongs on the mutating verb every bit as much as on the read, and a
+  // status assertion alone would pass a route that refused the caller after
+  // queueing the work. Each of these hands the route a service that would have
+  // succeeded, so an ungated POST answers 200 rather than failing inside a stub.
+  it("refuses a re-derivation request whose caller is no longer MODERATOR, without queueing it", async () => {
+    const getCurrentRole = vi.fn().mockResolvedValue("MEMBER");
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+    const response = await createRederivationPostHandler({
+      ...moderatorDependencies({ requestRederivation }),
+      getSession: async () => memberSession,
+      getCurrentRole,
+    })(jsonRequest({ repositoryId }));
+
+    await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
+    expect(getCurrentRole).toHaveBeenCalledWith(memberSession.user.id);
+    expect(requestRederivation).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unauthenticated re-derivation request, without queueing it", async () => {
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+    const response = await createRederivationPostHandler({
+      ...moderatorDependencies({ requestRederivation }),
+      getSession: async () => null,
+    })(jsonRequest({ repositoryId }));
+
+    await expectRejection(response, 401, "UNAUTHENTICATED", "Sign in is required.");
+    expect(requestRederivation).not.toHaveBeenCalled();
+  });
+
   it("records the request and answers with the resulting outstanding state", async () => {
-    const outstanding = {
-      repositoryId,
-      ownerName: "owner/stale",
-      rederivationRequestedAt: requestedAt.toISOString(),
-    };
-    const requestRederivation = vi.fn().mockResolvedValue(outstanding);
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
     const response = await createRederivationPostHandler(
       moderatorDependencies({ requestRederivation }),
     )(jsonRequest({ repositoryId }));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ request: outstanding });
+    await expect(response.json()).resolves.toEqual({ request: outstandingRequest });
     expect(requestRederivation).toHaveBeenCalledWith(
       { id: moderatorSession.user.id, role: "MODERATOR" },
       repositoryId,
@@ -225,9 +249,23 @@ describe("fold re-derivation service reached through its route", () => {
       .rejects.toThrow(ModerationServiceError);
     expect(store.requestRepositoryRederivation).not.toHaveBeenCalled();
   });
+
+  it("refuses a non-moderator actor reading the status at the service, not only at the route", async () => {
+    const store = storeHarness();
+    const service = new RepositoryRederivationService(store, () => requestedAt);
+
+    await expect(service.listRederivationStatus({ id: memberSession.user.id, role: "MEMBER" }))
+      .rejects.toThrow(ModerationServiceError);
+    expect(store.listRepositoryFoldRevisionCounts).not.toHaveBeenCalled();
+  });
 });
 
 const emptyOverview = { foldRevision: FOLD_REVISION, repositories: [] };
+const outstandingRequest = {
+  repositoryId,
+  ownerName: "owner/stale",
+  rederivationRequestedAt: requestedAt.toISOString(),
+};
 
 // The mocks stand in for a service whose methods are typed, which vi.fn() is not.
 function moderatorDependencies(service: {
