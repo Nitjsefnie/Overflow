@@ -52,6 +52,57 @@ function fixture(remaining?: number) {
 }
 
 describe("reconciliation budget holds", () => {
+  it.each(["sync", "async"])("survives a %s hook when native console inspection and stream access both fail", (mode) => {
+    const child = spawnSync(process.execPath, [
+      "--experimental-transform-types", "--unhandled-rejections=strict",
+      "--import", "./scripts/register-path-aliases.ts", "--input-type=module", "--eval", `
+        import { runNextReconciliationJob } from './src/lib/fold/reconciliation-worker.ts';
+        import { createReconciliationBudgetGate } from './src/lib/fold/reconciliation-budget.ts';
+        import { createGitHubGraphqlBudgetStore } from './src/lib/github/rate-limit-budget.ts';
+        const budgetStore = createGitHubGraphqlBudgetStore();
+        budgetStore.record({ remaining: 1, limit: 5000, cost: 1,
+          observedAt: new Date('2026-09-07T10:00:00Z'), resetAt: new Date('2026-09-07T11:00:00Z') });
+        const nativeError = console.error;
+        const stderrDescriptor = Object.getOwnPropertyDescriptor(console, '_stderr');
+        let inspected = 0, streamAccesses = 0, claimed = 0, reconciled = 0;
+        const failure = { [Symbol.for('nodejs.util.inspect.custom')]() {
+          inspected++;
+          Object.defineProperty(console, '_stderr', { configurable: true, get() {
+            streamAccesses++; throw new Error('native console stream unavailable');
+          }});
+          throw new Error('cannot inspect hook failure');
+        }};
+        const fail = () => { throw failure; };
+        const dependencies = {
+          budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),
+          now: () => new Date('2026-09-07T10:00:00Z'),
+          store: { async claimNextReconciliationJob() { claimed++; return null; } },
+          async reconcile() { reconciled++; },
+          onBudgetChange: ${mode === "async" ? "async () => { await Promise.resolve(); fail(); }" : "fail"},
+        };
+        const outcomes = [await runNextReconciliationJob(dependencies)];
+        // Settle the async hook and its reporter, then restore the stream so
+        // Node can print any unhandled rejection when this turn ends.
+        await Promise.resolve();
+        await Promise.resolve();
+        Object.defineProperty(console, '_stderr', stderrDescriptor);
+        await new Promise(resolve => setImmediate(resolve));
+        outcomes.push(await runNextReconciliationJob(dependencies));
+        process.stdout.write(JSON.stringify({
+          outcomes, inspected, streamAccesses, claimed, reconciled,
+          nativeErrorUnchanged: console.error === nativeError,
+        }));
+      `,
+    ], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({
+      outcomes: ["BUDGET_HELD", "BUDGET_HELD"],
+      inspected: 1, streamAccesses: 1, claimed: 0, reconciled: 0,
+      nativeErrorUnchanged: true,
+    });
+  });
+
   it.each(["sync", "async"])("survives a %s hook whose rejection breaks native console inspection", (mode) => {
     const child = spawnSync(process.execPath, [
       "--experimental-transform-types", "--unhandled-rejections=strict",
