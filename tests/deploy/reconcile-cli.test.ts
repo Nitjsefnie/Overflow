@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
@@ -100,30 +100,39 @@ function tokenizeCommand(command: string): string[] {
   return words;
 }
 
-function runCommand(command: string, databaseUrl?: string) {
+function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot) {
   const [executable, ...argumentsList] = tokenizeCommand(command);
-  const environment = { ...process.env };
-  delete environment.DATABASE_URL;
-  // Node preloads/flags and pnpm's lifecycle options must not repair the command
-  // under test. Alternate runtimes, config files and shell startup files can
-  // inject the same flags as well.
-  for (const name of Object.keys(environment)) {
-    if (/^(node_options|node_path|npm_config_(node_options|script_shell|shell_emulator|use_node_version|userconfig|globalconfig)|bash_env|env)$/.test(
-      name.toLowerCase().replaceAll("-", "_"),
-    )) delete environment[name];
-  }
-  if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
   const configDirectory = mkdtempSync(join(tmpdir(), "reconcile-cli-config-"));
   try {
-    // Empty environment options do not override pnpm/rc. Explicit XDG and npm
-    // paths prevent fallback to home config while retaining Corepack's cache.
     const npmConfig = join(configDirectory, "npmrc");
     writeFileSync(npmConfig, "");
-    environment.XDG_CONFIG_HOME = configDirectory;
-    environment.npm_config_userconfig = npmConfig;
-    environment.npm_config_globalconfig = npmConfig;
+    // Allowlist only: host Node flags, pnpm hooks and shell startup settings
+    // must not supply behavior missing from the documented package script.
+    const environment: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH, // Find the installed pnpm and Node executables.
+      HOME: configDirectory,
+      XDG_CONFIG_HOME: configDirectory,
+      npm_config_userconfig: npmConfig,
+      npm_config_globalconfig: npmConfig,
+      // Keep the installed Corepack distribution cache available with an empty
+      // HOME. This is Corepack's cache-location precedence, not pnpm config.
+      COREPACK_HOME: process.env.COREPACK_HOME ?? join(
+        process.env.XDG_CACHE_HOME ?? process.env.LOCALAPPDATA ??
+          join(homedir(), process.platform === "win32" ? "AppData/Local" : ".cache"),
+        "node/corepack",
+      ),
+      COREPACK_ENABLE_NETWORK: "0", // A missing cached package manager must fail offline.
+    };
+    if (process.platform === "win32") {
+      environment.SystemRoot = process.env.SystemRoot; // Windows runtime and executable lookup.
+      // Windows tools use these home/config paths instead of HOME or XDG.
+      environment.USERPROFILE = configDirectory;
+      environment.APPDATA = configDirectory;
+      environment.LOCALAPPDATA = configDirectory;
+    }
+    if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
     const result = spawnSync(executable!, argumentsList, {
-      cwd: repositoryRoot,
+      cwd,
       env: environment,
       encoding: "utf8",
       timeout: 60_000,
@@ -139,6 +148,45 @@ function runCommand(command: string, databaseUrl?: string) {
 }
 
 describe("documented reconciliation CLI commands", () => {
+  it("does not inherit a global pnpmfile that injects Node options through the lifecycle shell", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "reconcile-cli-pnpmfile-"));
+    const previousPnpmfile = process.env.npm_config_global_pnpmfile;
+    try {
+      const { packageManager } = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8"));
+      writeFileSync(join(fixture, "package.json"), JSON.stringify({
+        name: "reconcile-cli-lifecycle-witness", private: true, packageManager,
+        scripts: { "inspect-options": `node -p 'JSON.stringify(process.env.NODE_OPTIONS ?? null)'` },
+      }));
+      const shell = join(fixture, "inject-node-options.sh");
+      writeFileSync(shell, [
+        "#!/bin/sh", "export NODE_OPTIONS=--experimental-transform-types", 'exec /bin/sh "$@"', "",
+      ].join("\n"), { mode: 0o755 });
+      const pnpmfile = join(fixture, "global-pnpmfile.cjs");
+      writeFileSync(pnpmfile, `module.exports = {
+        hooks: { updateConfig: (config) => ({ ...config, scriptShell: ${JSON.stringify(shell)} }) },
+      };`);
+
+      // First prove an unsanitized child sees this lifecycle shell; pnpm exec
+      // would miss the injection and make the isolation assertion meaningless.
+      process.env.npm_config_global_pnpmfile = pnpmfile;
+      const control = spawnSync("pnpm", ["--silent", "run", "inspect-options"], {
+        cwd: fixture, env: process.env, encoding: "utf8", timeout: 60_000,
+      });
+      if (control.error) throw control.error;
+      expect(control.signal).toBeNull();
+      expect(control.status, control.stderr).toBe(0);
+      expect(JSON.parse(control.stdout)).toBe("--experimental-transform-types");
+
+      const isolated = runCommand("pnpm --silent run inspect-options", undefined, fixture);
+      expect(isolated.status, isolated.stderr).toBe(0);
+      expect(JSON.parse(isolated.stdout)).toBeNull();
+    } finally {
+      if (previousPnpmfile === undefined) delete process.env.npm_config_global_pnpmfile;
+      else process.env.npm_config_global_pnpmfile = previousPnpmfile;
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("does not inherit Node options from the parent's pnpm config file", () => {
     const parentConfig = mkdtempSync(join(tmpdir(), "reconcile-cli-parent-config-"));
     const previousConfigHome = process.env.XDG_CONFIG_HOME;
