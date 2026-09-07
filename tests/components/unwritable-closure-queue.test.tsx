@@ -63,7 +63,6 @@ describe("unwritable closure queue", () => {
 
   it.each([
     ["OPEN", "open"],
-    ["GRANTED", "granted"],
     ["DECLINED", "declined"],
   ] as const)("shows rejected evidence with its settlement path and %s correction", (state, label) => {
     render(<UnwritableClosureQueue closures={[closure({
@@ -149,14 +148,61 @@ describe("self-worked closure in the queue", () => {
 
   it("shows the latest correction against a self-worked closure", () => {
     render(<UnwritableClosureQueue closures={[selfWorked({
-      latestCorrection: { state: "GRANTED", requestedAt: "2026-09-05T12:00:00.000Z" },
+      latestCorrection: { state: "DECLINED", requestedAt: "2026-09-05T12:00:00.000Z" },
     })]} />);
 
-    expect(screen.getByText("Correction granted · reported 2026-09-05T12:00:00.000Z")).toBeVisible();
+    expect(screen.getByText("Correction declined · reported 2026-09-05T12:00:00.000Z")).toBeVisible();
   });
 });
 
 describe("moderation closure section", () => {
+  it("renders live entries in the queue and grants in a history landmark immediately before enforcement history", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      if (!strings.join("?").includes("from unwritable_closures")) return [];
+      return [null, "GRANTED", "OPEN", "DECLINED"].map((state, index) => ({
+        id: `closure-${index}`,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        reason: "The settled label was applied after the evidence window.",
+        recorded_at: "2026-09-05T10:00:00.000Z",
+        repository_name: "co-op/harbour",
+        issue_number: 17 + index,
+        issue_title: `Issue ${17 + index}`,
+        issue_url: `https://github.com/co-op/harbour/issues/${17 + index}`,
+        pull_request_number: null,
+        pull_request_title: null,
+        pull_request_url: null,
+        settlement_id: `settlement-${index}`,
+        creditor_login: "mira",
+        debtor_login: "quinn",
+        calibration_id: null,
+        calibration_owner_login: null,
+        correction_state: state,
+        correction_requested_at: state === null ? null : "2026-09-05T12:00:00.000Z",
+      }));
+    });
+
+    render(await ModerationPage());
+
+    const regions = screen.getAllByRole("region");
+    const queue = regions.find((region) => region.getAttribute("aria-labelledby") === "unwritable-closures-heading")!;
+    const history = regions.find((region) => region.getAttribute("aria-labelledby") === "unwritable-closure-history-heading")!;
+    expect(queue).toBeVisible();
+    expect(history).toBeVisible();
+    expect(history).toHaveClass("surface");
+    expect(within(history).getByRole("heading", { level: 2 })).toHaveAttribute("id", "unwritable-closure-history-heading");
+    expect(queue.previousElementSibling).toHaveAttribute("aria-labelledby", "settlement-corrections-heading");
+    expect(queue.nextElementSibling).toHaveAttribute("aria-labelledby", "recalibrating-heading");
+    expect(history.nextElementSibling).toHaveAttribute("aria-labelledby", "enforcement-history-heading");
+    expect(within(queue).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "https://github.com/co-op/harbour/issues/17", "/settlements/settlement-0",
+      "https://github.com/co-op/harbour/issues/19", "/settlements/settlement-2",
+      "https://github.com/co-op/harbour/issues/20", "/settlements/settlement-3",
+    ]);
+    expect(within(history).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "https://github.com/co-op/harbour/issues/18",
+    ]);
+  });
+
   it("loads the closure queue between settlement corrections and recalibration", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
       if (!strings.join("?").includes("from unwritable_closures")) return [];
@@ -226,5 +272,13 @@ describe("moderation closure section", () => {
     expect(screen.getByText("No account audits are open.")).toBeVisible();
     expect(screen.getByText("No accounts are recalibrating.")).toBeVisible();
     expect(screen.queryByText("No closures are waiting on evidence.")).toBeNull();
+    const history = screen.getAllByRole("region").find(
+      (region) => region.getAttribute("aria-labelledby") === "unwritable-closure-history-heading",
+    )!;
+    expect(history).toBeVisible();
+    expect(within(history).getByRole("heading", { level: 2 })).toHaveAttribute("id", "unwritable-closure-history-heading");
+    expect(within(history).getByRole("alert")).toBeVisible();
+    expect(within(history).getByRole("alert")).not.toBeEmptyDOMElement();
+    expect(within(history).queryByRole("list")).toBeNull();
   });
 });
