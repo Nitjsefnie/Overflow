@@ -32,10 +32,10 @@ function fixture(remaining?: number) {
   const store = {
     claimNextReconciliationJob: vi.fn(async () => ({
       id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
-      attemptCount: 1, leaseToken: "lease-1",
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null,
     })),
     renewReconciliationJobLease: vi.fn(async () => true),
-    completeReconciliationJob: vi.fn(async () => true),
+    completeReconciliationJob: vi.fn<ReconciliationWorkerStore["completeReconciliationJob"]>(async () => true),
     deferReconciliationJob: vi.fn(async () => true),
     retryReconciliationJob: vi.fn(async () => true),
     failReconciliationJob: vi.fn(async () => true),
@@ -94,7 +94,7 @@ describe("reconciliation budget holds under the repository lock", () => {
         if (state !== "PENDING" || runAfter.getTime() > now.getTime()) return null;
         state = "RUNNING";
         attempts++;
-        return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts, leaseToken: "lease-1" };
+        return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts, leaseToken: "lease-1", rederivationRequestedAt: null };
       });
       const defer = vi.fn<ReconciliationWorkerStore["deferReconciliationJob"]>(async (_id, _lease, deadline) => {
         deadline.toISOString();
@@ -104,7 +104,7 @@ describe("reconciliation budget holds under the repository lock", () => {
         return true;
       });
       worker.store = { ...worker.store, claimNextReconciliationJob: claim, deferReconciliationJob: defer,
-        completeReconciliationJob: vi.fn(async () => { state = "COMPLETED"; return true; }) };
+        completeReconciliationJob: vi.fn<ReconciliationWorkerStore["completeReconciliationJob"]>(async () => { state = "COMPLETED"; return true; }) };
       const clock = vi.fn(() => now);
       fold.now = clock;
       await expect(drainReconciliationJobs(worker, { maxJobs: 3 })).resolves.toEqual(["RECONCILED"]);
@@ -394,7 +394,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledWith(4242);
-    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1");
+    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", null);
   });
 
   it("claims when there has been no budget reading", async () => {
@@ -481,7 +481,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("defers the next claimed repository when its budget falls during the preceding fold", async () => {
     const { fold, worker, budgetStore, store, reconcile } = fixture(500);
     const first = { id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
-      attemptCount: 1, leaseToken: "lease-1" };
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null };
     store.claimNextReconciliationJob.mockResolvedValueOnce(first).mockResolvedValueOnce({ ...first,
       id: "job-2", repositoryId: "repository-2", leaseToken: "lease-2" });
     const repository = (await fold.store.getRepository("repository-1"))!;

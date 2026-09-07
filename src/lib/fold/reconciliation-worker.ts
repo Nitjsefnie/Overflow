@@ -4,7 +4,7 @@ import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
   renewReconciliationJobLease(jobId: string, leaseToken: string, renewalDeadline: Date): Promise<boolean>;
-  completeReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
+  completeReconciliationJob(jobId: string, leaseToken: string, rederivationRequestedAt: Date | null): Promise<boolean>;
   deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   retryReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   failReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
@@ -269,7 +269,7 @@ export async function runNextReconciliationJob(
       return result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }
 
-    await store.completeReconciliationJob(job.id, job.leaseToken);
+    await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationRequestedAt);
     return "RECONCILED";
   } finally {
     try {
