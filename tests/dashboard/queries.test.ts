@@ -136,6 +136,8 @@ describe("unwritable closures", () => {
     expect(projection).toMatch(/(?:^|,)\s*settlements\.id\s+as\s+settlement_id\s*(?:,|$)/i);
     expect(projection).toMatch(/(?:^|,)\s*creditors\.github_login\s+as\s+creditor_login\s*(?:,|$)/i);
     expect(projection).toMatch(/(?:^|,)\s*debtors\.github_login\s+as\s+debtor_login\s*(?:,|$)/i);
+    expect.soft(projection).toMatch(/(?:^|,)\s*latest_correction\.state::text\s+as\s+correction_state\s*(?:,|$)/i);
+    expect.soft(projection).toMatch(/(?:^|,)\s*latest_correction\.created_at\s+as\s+correction_requested_at\s*(?:,|$)/i);
     expect(query).toMatch(/left join pull_requests on pull_requests\.id = unwritable_closures\.pull_request_id/i);
     expect(query).toMatch(/left join settlements on settlements\.issue_id = issues\.id/i);
     expect(query).toMatch(/left join users as creditors on creditors\.id = settlements\.creditor_id/i);
