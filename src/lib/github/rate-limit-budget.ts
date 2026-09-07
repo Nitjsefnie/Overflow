@@ -15,7 +15,7 @@ export type GitHubGraphqlBudgetAssessment = {
 };
 
 export type GitHubGraphqlBudgetStore = {
-  /** Keeps `reading` when it is newer than the one held. */
+  /** Keeps the lowest remaining balance in the newest reset window. */
   record(reading: GitHubGraphqlBudgetReading): void;
   read(): GitHubGraphqlBudgetReading | null;
   /** Records the latest verdict and answers whether it differs from the one before. */
@@ -28,7 +28,12 @@ export function createGitHubGraphqlBudgetStore(): GitHubGraphqlBudgetStore {
   let state: GraphqlBudgetState | null = null;
   return {
     record(next) {
-      if (reading === null || next.observedAt.getTime() > reading.observedAt.getTime()) {
+      // Receipt time cannot order concurrent responses. A later reset window
+      // supersedes an earlier one; within a window only a lower balance wins.
+      // This shared slot currently conflates sponsors, so retaining any low
+      // balance until rollover is also the conservative choice across sponsors.
+      if (reading === null || next.resetAt.getTime() > reading.resetAt.getTime()
+        || (next.resetAt.getTime() === reading.resetAt.getTime() && next.remaining < reading.remaining)) {
         reading = next;
       }
     },

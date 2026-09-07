@@ -11,6 +11,7 @@ import {
 } from "@/lib/github/rate-limit-budget";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
 import { GitHubGateway } from "@/lib/github/client";
+import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
 
 const reset = new Date("2026-09-07T11:00:00.000Z");
 const observed = new Date("2026-09-07T10:00:00.000Z");
@@ -95,7 +96,7 @@ describe("readGraphqlBudgetPayload", () => {
 });
 
 describe("GitHubGraphqlBudgetStore", () => {
-  it("starts empty, keeps newer readings, and rejects older and equally dated arrivals", () => {
+  it("starts empty and keeps the lowest reading within the same reset window", () => {
     const budget = createGitHubGraphqlBudgetStore();
     expect(budget.read()).toBeNull();
     budget.record(reading);
@@ -229,6 +230,57 @@ describe("readGraphqlBudgetReserve", () => {
 });
 
 describe("GitHubGraphqlClient budget recording", () => {
+  it.each([
+    { name: "a delayed higher balance in the same window", early: 499, late: 501,
+      earlyReset: "2026-09-07T11:00:00Z", lateReset: "2026-09-07T11:00:00Z",
+      laterNow: "2026-09-07T10:01:00Z", expected: 499, state: "BELOW_RESERVE" },
+    { name: "a lower balance received in the same millisecond", early: 500, late: 499,
+      earlyReset: "2026-09-07T11:00:00Z", lateReset: "2026-09-07T11:00:00Z",
+      laterNow: "2026-09-07T10:00:00Z", expected: 499, state: "BELOW_RESERVE" },
+    { name: "a delayed expired window", early: 499, late: 1,
+      earlyReset: "2026-09-07T11:00:00Z", lateReset: "2026-09-07T10:00:00Z",
+      laterNow: "2026-09-07T10:01:00Z", expected: 499, state: "BELOW_RESERVE" },
+    { name: "a replenished newer window", early: 499, late: 4900,
+      earlyReset: "2026-09-07T11:00:00Z", lateReset: "2026-09-07T12:00:00Z",
+      laterNow: "2026-09-07T11:00:00Z", expected: 4900, state: "AVAILABLE" },
+  ])("merges $name through the transport and admission gate", async (scenario) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
+    try {
+      const budget = createGitHubGraphqlBudgetStore();
+      const gate = createReconciliationBudgetGate({ store: budget, reserve: 500 });
+      const delayed = Promise.withResolvers<Response>();
+      const early = Promise.withResolvers<Response>();
+      const responses = [delayed.promise, early.promise];
+      const client = new GitHubGraphqlClient({
+        accessToken: "test-token", budget, fetch: () => responses.shift()!,
+      });
+      const delayedQuery = client.query("query { rateLimit { remaining resetAt } }", {});
+      const earlyQuery = client.query("query { rateLimit { remaining resetAt } }", {});
+      early.resolve(Response.json({ data: { rateLimit: {
+        ...rateLimit, remaining: scenario.early, resetAt: scenario.earlyReset,
+      } } }));
+      await earlyQuery;
+      expect(gate.check(new Date("2026-09-07T10:00:00Z"))).toMatchObject({
+        state: scenario.early === 500 ? "AVAILABLE" : "BELOW_RESERVE",
+        reading: { remaining: scenario.early, resetAt: new Date(scenario.earlyReset) },
+      });
+
+      vi.setSystemTime(new Date(scenario.laterNow));
+      delayed.resolve(Response.json({ data: { rateLimit: {
+        ...rateLimit, remaining: scenario.late, resetAt: scenario.lateReset,
+      } } }));
+      await delayedQuery;
+      expect(gate.check(new Date(scenario.laterNow))).toMatchObject({
+        state: scenario.state,
+        reading: { remaining: scenario.expected,
+          resetAt: new Date(scenario.state === "AVAILABLE" ? scenario.lateReset : scenario.earlyReset) },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records a successful reading and returns the data unchanged", async () => {
     const budget = createGitHubGraphqlBudgetStore();
     const data = { repository: null, rateLimit };
