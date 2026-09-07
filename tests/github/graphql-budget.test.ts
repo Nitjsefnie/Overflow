@@ -20,6 +20,12 @@ const reading: GitHubGraphqlBudgetReading = {
   cost: 1, limit: 5000, remaining: 42, resetAt: reset, observedAt: observed,
 };
 
+function deferredResponse() {
+  let resolve!: (value: Response | PromiseLike<Response>) => void;
+  const promise = new Promise<Response>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 describe("readGraphqlBudgetPayload", () => {
   it("keeps a well-formed payload", () => {
     expect(
@@ -249,8 +255,8 @@ describe("GitHubGraphqlClient budget recording", () => {
     try {
       const budget = createGitHubGraphqlBudgetStore();
       const gate = createReconciliationBudgetGate({ store: budget, reserve: 500 });
-      const delayed = Promise.withResolvers<Response>();
-      const early = Promise.withResolvers<Response>();
+      const delayed = deferredResponse();
+      const early = deferredResponse();
       const responses = [delayed.promise, early.promise];
       const client = new GitHubGraphqlClient({
         accessToken: "test-token", budget, fetch: () => responses.shift()!,
