@@ -3,6 +3,7 @@
 !.env.example
 !README.md
 !CONTRIBUTING.md
+!LICENSE
 !docker-compose.yml
 !package.json
 !pnpm-lock.yaml
