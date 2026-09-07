@@ -260,7 +260,7 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
     const migration = runCommand("pnpm db:migrate", started.databaseUrl);
     expect(migration.status, migration.stderr).toBe(0);
 
-    // No OAuth token is seeded: cooldown must return before any GitHub access.
+    // The sponsor has no OAuth token, and both repositories are cooled down.
     const [sponsor] = await sql<{ id: string }[]>`
       insert into users (github_user_id, github_login)
       values (10001, 'cli-sponsor') returning id
@@ -286,7 +286,7 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
     }
   }, 120_000);
 
-  it.each([...documentedCommands, "pnpm reconcile --repository cli/second"])("successfully runs %s without GitHub access", async (command) => {
+  it.each([...documentedCommands, "pnpm reconcile --repository cli/second"])("completes %s with cooldown skips and no reconciliation runs", async (command) => {
     const { status, stdout, stderr } = runCommand(command, started!.databaseUrl);
     expect(status, stderr).toBe(0);
     const summaries = stdout.split(/\r?\n/)
@@ -303,6 +303,6 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
       repositoryId, runId: null, skipped: true,
       adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0,
     }))));
-    expect(await sql`select id from reconciliation_runs`).toHaveLength(0);
+    expect(await sql`select id from reconciliation_runs`, "Cooldown skips must not create reconciliation runs").toHaveLength(0);
   }, 120_000);
 });
