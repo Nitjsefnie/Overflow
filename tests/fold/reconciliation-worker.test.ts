@@ -32,6 +32,141 @@ const DEFAULTED_CONCURRENCY_MESSAGE =
   "Reconciliation worker concurrency could not be used; drains use the default concurrency instead";
 
 describe("running the next reconciliation job", () => {
+  it("keeps repository exclusion after a lost-lease heartbeat stops", async () => {
+    const { store } = createFakeStore({ jobs: [job(), job()] });
+    const timer = createRenewalTimer();
+    const entered = signal();
+    const held = signal();
+    let folded = 0;
+    store.renewReconciliationJobLease = async () => false;
+    const dependencies = {
+      store,
+      ...timer.dependencies,
+      reconcile: async () => {
+        folded += 1;
+        if (folded === 1) { entered.resolve(); await held.promise; }
+      },
+    };
+    const first = runNextReconciliationJob(dependencies);
+    try {
+      await entered.promise;
+      await timer.armed;
+      await timer.tick();
+      const second = await runNextReconciliationJob(dependencies);
+      expect(folded).toBe(1);
+      expect(second).toBe("DEFERRED");
+    } finally {
+      held.resolve();
+      await first;
+    }
+  });
+
+  it("keeps repository exclusion until the completion write settles", async () => {
+    const { store } = createFakeStore({ jobs: [job(), job()] });
+    const writing = signal();
+    const held = signal();
+    let writes = 0;
+    let folded = 0;
+    store.completeReconciliationJob = async () => {
+      writes += 1;
+      if (writes === 1) { writing.resolve(); await held.promise; }
+      return true;
+    };
+    const dependencies = {
+      store,
+      reconcile: async () => { folded += 1; },
+      scheduleLeaseRenewal: () => () => {},
+    };
+    const first = runNextReconciliationJob(dependencies);
+    try {
+      await writing.promise;
+      const second = await runNextReconciliationJob(dependencies);
+      expect(folded).toBe(1);
+      expect(second).toBe("DEFERRED");
+    } finally {
+      held.resolve();
+      await first;
+    }
+  });
+
+  it.each(["FAILED", "skipped result", "retry write rejection", "rejecting stop"] as const)(
+    "admits a second same-store fold after terminal path %s",
+    async (path) => {
+      const { store } = createFakeStore({ jobs: [
+        job({ attemptCount: path === "FAILED" ? 5 : 1 }),
+        job(),
+      ] });
+      const failure = new Error("fold or cleanup failed");
+      const consoleFailure = new Error("both console fallbacks failed");
+      let firstJob = true;
+      const folded: string[] = [];
+      store.retryReconciliationJob = async () => { throw failure; };
+      const dependencies = {
+        store,
+        reconcile: async (repositoryId: string) => {
+          folded.push(repositoryId);
+          if (firstJob && (path === "FAILED" || path === "retry write rejection")) throw failure;
+          if (firstJob && path === "skipped result") return { skipped: true };
+        },
+        scheduleLeaseRenewal: () => () => {
+          if (firstJob && path === "rejecting stop") throw failure;
+        },
+        onFailure: () => {},
+      };
+      const logged = path === "rejecting stop"
+        ? vi.spyOn(console, "error").mockImplementation(() => { throw consoleFailure; })
+        : undefined;
+      try {
+        if (path === "FAILED") await expect(runNextReconciliationJob(dependencies)).resolves.toBe("FAILED");
+        else if (path === "skipped result") await expect(runNextReconciliationJob(dependencies)).resolves.toBe("DEFERRED");
+        else await expect(runNextReconciliationJob(dependencies)).rejects.toBe(
+          path === "rejecting stop" ? consoleFailure : failure,
+        );
+        if (logged) expect(logged).toHaveBeenCalledTimes(2);
+      } finally {
+        logged?.mockRestore();
+      }
+      firstJob = false;
+      const second = await runNextReconciliationJob(dependencies);
+      expect(folded).toEqual(["repo-a", "repo-a"]);
+      expect(second).toBe("RECONCILED");
+    },
+  );
+
+  it("keeps the original exclusion when a duplicate deferral write rejects", async () => {
+    const { store } = createFakeStore({ jobs: [job(), job(), job(), job()] });
+    const entered = signal();
+    const held = signal();
+    const failure = new Error("deferral update failed");
+    const defer = store.deferReconciliationJob;
+    let folded = 0;
+    const dependencies = {
+      store,
+      reconcile: async () => {
+        folded += 1;
+        if (folded === 1) { entered.resolve(); await held.promise; }
+      },
+      scheduleLeaseRenewal: () => () => {},
+    };
+    const first = runNextReconciliationJob(dependencies);
+    try {
+      await entered.promise;
+      store.deferReconciliationJob = async () => { throw failure; };
+      await expect(runNextReconciliationJob(dependencies)).rejects.toBe(failure);
+      store.deferReconciliationJob = defer;
+      const third = await runNextReconciliationJob(dependencies);
+      expect(folded).toBe(1);
+      expect(third).toBe("DEFERRED");
+      held.resolve();
+      await first;
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      expect(folded).toBe(2);
+    } finally {
+      held.resolve();
+      await first;
+    }
+  });
+
   it("defers an in-flight repository before heartbeat setup while unrelated work continues", async () => {
     const held = signal();
     const entered = signal();
@@ -1116,7 +1251,7 @@ describe("the scheduled reconciliation worker", () => {
     expect(bFolding).toBe(true);
   });
 
-  it.each([undefined, 1, 2, 6, RECONCILIATION_WORKER_MAX_CONCURRENCY])("fills startup to concurrency %s and drops ticks at capacity", async (concurrency) => {
+  it.each([undefined, 1, 2, 6, 16])("fills startup to concurrency %s and drops ticks at capacity", async (concurrency) => {
     const timer = createTimer();
     const held = signal();
     let started = 0;
@@ -1322,7 +1457,7 @@ describe("the scheduled reconciliation worker", () => {
     ["number Infinity", Infinity],
     ["number 1e100", 1e100],
     ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
-    ["number 17", RECONCILIATION_WORKER_MAX_CONCURRENCY + 1],
+    ["number 17", 17],
     ['string "2"', "2"],
   ])("reports invalid concurrency %s and uses the default capacity", async (_label, concurrency) => {
     const timer = createTimer();
@@ -1749,6 +1884,10 @@ describe("the scheduled reconciliation worker", () => {
     } finally {
       rejections.stop();
     }
+  });
+
+  it("caps exported startup concurrency at sixteen", () => {
+    expect(RECONCILIATION_WORKER_MAX_CONCURRENCY).toBe(16);
   });
 
   it("polls every five seconds, because a webhook now waits out this poll", () => {
