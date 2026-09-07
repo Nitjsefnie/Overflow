@@ -383,8 +383,9 @@ describe("reconciliation budget holds", () => {
     });
     expect(store.claimNextReconciliationJob).not.toHaveBeenCalled();
 
-    budgetStore.record(reading(1000, new Date("2026-09-07T10:01:00Z")));
-    dependencies.now = () => new Date("2026-09-07T10:01:00Z");
+    budgetStore.record({ ...reading(1000, new Date("2026-09-07T11:01:00Z")),
+      resetAt: new Date("2026-09-07T12:00:00Z") });
+    dependencies.now = () => new Date("2026-09-07T11:01:00Z");
     dependencies.budget = createReconciliationBudgetGate({ store: budgetStore, reserve: 500 });
     await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
     await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
@@ -482,8 +483,8 @@ describe("reconciliation budget holds", () => {
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledTimes(1);
 
-    const recoveredAt = new Date("2026-09-07T10:01:00Z");
-    budgetStore.record(reading(700, recoveredAt));
+    const recoveredAt = new Date("2026-09-07T11:01:00Z");
+    budgetStore.record({ ...reading(700, recoveredAt), resetAt: new Date("2026-09-07T12:00:00Z") });
     dependencies.now = () => recoveredAt;
     for (let poll = 0; poll < 3; poll += 1) {
       await expect(schedule.drain()).resolves.toEqual(["RECONCILED"]);
