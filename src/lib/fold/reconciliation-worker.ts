@@ -1,4 +1,5 @@
 import { callGuarded } from "@/lib/fold/guarded-callback";
+import type { ReconciliationBudgetCheck, ReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 
 export type ReconciliationWorkerStore = {
@@ -17,6 +18,10 @@ export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
   reconcile(repositoryId: string): Promise<{ skipped?: boolean } | void>;
   now?: () => Date;
+  /** Consulted before a job is claimed. Omit it to reconcile without a budget gate. */
+  budget?: ReconciliationBudgetGate;
+  /** Reports entering and leaving a hold — once per transition, never once per poll. */
+  onBudgetChange?(check: ReconciliationBudgetCheck): void;
   /** Setup owns its cleanup; stopping awaits even a cancellation handle delivered late. */
   scheduleLeaseRenewal?(
     callback: () => Promise<void>,
@@ -172,7 +177,10 @@ export type ReconciliationJobOutcome =
   | "RECONCILED"
   | "DEFERRED"
   | "RETRY_SCHEDULED"
-  | "FAILED";
+  | "FAILED"
+  // Holding trades freshness for enough budget to keep reconciliation possible.
+  // It is an outcome, not a failure: no job is claimed and nothing retries it.
+  | "BUDGET_HELD";
 
 /**
  * Excludes a worker's own competing publisher after its lock session is lost.
@@ -207,6 +215,19 @@ const inFlightRepositoriesByStore = new WeakMap<ReconciliationWorkerStore, Set<s
 export async function runNextReconciliationJob(
   dependencies: ReconciliationWorkerDependencies,
 ): Promise<ReconciliationJobOutcome> {
+  if (dependencies.budget) {
+    const now = dependencies.now ?? (() => new Date());
+    const check = dependencies.budget.check(now());
+    if (check.changed) {
+      callGuarded(
+        dependencies,
+        () => dependencies.onBudgetChange ?? (() => {}),
+        [check],
+        (error) => { console.error("Reconciliation budget transition hook failed", error); },
+      );
+    }
+    if (check.state === "BELOW_RESERVE") return "BUDGET_HELD";
+  }
   const { store } = dependencies;
   const job = await store.claimNextReconciliationJob();
   if (job === null) {
@@ -360,14 +381,14 @@ function logLeaseRenewalFailure(jobId: string, error: unknown): void {
 }
 
 /**
- * Works the queue until it is empty, or until `maxJobs` jobs have been taken.
+ * Works the queue until it is empty, the budget holds, or `maxJobs` jobs are taken.
  *
  * The bound is what keeps an enqueue storm from holding the drain forever: the
  * poll comes round again in seconds, so leaving jobs behind costs nothing and
  * lets the process shut down between drains.
  *
- * Returns the outcome of every job it took, in order; the terminating idle poll
- * is not one of them.
+ * Returns each job's outcome and any terminating budget hold, in order. An
+ * idle poll is omitted; a hold stays visible even when no job could be taken.
  */
 export async function drainReconciliationJobs(
   dependencies: ReconciliationWorkerDependencies,
@@ -385,6 +406,7 @@ export async function drainReconciliationJobs(
       break;
     }
     outcomes.push(outcome);
+    if (outcome === "BUDGET_HELD") break;
   }
 
   return outcomes;
