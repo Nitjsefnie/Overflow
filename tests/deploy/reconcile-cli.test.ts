@@ -348,6 +348,7 @@ describe("documented command tokenization", () => {
 describe("reconciliation CLI commands with PostgreSQL", () => {
   let started: StartedPostgres | undefined;
   let sql: Sql;
+  let sponsorId: string;
   const repositoryIdsByOwnerName = new Map<string, string>();
 
   beforeAll(async () => {
@@ -361,6 +362,7 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
       insert into users (github_user_id, github_login)
       values (10001, 'cli-sponsor') returning id
     `;
+    sponsorId = sponsor!.id;
     for (const [index, ownerName] of ["octocat/hello-world", "cli/second"].entries()) {
       const [repository] = await sql<{ id: string }[]>`
         insert into registered_repositories
@@ -400,5 +402,37 @@ describe("reconciliation CLI commands with PostgreSQL", () => {
       adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0,
     }))));
     expect(await sql`select id from reconciliation_runs`, "Cooldown skips must not create reconciliation runs").toHaveLength(0);
+  }, 120_000);
+
+  it("records a failed run for a due repository whose sponsor has no OAuth token", async () => {
+    // Seed inside this test so all-repository cooldown checks keep their own
+    // fixture. Missing credentials stop the real callback before any GitHub read.
+    const [repository] = await sql<{ id: string }[]>`
+      insert into registered_repositories
+        (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id,
+         difficulty_scheme, reconciliation_not_before)
+      values (10004, 'cli/tokenless', ${sponsorId}, 'PUBLIC', 10004,
+        ${sql.json(validDifficultyScheme())}, now() - interval '1 day')
+      returning id
+    `;
+    try {
+      const { status, stdout, stderr } = runCommand("pnpm reconcile --repository cli/tokenless", started!.databaseUrl);
+      const runs = await sql`
+        select repository_id, status, error_message, completed_at
+        from reconciliation_runs where repository_id = ${repository!.id}
+      `;
+      expect(runs, "The real callback must persist its attempt instead of fabricating a cooldown skip").toEqual([{
+        repository_id: repository!.id,
+        status: "FAILED",
+        error_message: "Reconciliation failed.",
+        completed_at: expect.any(Date),
+      }]);
+      expect(status, stderr).toBe(1);
+      expect(stderr).toContain("GitHub access token was not available.");
+      expect(stdout.split(/\r?\n/).filter((line) => line.startsWith("{"))).toEqual([]);
+    } finally {
+      await sql`delete from reconciliation_runs where repository_id = ${repository!.id}`;
+      await sql`delete from registered_repositories where id = ${repository!.id}`;
+    }
   }, 120_000);
 });
