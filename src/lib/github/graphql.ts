@@ -124,6 +124,8 @@ export type GitHubGraphqlClientOptions = {
   fetch?: typeof fetch;
   timeoutMs?: number;
   budget?: GitHubGraphqlBudgetStore;
+  /** Account id owning the OAuth quota; never a credential. Unowned reads are not recorded. */
+  owner?: string;
 };
 
 export type GitHubGraphqlPage<TNode> = {
@@ -139,6 +141,7 @@ export class GitHubGraphqlClient {
   private readonly endpoint: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly owner: string | undefined;
   private readonly budget: GitHubGraphqlBudgetStore | undefined;
 
   public constructor(options: GitHubGraphqlClientOptions) {
@@ -147,6 +150,7 @@ export class GitHubGraphqlClient {
     this.fetchImplementation = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
     this.budget = options.budget;
+    this.owner = options.owner;
   }
 
   public async query<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
@@ -188,12 +192,12 @@ export class GitHubGraphqlClient {
 
       try {
         const reading = readGraphqlBudgetPayload((payload.data as { rateLimit?: unknown }).rateLimit, new Date());
-        if (reading !== null) {
+        if (reading !== null && this.owner !== undefined) {
           // A void-typed recorder can still be async; consume its rejection
           // without making the query wait for observation to finish.
           // Acquire the default here too: a broken observer must not prevent
           // requests, and the next response must retry acquisition after recovery.
-          void Promise.resolve((this.budget ?? gitHubGraphqlBudget()).record(reading)).catch(() => {});
+          void Promise.resolve((this.budget ?? gitHubGraphqlBudget()).record(this.owner, reading)).catch(() => {});
         }
       } catch {
         // Budget observation must never fail an otherwise successful query.

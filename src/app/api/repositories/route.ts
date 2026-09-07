@@ -142,7 +142,7 @@ export const POST = createRepositoryPostHandler({
 
     return {
       actor: { ...session.user, enforcementState },
-      github: new GitHubGateway({ accessToken }),
+      github: new GitHubGateway({ accessToken, owner: session.user.id }),
       store,
       webhook: requiredWebhookConfiguration(),
       // Existing issues predate the webhook this registration creates, so only a
