@@ -169,6 +169,22 @@ describe("documented reconciliation CLI commands", () => {
     expect(stderr).not.toContain(databaseError);
   }, 120_000);
 
+  it.each(["vercel/next.js", "cli/hello_world", "dot.owner/name", "under_score/name"])(
+    "accepts repository name %s before requiring a database", (ownerName) => {
+      const { status, stderr } = runCommand(`pnpm reconcile --repository ${ownerName}`);
+      expect(status).not.toBe(0);
+      expect(stderr).toContain(databaseError);
+      expect(stderr).not.toContain("Usage:");
+    },
+  );
+
+  it("rejects a malformed repository name before requiring a database", () => {
+    const { status, stderr } = runCommand("pnpm reconcile --repository cli//second");
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("Usage: pnpm reconcile [--repository owner/name]");
+    expect(stderr).not.toContain(databaseError);
+  });
+
   it.each(["'", '"'])("passes a %s-quoted repository argument to the real CLI", (quote) => {
     const { status, stderr } = runCommand(`pnpm reconcile --repository ${quote}<owner>/<name>${quote}`);
     expect(status).not.toBe(0);
