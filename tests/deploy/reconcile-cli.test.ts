@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -65,20 +67,49 @@ function runCommand(command: string, databaseUrl?: string) {
     )) delete environment[name];
   }
   if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
-  const result = spawnSync(executable!, argumentsList, {
-    cwd: repositoryRoot,
-    env: environment,
-    encoding: "utf8",
-    timeout: 60_000,
-  });
-  // A missing pnpm executable or a timed-out child is a failure, never a skip.
-  if (result.error) throw result.error;
-  expect(result.signal).toBeNull();
-  expect(result.status).not.toBeNull();
-  return result;
+  const configDirectory = mkdtempSync(join(tmpdir(), "reconcile-cli-config-"));
+  try {
+    // Empty environment options do not override pnpm/rc. Explicit XDG and npm
+    // paths prevent fallback to home config while retaining Corepack's cache.
+    const npmConfig = join(configDirectory, "npmrc");
+    writeFileSync(npmConfig, "");
+    environment.XDG_CONFIG_HOME = configDirectory;
+    environment.npm_config_userconfig = npmConfig;
+    environment.npm_config_globalconfig = npmConfig;
+    const result = spawnSync(executable!, argumentsList, {
+      cwd: repositoryRoot,
+      env: environment,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    // A missing pnpm executable or a timed-out child is a failure, never a skip.
+    if (result.error) throw result.error;
+    expect(result.signal).toBeNull();
+    expect(result.status).not.toBeNull();
+    return result;
+  } finally {
+    rmSync(configDirectory, { recursive: true, force: true });
+  }
 }
 
 describe("documented reconciliation CLI commands", () => {
+  it("does not inherit Node options from the parent's pnpm config file", () => {
+    const parentConfig = mkdtempSync(join(tmpdir(), "reconcile-cli-parent-config-"));
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    try {
+      mkdirSync(join(parentConfig, "pnpm"));
+      writeFileSync(join(parentConfig, "pnpm/rc"), "node-options=--experimental-transform-types\n");
+      process.env.XDG_CONFIG_HOME = parentConfig;
+      const { status, stdout, stderr } = runCommand("pnpm exec node -p 'JSON.stringify(process.env.NODE_OPTIONS ?? null)'");
+      expect(status, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toBeNull();
+    } finally {
+      if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousConfigHome;
+      rmSync(parentConfig, { recursive: true, force: true });
+    }
+  });
+
   it("extracts exactly one all-repositories and one selected-repository invocation", () => {
     expect(documentedCommands, "No reconciliation commands found in the README bash block").not.toHaveLength(0);
     const argumentShapes = documentedCommands.map((command) => tokenizeCommand(command).slice(2));
