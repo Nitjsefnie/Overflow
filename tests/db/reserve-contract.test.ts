@@ -8,13 +8,6 @@ let container: StartedTestContainer | undefined;
 let databaseUrl: string;
 let observer: Sql | undefined;
 
-/**
- * How long a shutdown that should be immediate is given before its absence is called a failure.
- * Only one case uses it, and only because the defect it names is a connection nobody closes,
- * which has no observable form other than a window. Polled, not slept through.
- */
-const shutdownWindowMs = 5_000;
-
 interface ErrorResponseFields {
   readonly code: string;
   readonly message: string;
@@ -253,26 +246,18 @@ describe("the client's reserve contract", () => {
 
     // A graceful end, so nothing tears the connection down on a deadline: it settles only once
     // every connection the pool holds has closed.
-    const shutdown = sql.end();
-    let shutdownSettled = false;
-    void shutdown.then(() => { shutdownSettled = true; }, () => { shutdownSettled = true; });
-
-    // The assertion that names the defect. Handing this connection to the reservation instead of
-    // closing it leaves `end()` waiting on a connection nothing will ever close, and an absence
-    // can only be observed over a window — so the window is bounded here and the assertion is
-    // made on the record rather than on the clock. The bound is not a performance budget: the
-    // correct path terminates this connection in the same tick its handshake completes, which is
-    // two orders of magnitude inside this window, and it is polled rather than slept through so a
-    // passing run costs milliseconds. Before Overflow issue 223's drain, the reservation itself
-    // was the discriminator; now the drain refuses it either way, and the connection's fate is
-    // all that is left to observe.
-    const deadline = Date.now() + shutdownWindowMs;
-    while (!shutdownSettled && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(shutdownSettled).toBe(true);
-
-    await expect(shutdown).resolves.toBeUndefined();
+    //
+    // Awaited unbounded, and this await is the guard. The mutation it exists to catch is the
+    // startup arm becoming `opening && onopen(connection)` — handing an ending pool's connection
+    // to the reservation instead of closing it — and what that leaves behind is a connection
+    // nothing will ever close, so `end()` never settles and this line never returns. Its
+    // signature is therefore the suite's per-test timeout rather than an assertion message,
+    // which is the form this repository has already chosen for a shutdown that never settles;
+    // `tests/db/closesql-shutdown-before-death.test.ts` says so in its own header. There is no
+    // positive discriminator left to assert instead: the drain in `end()` refuses the queued
+    // reservation before that arm is reached, so its outcome is the same either way, and the one
+    // remaining difference between the two builds is whether this promise settles at all.
+    await sql.end();
 
     // Refused rather than reserved, and no longer left queued: `end()` disposes of the work the
     // pool accepted and can no longer serve, with the same `CONNECTION_DESTROYED` `destroy()`

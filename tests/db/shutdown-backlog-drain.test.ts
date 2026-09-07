@@ -151,11 +151,18 @@ describe("ending a client that still has queued work", () => {
     // A reserve is a pseudo-query in the same queue, and the patch gives it a rejection that
     // removes it from that queue. The drain shifts each entry out before rejecting it, exactly as
     // `destroy()` does, which is what keeps that removal inert -- a shifted entry is no longer
-    // found by `indexOf`. A drain that rejected without shifting would have the reserve splice
-    // the array underneath the drain's own cursor: this case catches that, but by hanging until
-    // the per-test timeout, because the entry behind the reserve is skipped rather than
-    // mis-settled. The assertion-shaped failure for that mutation comes from
-    // `reserve-contract.test.ts`, whose queued reservation is settled with a code it can name.
+    // found by `indexOf`.
+    //
+    // What this case catches, and how. A drain that settles the wrong entry, the wrong number of
+    // them, or with the wrong code fails the comparison below by name; leaving either of these
+    // two behind fails it as a missing outcome. A drain that rejected WITHOUT shifting is caught
+    // by no assertion anywhere, here or in `reserve-contract.test.ts`: driving the dependency's
+    // own `Queue` shows the loop only terminates while every entry removes itself, so a queue
+    // like this one -- a self-removing reserve and an ordinary query that stays put -- spins
+    // synchronously and forever, taking the event loop with it, which means not even the
+    // per-test timeout can fire. A queue holding just one reserve, which is what
+    // `reserve-contract.test.ts` has, empties in a single pass and stays green. So the shape of
+    // the drain is held by construction and by review, not by this case.
     const reservation = outcome(sql.reserve());
     const behindIt = outcome(sql`select 2 as value`.execute());
 
@@ -194,9 +201,13 @@ describe("ending a client that still has queued work", () => {
       const queued = record(sql`select 2 as value`.execute(), "queued", observed);
       const shutdown = record(sql.end(), "shutdown", observed);
 
-      // Awaited unbounded. The assertion is the list, not the wait: when the backlog is disposed
-      // of, the shutdown must still be pending, because the connection it is waiting on is still
-      // in a handshake nobody is going to answer.
+      // Awaited unbounded, and this line is where every drain mutation actually dies: a drain
+      // that never runs, runs late, or settles this entry with another code all reach it first
+      // and print the same kind of message. The list below never gets to speak for them -- it
+      // guards the ordering only in the sense of being consistent with it, and what pins the
+      // ordering is WHICH cases fail rather than what any of them prints. Moving the drain after
+      // the connections are told to end fails this case alone; deleting it fails four. Both
+      // report identical text here.
       await expect(queued).resolves.toBe("rejected:CONNECTION_DESTROYED");
       expect(observed).toEqual(["queued rejected"]);
 
