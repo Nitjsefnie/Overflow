@@ -9,14 +9,54 @@ const originalDistDir = process.env.NEXT_DIST_DIR;
 const project = fileURLToPath(new URL("../..", import.meta.url));
 const preparedTrees: string[] = [];
 
-function prepareConfig(release = ".next-release-20260907T101500Z-abc1234") {
-  const tree = mkdtempSync(path.join(os.tmpdir(), "overflow-next-config-"));
-  preparedTrees.push(tree);
+async function expectPathRefusal(configImport: Promise<unknown>, value: string) {
+  await expect(configImport).rejects.toThrowError(Error);
+  // Preparation failures wrap their underlying cause; path refusals do not.
+  await expect(configImport).rejects.not.toHaveProperty("cause");
+  await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+  await expect(configImport).rejects.toThrow(value);
+}
+
+function writePreparedConfig(tree: string, release: string) {
   copyFileSync(path.join(project, "tsconfig.json"), path.join(tree, "tsconfig.json"));
   const prepared = spawnSync(process.execPath, [path.join(project, "scripts/release.ts"), "prepare", tree, release], { encoding: "utf8" });
   expect(prepared.status, prepared.stderr).toBe(0);
+  return prepared.stdout.trim();
+}
+
+function prepareConfig(release = ".next-release-20260907T101500Z-abc1234") {
+  const tree = mkdtempSync(path.join(os.tmpdir(), "overflow-next-config-"));
+  preparedTrees.push(tree);
+  const filename = writePreparedConfig(tree, release);
   vi.spyOn(process, "cwd").mockReturnValue(tree);
-  return { tree, filename: prepared.stdout.trim() };
+  return { tree, filename };
+}
+
+function mapFixtureFilesystem(mapPath: (target: string) => string) {
+  vi.doMock("node:fs", () => ({
+    lstatSync: (target: string, options?: Parameters<typeof lstatSync>[1]) => lstatSync(mapPath(target), options),
+    readFileSync: (target: string, encoding?: BufferEncoding) => readFileSync(mapPath(target), { encoding }),
+  }));
+}
+
+function prepareInvalidPathConfig(value: string, tree?: string, paths = path) {
+  const prepared = tree
+    ? { tree, filename: writePreparedConfig(tree, "build-output") }
+    : prepareConfig("build-output");
+  // The prepare CLI correctly rejects these paths. Retarget only its metadata
+  // and map the requested filename to the real generated file, keeping writes
+  // inside the fixture and preserving the nested-output non-creation check.
+  const config = JSON.parse(readFileSync(prepared.filename, "utf8"));
+  config.releaseConfig.distDir = value.trim();
+  writeFileSync(prepared.filename, JSON.stringify(config));
+  const projectDir = paths === path.win32 ? "C:\\project" : prepared.tree;
+  const requestedConfig = paths.join(projectDir, `${value.trim()}.tsconfig.json`);
+  vi.spyOn(process, "cwd").mockReturnValue(projectDir);
+  if (paths === path.win32) vi.doMock("node:path", () => ({ default: path.win32 }));
+  mapFixtureFilesystem((target) => target === requestedConfig
+    ? prepared.filename
+    : path.join(prepared.tree, ...paths.relative(projectDir, target).split(paths.sep)),
+  );
 }
 
 afterEach(() => {
@@ -37,11 +77,12 @@ describe("NEXT_DIST_DIR", () => {
     let projectDir: string;
 
     beforeEach(() => {
-      fixtureDir = mkdtempSync(path.join(process.cwd(), ".next-config-test-"));
+      fixtureDir = mkdtempSync(path.join(os.tmpdir(), "overflow-next-containment-"));
       projectDir = path.join(fixtureDir, "project");
       const outsideDir = path.join(fixtureDir, "outside");
       mkdirSync(projectDir);
       mkdirSync(outsideDir);
+      writePreparedConfig(projectDir, "release-link");
       symlinkSync(outsideDir, path.join(projectDir, "release-link"), "dir");
       vi.spyOn(process, "cwd").mockReturnValue(projectDir);
     });
@@ -56,16 +97,13 @@ describe("NEXT_DIST_DIR", () => {
     it.each(["release-link/build-123", "release-link\\build-123"])(
       "rejects a Windows path separator in %s",
       async (value) => {
-        vi.spyOn(process, "cwd").mockReturnValue("C:\\project");
-        vi.doMock("node:path", () => ({ default: path.win32 }));
+        prepareInvalidPathConfig(value, projectDir, path.win32);
         process.env.NEXT_DIST_DIR = value;
         vi.resetModules();
 
         const configImport = import("../../next.config");
 
-        await expect(configImport).rejects.toThrowError(Error);
-        await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-        await expect(configImport).rejects.toThrow(value);
+        await expectPathRefusal(configImport, value);
       },
     );
 
@@ -74,20 +112,15 @@ describe("NEXT_DIST_DIR", () => {
       vi.spyOn(process, "cwd").mockReturnValue(windowsProjectDir);
       vi.doMock("node:path", () => ({ default: path.win32 }));
       // Map Windows paths to the real fixture; retain native symlink metadata.
-      vi.doMock("node:fs", () => ({
-        lstatSync: (target: string) => lstatSync(
-          path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
-          { throwIfNoEntry: false },
-        ),
-      }));
+      mapFixtureFilesystem((target) =>
+        path.join(projectDir, ...path.win32.relative(windowsProjectDir, target).split("\\")),
+      );
       process.env.NEXT_DIST_DIR = "release-link";
       vi.resetModules();
 
       const configImport = import("../../next.config");
 
-      await expect(configImport).rejects.toThrowError(Error);
-      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-      await expect(configImport).rejects.toThrow("release-link");
+      await expectPathRefusal(configImport, "release-link");
     });
 
     it("rejects a direct external symlink", async () => {
@@ -96,19 +129,17 @@ describe("NEXT_DIST_DIR", () => {
 
       const configImport = import("../../next.config");
 
-      await expect(configImport).rejects.toThrowError(Error);
-      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-      await expect(configImport).rejects.toThrow("release-link");
+      await expectPathRefusal(configImport, "release-link");
     });
 
     it("rejects a new nested build directory without creating it", async () => {
+      prepareInvalidPathConfig("releases/new/build-123", projectDir);
       process.env.NEXT_DIST_DIR = "releases/new/build-123";
       vi.resetModules();
 
       const configImport = import("../../next.config");
 
-      await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-      await expect(configImport).rejects.toThrow("releases/new/build-123");
+      await expectPathRefusal(configImport, "releases/new/build-123");
       expect(lstatSync(path.join(projectDir, "releases"), { throwIfNoEntry: false })).toBeUndefined();
     });
   });
@@ -121,15 +152,14 @@ describe("NEXT_DIST_DIR", () => {
     ["a Windows absolute path", "C:\\overflow-build"],
     ["a Windows parent segment", ".next-releases\\..\\overflow-build"],
     ["an absolute path with surrounding whitespace", " /tmp/overflow-build "],
-  ])("rejects %s with the variable name and value", async (_description, value) => {
+  ])("rejects %s as an output path", async (_description, value) => {
+    prepareInvalidPathConfig(value);
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
 
-    await expect(configImport).rejects.toThrowError(Error);
-    await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-    await expect(configImport).rejects.toThrow(value);
+    await expectPathRefusal(configImport, value);
   });
 
   it("trims surrounding whitespace from a relative path", async () => {
@@ -144,14 +174,13 @@ describe("NEXT_DIST_DIR", () => {
   });
 
   it.each([".", " \t.\n "])("rejects zero-depth %j", async (value) => {
+    prepareInvalidPathConfig(value);
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
 
-    await expect(configImport).rejects.toThrowError(Error);
-    await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-    await expect(configImport).rejects.toThrow(value);
+    await expectPathRefusal(configImport, value);
   });
 
   it.each([
@@ -163,14 +192,13 @@ describe("NEXT_DIST_DIR", () => {
     "./build-output",
     "build-output/",
   ])("rejects path separators in %j", async (value) => {
+    prepareInvalidPathConfig(value);
     process.env.NEXT_DIST_DIR = value;
     vi.resetModules();
 
     const configImport = import("../../next.config");
 
-    await expect(configImport).rejects.toThrowError(Error);
-    await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
-    await expect(configImport).rejects.toThrow(value);
+    await expectPathRefusal(configImport, value);
   });
 
   it.each([
