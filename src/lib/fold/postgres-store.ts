@@ -9,6 +9,7 @@ import {
   type TransactionClient,
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
+import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
 import type {
   FoldModerationEvent,
@@ -87,6 +88,7 @@ type PullRequestRow = {
 
 type SettlementRow = {
   id: string;
+  fold_revision: number;
   issue_id: string;
   pull_request_id: string;
   github_issue_id: number | string;
@@ -138,6 +140,7 @@ type ReconciliationJobLeaseRow = {
 
 type SelfWorkCalibrationRow = {
   id: string;
+  fold_revision: number;
   pull_request_id: string;
   issue_id: string;
   github_pull_request_id: number | string;
@@ -158,6 +161,7 @@ type SelfWorkCalibrationRow = {
 
 type UnwritableClosureRow = {
   id: string;
+  fold_revision: number;
   issue_id: string;
   github_issue_id: number | string;
   kind: UnwritableClosure["kind"];
@@ -951,16 +955,17 @@ export async function claimGitHubIdentity(
     for (const settlement of selfWorkSettlements) {
       await transaction`
         insert into self_work_calibrations (
-          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
         )
         values (
           ${settlement.pull_request_id}, ${settlement.issue_id}, ${userId},
-          ${settlement.opening_comparison_points}, ${settlement.settled_points}
+          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${FOLD_REVISION}
         )
         on conflict (pull_request_id, issue_id) do update
         set user_id = excluded.user_id,
             opening_comparison_points = excluded.opening_comparison_points,
-            actual_points = excluded.actual_points
+            actual_points = excluded.actual_points,
+            fold_revision = ${FOLD_REVISION}
       `;
       await transaction`delete from settlements where id = ${settlement.id}`;
     }
@@ -972,7 +977,7 @@ export async function claimGitHubIdentity(
     `;
     await transaction`
       update settlements
-      set creditor_id = ${userId}, status = ${"SETTLED"}
+      set creditor_id = ${userId}, status = ${"SETTLED"}, fold_revision = ${FOLD_REVISION}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
         and settlements.creditor_github_user_id = ${githubUserId}
@@ -1146,6 +1151,10 @@ async function materializeSettlements(
       await updateSettlement(sql, settlement, issueId, pullRequestId);
       await recordChange(sql, input.runId, pullRequestId, "SETTLEMENT", "CHANGE", before, desired);
       changes += 1;
+    } else if (current.fold_revision < FOLD_REVISION) {
+      // Recomputed but unchanged: refresh the stamp without creating a CHANGE
+      // record or counting a delta for every row after a revision bump (issue 197).
+      await sql`update settlements set fold_revision = ${FOLD_REVISION} where id = ${current.id}`;
     }
   }
 
@@ -1224,7 +1233,7 @@ async function loadExistingSettlements(
 ): Promise<SettlementRow[]> {
   return sql<SettlementRow[]>`
     select
-      settlements.id, settlements.issue_id, settlements.pull_request_id,
+      settlements.id, settlements.fold_revision, settlements.issue_id, settlements.pull_request_id,
       issues.github_issue_id, pull_requests.github_pull_request_id,
       settlements.creditor_id, settlements.creditor_github_login, settlements.creditor_github_user_id, settlements.debtor_id,
       settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
@@ -1249,12 +1258,12 @@ async function insertSettlement(
   await sql`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
-      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, fold_revision
     )
     values (
       ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.creditorGitHubUserId}, ${settlement.debtorId},
       ${settlement.openingComparisonPoints}, ${settlement.settledPoints}, ${settlement.reviewRounds},
-      ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}
+      ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}, ${FOLD_REVISION}
     )
   `;
 }
@@ -1272,7 +1281,7 @@ async function updateSettlement(
         creditor_github_user_id = ${settlement.creditorGitHubUserId}, debtor_id = ${settlement.debtorId},
         opening_comparison_points = ${settlement.openingComparisonPoints}, settled_points = ${settlement.settledPoints},
         review_rounds = ${settlement.reviewRounds}, credits = ${settlement.credits}, proof_sha256 = ${settlement.proofSha256},
-        status = ${settlement.status}
+        status = ${settlement.status}, fold_revision = ${FOLD_REVISION}
     where issue_id = ${issueId}
   `;
 }
@@ -1304,11 +1313,11 @@ async function materializeSelfWorkCalibrations(
     if (current === undefined) {
       await sql`
         insert into self_work_calibrations (
-          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
         )
         values (
           ${pullRequestId}, ${issueId}, ${calibration.userId},
-          ${calibration.openingComparisonPoints}, ${calibration.actualPoints}
+          ${calibration.openingComparisonPoints}, ${calibration.actualPoints}, ${FOLD_REVISION}
         )
       `;
       await recordChange(
@@ -1331,7 +1340,7 @@ async function materializeSelfWorkCalibrations(
         update self_work_calibrations
         set user_id = ${calibration.userId},
             opening_comparison_points = ${calibration.openingComparisonPoints},
-            actual_points = ${calibration.actualPoints}
+            actual_points = ${calibration.actualPoints}, fold_revision = ${FOLD_REVISION}
         where id = ${current.id}
       `;
       await recordChange(
@@ -1344,6 +1353,8 @@ async function materializeSelfWorkCalibrations(
         desired,
       );
       changes += 1;
+    } else if (current.fold_revision < FOLD_REVISION) {
+      await sql`update self_work_calibrations set fold_revision = ${FOLD_REVISION} where id = ${current.id}`;
     }
   }
 
@@ -1371,6 +1382,7 @@ async function loadExistingSelfWorkCalibrations(
   return sql<SelfWorkCalibrationRow[]>`
     select
       self_work_calibrations.id,
+      self_work_calibrations.fold_revision,
       self_work_calibrations.pull_request_id,
       self_work_calibrations.issue_id,
       pull_requests.github_pull_request_id,
@@ -1402,7 +1414,7 @@ async function materializeUnwritableClosures(
   pullRequestIds: Map<number, string>,
 ): Promise<ReconciliationDeltas> {
   const existingRows = await sql<UnwritableClosureRow[]>`
-    select unwritable_closures.id, unwritable_closures.issue_id, issues.github_issue_id,
+    select unwritable_closures.id, unwritable_closures.fold_revision, unwritable_closures.issue_id, issues.github_issue_id,
       unwritable_closures.kind::text, pull_requests.github_pull_request_id, unwritable_closures.reason
     from unwritable_closures
     join issues on issues.id = unwritable_closures.issue_id
@@ -1426,8 +1438,8 @@ async function materializeUnwritableClosures(
     const desired = unwritableClosureState(closure);
     if (current === undefined) {
       await sql`
-        insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
-        values (${issueId}, ${pullRequestId}, ${closure.kind}, ${closure.reason})
+        insert into unwritable_closures (issue_id, pull_request_id, kind, reason, fold_revision)
+        values (${issueId}, ${pullRequestId}, ${closure.kind}, ${closure.reason}, ${FOLD_REVISION})
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "ADD", null, desired);
       adds += 1;
@@ -1439,11 +1451,14 @@ async function materializeUnwritableClosures(
     if (JSON.stringify(before) !== JSON.stringify(desired)) {
       await sql`
         update unwritable_closures
-        set pull_request_id = ${pullRequestId}, kind = ${closure.kind}, reason = ${closure.reason}
+        set pull_request_id = ${pullRequestId}, kind = ${closure.kind}, reason = ${closure.reason},
+            fold_revision = ${FOLD_REVISION}
         where id = ${current.id}
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "CHANGE", before, desired);
       changes += 1;
+    } else if (current.fold_revision < FOLD_REVISION) {
+      await sql`update unwritable_closures set fold_revision = ${FOLD_REVISION} where id = ${current.id}`;
     }
   }
 
