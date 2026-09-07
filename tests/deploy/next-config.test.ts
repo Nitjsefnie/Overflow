@@ -116,6 +116,20 @@ describe("NEXT_DIST_DIR", () => {
     expect(config.distDir).toBe(".next-release-20260907T101500Z-abc1234");
   });
 
+  it.each([".", " \t.\n "])("rejects zero-depth %j with the type-include depth reason", async (value) => {
+    process.env.NEXT_DIST_DIR = value;
+    vi.resetModules();
+
+    const configImport = import("../../next.config");
+
+    await expect(configImport).rejects.toThrowError(Error);
+    await expect(configImport).rejects.toThrow("NEXT_DIST_DIR");
+    await expect(configImport).rejects.toThrow(value);
+    await expect(configImport).rejects.toThrow("tsconfig.json");
+    await expect(configImport).rejects.toThrow(".next/types/**/*.ts");
+    await expect(configImport).rejects.toThrow("one segment");
+  });
+
   it.each([
     ".next-releases/20260907T101500Z-abc1234",
     " \t.next-releases/20260907T101500Z-abc1234\n ",
