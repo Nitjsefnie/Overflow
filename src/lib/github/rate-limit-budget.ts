@@ -110,6 +110,9 @@ export function assessGraphqlBudget(
   return { state, reading, reserve: options.reserve };
 }
 
+// Roughly 10% of the ordinary 5,000-point budget is a recovery allowance for
+// the rest of the product and a human diagnosing trouble. This admission
+// threshold is not derived from a measured maximum fold cost.
 export const DEFAULT_GRAPHQL_BUDGET_RESERVE: number = 500;
 
 export function readGraphqlBudgetReserve(env: NodeJS.ProcessEnv): number {
