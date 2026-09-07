@@ -117,6 +117,7 @@ type SettlementRow = {
 type IdentityClaimSettlementRow = Pick<
   SettlementRow,
   | "id"
+  | "fold_revision"
   | "issue_id"
   | "pull_request_id"
   | "creditor_id"
@@ -963,6 +964,7 @@ export async function claimGitHubIdentity(
     const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
       select
         settlements.id,
+        settlements.fold_revision,
         settlements.issue_id,
         settlements.pull_request_id,
         settlements.creditor_id,
@@ -985,13 +987,15 @@ export async function claimGitHubIdentity(
         )
         values (
           ${settlement.pull_request_id}, ${settlement.issue_id}, ${userId},
-          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${FOLD_REVISION}
+          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
         )
         on conflict (pull_request_id, issue_id) do update
         set user_id = excluded.user_id,
             opening_comparison_points = excluded.opening_comparison_points,
             actual_points = excluded.actual_points,
-            fold_revision = ${FOLD_REVISION}
+            -- Identity claims carry values forward without recomputing them;
+            -- keep the older provenance when either row came from older logic.
+            fold_revision = least(self_work_calibrations.fold_revision, excluded.fold_revision)
       `;
       await transaction`delete from settlements where id = ${settlement.id}`;
     }
@@ -1003,7 +1007,7 @@ export async function claimGitHubIdentity(
     `;
     await transaction`
       update settlements
-      set creditor_id = ${userId}, status = ${"SETTLED"}, fold_revision = ${FOLD_REVISION}
+      set creditor_id = ${userId}, status = ${"SETTLED"}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
         and settlements.creditor_github_user_id = ${githubUserId}
