@@ -565,6 +565,8 @@ export class GitHubGateway {
       }));
 
       if (!response.ok) {
+        // HTTP failure intentionally takes precedence over a body timeout; pinned by
+        // "preserves the HTTP failure when reading its body is aborted" in graphql.test.ts.
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
         const { rateLimited, retryAfterSeconds } = classifyGitHubRateLimit(response.status, response.headers, body);
         throw new GitHubApiError(response.status, rateLimited, retryAfterSeconds, body);

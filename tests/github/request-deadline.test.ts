@@ -114,7 +114,7 @@ describe("GitHubGateway REST request deadline", () => {
     expect(stalledSocket?.destroyed).toBe(true);
   }, 3000);
 
-  it("preserves label pagination headers and drains creation responses", async () => {
+  it("preserves label pagination headers before creating missing labels", async () => {
     const requests: string[] = [];
     const apiUrl = await serve((request, response) => {
       requests.push(`${request.method} ${request.url}`);
@@ -146,15 +146,21 @@ describe("GitHubGateway REST request deadline", () => {
     expect(outcome).toBe(expected);
   });
 
-  it.each(["headers", "body"])("maps a transport failure during %s to the existing message", async (stage) => {
+  it("maps a header-stage transport failure to the request-failed message", async () => {
     const gateway = new GitHubGateway({
       accessToken: "test-token",
-      fetch: async () => {
-        if (stage === "headers") throw new Error("connection failed");
-        return new Response(new ReadableStream({ start(controller) { controller.error(new Error("connection failed")); } }));
-      },
+      fetch: async () => { throw new Error("connection failed"); },
     });
     await expect(gateway.getRepository(repository)).rejects.toMatchObject({ message: "GitHub request failed." });
+  });
+
+  it.each(reads)("reclassifies a mid-body transport failure as a failed request for $name", async ({ run }) => {
+    const apiUrl = await serve((_request, response) => {
+      response.writeHead(200, { "Content-Length": "1024", Connection: "close" });
+      response.end('{"id":');
+    });
+    const gateway = new GitHubGateway({ accessToken: "test-token", apiUrl });
+    await expect(run(gateway)).rejects.toMatchObject({ message: "GitHub request failed." });
   });
 
   it("bounds an injected fetch that never resolves and ignores abort", async () => {
@@ -171,20 +177,98 @@ describe("GitHubGateway REST request deadline", () => {
     await cancelled.promise;
   }, 3000);
 
-  it("keeps one absolute deadline across delayed headers and a trickling body", async () => {
+  it("bounds a body whose read stalls and whose cancellation never settles", async () => {
     vi.useFakeTimers();
-    let delivery: ReturnType<typeof setInterval>;
     let cancelled = false;
     const gateway = new GitHubGateway({
       accessToken: "test-token", timeoutMs: 1000,
-      fetch: () => new Promise((resolve) => setTimeout(() => resolve(new Response(new ReadableStream({
-        start(controller) { delivery = setInterval(() => controller.enqueue(new TextEncoder().encode(" ")), 100); },
-        cancel() { cancelled = true; clearInterval(delivery); },
-      }))), 400)),
+      fetch: async () => new Response(new ReadableStream({
+        cancel() { cancelled = true; return new Promise<void>(() => {}); },
+      })),
     });
-    const outcome = gateway.getRepository(repository).catch((error: Error) => error.message);
-    await vi.advanceTimersByTimeAsync(1000);
-    await expect(outcome).resolves.toBe("GitHub request timed out.");
+    let outcome: unknown = "pending";
+    void gateway.getRepository(repository).then(
+      (value) => { outcome = { resolved: value }; },
+      (error: unknown) => { outcome = error; },
+    );
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outcome).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).toMatchObject({ message: "GitHub request timed out." });
     expect(cancelled).toBe(true);
   }, 3000);
+
+  describe.each([
+    ...reads,
+    { name: "deleteWebhook", run: (gateway: GitHubGateway) => gateway.deleteWebhook(repository, 42), body: "", result: undefined },
+    { name: "label creation POST", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, ["easy"]), body: '{"name":"easy"}', result: undefined },
+  ])("configured deadline for $name", ({ name, run, body, result }) => {
+    function afterLabelPrerequisite(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+      return (input, init) => {
+        if (name === "listLabelNames via ensureDifficultyLabels" && String(input).endsWith("page=1")) {
+          // Finish page one so the timed response exercises pagination's next request.
+          return Promise.resolve(new Response("[]", { headers: { link: '</labels?page=2>; rel="next"' } }));
+        }
+        if (name === "label creation POST" && init?.method !== "POST") {
+          return Promise.resolve(new Response("[]"));
+        }
+        return fetch(input, init);
+      };
+    }
+
+    it("stays pending at 999 ms and times out at 1000 ms despite delayed headers and trickling bytes", async () => {
+      vi.useFakeTimers();
+      let delivery: ReturnType<typeof setInterval>;
+      let cancelled = false;
+      const gateway = new GitHubGateway({
+        accessToken: "test-token", timeoutMs: 1000,
+        fetch: afterLabelPrerequisite(() => new Promise((resolve) => setTimeout(() => resolve(new Response(new ReadableStream({
+          start(controller) { delivery = setInterval(() => controller.enqueue(new TextEncoder().encode(" ")), 100); },
+          cancel() { cancelled = true; clearInterval(delivery); },
+        }))), 400))),
+      });
+      let outcome: unknown = "pending";
+      void run(gateway).then(
+        (value) => { outcome = { resolved: value }; },
+        (error: unknown) => { outcome = error; },
+      );
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(outcome).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toMatchObject({ message: "GitHub request timed out." });
+      expect(cancelled).toBe(true);
+    }, 3000);
+
+    it("resolves a body completed at 900 ms after headers at 400 ms within a 1000 ms budget", async () => {
+      vi.useFakeTimers();
+      let completion: ReturnType<typeof setTimeout>;
+      const gateway = new GitHubGateway({
+        accessToken: "test-token", timeoutMs: 1000,
+        fetch: afterLabelPrerequisite(() => new Promise((resolve) => setTimeout(() => resolve(new Response(new ReadableStream({
+          start(controller) {
+            completion = setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode(body));
+              controller.close();
+            }, 500);
+          },
+          cancel() { clearTimeout(completion); },
+        }))), 400))),
+      });
+      let outcome: unknown = "pending";
+      void run(gateway).then(
+        (value) => { outcome = { resolved: value }; },
+        (error: unknown) => { outcome = error; },
+      );
+
+      await vi.advanceTimersByTimeAsync(899);
+      expect(outcome).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toEqual({ resolved: result });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(outcome).toEqual({ resolved: result });
+    }, 3000);
+  });
 });
