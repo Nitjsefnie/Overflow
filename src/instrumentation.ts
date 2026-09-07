@@ -34,7 +34,7 @@ export async function register(): Promise<void> {
           console.error(`Reconciliation failed for repository ${repositoryId}`, error);
         },
       });
-      console.info("Reconciliation drain", countOutcomes(outcomes));
+      if (outcomes.length > 0) console.info("Reconciliation drain", countOutcomes(outcomes));
       return outcomes;
     },
     onFailure: (error) => {
