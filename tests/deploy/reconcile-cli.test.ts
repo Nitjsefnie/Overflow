@@ -249,10 +249,10 @@ describe("documented command tokenization", () => {
   });
 });
 
-describe("documented reconciliation CLI commands with PostgreSQL", () => {
+describe("reconciliation CLI commands with PostgreSQL", () => {
   let started: StartedPostgres | undefined;
   let sql: Sql;
-  const repositoryIds: string[] = [];
+  const repositoryIdsByOwnerName = new Map<string, string>();
 
   beforeAll(async () => {
     started = await startPostgresContainer({ database: "cli", user: "cli", password: "cli" });
@@ -274,7 +274,7 @@ describe("documented reconciliation CLI commands with PostgreSQL", () => {
           ${sql.json(validDifficultyScheme())}, now() + interval '1 day')
         returning id
       `;
-      repositoryIds.push(repository!.id);
+      repositoryIdsByOwnerName.set(ownerName, repository!.id);
     }
   }, 120_000);
 
@@ -286,13 +286,18 @@ describe("documented reconciliation CLI commands with PostgreSQL", () => {
     }
   }, 120_000);
 
-  it.each(documentedCommands)("successfully runs %s without GitHub access", async (command) => {
+  it.each([...documentedCommands, "pnpm reconcile --repository cli/second"])("successfully runs %s without GitHub access", async (command) => {
     const { status, stdout, stderr } = runCommand(command, started!.databaseUrl);
     expect(status, stderr).toBe(0);
     const summaries = stdout.split(/\r?\n/)
       .filter((line) => line.startsWith("{"))
       .map((line) => JSON.parse(line));
-    const expectedIds = tokenizeCommand(command).length === 4 ? [repositoryIds[0]!] : repositoryIds;
+    const words = tokenizeCommand(command);
+    const repositoryOption = words.indexOf("--repository");
+    const expectedIds = repositoryOption === -1
+      ? [...repositoryIdsByOwnerName.values()]
+      : [repositoryIdsByOwnerName.get(words[repositoryOption + 1]!)];
+    expect(expectedIds, "Every selected repository must be seeded").not.toContain(undefined);
     expect(summaries).toHaveLength(expectedIds.length);
     expect(summaries).toEqual(expect.arrayContaining(expectedIds.map((repositoryId) => ({
       repositoryId, runId: null, skipped: true,
