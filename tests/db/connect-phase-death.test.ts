@@ -197,11 +197,11 @@ async function until(condition: () => boolean) {
  * `onclose` after the shutdown settled, which starts a fresh connect with `ending` cleared;
  * `tests/db/shutdown-backlog-drain.test.ts` covers the half of that the drain in `end()` closes,
  * and the re-arm itself is not reached once the backlog is empty but is not guarded against
- * either. And the cancel below reaches only a retry a *close* scheduled: the pool's own
- * `connection.connect(query)` discards the handle `reconnect()` hands back, so a shutdown
- * arriving inside that scheduled window still waits it out. Widening the cancel to cover it
- * would reject a freshly dispatched query that every build serves today, which the last case in
- * this file exists to prevent.
+ * either. Overflow issue 224 is the other one: the cancel below reaches only a retry a *close*
+ * scheduled, because the pool's own `connection.connect(query)` discards the handle
+ * `reconnect()` hands back, so a shutdown arriving inside that scheduled window still waits it
+ * out. Widening the cancel to cover it would reject a freshly dispatched query that every build
+ * serves today, which the last case in this file exists to prevent.
  *
  * The library client is driven directly rather than through `closeSql()`: the defect is in the
  * patched dependency, and the wrapper adds nothing to the evidence. `closeSql()` is awaited by
@@ -461,7 +461,12 @@ describe("a connection whose socket dies while it is still opening", () => {
       // CONNECTION_DESTROYED, one left to time out with CONNECT_TIMEOUT. Awaited unbounded.
       await expect(opening).resolves.toBe("CONNECT_TIMEOUT");
       await expect(shutdown).resolves.toBeUndefined();
-      // And the timeout ends the client rather than starting another round.
+      // And the timeout ends the client rather than starting another round. The window is the
+      // same evidence-not-proof shape as the two cases above: a count read in the tick the
+      // shutdown settled cannot see an attempt that has merely been scheduled, and this client's
+      // `backoff` answers `promptSeconds`, so a rearm would land thirty times inside it.
+      expect(proxy.accepted).toBe(2);
+      await new Promise((resolve) => setTimeout(resolve, quietWindowMs));
       expect(proxy.accepted).toBe(2);
     } finally {
       await sql.end();

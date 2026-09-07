@@ -8,6 +8,13 @@ let container: StartedTestContainer | undefined;
 let databaseUrl: string;
 let observer: Sql | undefined;
 
+/**
+ * How long a shutdown that should be immediate is given before its absence is called a failure.
+ * Only one case uses it, and only because the defect it names is a connection nobody closes,
+ * which has no observable form other than a window. Polled, not slept through.
+ */
+const shutdownWindowMs = 5_000;
+
 interface ErrorResponseFields {
   readonly code: string;
   readonly message: string;
@@ -239,19 +246,41 @@ describe("the client's reserve contract", () => {
     // when the connection becomes ready. Handing it to the reserve instead of terminating it
     // leaves end() waiting on a connection nothing will close, which is what the unbounded await
     // below would then hang on.
-    const reserved = sql.reserve().then(() => "reserved", () => "refused");
+    const reserved = sql.reserve().then(
+      () => "reserved",
+      (error: { code?: string }) => `refused:${error.code}`,
+    );
 
     // A graceful end, so nothing tears the connection down on a deadline: it settles only once
     // every connection the pool holds has closed.
-    await sql.end();
+    const shutdown = sql.end();
+    let shutdownSettled = false;
+    void shutdown.then(() => { shutdownSettled = true; }, () => { shutdownSettled = true; });
+
+    // The assertion that names the defect. Handing this connection to the reservation instead of
+    // closing it leaves `end()` waiting on a connection nothing will ever close, and an absence
+    // can only be observed over a window — so the window is bounded here and the assertion is
+    // made on the record rather than on the clock. The bound is not a performance budget: the
+    // correct path terminates this connection in the same tick its handshake completes, which is
+    // two orders of magnitude inside this window, and it is polled rather than slept through so a
+    // passing run costs milliseconds. Before Overflow issue 223's drain, the reservation itself
+    // was the discriminator; now the drain refuses it either way, and the connection's fate is
+    // all that is left to observe.
+    const deadline = Date.now() + shutdownWindowMs;
+    while (!shutdownSettled && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(shutdownSettled).toBe(true);
+
+    await expect(shutdown).resolves.toBeUndefined();
 
     // Refused rather than reserved, and no longer left queued: `end()` disposes of the work the
     // pool accepted and can no longer serve, with the same `CONNECTION_DESTROYED` `destroy()`
     // uses. This case used to assert that the reservation was *still pending* after the shutdown
     // had resolved — true of the build it was written against, and the shape Overflow issue 223
-    // exists to remove, since a caller cannot act on a promise that never settles. What the case
-    // is for is unchanged: a pool that opened its connection for this reservation must still end.
-    expect(await Promise.race([reserved, Promise.resolve("still queued")])).toBe("refused");
+    // exists to remove, since a caller cannot act on a promise that never settles.
+    expect(await Promise.race([reserved, Promise.resolve("still queued")]))
+      .toBe("refused:CONNECTION_DESTROYED");
   });
 
   it("does not dispatch queued work to a connection the pool has already reclaimed", async () => {

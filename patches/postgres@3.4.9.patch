@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5318225a1e25e136a4e50977873e7f71f681cb88 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125b777733c 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -96,6 +96,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -68,7 +68,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5318225a1e25e136a4e50977873e7f71
 +    // it has just dispatched -- socketless and holding it as `initial` in the same way -- is
 +    // untouched and still runs, and a shutdown arriving inside THAT scheduled window still
 +    // waits it out. Covering it here would reject the freshly dispatched query along with
-+    // it, so it is left to its own issue. Overflow issue 164.
++    // it, so it is left to Overflow issue 224. Overflow issue 164.
 +    const scheduled = retryTimer !== null && !connection.reserved && !query && sent.length === 0
 +    scheduled && (clearTimeout(retryTimer), retryTimer = null)
 +
@@ -168,10 +168,24 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5318225a1e25e136a4e50977873e7f71
      }
  
 diff --git a/src/index.js b/src/index.js
-index c7fba3dace20173f4cb13f3f138bb6d213b43683..0e38b9bb3132bb6232e831290aecdce0ed9a46a9 100644
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..06d04f117754700ce4863f33fa0d136339f2e3c4 100644
 --- a/src/index.js
 +++ b/src/index.js
-@@ -205,19 +205,37 @@ function Postgres(a, b) {
+@@ -201,23 +201,51 @@ function Postgres(a, b) {
+   }
+ 
+   async function reserve() {
++    // A reservation asks the pool for work the same way a query does, and has to be refused
++    // the same way once the pool is ending -- handler() consults this flag and reserve() did
++    // not, so a reservation requested after the shutdown was pushed into a queue that will
++    // never be dispatched and, since end() drains once and before this flag is set, never
++    // drained either. Against a reachable server it was worse than a stranded promise: the
++    // pool opened a fresh socket for it after the shutdown had already resolved. Overflow
++    // issue 223.
++    if (ending)
++      throw Errors.connection('CONNECTION_ENDED', options, options)
++
+     const queue = Queue()
      const c = open.length
        ? open.shift()
        : await new Promise((resolve, reject) => {
@@ -211,7 +225,7 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..0e38b9bb3132bb6232e831290aecdce0
        c.reserved = null
        onopen(c)
      }
-@@ -368,6 +386,24 @@ function Postgres(a, b) {
+@@ -368,6 +396,24 @@ function Postgres(a, b) {
  
      await 1
      let timer
@@ -236,7 +250,7 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..0e38b9bb3132bb6232e831290aecdce0
      return ending = Promise.race([
        new Promise(r => timeout !== null && (timer = setTimeout(destroy, timeout * 1000, r))),
        Promise.all(connections.map(c => c.end()).concat(
-@@ -423,7 +459,11 @@ function Postgres(a, b) {
+@@ -423,7 +469,11 @@ function Postgres(a, b) {
      c.reserved = null
      c.onclose && (c.onclose(e), c.onclose = null)
      options.onclose && options.onclose(c.id)

@@ -1,9 +1,17 @@
+import net from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { startPostgresContainer } from "../support/postgres-container";
 
 const database = "overflow_shutdown_backlog";
+
+/**
+ * How long the client is willing to wait for a handshake nobody will answer. It is what makes the
+ * ordering case's connection unable to finish ending; only its being longer than everything else
+ * that case does matters, and nothing is asserted about the duration.
+ */
+const unansweredHandshakeSeconds = 3;
 
 let container: StartedTestContainer | undefined;
 let databaseUrl: string;
@@ -14,6 +22,47 @@ function outcome(promise: Promise<unknown>): Promise<string> {
     (value) => `settled:${JSON.stringify(value)}`,
     (error: { code?: string }) => `rejected:${error.code}`,
   );
+}
+
+/**
+ * Records what a promise did, in the order it happened, and hands back the outcome string. The
+ * ordering case asserts on this list rather than on a clock: the question it answers is whether
+ * the backlog was disposed of before or after the shutdown waited on its connections.
+ */
+function record(promise: Promise<unknown>, name: string, into: string[]): Promise<string> {
+  return outcome(promise).then((result) => {
+    into.push(`${name} ${result.startsWith("rejected") ? "rejected" : "settled"}`);
+    return result;
+  });
+}
+
+/**
+ * A listener that accepts a connection and never answers it — no postgres behind it at all,
+ * because a client that never finishes its handshake never needs one. It is what a restarting
+ * server, a pooler with no backend, or a firewall that swallows the reply looks like.
+ */
+async function startSilentListener(): Promise<{ port: number; close(): Promise<void> }> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("data", () => undefined);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  return {
+    port: (server.address() as net.AddressInfo).port,
+    async close() {
+      for (const socket of [...sockets]) socket.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    },
+  };
 }
 
 /**
@@ -103,7 +152,10 @@ describe("ending a client that still has queued work", () => {
     // removes it from that queue. The drain shifts each entry out before rejecting it, exactly as
     // `destroy()` does, which is what keeps that removal inert -- a shifted entry is no longer
     // found by `indexOf`. A drain that rejected without shifting would have the reserve splice
-    // the array underneath the drain's own cursor, so this case is the one that would catch it.
+    // the array underneath the drain's own cursor: this case catches that, but by hanging until
+    // the per-test timeout, because the entry behind the reserve is skipped rather than
+    // mis-settled. The assertion-shaped failure for that mutation comes from
+    // `reserve-contract.test.ts`, whose queued reservation is settled with a code it can name.
     const reservation = outcome(sql.reserve());
     const behindIt = outcome(sql`select 2 as value`.execute());
 
@@ -116,5 +168,67 @@ describe("ending a client that still has queued work", () => {
       "rejected:CONNECTION_DESTROYED",
       "rejected:CONNECTION_DESTROYED",
     ]);
+  }, 120_000);
+
+  it("disposes of the backlog before waiting for a connection that cannot finish ending", async () => {
+    // Nothing answers this listener, so the client's only connection is stuck in a handshake for
+    // `unansweredHandshakeSeconds` and its own `end()` cannot settle until then. That is what
+    // makes the drain's *order* observable: draining before the connections are told to end
+    // settles the backlog now, draining after settles it only once every connection has finished
+    // ending -- and where a connection never finishes, never. Every other case in this file uses
+    // a reachable server, where both orders look identical.
+    const listener = await startSilentListener();
+    const sql = postgres({
+      host: "127.0.0.1",
+      port: listener.port,
+      database,
+      username: database,
+      password: database,
+      max: 1,
+      connect_timeout: unansweredHandshakeSeconds,
+    });
+    const observed: string[] = [];
+
+    try {
+      const dispatched = record(sql`select 1 as value`.execute(), "dispatched", observed);
+      const queued = record(sql`select 2 as value`.execute(), "queued", observed);
+      const shutdown = record(sql.end(), "shutdown", observed);
+
+      // Awaited unbounded. The assertion is the list, not the wait: when the backlog is disposed
+      // of, the shutdown must still be pending, because the connection it is waiting on is still
+      // in a handshake nobody is going to answer.
+      await expect(queued).resolves.toBe("rejected:CONNECTION_DESTROYED");
+      expect(observed).toEqual(["queued rejected"]);
+
+      // And the rest of the shutdown still happens in its own time: the stuck handshake gives up
+      // at its connect_timeout, which is what rejects the dispatched query and settles the
+      // shutdown -- after the backlog, not before it.
+      await expect(shutdown).resolves.toBe("settled:undefined");
+      await expect(dispatched).resolves.toBe("rejected:CONNECT_TIMEOUT");
+      expect(observed).toEqual(["queued rejected", "dispatched rejected", "shutdown settled"]);
+    } finally {
+      await listener.close();
+    }
+  }, 120_000);
+
+  it("refuses a reservation requested after the shutdown, as it already refuses a query", async () => {
+    const sql = postgres(databaseUrl, { max: 1 });
+
+    // Healthy first, so the pool has really opened and closed a connection rather than never
+    // having had one.
+    await expect(sql`select 1 as value`).resolves.toEqual([{ value: 1 }]);
+    await expect(sql.end()).resolves.toBeUndefined();
+
+    // The parity this case exists for, and the half of it that is verified rather than assumed:
+    // an ordinary query submitted after the shutdown is refused by `handler()`, which consults
+    // the pool's `ending` flag.
+    await expect(sql`select 2 as value`).rejects.toMatchObject({ code: "CONNECTION_ENDED" });
+
+    // `reserve()` pushes into the same queue without going through `handler()`, so before the
+    // patch it was served: against a reachable server by opening a fresh socket after the
+    // shutdown had resolved, and against an unreachable one by waiting for a connection that
+    // never comes -- a promise nothing settles, since the drain has already run and runs once.
+    // It now answers exactly as the query above does.
+    await expect(sql.reserve()).rejects.toMatchObject({ code: "CONNECTION_ENDED" });
   }, 120_000);
 });
