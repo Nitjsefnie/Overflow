@@ -47,8 +47,20 @@ const budgetKey = Symbol.for("overflow.github.graphql-budget");
 export function gitHubGraphqlBudget(): GitHubGraphqlBudgetStore {
   // Next.js bundles instrumentation separately from the page tree; both must
   // reach the same store, rather than separate module-level singletons.
-  const shared = globalThis as typeof globalThis & { [budgetKey]?: GitHubGraphqlBudgetStore };
-  return shared[budgetKey] ??= createGitHubGraphqlBudgetStore();
+  const shared = globalThis as typeof globalThis & { [budgetKey]?: unknown };
+  try {
+    const existing = shared[budgetKey] as Partial<GitHubGraphqlBudgetStore> | null | undefined;
+    if (existing !== null && (typeof existing === "object" || typeof existing === "function")
+      && typeof existing.record === "function" && typeof existing.read === "function"
+      && typeof existing.noteState === "function" && typeof existing.readState === "function") {
+      return existing as GitHubGraphqlBudgetStore;
+    }
+  } catch {
+    // An unreadable shape (for example a throwing getter) is not a store.
+  }
+  const budget = createGitHubGraphqlBudgetStore();
+  shared[budgetKey] = budget;
+  return budget;
 }
 
 export function readGraphqlBudgetPayload(
