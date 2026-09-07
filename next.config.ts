@@ -17,6 +17,9 @@ if (distDir) {
   }
 
   if (
+    // Absolute paths contain a separator, so the earlier rule rejects them.
+    // Keep the absolute checks as redundant defence in depth: their rejection
+    // paths are unreachable here and cannot be tested independently.
     path.isAbsolute(distDir) ||
     path.win32.isAbsolute(distDir) ||
     distDir === ".." ||
