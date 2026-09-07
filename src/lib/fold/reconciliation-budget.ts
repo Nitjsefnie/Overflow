@@ -60,10 +60,16 @@ export function reconciliationBudgetHoldUntil(
   let check: ReconciliationBudgetCheck | undefined;
   let holdUntil: Date | null = null;
   try {
-    check = (dependencies.budget ?? createReconciliationBudgetGate()).check(owner, now());
+    const admissionTime = now().getTime();
+    const admission = new Date(admissionTime);
+    if (!Number.isFinite(admission.getTime())) return null;
+    check = (dependencies.budget ?? createReconciliationBudgetGate()).check(owner, admission);
     if (check.state === "BELOW_RESERVE" && check.reading !== null) {
-      const reset = check.reading.resetAt.getTime();
-      if (Number.isFinite(reset)) holdUntil = new Date(reset);
+      const reset = new Date(check.reading.resetAt.getTime());
+      // A discriminator cannot make an expired window current, and a finite
+      // source number may still exceed Date's representable range.
+      if (Number.isFinite(reset.getTime()) && reset.getTime() > admissionTime) holdUntil = reset;
+      else check = { ...check, state: "UNKNOWN", reading: null };
     }
   } catch {
     // Missing or unreadable observation means UNKNOWN and admits the pass.

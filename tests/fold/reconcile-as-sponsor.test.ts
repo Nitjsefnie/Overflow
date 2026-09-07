@@ -197,6 +197,8 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
   });
   it("records the default sponsor gateway's successful GraphQL request under its account id", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
     Reflect.set(globalThis, budgetKey, createGitHubGraphqlBudgetStore());
@@ -213,9 +215,15 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(gitHubGraphqlBudget().owners()).toEqual(["sponsor-1"]);
     expect(gitHubGraphqlBudget().read("sponsor-1")?.remaining).toBe(42);
+    expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "UNKNOWN", remaining: undefined, reserve: 500, resetAt: undefined,
+    });
+    expect(warned).not.toHaveBeenCalled();
   });
 
   it("continues to healthy B after deferring A and admits A at its own reset", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
     vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
@@ -247,9 +255,19 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(a.gatewaysBuilt).toEqual(["a-token"]);
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
+    expect(warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "BELOW_RESERVE", remaining: 42, reserve: 500, resetAt,
+    });
+    expect(informed.mock.calls).toEqual([
+      [expect.any(String), { owner: "sponsor-2", state: "AVAILABLE", remaining: 4200,
+        reserve: 500, resetAt: new Date("2026-09-07T12:00:00Z") }],
+      [expect.any(String), { owner: "sponsor-1", state: "UNKNOWN", remaining: 42, reserve: 500, resetAt }],
+    ]);
   });
 
   it("checks direct folds under the repository lock after resolving the sponsor and before beginRun", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
     const budget = createGitHubGraphqlBudgetStore();
@@ -276,6 +294,11 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     expect(harness.calls).toEqual(["getRepository"]);
     expect(harness.gatewaysBuilt).toEqual([]);
     expect(locked).toBe(false);
+    expect(warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "BELOW_RESERVE", remaining: 42, reserve: 500,
+      resetAt: new Date("2026-09-07T11:00:00Z"),
+    });
+    expect(informed).not.toHaveBeenCalled();
   });
 
 });
