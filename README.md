@@ -322,3 +322,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Contributions are accepted under the same terms.
