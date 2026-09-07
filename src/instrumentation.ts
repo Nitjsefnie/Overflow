@@ -1,3 +1,4 @@
+import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
 import {
   drainReconciliationJobs,
   startReconciliationWorker,
@@ -18,11 +19,25 @@ export async function register(): Promise<void> {
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
   const store = new PostgresFoldStore();
+  let budgetHeld = false;
 
   startReconciliationWorker({
     drain: async () => {
       const outcomes = await drainReconciliationJobs({
         store,
+        budget: createReconciliationBudgetGate(),
+        onBudgetChange: (check) => {
+          if (check.state === "BELOW_RESERVE") {
+            console.warn("Reconciliation held below the GraphQL budget reserve", {
+              remaining: check.reading?.remaining,
+              reserve: check.reserve,
+              resetAt: check.reading?.resetAt,
+            });
+          } else if (budgetHeld) {
+            console.info("Reconciliation GraphQL budget hold cleared", { state: check.state });
+          }
+          budgetHeld = check.state === "BELOW_RESERVE";
+        },
         // Each repository is folded with its own sponsor's token, the same way the
         // webhook route reads it — the worker has no actor of its own. Which token
         // and whether one is needed at all belong to the fold, so this is wiring
@@ -34,9 +49,9 @@ export async function register(): Promise<void> {
           console.error(`Reconciliation failed for repository ${repositoryId}`, error);
         },
       });
-      // A drain that took no job is the ordinary case and says nothing; anything
-      // else is the only record that the queue is being worked at all.
-      if (outcomes.length > 0) {
+      // A hold already reports its transitions. Summaries of held polls would
+      // repeat that report every five seconds without any work being done.
+      if (outcomes.some((outcome) => outcome !== "BUDGET_HELD")) {
         console.info("Reconciliation drain", countOutcomes(outcomes));
       }
       return outcomes;
