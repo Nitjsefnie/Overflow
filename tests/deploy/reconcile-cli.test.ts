@@ -15,11 +15,44 @@ const documentedCommands = [...reconciliationSection.matchAll(/^```bash\r?\n([\s
 const databaseError = "DATABASE_URL must be configured before using the database.";
 
 function tokenizeCommand(command: string): string[] {
-  return command.replaceAll("<owner>/<name>", "octocat/hello-world").split(/\s+/);
+  const words: string[] = [];
+  let word = "";
+  let wordStarted = false;
+  let quote: "'" | '"' | null = null;
+
+  // Only literal shell words are supported. Never silently reinterpret expansion,
+  // redirection, escapes or operators as argv passed to spawnSync.
+  for (const character of command.replaceAll("<owner>/<name>", "octocat/hello-world")) {
+    const unsupported = () => {
+      throw new Error(`Unsupported shell syntax ${JSON.stringify(character)} in documented command: ${command}`);
+    };
+    if (character === "\n" || character === "\r") unsupported();
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      } else {
+        if (quote === '"' && "$`\\".includes(character)) unsupported();
+        word += character;
+      }
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      wordStarted = true;
+    } else if (character === " " || character === "\t") {
+      if (wordStarted) words.push(word);
+      word = "";
+      wordStarted = false;
+    } else {
+      if ("$`\\;&|<>(){}*?[]~#!".includes(character) || /\s/.test(character)) unsupported();
+      word += character;
+      wordStarted = true;
+    }
+  }
+  if (quote !== null) throw new Error(`Unterminated quote in documented command: ${command}`);
+  if (wordStarted) words.push(word);
+  return words;
 }
 
 function runCommand(command: string, databaseUrl?: string) {
-  // Replace the README's owner/name placeholder with a syntactically valid repository.
   const [executable, ...argumentsList] = tokenizeCommand(command);
   const environment = { ...process.env };
   delete environment.DATABASE_URL;
@@ -75,6 +108,34 @@ describe("documented reconciliation CLI commands", () => {
     expect(stderr).toContain("Usage: pnpm reconcile [--repository owner/name]");
     expect(stderr).not.toContain(databaseError);
   }, 120_000);
+
+  it.each(["'", '"'])("passes a %s-quoted repository argument to the real CLI", (quote) => {
+    const { status, stderr } = runCommand(`pnpm reconcile --repository ${quote}<owner>/<name>${quote}`);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain(databaseError);
+    expect(stderr).not.toContain("Usage:");
+  }, 120_000);
+});
+
+describe("documented command tokenization", () => {
+  it.each([
+    { command: `pnpm reconcile --repository 'octocat/hello-world'`, words: ["pnpm", "reconcile", "--repository", "octocat/hello-world"] },
+    { command: `pnpm reconcile --repository "octocat/hello-world"`, words: ["pnpm", "reconcile", "--repository", "octocat/hello-world"] },
+    { command: `pnpm reconcile --repo"sitory" octocat/'hello-world'`, words: ["pnpm", "reconcile", "--repository", "octocat/hello-world"] },
+    { command: `pnpm reconcile "two words" ''`, words: ["pnpm", "reconcile", "two words", ""] },
+    { command: `pnpm reconcile '$HOME;*'`, words: ["pnpm", "reconcile", "$HOME;*"] },
+  ])("preserves literal shell words in $command", ({ command, words }) => {
+    expect(tokenizeCommand(command)).toEqual(words);
+  });
+
+  it.each([
+    '"unterminated', "'unterminated", "$OWNER/name", '"$OWNER/name"', "$(pwd)", "`pwd`",
+    "owner/*", "owner/{one,two}", "owner/name; true", "owner/name | cat", "> output",
+    "owner/\\name", '"owner/\\name"', "owner/name # comment",
+  ])("rejects unsupported shell syntax: %s", (argument) => {
+    expect(() => tokenizeCommand(`pnpm reconcile --repository ${argument}`))
+      .toThrow(/Unsupported shell syntax|Unterminated quote/);
+  });
 });
 
 describe("documented reconciliation CLI commands with PostgreSQL", () => {
@@ -120,7 +181,7 @@ describe("documented reconciliation CLI commands with PostgreSQL", () => {
     const summaries = stdout.split(/\r?\n/)
       .filter((line) => line.startsWith("{"))
       .map((line) => JSON.parse(line));
-    const expectedIds = command.includes("--repository") ? [repositoryIds[0]!] : repositoryIds;
+    const expectedIds = tokenizeCommand(command).length === 4 ? [repositoryIds[0]!] : repositoryIds;
     expect(summaries).toHaveLength(expectedIds.length);
     expect(summaries).toEqual(expect.arrayContaining(expectedIds.map((repositoryId) => ({
       repositoryId, runId: null, skipped: true,
