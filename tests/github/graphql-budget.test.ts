@@ -386,6 +386,30 @@ describe("GitHubGraphqlClient budget recording", () => {
     }
   });
 
+  it("constructs and queries through a broken default observer, then observes after recovery", async () => {
+    const key = Symbol.for("overflow.github.graphql-budget");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    const fault = vi.fn(() => { throw new Error("shared store cannot be assigned"); });
+    Object.defineProperty(globalThis, key, { configurable: true, get: () => undefined, set: fault });
+    const data = { repository: null, rateLimit };
+    const request = vi.fn(async () => Response.json({ data }));
+    try {
+      const client = new GitHubGraphqlClient({ accessToken: "test-token", fetch: request });
+      expect(fault).not.toHaveBeenCalled();
+      await expect(client.query("query { rateLimit { remaining resetAt } }", {})).resolves.toEqual(data);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(fault).toHaveBeenCalledTimes(1);
+
+      Reflect.deleteProperty(globalThis, key);
+      await expect(client.query("query { rateLimit { remaining resetAt } }", {})).resolves.toEqual(data);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(gitHubGraphqlBudget().read()).toMatchObject({ remaining: 42, resetAt: reset });
+    } finally {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+
   it("records through the gateway's injected store and requests the full budget first", async () => {
     const budget = createGitHubGraphqlBudgetStore();
     const queries: string[] = [];

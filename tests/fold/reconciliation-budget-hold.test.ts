@@ -8,6 +8,7 @@ import {
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
 import * as budgets from "@/lib/github/rate-limit-budget";
+import { GitHubGateway } from "@/lib/github/client";
 
 const now = new Date("2026-09-07T10:00:00Z");
 const resetAt = new Date("2026-09-07T11:00:00Z");
@@ -302,6 +303,44 @@ describe("reconciliation budget holds", () => {
       expect(fault).toHaveBeenCalledTimes(2);
       expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
       expect(reconcile).toHaveBeenCalledTimes(2);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, key, previous);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+
+  it("reaches GitHub through the real gateway when the shared observer is broken and later recovers", async () => {
+    const key = Symbol.for("overflow.github.graphql-budget");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    const fault = vi.fn(() => { throw new Error("shared store cannot be assigned"); });
+    Object.defineProperty(globalThis, key, { configurable: true, get: () => undefined, set: fault });
+    const request = vi.fn(async () => Response.json({ data: {
+      rateLimit: { remaining: 499, limit: 5000, cost: 1, resetAt: resetAt.toISOString() },
+      repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+    } }));
+    try {
+      const { dependencies, store, reconcile } = fixture();
+      dependencies.budget = createReconciliationBudgetGate();
+      let gateway: GitHubGateway | undefined;
+      const results: unknown[] = [];
+      reconcile.mockImplementation(async () => {
+        gateway ??= new GitHubGateway({ accessToken: "test-token", fetch: request });
+        results.push(await gateway.listIssues({ owner: "octo", name: "overflow" }));
+      });
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(fault).toHaveBeenCalledTimes(2);
+
+      Reflect.deleteProperty(globalThis, key);
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RECONCILED");
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(results).toEqual([[], []]);
+      expect(budgets.gitHubGraphqlBudget().read()).toMatchObject({ remaining: 499, resetAt });
+      await expect(runNextReconciliationJob(dependencies)).resolves.toBe("BUDGET_HELD");
+      expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
+      expect(store.completeReconciliationJob).toHaveBeenCalledTimes(2);
+      expect(store.retryReconciliationJob).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledTimes(2);
     } finally {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
