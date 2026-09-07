@@ -175,6 +175,25 @@ error can still reach the arm with `initial` set — the multi-host fallback the
 caveat below describes, where `error()` returns before `errored()` — the two
 forms agree, as they do wherever `hadError` is true.
 
+**That counter is pool-wide, and this hunk makes it move more often.**
+`options.shared` is one object per client, so `options.shared.retries` is
+advanced by *any* connection's close and read by *every* connection's next
+`backoff()` — the spacing one connection earns is the spacing they all get. The
+sharing is stock's own arrangement, not something introduced here: stock already
+advances the same counter on an errored close from any connection. What changes
+is what advances it, since a connect-phase close is a clean FIN and stock's
+`hadError` form ignored it. The consequence scales with `max`: a pool of ten
+whose connections all fail to open climbs the curve ten times faster than a
+single connection would, and with the package's default `backoff` —
+`(0.5 + random / 2) · min(3 ** retries / 100, 20)` seconds — that reaches the
+10-to-20-second cap inside the first round of ten, so every connection then
+waits out a cap it did not individually earn. Deliberate: the peer this hunk
+exists for is a database that is trying to come back, and trading a slower
+notice of its return for far less load on it is the trade the storm asks for. A
+client that wants a different curve passes its own `backoff`, and a single
+completed startup resets the counter to zero, so one connection getting through
+re-arms the whole pool.
+
 #### The shutdown that arrives between two attempts
 
 Spacing those attempts lengthened a wait the settle above then had to sit
@@ -583,6 +602,18 @@ entry already shifted out is the only kind that removal is inert on. Rejecting
 without shifting is not merely untidy — the loop reads its head each pass, so an
 entry that does not remove itself is read forever, and the drain becomes a
 synchronous spin that takes the event loop with it.
+
+That shape **is** detected, and the signal is the worst kind: not an assertion,
+and not even a per-test timeout, because the timers a timeout needs are on the
+event loop the spin has taken. What a reader sees is a run that never finishes —
+locally a suite that has to be interrupted, in CI the workflow's own 45-minute
+job limit. So this is a detection with an unnamed signal rather than a gap in
+coverage, and the difference matters if anyone improves it: making the loop
+terminate by construction — shifting every entry into a local array first, then
+rejecting from that — would retire the question instead of renaming the failure.
+It is left as it is here because it matches `destroy()` line for line, and
+agreeing with the path this hunk exists to agree with is worth more than the
+signal.
 
 The second hunk gives `reserve()` the `ending` check `handler()` already has. A
 reservation requested after the shutdown was pushed into the same queue without
