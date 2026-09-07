@@ -20,7 +20,7 @@ if (distDir) {
   }
 
   let ancestor = projectDir;
-  for (const segment of distDir.split(path.sep)) {
+  for (const segment of path.normalize(distDir).split(path.sep)) {
     if (!segment || segment === ".") continue;
     ancestor = path.join(ancestor, segment);
     let entry;
