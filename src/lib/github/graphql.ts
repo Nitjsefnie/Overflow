@@ -1,4 +1,5 @@
 import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, type GitHubRateLimitDetails } from "@/lib/github/errors";
+import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
@@ -122,6 +123,7 @@ export type GitHubGraphqlClientOptions = {
   endpoint?: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  budget?: GitHubGraphqlBudgetStore;
 };
 
 export type GitHubGraphqlPage<TNode> = {
@@ -137,12 +139,14 @@ export class GitHubGraphqlClient {
   private readonly endpoint: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly budget: GitHubGraphqlBudgetStore;
 
   public constructor(options: GitHubGraphqlClientOptions) {
     this.accessToken = options.accessToken;
     this.endpoint = options.endpoint ?? defaultGraphqlEndpoint;
     this.fetchImplementation = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+    this.budget = options.budget ?? gitHubGraphqlBudget();
   }
 
   public async query<TData>(query: string, variables: Record<string, unknown>): Promise<TData> {
@@ -180,6 +184,13 @@ export class GitHubGraphqlClient {
       if (payload?.data === undefined || payload.errors !== undefined) {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
         throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken), rateLimited, retryAfterSeconds);
+      }
+
+      try {
+        const reading = readGraphqlBudgetPayload((payload.data as { rateLimit?: unknown }).rateLimit, new Date());
+        if (reading !== null) this.budget.record(reading);
+      } catch {
+        // Budget observation must never fail an otherwise successful query.
       }
 
       return payload.data;

@@ -414,7 +414,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
       includeRateLimit = false;
       await expect(gateway.listIssues({ owner: "octo", name: "overflow" })).resolves.toEqual([]);
       expect(info).toHaveBeenCalledTimes(1);
-      expect(queries.every((query) => /rateLimit\s*\{\s*cost\s+remaining\s*\}/.test(query))).toBe(true);
+      expect(queries.every((query) => /rateLimit\s*\{\s*cost\s+limit\s+remaining\s+resetAt\s*\}/.test(query))).toBe(true);
     } finally {
       vi.unstubAllEnvs();
       info.mockRestore();
