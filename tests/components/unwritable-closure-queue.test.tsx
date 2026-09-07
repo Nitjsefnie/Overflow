@@ -90,7 +90,9 @@ describe("unwritable closure queue", () => {
     render(<UnwritableClosureQueue closures={[closure()]} />);
 
     expect(screen.getByRole("link", { name: "Open the settlement to request a correction" })).toHaveAttribute("href", "/settlements/settlement-1");
-    expect(screen.queryByText(/Correction .* · reported/)).toBeNull();
+    const entry = screen.getByRole("listitem");
+    expect(entry.querySelector("data")).toBeNull();
+    expect(entry.querySelector("time")).toBeNull();
   });
 
   it.each([
@@ -286,6 +288,7 @@ describe("moderation closure section", () => {
     )!;
     expect(within(queue).getByRole("alert")).toBeVisible();
     expect(within(queue).getByRole("alert")).not.toBeEmptyDOMElement();
+    expect(within(queue).getByRole("alert").textContent?.trim()).toBeTruthy();
     expect(screen.getByText(/A moderator who is not a party cannot open either page\./)).toBeVisible();
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
@@ -298,6 +301,7 @@ describe("moderation closure section", () => {
     expect(within(history).getByRole("heading", { level: 2 })).toHaveAttribute("id", "unwritable-closure-history-heading");
     expect(within(history).getByRole("alert")).toBeVisible();
     expect(within(history).getByRole("alert")).not.toBeEmptyDOMElement();
+    expect(within(history).getByRole("alert").textContent?.trim()).toBeTruthy();
     expect(within(history).queryByRole("list")).toBeNull();
   });
 });
