@@ -138,11 +138,17 @@ git restore -- tsconfig.json
 test "$build_status" -eq 0
 ```
 
-Each build gets a new `.next-release-<id>` directory at the tree root, alongside
-`.next`; the UTC timestamp makes the names sort in deployment order, and the SHA
-identifies the source revision. `mkdir` deliberately has no `-p`: a collision
-must stop the deploy, not reuse an existing build. Never build into `.next` on a
-serving host, or reuse a release directory, even to retry a failed build.
+Each build gets a new directory at the tree root, alongside `.next`, named
+`.next-release-<YYYYMMDDTHHMMSSZ>-<7 to 40 lowercase hex characters>`.
+The UTC timestamp makes the names sort in deployment order, and the SHA
+identifies the source revision. `prune` deletes directories, so it only touches
+names matching this grammar to be certain they are ones the deployment procedure
+created. A directory named `.next-release-notes` is safe beside the releases:
+`prune` ignores it entirely, including when counting retention slots. Reserve
+matching names for releases; the name check does not prove a build succeeded.
+`mkdir` deliberately has no `-p`: a collision must stop the deploy, not reuse an
+existing build. Never build into `.next` on a serving host, or reuse a release
+directory, even to retry a failed build.
 
 The release directory must be one path segment deep. The tracked `tsconfig.json`
 includes `.next/types/**/*.ts`, and Next generates `<distDir>/types/validator.ts`
@@ -156,9 +162,9 @@ beside `.next` gives both paths the same depth; two successive builds with this
 layout passed with `.next` still pointing at the first release during the second.
 
 `next.config.ts` reads `NEXT_DIST_DIR` for this build only. It trims the value
-and rejects either path separator (`/` or `\`), absolute paths, `..` and existing
-symlinks in the output path. Use a single directory name inside the tree, as
-above, with no `./` prefix or trailing slash. With the variable unset or blank,
+and rejects either path separator (`/` or `\`), absolute paths, `.` (zero depth),
+`..` and existing symlinks in the output path. Use a single directory name inside
+the tree, as above, with no `./` prefix or trailing slash. With the variable unset or blank,
 local `pnpm build` still uses `.next`. Do not export
 `NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
@@ -204,12 +210,16 @@ pnpm release:switch /srv/overflow "$release"
 
 `pnpm release:switch <tree> <releaseDir>` runs
 `node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
-is relative to the tree. The requested directory must be a direct child of that
-tree, whether the argument is relative or absolute; nested arguments are refused
-with the type-include depth explanation above. The script requires a real
-`BUILD_ID` file and a real `cache` directory, refuses symlinks for those two
-markers, then renames a temporary relative symlink over `.next` and prints the
-resolved release path.
+is relative to the tree. The resolved directory must be a direct child of the
+canonical tree, whether the argument is relative, absolute or a symlink alias.
+A symlink to a nested or outside build is refused with the type-include depth
+explanation above; an alias resolving to a valid direct child is accepted.
+`switch` also refuses a resolved directory name that does not match the release
+grammar above. Inventing a name therefore produces a clear failure instead of
+selecting a release that silently accumulates because `prune` cannot manage it.
+The script requires a real `BUILD_ID` file and a real `cache` directory, refuses
+symlinks for those two markers, then renames a temporary relative symlink over
+`.next` and prints the resolved release path.
 That rename keeps an existing `.next` symlink resolvable throughout the swap.
 The marker checks do not validate every manifest or prove that a build succeeded;
 the successful build and the service verification remain required.
@@ -563,7 +573,8 @@ The one-time migration has no previous release directory to retain.
 
 ```bash
 set -o pipefail
-find /srv/overflow -mindepth 1 -maxdepth 1 -type d -name '.next-release-*' \
+LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1 \
+  -type d -regex '.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}' \
   -printf '%f\n' | LC_ALL=C sort -r
 ```
 
@@ -574,10 +585,11 @@ pnpm release:prune /srv/overflow --keep 3
 `pnpm release:prune <tree> [--keep N]` runs
 `node scripts/release.ts prune <tree> [--keep N]`; pass the arguments directly,
 without an extra `--` separator, for both pnpm release commands. `--keep` must
-be a positive integer and defaults to `3`. The script enumerates only real
-`.next-release-*` directories directly inside the tree, ignoring files, symlinks
-and other directories; reserve that prefix for releases, since it checks no
-build markers when pruning. It keeps the newest N directory names in descending
+be a positive integer and defaults to `3`. Like the listing above, the script
+enumerates only real directories directly inside the tree whose names match the
+release grammar in section 5, ignoring files, symlinks and all other directory
+names. It checks no build markers when pruning, so even a failed build with a
+matching name counts. It keeps the newest N directory names in descending
 lexical order, not by modification time or build success. It also protects the
 release `.next` resolves to and directories needed to resolve its symlink chain,
 even outside that N. It prints each removed
