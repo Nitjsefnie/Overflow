@@ -17,7 +17,7 @@
     "test": "vitest",
     "test:watch": "vitest --watch",
     "db:migrate": "node scripts/migrate.ts",
-    "reconcile": "node scripts/reconcile.ts"
+    "reconcile": "node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/reconcile.ts"
   },
   "dependencies": {
     "next": "16.3.4",
