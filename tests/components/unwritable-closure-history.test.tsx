@@ -40,13 +40,24 @@ describe("unwritable closure history", () => {
       record: { ...granted, settlementId: null, settlementParties: null, pullRequest: null },
     },
   ])("records $outcome evidence without offering correction actions", ({ record }) => {
-    render(<UnwritableClosureHistory closures={[record]} />);
+    const { container } = render(<UnwritableClosureHistory closures={[record]} />);
 
     const entry = screen.getByRole("listitem");
-    expect(screen.getByRole("list").tagName).toBe("OL");
-    expect(within(entry).getByText(record.repositoryName)).toBeVisible();
-    expect(entry.querySelector(".override-reason")).toHaveTextContent(record.reason);
-    expect(within(entry).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(
+    const list = screen.getByRole("list");
+    const repository = within(entry).getByText(record.repositoryName);
+    const reason = entry.querySelector(".override-reason");
+    const issue = within(entry).getByRole("link", { name: `#${record.issueNumber} ${record.issueTitle}` });
+    const pullRequest = record.pullRequest === null ? null : within(entry).getByRole("link", {
+      name: `#${record.pullRequest.number} ${record.pullRequest.title}`,
+    });
+    expect(list.tagName).toBe("OL");
+    expect(repository).toBeVisible();
+    expect(reason).toHaveTextContent(record.reason);
+    expect(issue).toHaveAttribute("href", record.issueUrl);
+    if (pullRequest !== null) {
+      expect(pullRequest).toHaveAttribute("href", record.pullRequest!.url);
+    }
+    expect(within(container).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(
       record.pullRequest === null
         ? ["https://github.com/co-op/harbour/issues/17"]
         : ["https://github.com/co-op/harbour/issues/17", "https://github.com/co-op/harbour/pull/18"],
@@ -58,6 +69,18 @@ describe("unwritable closure history", () => {
       expect(time).toBeVisible();
       expect(time).toHaveTextContent(time.dateTime);
     }
+    const outcome = entry.querySelector("data");
+    expect(outcome).toBeVisible();
+    expect(outcome).toHaveAttribute("value", record.latestCorrection!.state);
+    expect(outcome).toHaveTextContent(record.latestCorrection!.state.toLowerCase());
+    expect(Array.from(container.children)).toEqual([list]);
+    expect(Array.from(entry.children)).toEqual([
+      repository.closest("p"),
+      issue.closest("p"),
+      ...(pullRequest === null ? [] : [pullRequest.closest("p")]),
+      reason,
+      outcome!.closest("p"),
+    ]);
     expect(entry.querySelectorAll("code")).toHaveLength(0);
   });
 
