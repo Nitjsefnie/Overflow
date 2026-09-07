@@ -107,29 +107,42 @@ describe("fold revision stamps", () => {
     expect(await rowsFor(table, repositoryId)).toEqual([{ ...row, fold_revision: FOLD_REVISION }]);
   });
 
-  it("stamps a settlement updated by an identity claim", async () => {
+  it("preserves the revision and values of a settlement updated by an identity claim", async () => {
     const { repositoryId, fold } = await materializedFixture();
     const [row] = await rowsFor("settlements", repositoryId);
-    await sql`update settlements set creditor_id = null, status = 'UNCLAIMED', fold_revision = 0 where id = ${row.id}`;
+    await sql`
+      update settlements set creditor_id = null, status = 'UNCLAIMED',
+        opening_comparison_points = 3, fold_revision = 0 where id = ${row.id}
+    `;
 
     await claimGitHubIdentity(sql, fold.settlements[0].creditorId!, fold.settlements[0].creditorGitHubUserId!);
 
-    expect(await rowsFor("settlements", repositoryId)).toEqual([{ ...row, fold_revision: FOLD_REVISION }]);
+    expect(await rowsFor("settlements", repositoryId)).toEqual([{
+      ...row, creditor_id: fold.settlements[0].creditorId, status: "SETTLED",
+      opening_comparison_points: 3, fold_revision: 0,
+    }]);
   });
 
-  it.each([false, true])("stamps an identity claim's self-work calibration (existing: %s)", async (existing) => {
+  it.each([
+    { sourceRevision: 0, existingRevision: null },
+    { sourceRevision: 0, existingRevision: 1 },
+    { sourceRevision: 1, existingRevision: 0 },
+  ])("preserves self-work provenance on an identity claim (source: $sourceRevision, existing: $existingRevision)", async ({ sourceRevision, existingRevision }) => {
     const { repositoryId, fold } = await materializedFixture();
     const [row] = await rowsFor("settlements", repositoryId);
     const sponsorId = fold.settlements[0].debtorId;
     const sponsorGitHubId = fold.pullRequests[1].authorGitHubUserId!;
     await sql`
       update settlements set creditor_id = null, creditor_github_user_id = ${sponsorGitHubId},
-        status = 'UNCLAIMED', fold_revision = 0 where id = ${row.id}
+        status = 'UNCLAIMED', opening_comparison_points = 3,
+        fold_revision = ${sourceRevision} where id = ${row.id}
     `;
-    if (existing) {
+    if (existingRevision !== null) {
       await sql`
-        insert into self_work_calibrations (pull_request_id, issue_id, user_id, opening_comparison_points, actual_points)
-        values (${row.pull_request_id}, ${row.issue_id}, ${sponsorId}, 5, 5)
+        insert into self_work_calibrations (
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
+        )
+        values (${row.pull_request_id}, ${row.issue_id}, ${sponsorId}, 5, 5, ${existingRevision})
       `;
     }
 
@@ -137,8 +150,9 @@ describe("fold revision stamps", () => {
 
     expect(await sql`select * from settlements where id = ${row.id}`).toEqual([]);
     expect(await sql`
-      select user_id, actual_points, fold_revision from self_work_calibrations where issue_id = ${row.issue_id}
-    `).toEqual([{ user_id: sponsorId, actual_points: 6, fold_revision: FOLD_REVISION }]);
+      select user_id, opening_comparison_points, actual_points, fold_revision
+      from self_work_calibrations where issue_id = ${row.issue_id}
+    `).toEqual([{ user_id: sponsorId, opening_comparison_points: 3, actual_points: 6, fold_revision: 0 }]);
   });
 });
 
