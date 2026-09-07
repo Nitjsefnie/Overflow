@@ -23,6 +23,26 @@ const granted: UnwritableClosureProjection = {
 };
 
 describe("unwritable closure history", () => {
+  it("renders every granted closure in the supplied order", () => {
+    const second: UnwritableClosureProjection = {
+      ...granted,
+      id: "closure-2",
+      issueNumber: 19,
+      issueTitle: "Restore the beacon",
+      issueUrl: "https://github.com/co-op/harbour/issues/19",
+    };
+    render(<UnwritableClosureHistory closures={[second, granted]} />);
+
+    const identities = screen.getAllByRole("listitem").map((entry) => {
+      const issue = within(entry).getAllByRole("link")[0];
+      return { title: issue.textContent?.trim(), url: issue.getAttribute("href") };
+    });
+    expect(identities).toEqual([
+      { title: "#19 Restore the beacon", url: "https://github.com/co-op/harbour/issues/19" },
+      { title: "#17 Repair the tide gate", url: "https://github.com/co-op/harbour/issues/17" },
+    ]);
+  });
+
   it.each([
     { outcome: "settlement", record: granted },
     {
@@ -52,10 +72,12 @@ describe("unwritable closure history", () => {
     });
     expect(list.tagName).toBe("OL");
     expect(repository).toBeVisible();
-    expect(reason).toHaveTextContent(record.reason);
+    expect(reason?.textContent).toBe(record.reason);
     expect(issue).toHaveAttribute("href", record.issueUrl);
+    expect(issue).toBeVisible();
     if (pullRequest !== null) {
       expect(pullRequest).toHaveAttribute("href", record.pullRequest!.url);
+      expect(pullRequest).toBeVisible();
     }
     expect(within(container).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(
       record.pullRequest === null

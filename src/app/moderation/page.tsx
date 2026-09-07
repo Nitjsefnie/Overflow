@@ -145,7 +145,7 @@ export default async function ModerationPage() {
           A moderator who is not a party cannot open either page.
         </p>
         {unwritableClosures === null ? (
-          <p>The closure queue could not be loaded.</p>
+          <p role="alert">The closure queue could not be loaded.</p>
         ) : (
           <UnwritableClosureQueue closures={unwritableClosures.queue} />
         )}
