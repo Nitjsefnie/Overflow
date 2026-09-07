@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readlink, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readlink, realpath, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,59 @@ async function release(name: string) {
 }
 
 describe("release switch", () => {
+  it("stores a relative target and reports the release after consecutive switches", async () => {
+    for (const name of ["20260904", "20260907"]) {
+      const directory = await release(name);
+
+      const result = run("switch", tree, directory);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(await readlink(path.join(tree, ".next"))).toBe(`.next-releases/${name}`);
+      expect(await realpath(path.join(tree, ".next"))).toBe(directory);
+      expect(path.resolve(tree, result.stdout.trim())).toBe(directory);
+    }
+  });
+
+  it("lists both subcommands in the usage message", () => {
+    const result = run();
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/\bswitch\b/);
+    expect(result.stderr).toMatch(/\bprune\b/);
+  });
+
+  it("rejects surplus switch arguments without changing the live release", async () => {
+    const old = await release("20260904");
+    const directory = await release("20260907");
+    await symlink(".next-releases/20260904", path.join(tree, ".next"));
+
+    const result = run("switch", tree, directory, "extra");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.trim()).not.toBe("");
+    expect(await realpath(path.join(tree, ".next"))).toBe(old);
+    expect(await readdir(tree)).toEqual([".next", ".next-releases"]);
+  });
+
+  it.each(["BUILD_ID", "cache"])("refuses a %s symlink through the old live build", async (marker) => {
+    const old = await release("20260904");
+    const directory = await release("20260907");
+    const current = path.join(tree, ".next");
+    await symlink(".next-releases/20260904", current);
+    const markerPath = path.join(directory, marker);
+    await rm(markerPath, { recursive: true });
+    await symlink(`../../.next/${marker}`, markerPath);
+    expect(await realpath(markerPath)).toBe(path.join(old, marker));
+
+    const result = run("switch", tree, directory);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(markerPath);
+    expect(await realpath(current)).toBe(old);
+    expect(await realpath(path.join(current, marker))).toBe(path.join(old, marker));
+    expect(await readdir(tree)).toEqual([".next", ".next-releases"]);
+  });
+
   it("resolves a release argument through .next before replacing that link", async () => {
     const directory = await release("20260907");
     await symlink(directory, path.join(tree, ".next"));
@@ -111,39 +164,48 @@ describe("release switch", () => {
     expect(await readdir(old)).toEqual(["BUILD_ID", "cache"]);
   });
 
-  it("keeps .next resolvable across each filesystem mutation during replacement", async () => {
-    const old = await release("20260906");
-    const directory = await release("20260907");
-    const current = path.join(tree, ".next");
-    await symlink(old, current);
-    const observer = path.join(tree, "observe.mjs");
-    // Observe real filesystem state after every mutation, without scheduling a poll
-    // in the potentially tiny unlink/symlink gap. All operations still run on disk.
-    await writeFile(observer, `
-      import fs from "node:fs/promises";
-      import { syncBuiltinESMExports } from "node:module";
-      const current = ${JSON.stringify(current)};
-      for (const name of ["symlink", "rename", "unlink", "rm"]) {
-        const original = fs[name];
-        fs[name] = async (...args) => {
-          const result = await original(...args);
-          const resolved = await fs.realpath(current);
-          if (![${JSON.stringify(old)}, ${JSON.stringify(directory)}].includes(resolved)) {
-            throw new Error("Unexpected live release: " + resolved);
-          }
-          return result;
-        };
+  it.each(["absolute", "relative"])(
+    "keeps .next resolvable across each filesystem mutation during %s symlink replacement",
+    async (link) => {
+      const old = await release("20260906");
+      const directory = await release("20260907");
+      const current = path.join(tree, ".next");
+      if (link === "relative") {
+        const first = run("switch", tree, old);
+        expect(first.status, first.stderr).toBe(0);
+        expect(await readlink(current)).toBe(".next-releases/20260906");
+      } else {
+        await symlink(old, current);
       }
-      syncBuiltinESMExports();
-    `);
+      const observer = path.join(tree, "observe.mjs");
+      // Observe real filesystem state after every mutation, without scheduling a poll
+      // in the potentially tiny unlink/symlink gap. All operations still run on disk.
+      await writeFile(observer, `
+        import fs from "node:fs/promises";
+        import { syncBuiltinESMExports } from "node:module";
+        const current = ${JSON.stringify(current)};
+        for (const name of ["symlink", "rename", "unlink", "rm"]) {
+          const original = fs[name];
+          fs[name] = async (...args) => {
+            const result = await original(...args);
+            const resolved = await fs.realpath(current);
+            if (![${JSON.stringify(old)}, ${JSON.stringify(directory)}].includes(resolved)) {
+              throw new Error("Unexpected live release: " + resolved);
+            }
+            return result;
+          };
+        }
+        syncBuiltinESMExports();
+      `);
 
-    const result = spawnSync(process.execPath, ["--import", observer, script, "switch", tree, directory], {
-      encoding: "utf8",
-    });
+      const result = spawnSync(process.execPath, ["--import", observer, script, "switch", tree, directory], {
+        encoding: "utf8",
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(await realpath(current)).toBe(directory);
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(await realpath(current)).toBe(directory);
+    },
+  );
 
   it("replaces an existing symlink to an older release", async () => {
     const old = await release("20260906");
@@ -179,6 +241,57 @@ describe("release switch", () => {
 });
 
 describe("release prune", () => {
+  it("protects the served release when .next-releases is a symlink", async () => {
+    await release("20260904");
+    await release("20260907");
+    const releases = path.join(tree, ".next-releases");
+    const storage = path.join(tree, "stored-releases");
+    await rename(releases, storage);
+    await symlink("stored-releases", releases);
+    await symlink(".next-releases/20260904", path.join(tree, ".next"));
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(path.join(storage, "20260904"));
+    expect(await readdir(releases)).toEqual(["20260904", "20260907"]);
+    expect(result.stdout.trim()).not.toBe("");
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    expect(result.stdout).not.toContain(path.join(releases, "20260904"));
+  });
+
+  it("preserves directories traversed before resolving symlink-relative parent components", async () => {
+    for (const name of ["20260903", "20260904", "20260905", "20260906", "20260907"]) await release(name);
+    const releases = path.join(tree, ".next-releases");
+    await symlink("../20260906", path.join(releases, "20260905", "jump"));
+    await symlink("../20260905/jump/../20260907", path.join(releases, "20260904", "redirect"));
+    await symlink(".next-releases/20260904/redirect", path.join(tree, ".next"));
+    expect(await realpath(path.join(tree, ".next"))).toBe(path.join(releases, "20260907"));
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(path.join(releases, "20260907"));
+    expect(await readdir(releases)).toEqual(["20260904", "20260905", "20260906", "20260907"]);
+    expect(result.stdout.trim()).toBe(path.join(releases, "20260903"));
+  });
+
+  it("preserves release directories traversed by the live symlink chain", async () => {
+    const intermediate = await release("20260904");
+    await release("20260905");
+    const served = await release("20260907");
+    await symlink("../20260907", path.join(intermediate, "redirect"));
+    await symlink(".next-releases/20260904/redirect", path.join(tree, ".next"));
+    expect(await realpath(path.join(tree, ".next"))).toBe(served);
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(served);
+    expect(await readdir(path.join(tree, ".next-releases"))).toEqual(["20260904", "20260907"]);
+    expect(result.stdout.trim()).toBe(path.join(tree, ".next-releases", "20260905"));
+  });
+
   it("does not recursively delete a release containing the served build", async () => {
     const served = await release("20260904/nested");
     await release("20260906");
