@@ -130,8 +130,7 @@ cd /srv/overflow
 pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
-mkdir -p .next-releases
-release=".next-releases/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
 mkdir "$release"
 build_status=0
 NEXT_DIST_DIR="$release" pnpm build || build_status=$?
@@ -139,16 +138,28 @@ git restore -- tsconfig.json
 test "$build_status" -eq 0
 ```
 
-Each build gets a new directory under `.next-releases`; the UTC timestamp makes
-the names sort in deployment order, and the SHA identifies the source revision.
-The second `mkdir` deliberately has no `-p`: a collision must stop the deploy,
-not reuse an existing build. Never build into `.next` on a serving host, or
-reuse a release directory, even to retry a failed build.
+Each build gets a new `.next-release-<id>` directory at the tree root, alongside
+`.next`; the UTC timestamp makes the names sort in deployment order, and the SHA
+identifies the source revision. `mkdir` deliberately has no `-p`: a collision
+must stop the deploy, not reuse an existing build. Never build into `.next` on a
+serving host, or reuse a release directory, even to retry a failed build.
+
+The release directory must be one path segment deep. The tracked `tsconfig.json`
+includes `.next/types/**/*.ts`, and Next generates `<distDir>/types/validator.ts`
+with relative imports back to the project's `src` directory. TypeScript resolves
+those imports lexically through the `.next` include, without following the
+symlink. A nested layout such as `.next-releases/<id>` generates `../../../src/...`
+imports, which land one directory above the project when read as
+`.next/types/validator.ts`. The first ordinary deploy after migration then fails
+with `TS2307`, even though the migration build succeeded. Keeping the release
+beside `.next` gives both paths the same depth; two successive builds with this
+layout passed with `.next` still pointing at the first release during the second.
 
 `next.config.ts` reads `NEXT_DIST_DIR` for this build only. It trims the value
-and rejects absolute paths, `..` components and existing symlink components in
-the output path. Use a relative path inside the tree, as above. With the variable
-unset or blank, local `pnpm build` still uses `.next`. Do not export
+and rejects either path separator (`/` or `\`), absolute paths, `..` and existing
+symlinks in the output path. Use a single directory name inside the tree, as
+above, with no `./` prefix or trailing slash. With the variable unset or blank,
+local `pnpm build` still uses `.next`. Do not export
 `NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
 
@@ -157,6 +168,8 @@ regenerates the ignored `next-env.d.ts` and appends release-specific entries to
 the tracked `tsconfig.json`. `git restore -- tsconfig.json` removes that generated
 edit so the next deploy's `git pull --ff-only` does not fail on a dirty tree.
 Keep this command: it is needed after every build, including a failed one.
+Skipping it on a host with `pull.rebase=true` made the next `git pull --ff-only`
+exit 128 with `cannot pull with rebase: You have unstaged changes`.
 `build_status` preserves the build's failure through the restore, so cleanup
 cannot turn a failed build into a successful deploy. Start with a clean tracked
 tree; the restore would also discard a hand edit to `tsconfig.json`.
@@ -168,6 +181,12 @@ the `overflow` group; nothing in it is group-writable.
 chown -R root:overflow /srv/overflow
 chmod -R u=rwX,g=rX,o= /srv/overflow
 ```
+
+These ownership and mode changes also affect pnpm package files hardlinked from
+a shared store, so every checkout sharing those inodes sees the changes.
+[Issue 214](https://github.com/Nitjsefnie/Overflow/issues/214) tracks this defect;
+it predates this release layout and remains unfixed here, including in section
+10's reset.
 
 `next start` writes inside `.next/cache` — the image optimizer's output and the
 `.previewinfo` and `.rscinfo` files — and that directory is the only one the
@@ -185,9 +204,12 @@ pnpm release:switch /srv/overflow "$release"
 
 `pnpm release:switch <tree> <releaseDir>` runs
 `node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
-is relative to the tree. The script requires a real `BUILD_ID` file and a real
-`cache` directory, refuses symlinks for those two markers, then renames a
-temporary relative symlink over `.next` and prints the resolved release path.
+is relative to the tree. The requested directory must be a direct child of that
+tree, whether the argument is relative or absolute; nested arguments are refused
+with the type-include depth explanation above. The script requires a real
+`BUILD_ID` file and a real `cache` directory, refuses symlinks for those two
+markers, then renames a temporary relative symlink over `.next` and prints the
+resolved release path.
 That rename keeps an existing `.next` symlink resolvable throughout the swap.
 The marker checks do not validate every manifest or prove that a build succeeded;
 the successful build and the service verification remain required.
@@ -206,10 +228,15 @@ An existing host has a real `/srv/overflow/.next` directory. A symlink cannot
 be renamed over a real directory; `scripts/release.ts switch` refuses it with a
 one-time migration message rather than deleting the serving build silently.
 
-For that host, follow section 10 through the build, `tsconfig.json` restore,
-ownership reset and new cache handover. Leave the old `.next` alone while those
-steps run. Then replace section 10's switch and restart lines with this block,
-in the same shell so `$release` still names the completed new build:
+**Use the same Bash shell for section 10's preparation and this migration block.**
+Follow section 10 through the build, `tsconfig.json` restore, ownership reset,
+new cache handover and previous/new build printout, stopping before its switch
+and restart lines. The reset excludes the serving cache, which is still in the
+real `.next` directory on this host; leave that directory in place while
+preparing the new release. Replace section 10's switch and restart lines with
+the block below, pasted into that same shell so `$release` still names the
+completed new build. In a separate shell, `${release:?}` stops with `parameter
+null or not set` before removal and leaves the old `.next` intact:
 
 ```bash
 set -e
@@ -262,22 +289,25 @@ what section 7 compares against; on a host that has never run Overflow it is
 
 ## 7. Verify
 
+Wait for the HTTP readiness check to succeed before inspecting the process
+owner. Keep that order when pasting the commands separately too.
+
 ```bash
+set -e
 systemctl is-active overflow.service
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
   "$(cat /run/overflow-preswitch-mainpid)" \
   "$(systemctl show overflow.service -p MainPID --value)"
 systemctl show overflow.service \
   -p MainPID -p User -p Group -p NoNewPrivileges -p ProtectSystem
 ps -o user=,pid=,args= -p "$(systemctl show overflow.service -p MainPID --value)"
-curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
-  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
 ```
 
-Expected: `active`; the two `MainPID` values differ and the current one is not
-`0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
-`ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`;
-`200` from curl.
+Expected: `active`; `200` from curl; the two `MainPID` values differ and the current
+one is not `0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
+`ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`.
 
 The two `MainPID` values are the check that distinguishes a switch from a
 reload. `systemctl show` reports the merged effective configuration, so it answers
@@ -298,9 +328,11 @@ and Next rewrites its process title to `next-server (v…`, so `ps -o user= -C
 node` never sees this service at all and answers `root` from whatever unrelated
 Node processes the host happens to run — the alarming answer whether the
 hardening worked or not. And `Type=simple` has no readiness barrier, so
-`systemctl start` returns as soon as the process is forked, before Next binds
-the port; the curl retry is what absorbs that race instead of reporting a
-connection refusal as a failed deploy.
+`systemctl start` returns as soon as the process is forked, before the drop to
+`overflow` and before Next binds the port. An early `ps` can therefore print
+`root` for a process still starting. The curl retry absorbs that readiness race;
+only inspect the PID and owner after it succeeds, so a connection refusal or
+the transient startup owner is not mistaken for a failed deploy.
 
 `systemd-analyze security overflow.service` reports the remaining exposure and
 is worth reading after any change to the unit.
@@ -404,13 +436,14 @@ For a failed release, switch back to the retained previous build and restart
 the same hardened unit. Section 10 prints the previous release path before
 switching; record it with the deploy. Replace the value below with that recorded
 path, and confirm the directory still exists. The ownership reset on a later
-deploy also resets retained caches, so hand the previous cache back before the
-restart, even if it was writable when that release last ran.
+deploy also resets retained caches other than the serving cache, so hand the
+previous cache back before the restart, even if it was writable when that
+release last ran.
 
 ```bash
 set -e
 cd /srv/overflow
-previous_release='.next-releases/REPLACE-WITH-RECORDED-RELEASE'
+previous_release='.next-release-REPLACE-WITH-RECORDED-ID'
 test -f "$previous_release/BUILD_ID"
 test -d "$previous_release/cache"
 chown -R overflow:overflow "$previous_release/cache"
@@ -459,10 +492,11 @@ considered explicitly.
 
 Install, migrate and build run as root inside the tree. Only the service runs as
 `overflow`, and the ownership reset afterwards is what keeps it that way: a
-build writes new files as root, and the cache has to be handed back. Build into
-a new release directory every time so Next cannot rewrite the serving build's
-manifests, chunks and fallback error page during the build. Run one deploy at a
-time; concurrent installs, restores, switches or prunes share the same tree.
+build writes new files as root, and the new cache has to be handed back while
+the serving cache stays writable. Build into a new release directory every time
+so Next cannot rewrite the serving build's manifests, chunks and fallback error
+page during the build. Run one deploy at a time; concurrent installs, restores,
+switches or prunes share the same tree.
 On a host whose `.next` is still a real directory, use section 5's one-time
 migration block at the switch step.
 
@@ -473,19 +507,22 @@ git pull --ff-only origin main
 pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
-mkdir -p .next-releases
-release=".next-releases/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
+release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
 mkdir "$release"
 build_status=0
 NEXT_DIST_DIR="$release" pnpm build || build_status=$?
 git restore -- tsconfig.json
 test "$build_status" -eq 0
-chown -R root:overflow /srv/overflow
-chmod -R u=rwX,g=rX,o= /srv/overflow
+previous_release=$(readlink -f /srv/overflow/.next)
+serving_cache="$previous_release/cache"
+test -d "$serving_cache"
+find /srv/overflow -path "$serving_cache" -prune -o \
+  -exec chown -h root:overflow {} +
+find /srv/overflow -path "$serving_cache" -prune -o \
+  ! -type l -exec chmod u=rwX,g=rX,o= {} +
 mkdir -p "$release/cache"
 chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
-previous_release=$(readlink -f /srv/overflow/.next)
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
 pnpm release:switch /srv/overflow "$release"
 systemctl restart overflow.service
@@ -499,12 +536,22 @@ Next appends the release's generated type paths to this tracked file. Leaving
 that change behind makes the next `git pull --ff-only` fail. The saved build
 status ensures a failed build is restored too and then stops before the switch.
 
-The ownership reset keeps code root-owned and group-readable. The cache the
-unit needs now lives at `/srv/overflow/$release/cache`, so create and hand over
+The ownership reset keeps code root-owned and group-readable while preserving
+the serving cache's Unix permissions. Resolve `.next` before resetting ownership:
+`find` does not follow the symlink, so its exclusion must name the actual release's
+cache. `-prune` skips that directory and everything inside it in both passes;
+`chown -h` changes symlink ownership without following links, and the mode pass
+skips symlinks. The old process can keep writing its cache throughout preparation,
+even if preparation or switching stops before the restart. During the one-time
+migration the resolved path is the real `.next`, so the same exclusion preserves
+`.next/cache`. The shared-store inode limitation in section 5 still applies.
+
+The new cache lives at `/srv/overflow/$release/cache`, so create and hand over
 that directory before the switch and restart. The unit still names
 `/srv/overflow/.next/cache` and resolves it through the symlink. A running process
-keeps its old writable mount across a swap; the immediate restart picks up the
-new release's cache and is what makes that mount lifetime a non-issue.
+keeps its old writable mount across a swap, but that mount does not bypass Unix
+ownership or mode checks; preserving the old cache permissions is required too.
+The immediate restart picks up the new release's cache.
 
 Expect `active` and HTTP `200`, then exercise the application and inspect the
 journal as in section 7. Only prune after those checks succeed. Before pruning,
@@ -515,7 +562,9 @@ make the previously served release older than the normal retention window.
 The one-time migration has no previous release directory to retain.
 
 ```bash
-LC_ALL=C ls -1 /srv/overflow/.next-releases
+set -o pipefail
+find /srv/overflow -mindepth 1 -maxdepth 1 -type d -name '.next-release-*' \
+  -printf '%f\n' | LC_ALL=C sort -r
 ```
 
 ```bash
@@ -525,10 +574,13 @@ pnpm release:prune /srv/overflow --keep 3
 `pnpm release:prune <tree> [--keep N]` runs
 `node scripts/release.ts prune <tree> [--keep N]`; pass the arguments directly,
 without an extra `--` separator, for both pnpm release commands. `--keep` must
-be a positive integer and defaults to `3`. The script keeps the newest N
-directory names in descending lexical order, not by modification time or build
-success. It also protects the release `.next` resolves to and directories needed
-to resolve its symlink chain, even outside that N. It prints each removed
+be a positive integer and defaults to `3`. The script enumerates only real
+`.next-release-*` directories directly inside the tree, ignoring files, symlinks
+and other directories; reserve that prefix for releases, since it checks no
+build markers when pruning. It keeps the newest N directory names in descending
+lexical order, not by modification time or build success. It also protects the
+release `.next` resolves to and directories needed to resolve its symlink chain,
+even outside that N. It prints each removed
 directory, or a no-op line if nothing was removed. A missing or dangling `.next`
 is reported but protects no release and does not prevent deletion; do not prune
 to recover from a failed switch. Pruning knows the symlink target, not which
