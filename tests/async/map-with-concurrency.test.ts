@@ -19,10 +19,10 @@ describe("mapWithConcurrency", () => {
     });
     const failure = expect(result).rejects.toBe(first);
     failing.reject(first);
-    await failure;
+    await failing.promise.catch(() => {});
 
     ongoing.resolve(0);
-    await ongoing.promise;
+    await failure;
     expect(calls).toEqual([0, 1]);
   });
 
@@ -104,22 +104,66 @@ describe("mapWithConcurrency", () => {
     await expect(result).resolves.toEqual(["first", "second", "third"]);
   });
 
-  it("propagates the first rejection before other in-flight calls finish", async () => {
+  it("waits for every in-flight operation before rejecting", async () => {
     const first = new Error("first failure");
-    const later = new Error("later failure");
     const gates = Array.from({ length: 3 }, () => deferred<string>());
-    const result = mapWithConcurrency([0, 1, 2], 3, (index) => gates[index].promise);
-    const failure = expect(result).rejects.toBe(first);
+    const record: string[] = [];
+    const result = mapWithConcurrency([0, 1, 2, 3], 3, async (index) => {
+      record.push(`start ${index}`);
+      try {
+        return await gates[index].promise;
+      } finally {
+        record.push(`settle ${index}`);
+      }
+    });
+    const outcome = result.then(
+      () => { record.push("resolved"); },
+      (error: unknown) => { record.push("rejected"); return error; },
+    );
 
     gates[1].reject(first);
     try {
-      await failure;
+      // An event-loop checkpoint drains promise reactions without a clock margin.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(record).toEqual(["start 0", "start 1", "start 2", "settle 1"]);
+      gates[2].resolve("second");
+      gates[0].resolve("last");
+      expect(await outcome).toBe(first);
+      expect(record).toEqual([
+        "start 0", "start 1", "start 2", "settle 1", "settle 2", "settle 0", "rejected",
+      ]);
     } finally {
-      gates[2].reject(later);
+      gates[2].resolve("finished second");
       gates[0].resolve("finished last");
-      await Promise.allSettled(gates.map(({ promise }) => promise));
+      await outcome;
     }
   });
+
+  it.each([new Error("first failure"), undefined, null, false])(
+    "preserves the chronologically first rejection reason %s after draining",
+    async (first) => {
+      const later = new Error("later failure");
+      const gates = Array.from({ length: 2 }, () => deferred<string>());
+      const record: number[] = [];
+      const result = mapWithConcurrency([0, 1], 2, async (index) => {
+        try {
+          return await gates[index].promise;
+        } finally {
+          record.push(index);
+        }
+      });
+      const outcome = result.then(
+        () => ({ resolved: true }),
+        (error: unknown) => ({ error, settled: [...record] }),
+      );
+
+      gates[1].reject(first);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      gates[0].reject(later);
+
+      expect(await outcome).toEqual({ error: first, settled: [1, 0] });
+    },
+  );
 });
 
 function deferred<T>() {

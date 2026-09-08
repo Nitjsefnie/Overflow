@@ -8,7 +8,7 @@ import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 const pageInfo = { hasNextPage: false, endCursor: null };
 
-it("latches a mid-pass hold across active PR collectors even after coordination and the reset window end", async () => {
+it("drains active PR collectors before releasing coordination and retains their hold across the reset", async () => {
   let now = new Date("2026-09-07T10:00:00Z");
   const resetAt = new Date("2026-09-07T11:00:00Z");
   const budget = createGitHubGraphqlBudgetStore();
@@ -83,30 +83,128 @@ it("latches a mid-pass hold across active PR collectors even after coordination 
     await Promise.race([started.promise, outcome.then(() => { throw new Error("Ended before concurrent reads"); })]);
     expect(coordinated).toBe(true);
     gates[0].resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(coordinated).toBe(true);
+    expect(released).toBe(false);
+    expect(active).toBe(3);
+    // The active collectors keep their hold even if its reset passes while draining.
+    now = resetAt;
+    for (const gate of gates) gate.resolve();
     const result = await outcome;
     expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
     expect(result).toEqual({ value: expect.objectContaining({ skipped: true, budgetHeldUntil: resetAt }) });
     expect(released).toBe(true);
-    expect(active).toBe(3);
+    expect(active).toBe(0);
+    expect(settled).toBe(4);
     expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
-    // The same owned gateway remains available outside the held reconciliation,
-    // even while the observation is current and its old collectors are active.
+    // The same owned gateway remains available outside the held reconciliation.
     await github.listIssues({ owner: "sponsor", name: "repository" }, {
       timelineCriticalLabels: new Set(["delivered/6"]), timelineWatchedLabels: new Set(["M"]),
     });
     expect(calls[14]).toBe("RepositoryIssues");
-    // Detached collectors retain their original hold even if the next fold can be admitted.
-    now = resetAt;
-    for (const gate of gates) gate.resolve();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(settled).toBe(4);
-    expect(active).toBe(0);
     expect(calls).toHaveLength(15);
     expect(materialize).not.toHaveBeenCalled();
   } finally {
     gates.forEach(({ resolve }) => resolve());
     await outcome;
     await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+});
+
+it("settles every started HTTP request before a failed fold rejects and releases coordination", async () => {
+  const gates = Array.from({ length: 4 }, signal);
+  const started = signal();
+  const requests: Array<{ operation: string; number: number | null; settled: boolean }> = [];
+  const events: Array<{ event: string; outstanding: number }> = [];
+  const outstanding = () => requests.filter((request) => !request.settled).length;
+  const github = new GitHubGateway({
+    accessToken: "fixture-token",
+    fetch: async (input, init) => {
+      const body = String(input).endsWith("/graphql") ? JSON.parse(String(init?.body)) : null;
+      const operation = body ? /query (\w+)/.exec(body.query)![1]!
+        : String(input).endsWith("/repositories/5001") ? "identity" : "diff";
+      const number = operation === "diff"
+        ? Number(/\/pulls\/(\d+)$/.exec(String(input))![1])
+        : body?.variables.pullRequestNumber ?? null;
+      const record = { operation, number, settled: false };
+      requests.push(record);
+      try {
+        if (operation === "identity") {
+          return Response.json(verifiedRepositoryPayload(5001, "sponsor/repository"));
+        }
+        if (operation === "RepositoryIssues") {
+          return Response.json({ data: { repository: { issues: {
+            nodes: Array.from({ length: 9 }, (_, index) => issueNode(index + 1)), pageInfo,
+          } } } });
+        }
+        if (operation === "IssueTimeline") {
+          return Response.json({ data: { repository: { issue: {
+            timelineItems: issueTimeline(body.variables.issueNumber),
+          } } } });
+        }
+        if (operation === "PullRequestReviews") {
+          if (requests.filter((request) => request.operation === operation).length === 4) started.resolve();
+          await gates[number - 1].promise;
+          if (number === 1) return new Response("request failed", { status: 400 });
+          return Response.json({ data: { repository: { pullRequest: {
+            reviews: { nodes: [], pageInfo },
+          } } } });
+        }
+        if (operation === "PullRequestReviewDismissals") {
+          return Response.json({ data: { repository: { pullRequest: {
+            timelineItems: { nodes: [], pageInfo },
+          } } } });
+        }
+        if (operation === "diff") return new Response(`diff ${number}`);
+        throw new Error(`Unexpected request: ${operation}`);
+      } finally {
+        record.settled = true;
+      }
+    },
+  });
+  const store: ReconciliationStore = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
+    withRepositoryReconciliation: async (_id, work) => {
+      try { return await work(); } finally { events.push({ event: "released", outstanding: outstanding() }); }
+    },
+    getRepository: async () => ({
+      id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
+      registeredAt: "2026-01-01T00:00:00Z",
+      sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
+      difficultyScheme: { openingName: "Size", actualName: "Delivered",
+        openingLabels: [{ label: "M", comparisonPoints: 5, reservePoints: 5 }],
+        actualLabels: [{ label: "delivered/6", points: 6 }] },
+    }),
+    getGitHubAccessToken: async () => "fixture-token", getReconciliationCooldown: async () => null,
+    setReconciliationCooldown: async () => {}, findUsersByGitHubUserIds: async () => [],
+    hasDerivedRowsBelowFoldRevision: async () => false, beginRun: async () => "run",
+    completeRun: async () => {}, failRun: async () => {},
+    materialize: async () => { throw new Error("A failed fold must not materialize"); },
+    recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+  };
+  const outcome = reconcileRepository({ store, github }, "repository").then(
+    () => { events.push({ event: "resolved", outstanding: outstanding() }); },
+    (error: unknown) => {
+      events.push({ event: "rejected", outstanding: outstanding() });
+      return { error };
+    },
+  );
+  try {
+    await Promise.race([started.promise, outcome.then(() => { throw new Error("Ended before concurrent reads"); })]);
+    gates[0].resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(outstanding()).toBe(3);
+    expect(events).toEqual([]);
+    for (const gate of gates) gate.resolve();
+    expect(await outcome).toMatchObject({ error: { cause: { status: 400 } } });
+    expect(events).toEqual([{ event: "released", outstanding: 0 }, { event: "rejected", outstanding: 0 }]);
+    expect(requests.every(({ settled }) => settled)).toBe(true);
+    expect(requests.filter(({ operation }) => operation === "PullRequestReviews").map(({ number }) => number))
+      .toEqual([1, 2, 3, 4]);
+  } finally {
+    for (const gate of gates) gate.resolve();
+    await outcome;
   }
 });
 
