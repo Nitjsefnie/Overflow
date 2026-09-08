@@ -43,6 +43,22 @@ describe("GitHub webhook route", () => {
     },
   );
 
+  it.each([
+    { action: "opened", repository: { id: 42, full_name: "octo/example" } },
+    { action: "created", repository: { id: "42", full_name: "octo/example" } },
+    { action: "deleted", repository: { id: 0, full_name: "octo/example" } },
+    { action: "edited", repository: { id: 42 } },
+    { repository: { id: 42, full_name: "octo/example" } },
+  ])("rejects unsupported or malformed comment envelopes before queueing: %j", async (payload) => {
+    const processed: unknown[] = [];
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => processed.push(delivery) });
+    const response = await route(request(JSON.stringify(payload), {
+      "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment",
+    }));
+    expect(response.status).toBe(400);
+    expect(processed).toEqual([]);
+  });
+
   it("keeps setup configuration aligned with the production App Router pathname", async () => {
     const routeFile = resolve("src/app/api/github/webhooks/route.ts");
     const routePathname = `/${relative(resolve("src/app"), routeFile).replace(/\/route\.ts$/, "")}`;

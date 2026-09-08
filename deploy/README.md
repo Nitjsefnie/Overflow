@@ -527,6 +527,14 @@ considered explicitly.
 
 ## 10. Deploying a new revision
 
+Every revision deploy finishes by upgrading existing webhook subscriptions after
+the new parser-capable release is serving and its readiness check succeeds. Keep
+the original `GITHUB_WEBHOOK_SECRET` in the loaded environment; the upgrade must
+not rotate it. Avoid concurrent manual hook-configuration edits. The command
+preserves callback configuration, active state and unrelated subscriptions,
+verifies each persisted hook at the repository's current numeric-ID-resolved
+location, then queues repair. Startup recovery does not replace this upgrade.
+
 Startup recovery is on by default. Before every deploy, review whether the
 revision can affect fold-derived values. Changes to fold behavior **must not
 suppress the startup pass**; leave `OVERFLOW_SKIP_STARTUP_RECONCILIATION` unset
@@ -590,6 +598,13 @@ systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+install -d -m 0700 /var/log/overflow
+upgrade_log="/var/log/overflow/webhook-upgrade-$release.jsonl"
+upgrade_status=0
+pnpm --silent webhooks:upgrade > "$upgrade_log" 2>&1 || upgrade_status=$?
+cat "$upgrade_log"
+printf 'Webhook upgrade log: %s\nWebhook upgrade exit status: %s\n' "$upgrade_log" "$upgrade_status"
+test "$upgrade_status" -eq 0 || exit "$upgrade_status"
 ```
 
 The generated config belongs to `$release` and excludes serving and retained
@@ -597,6 +612,21 @@ release validators; Next adds the new release's types to that file. Omitting
 preparation makes the build fail with the command needed to prepare this release.
 The tracked config stays clean, and `set -e` stops a failed preparation or build
 before the switch.
+
+Retain the upgrade log and printed exit status with the deployment record. A
+nonzero upgrade leaves the new release serving but the deployment incomplete;
+inspect each sanitized `failure` code, restore sponsor credentials or hook admin
+access as needed, and rerun `pnpm webhooks:upgrade` with the same environment.
+`subscription: VERIFIED` and `queue: FAILED` is partial completion: the rerun
+verifies the hook again and retries repair queueing. Do not report the upgrade as
+successful from a restart or startup sweep. Queue acceptance does not establish
+that reconciliation has finished; check the worker's outcomes afterwards.
+
+For section 5's one-time migration, run the upgrade/logging lines above after its
+switch/restart and section 10's HTTP verification. For a first installation or
+unit migration, run them after section 7's readiness verification with the
+environment from section 5 loaded. With no active registrations the command is
+a successful no-op.
 
 The ownership reset keeps code root-owned and group-readable while preserving
 the serving cache's Unix permissions. Resolve `.next` before resetting ownership:

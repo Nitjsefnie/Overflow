@@ -1,4 +1,6 @@
+import { z } from "zod";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
+import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
@@ -233,7 +235,7 @@ export class GitHubGateway {
         body: JSON.stringify({
           name: "web",
           active: true,
-          events: ["issues", "pull_request", "pull_request_review"],
+          events: githubWebhookEvents,
           config: {
             url: configuration.callbackUrl,
             content_type: "json",
@@ -257,6 +259,52 @@ export class GitHubGateway {
     await this.request(`/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`, {
       method: "DELETE",
     });
+  }
+
+  public async ensureWebhookEvents(
+    repository: GitHubRepositoryReference,
+    webhookId: number,
+    existingSecret: string,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(webhookId) || webhookId <= 0) {
+      throw new Error("GitHub webhook id must be a positive safe integer.");
+    }
+    if (existingSecret.length === 0) {
+      throw new Error("Existing webhook secret must be configured.");
+    }
+    const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
+    try {
+      const before = parseWebhook(await this.request(path), webhookId);
+      const missing = githubWebhookEvents.filter((event) => !subscribesTo(before.events, event));
+      if (missing.length === 0) return;
+
+      // GitHub's PATCH adds events without replacing concurrent subscriptions.
+      // Its update contract requires retaining the original secret explicitly;
+      // GET only returns a mask. Preserve the other settings read from this hook.
+      const after = parseWebhook(await this.request(path, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          add_events: missing,
+          active: before.active,
+          config: { ...before.config, secret: existingSecret },
+        }),
+      }), webhookId);
+      if (
+        ![...githubWebhookEvents, ...before.events].every((event) => subscribesTo(after.events, event))
+        || after.active !== before.active
+        || Object.entries(before.config).some(([key, value]) => key !== "secret" && after.config[key] !== value)
+      ) {
+        throw new Error("GitHub webhook subscription verification failed.");
+      }
+    } catch (error) {
+      // The ordinary gateway retains diagnostic bodies for internal callers.
+      // Administrative outcomes must never carry those bodies to an operator.
+      if (error instanceof GitHubApiError) {
+        throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds);
+      }
+      throw error;
+    }
   }
 
   public async ensureDifficultyLabels(
@@ -913,6 +961,9 @@ const pullRequestReviewDismissalsQuery = `
 `;
 
 function toGitHubRepository(payload: GitHubRestRepository): GitHubRepository {
+  if (typeof payload?.private !== "boolean") {
+    throw new Error("GitHub API response was invalid.");
+  }
   return {
     id: payload.id,
     owner: payload.owner.login,
@@ -923,6 +974,31 @@ function toGitHubRepository(payload: GitHubRestRepository): GitHubRepository {
     url: payload.html_url,
     canAdminister: payload.permissions?.admin === true,
   };
+}
+
+const webhookSchema = z.object({
+  id: z.number().int().positive().safe(),
+  active: z.boolean(),
+  events: z.array(z.string().min(1)),
+  config: z.object({
+    url: z.url(),
+    content_type: z.enum(["json", "form"]),
+    insecure_ssl: z.union([z.literal("0"), z.literal("1"), z.literal(0), z.literal(1)]),
+  }).catchall(z.union([z.string(), z.number(), z.boolean()])),
+});
+
+function parseWebhook(response: GitHubRestResponse, webhookId: number): z.infer<typeof webhookSchema> {
+  let payload: unknown;
+  try { payload = JSON.parse(response.body); } catch { /* Invalid responses fail closed below. */ }
+  const parsed = webhookSchema.safeParse(payload);
+  if (response.status !== 200 || !parsed.success || parsed.data.id !== webhookId) {
+    throw new Error("GitHub webhook response was invalid.");
+  }
+  return parsed.data;
+}
+
+function subscribesTo(events: readonly string[], event: string): boolean {
+  return events.includes("*") || events.includes(event);
 }
 
 function toGitHubIssue(

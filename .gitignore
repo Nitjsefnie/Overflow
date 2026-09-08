@@ -143,6 +143,7 @@ src/lib/overrides/*
 !src/lib/repositories/
 src/lib/repositories/*
 !src/lib/repositories/*.ts
+!src/lib/repositories/upgrade-webhooks.ts
 !src/lib/security/
 src/lib/security/*
 !src/lib/security/*.ts
@@ -179,6 +180,7 @@ public/*
 !scripts/
 scripts/*
 !scripts/*.ts
+!scripts/upgrade-webhooks.ts
 
 !tests/
 tests/*
@@ -204,6 +206,8 @@ tests/db/*
 !tests/deploy/
 tests/deploy/*
 !tests/deploy/*.ts
+!tests/deploy/webhook-upgrade-cli.test.ts
+!tests/deploy/webhook-upgrade-order.test.ts
 !tests/domain/
 tests/domain/*
 !tests/domain/*.ts
@@ -214,12 +218,15 @@ tests/fold/*
 !tests/github/
 tests/github/*
 !tests/github/*.ts
+!tests/github/webhook-upgrade.test.ts
 !tests/moderation/
 tests/moderation/*
 !tests/moderation/*.ts
 !tests/repositories/
 tests/repositories/*
 !tests/repositories/*.ts
+!tests/repositories/upgrade-webhooks.test.ts
+!tests/repositories/webhook-upgrade-postgres.test.ts
 !tests/security/
 tests/security/*
 !tests/security/*.ts
