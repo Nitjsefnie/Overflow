@@ -46,6 +46,32 @@ function fixture() {
 }
 
 describe("existing registration webhook upgrade", () => {
+  it.each([".github", "-renamed", "_renamed"])("upgrades a registration renamed to %s using the same immutable IDs and the current path", async (name) => {
+    const f = fixture();
+    Object.assign(f.repository, { name, full_name: `new-owner/${name}` });
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0 });
+    expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "GET /repositories/42", `GET /repos/new-owner/${name}/hooks/81`, `PATCH /repos/new-owner/${name}/hooks/81`,
+    ]);
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "WEBHOOK" }]);
+  });
+
+  it.each([".", "..", "has/slash", "has\\backslash", "%2e%2e", "", "has space"])("refuses unsafe current repository name %j before touching a hook", async (name) => {
+    const f = fixture();
+    Object.assign(f.repository, { name, full_name: `new-owner/${name}` });
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
+    expect(f.requests.map((request) => new URL(request.url).pathname)).toEqual(["/repositories/42"]);
+    expect(f.queued).toEqual([]);
+  });
+
+  it.each([".github", "-owner", "has/slash", "has\\backslash"])("refuses unsafe current owner %j independently of repository-name validation", async (owner) => {
+    const f = fixture();
+    Object.assign(f.repository, { owner: { login: owner }, full_name: `${owner}/renamed` });
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
+    expect(f.requests.map((request) => new URL(request.url).pathname)).toEqual(["/repositories/42"]);
+    expect(f.queued).toEqual([]);
+  });
+
   it("resolves immutable identity and the sponsor token, writes at the current path, and queues repair on every verified run", async () => {
     const f = fixture();
     await expect(upgradeRepositoryWebhooks(f.dependencies)).resolves.toEqual({ succeeded: 1, failed: 0 });
