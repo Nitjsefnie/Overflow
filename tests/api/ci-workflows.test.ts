@@ -14,12 +14,12 @@ type Workflow = {
     "timeout-minutes"?: number;
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
-    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>;
+    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }>;
   }>;
 };
 
 describe("GitHub Actions release gates", () => {
-  it("admits PRs using only base code with scoped writes and serialized corrective edits", async () => {
+  it("checks admission through the reviewed shared action without a consumer checkout", async () => {
     const workflow = await readWorkflow("pr-gate.yml");
     expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened"] } });
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write", issues: "read" });
@@ -32,20 +32,15 @@ describe("GitHub Actions release gates", () => {
     expect(gate.if).toBe("github.event.pull_request.user.type != 'Bot'");
     expect(gate["runs-on"]).toBe("ubuntu-latest");
     expect(gate["timeout-minutes"]).toBe(5);
-    expect(gate.steps).toHaveLength(2);
-    const [checkout, validate] = gate.steps;
-    expect(checkout?.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
-    // pull_request_target's default checkout resolves to the base repository/ref.
-    expect(checkout?.with).toEqual({ "persist-credentials": false });
-    expect(checkout?.run).toBeUndefined();
-    expect(validate?.uses).toBeUndefined();
-    expect(validate?.run).toBe("python3 scripts/ci/pr_gate.py");
-    expect(validate?.env).toEqual({
-      GH_TOKEN: "${{ github.token }}",
-      REPO: "${{ github.repository }}",
-      PR: "${{ github.event.pull_request.number }}",
-      ACTOR: "${{ github.event.pull_request.user.login }}",
-    });
+    expect(gate.steps).toEqual([{
+      uses: "Nitjsefnie-Actions/pr-gate@50ace1bb77b0599079a3ba0590a7f81794402a19",
+      with: {
+        "github-token": "${{ github.token }}",
+        repository: "${{ github.repository }}",
+        "pull-request-number": "${{ github.event.pull_request.number }}",
+        "pull-request-author": "${{ github.event.pull_request.user.login }}",
+      },
+    }]);
   });
 
   it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
