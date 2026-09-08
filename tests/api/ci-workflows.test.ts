@@ -19,6 +19,29 @@ type Workflow = {
 };
 
 describe("GitHub Actions release gates", () => {
+  it("preserves claim policy around the reviewed shared action without input overrides", async () => {
+    const workflow = await readWorkflow("claim.yml");
+    expect(workflow.on).toEqual({ issue_comment: { types: ["created"] } });
+    expect(workflow.permissions).toEqual({ issues: "write" });
+    expect(workflow.concurrency).toEqual({
+      group: "claim-${{ github.event.issue.number }}",
+      "cancel-in-progress": false,
+    });
+    expect(workflow.jobs).toEqual({
+      claim: {
+        if: "github.event.issue.pull_request == null"
+          + " && github.event.issue.state == 'open'"
+          + " && github.event.comment.user.type != 'Bot'"
+          + " && (contains(github.event.comment.body, '/claim')\n"
+          + "    || contains(github.event.comment.body, '/unclaim')\n"
+          + "    || contains(github.event.comment.body, '/release'))",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 5,
+        steps: [{ uses: "Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650" }],
+      },
+    });
+  });
+
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
     const workflow = await readWorkflow("pr-gate.yml");
     expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened"] } });

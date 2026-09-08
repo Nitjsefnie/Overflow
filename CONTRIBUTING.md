@@ -319,6 +319,12 @@ version, configuration or data conditions genuinely matter.
 
 ### Claim it before you start
 
+The [claim caller](.github/workflows/claim.yml) uses the
+[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/d9976f1f803f7a662eed3be17772800b7925e650).
+That SHA-pinned action is the implementation authority for the claim and release
+commands; the caller retains this repository's event, permission and concurrency
+policy.
+
 Comment `/claim` on an open, unassigned issue and
 [`.github/workflows/claim.yml`](.github/workflows/claim.yml) assigns you. You do
 not need write access, which is the entire point: GitHub's built-in slash

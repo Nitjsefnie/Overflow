@@ -33,6 +33,7 @@ export type ClaimPathVerdict = ClaimPathAssessment | "NOT_CHECKED";
 const assigneesCollection = /(?<![\w.~%+:=$-])issues\/[^/\r\n]+\/assignees(?=$|[\s"'`;&|)<>?#\\])/;
 const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
 const deletion = /(?:-X\s*|--method(?:\s+|=))["']?DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
+const reviewedClaimAction = "Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650";
 
 export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
   for (const { content } of workflows) {
@@ -53,13 +54,21 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
       || (Array.isArray(trigger) && trigger.includes("issue_comment"))
       || (trigger instanceof Map && trigger.has("issue_comment"));
 
+    const jobs: unknown = document.get("jobs");
+    const usesReviewedClaimAction = jobs instanceof Map && [...jobs.values()].some((job: unknown) => {
+      const steps: unknown = job instanceof Map ? job.get("steps") : undefined;
+      return Array.isArray(steps) && steps.some(
+        (step: unknown) => step instanceof Map && step.get("uses") === reviewedClaimAction,
+      );
+    });
+
     // Join shell continuations before splitting commands for the REST deletion scan.
     // Deletion tokens exclude even comments or repository names within a segment;
     // additive calls stay independent.
     const referencesAssignment = additiveCall.test(content) || content.replace(/\\\r?\n/g, "").split(/\r?\n/).some(
       (line) => line.split(/&&|\|\||[;|&]/).some((segment) => assigneesCollection.test(segment) && !deletion.test(segment)),
     );
-    if (reactsToComments && referencesAssignment) {
+    if (reactsToComments && (usesReviewedClaimAction || referencesAssignment)) {
       return "EVIDENCE_FOUND";
     }
   }
