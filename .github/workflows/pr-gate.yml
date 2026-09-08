@@ -1,0 +1,39 @@
+name: pr gate
+
+# pull_request_target: a fork's pull_request token is read-only, so its
+# comment and close would silently do nothing. The job checks out the base
+# ref only and runs no pull-request code; the body reaches the script
+# through the API, never through an expression.
+on:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+concurrency:
+  # Runs for one pull request queue and GitHub keeps only the newest pending
+  # one. Never cancel: a cancelled run may already have closed, and the
+  # queued run is what reads that and repairs it.
+  group: pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate pull request body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
+        run: python3 scripts/ci/pr_gate.py

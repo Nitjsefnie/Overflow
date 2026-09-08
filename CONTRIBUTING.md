@@ -159,6 +159,10 @@ to report. `--run` is what pins a single non-interactive pass regardless of how
 your terminal is attached; `pnpm test:watch` is the watching variant, for use
 while you work rather than in a result you paste into a pull request.
 
+The pull-request admission gate's focused Python suites also run through
+`pnpm test --run`. Have Python 3.10 or newer on `PATH` as `python3`; the gate
+and its tests use only the Python standard library.
+
 **Two suites need a container runtime.** `tests/db/schema.test.ts` and
 `tests/moderation/postgres-store.test.ts` each start a real `postgres:17-alpine`
 through testcontainers and run the actual migrations against it. Without Docker
@@ -272,6 +276,27 @@ Give the panel its own class next to `.surface` and put the spacing there.
 `.rules-card` is the pattern to copy: it sets `margin-top`, a fluid
 `padding: clamp(...)`, and the measure and rhythm of the headings and paragraphs
 inside it.
+
+## Pull-request admission
+
+Use [the pull-request template](.github/PULL_REQUEST_TEMPLATE.md), keeping its
+section names and order and removing its instruction comments. Summary,
+Changes, Testing, and Footer are required. Keep conditional and optional
+sections only when they apply, and give every included section visible content.
+
+Reference at least one issue assigned to you, normally under Related Issues and
+Pull Requests. Every issue your body names with a closing keyword must also be
+assigned to you. Use `/claim` on the issue first and confirm the assignment;
+use plain-text `Fixes #123` in Related Issues and Pull Requests when the merge
+should close that issue. The gate checks at most 20 distinct issue references.
+
+The admission workflow checks human-authored pull requests when opened, edited,
+or reopened. If a check fails, it posts a comment explaining what to correct,
+updates that same comment on later checks, and may close the pull request.
+Correct the body by editing that same pull request: once all conditions pass,
+the gate automatically reopens a pull request it closed itself. It does not
+reopen one closed by a maintainer or another actor. An uncertain reference may
+leave the pull request open with a corrective comment.
 
 ## Issues
 
