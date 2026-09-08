@@ -1,4 +1,13 @@
 import { z } from "zod";
+import type { IssueState } from "@/lib/db/types";
+
+export type GitHubWebhookIssue = {
+  state: IssueState;
+  updatedAt: string;
+  title: string;
+  body: string;
+  url: string;
+};
 
 export type SupportedGitHubWebhookEvent = keyof typeof supportedActions;
 
@@ -9,9 +18,19 @@ export type GitHubWebhookDelivery = {
   repositoryGitHubId: number;
   repositoryFullName: string;
   subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
+  /** Present for issue subjects; pull requests remain fold-only. */
+  issue?: GitHubWebhookIssue;
 };
 
 const subjectSchema = z.object({ id: z.number().int().positive(), number: z.number().int().positive() });
+const issueEnvelopeSchema = subjectSchema.extend({ pull_request: z.object({}).optional() });
+const issueViewSchema = z.object({
+  state: z.enum(["open", "closed"]),
+  updated_at: z.iso.datetime({ offset: true }),
+  title: z.string(),
+  body: z.string().nullable(),
+  html_url: z.url({ protocol: /^https?$/ }),
+});
 
 const payloadSchema = z
   .object({
@@ -53,6 +72,20 @@ export function parseGitHubWebhookDelivery(
   const isIssueEvent = eventName === "issues" || eventName === "issue_comment";
   const subject = subjectSchema.safeParse(isIssueEvent ? parsed.data.issue : parsed.data.pull_request);
   if (!subject.success) return null;
+  let issue: GitHubWebhookIssue | undefined;
+  let kind: GitHubWebhookDelivery["subject"]["kind"] = "PULL_REQUEST";
+  if (isIssueEvent) {
+    const envelope = issueEnvelopeSchema.safeParse(parsed.data.issue);
+    if (!envelope.success) return null;
+    // GitHub sends PR comments as issue_comment with issue.pull_request set.
+    if (envelope.data.pull_request === undefined) {
+      const view = issueViewSchema.safeParse(parsed.data.issue);
+      if (!view.success) return null;
+      kind = "ISSUE";
+      issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
+        title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
+    }
+  }
 
   return {
     deliveryId,
@@ -60,7 +93,8 @@ export function parseGitHubWebhookDelivery(
     action: parsed.data.action,
     repositoryGitHubId: parsed.data.repository.id,
     repositoryFullName: parsed.data.repository.full_name,
-    subject: { kind: isIssueEvent ? "ISSUE" : "PULL_REQUEST", ...subject.data },
+    subject: { kind, ...subject.data },
+    ...(issue === undefined ? {} : { issue }),
   };
 }
 

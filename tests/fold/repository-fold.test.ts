@@ -7,6 +7,12 @@ import {
 } from "@/lib/fold/repository-fold";
 
 describe("foldRepository", () => {
+  it.each(["OPEN", "CLOSED"] as const)("retains GitHub state %s and its update timestamp even with a merged closing PR", (state) => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0] = { ...snapshot.issues[0], state, updatedAt: "2026-09-08T10:00:00Z" };
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({ state, updatedAt: "2026-09-08T10:00:00Z" });
+  });
+
   it("keeps self work as calibration evidence instead of a settlement", () => {
     const result = foldRepository(selfWorkFixture());
 
@@ -560,6 +566,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
         createdAt: "2026-08-30T09:00:00.000Z",
+        updatedAt: "2026-09-01T12:05:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
         authorLogin: "sponsor",
         authorGitHubUserId: null,

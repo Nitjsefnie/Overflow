@@ -34,10 +34,12 @@ describe("GitHub webhook route", () => {
     const deliveries: unknown[] = [];
     const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => { deliveries.push(delivery); } });
     const response = await route(request(JSON.stringify({ action,
-      repository: { id: 42, full_name: "octo/example" }, [key]: { id: 201, number: 11, merged: true },
+      repository: { id: 42, full_name: "octo/example" }, [key]: { id: 201, number: 11, merged: true,
+        state: "closed", updated_at: "2026-09-08T10:00:00Z", title: "Issue", body: null,
+        html_url: "https://github.com/octo/example/issues/11" },
     }), { "x-github-event": event, "x-github-delivery": "subject" }));
     expect(response.status).toBe(202);
-    expect(deliveries).toEqual([{ deliveryId: "subject", event, action, repositoryGitHubId: 42,
+    expect(deliveries).toMatchObject([{ deliveryId: "subject", event, action, repositoryGitHubId: 42,
       repositoryFullName: "octo/example", subject: { kind, id: 201, number: 11 } }]);
   });
 
@@ -118,6 +120,7 @@ describe("GitHub webhook route", () => {
       reconcileRepository(repositoryId: string): Promise<void>;
     } = {
       store: {
+        applyIssueView: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
         markProcessed: async () => true,
@@ -154,6 +157,7 @@ describe("GitHub webhook route", () => {
     const markedFailed: { deliveryId: string; leaseToken: string }[] = [];
     const dependencies: WebhookProcessorDependencies = {
       store: {
+        applyIssueView: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
         markProcessed: async () => true,

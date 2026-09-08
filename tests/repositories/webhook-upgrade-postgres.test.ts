@@ -64,7 +64,8 @@ describe("upgrading actual persisted registrations", () => {
         await sql`delete from repository_reconciliation_jobs where repository_id = ${registered!.id}`;
         await sql`delete from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`;
         const body = JSON.stringify({ action, repository: { id: 45, full_name: "comments/current" },
-          issue: { id: 201, number: 11, state: "closed", labels: [] },
+          issue: { id: 201, number: 11, state: "closed", labels: [], updated_at: "2026-09-08T10:00:00Z",
+            title: "Issue", body: null, html_url: "https://github.com/comments/current/issues/11" },
           comment: { body: "unrelated text", user: { login: "other-author" } },
         });
         const signature = createHmac("sha256", "comment-secret").update(body).digest("hex");

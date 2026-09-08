@@ -218,6 +218,7 @@ describe("initial PostgreSQL materialization", () => {
       "024_reconciliation_run_rederivation.sql",
       "025_rederivation_generation.sql",
       "026_incremental_reconciliation.sql",
+      "027_issue_github_updated_at.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -264,7 +265,9 @@ describe("initial PostgreSQL materialization", () => {
           `Opening authority precondition failed: 1 issue(s) have non-sponsor opening evidence. Issue ids: ${issue.id}`,
         );
       }
-      await expect(readIssue()).resolves.toEqual(before);
+      await expect(readIssue()).resolves.toEqual(sponsorAuthored
+        ? before.map((row) => ({ ...row, github_updated_at: null }))
+        : before);
       // Each migration commits on its own, so a raised precondition rolls back only the migration
       // that raised it: 013 stays applied and a re-run resumes at 014 instead of replaying it.
       await expect(upgradeSql`
@@ -4254,6 +4257,7 @@ function materializationSnapshot(input: {
         url: "https://github.com/example/materialized/issues/1",
         state: "CLOSED",
         createdAt: "2026-09-01T08:00:00.000Z",
+        updatedAt: "2026-09-01T12:05:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
         authorLogin,
         authorGitHubUserId: null,
@@ -4493,7 +4497,7 @@ async function reconciliationMaterializationState(repositoryId: string) {
 
 function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGateway {
   const issues: GitHubIssue[] = snapshot.issues.map((issue) => ({
-    updatedAt: issue.closedAt ?? issue.createdAt,
+    updatedAt: issue.updatedAt,
     id: issue.id,
     number: issue.number,
     title: issue.title,

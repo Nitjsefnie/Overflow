@@ -36,7 +36,7 @@ import type {
   ClaimedReconciliationJob,
   ReconciliationJobReason,
 } from "@/lib/fold/reconciliation-jobs";
-import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
 import {
   applyGrantedSelfWorkCalibrationOverride,
   applyGrantedSettlementOverride,
@@ -975,6 +975,17 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return row ?? null;
   }
 
+  public async applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void> {
+    // Unknown issues need the fold's opening evidence before they can be inserted.
+    await this.sql`
+      update issues
+      set state = ${issue.state}, title = ${issue.title}, body = ${issue.body}, url = ${issue.url},
+          github_updated_at = ${issue.updatedAt}
+      where repository_id = ${repositoryId} and github_issue_id = ${githubIssueId}
+        and (github_updated_at is null or github_updated_at <= ${issue.updatedAt}::timestamptz)
+    `;
+  }
+
   public async markProcessed(deliveryId: string, leaseToken: string): Promise<boolean> {
     const rows = await this.sql<{ id: string }[]>`
       update webhook_deliveries
@@ -1337,10 +1348,13 @@ async function upsertIssues(
   fold: FoldResult,
 ): Promise<Map<number, string>> {
   const ids = new Map<number, string>();
+  // Raw fields share GitHub's clock with webhooks. A cached or in-flight fold
+  // may be older; its derived evidence must still be materialized below.
+  const acceptsRawView = sql`issues.github_updated_at is null or excluded.github_updated_at >= issues.github_updated_at`;
   for (const issue of fold.issues) {
     const [row] = await sql<IssueRow[]>`
       insert into issues (
-        github_issue_id, repository_id, issue_number, title, body, url, state,
+        github_issue_id, repository_id, issue_number, title, body, url, state, github_updated_at,
         owner_github_login, opening_label, opening_comparison_points, opening_reserve_points,
         opening_source_event_id, opening_source_actor_login, opening_source_at,
         settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
@@ -1348,7 +1362,7 @@ async function upsertIssues(
         settled_rationale_commented_at, claim_assignee_github_login
       )
       values (
-        ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state},
+        ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state}, ${issue.updatedAt},
         ${issue.ownerGitHubLogin}, ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints},
         ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt},
         ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
@@ -1357,10 +1371,11 @@ async function upsertIssues(
       )
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,
-          title = excluded.title,
-          body = excluded.body,
-          url = excluded.url,
-          state = excluded.state,
+          title = case when ${acceptsRawView} then excluded.title else issues.title end,
+          body = case when ${acceptsRawView} then excluded.body else issues.body end,
+          url = case when ${acceptsRawView} then excluded.url else issues.url end,
+          state = case when ${acceptsRawView} then excluded.state else issues.state end,
+          github_updated_at = case when ${acceptsRawView} then excluded.github_updated_at else issues.github_updated_at end,
           opening_label = case
             when issues.opening_source_event_id is null then excluded.opening_label
             else issues.opening_label

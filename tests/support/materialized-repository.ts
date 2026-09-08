@@ -53,7 +53,7 @@ export async function materializeRepositoryFixture(sql: Sql) {
   const fold: FoldResult = {
     issues: issueIds.map((githubIssueId, index) => ({
       githubIssueId, number: index + 1, title: "Revision fixture", body: "", url: "https://example.test/issue",
-      state: "CLOSED", openingLabel: "M", openingComparisonPoints: 5, openingReservePoints: 5,
+      state: "CLOSED", updatedAt: "2026-09-01T12:05:00.000Z", openingLabel: "M", openingComparisonPoints: 5, openingReservePoints: 5,
       ownerGitHubLogin: `sponsor-${sponsorGitHubId}`, openingSourceEventId: `opening-${githubIssueId}`,
       openingSourceActorLogin: `sponsor-${sponsorGitHubId}`, openingSourceAt: "2026-09-01T08:00:00.000Z",
       claimAssigneeGitHubLogin: null, ...settledEvidence,

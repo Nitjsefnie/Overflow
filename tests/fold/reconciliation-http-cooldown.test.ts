@@ -241,6 +241,7 @@ function issueNode(fixture: RepositoryFixture, number: number, changed: boolean)
   const actualLabel = changed ? "delivered/7" : "delivered/6";
   return {
     databaseId: id, number, title: changed ? "Changed issue" : "Original issue", body: "", state: "CLOSED",
+    updatedAt: "2026-09-01T12:05:00.000Z",
     url: `https://github.com/${fixture.ownerName}/issues/${number}`, createdAt: "2026-09-01T07:00:00.000Z",
     author: { login: fixture.sponsorLogin }, assignees: { nodes: [] },
     labels: { nodes: [{ name: "M" }, { name: actualLabel }], pageInfo },
