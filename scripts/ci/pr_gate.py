@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 if __package__:
+    from .pr_content import bug_issue_errors, section_content
     # pylint: disable-next=relative-beyond-top-level
     from .pr_body import (
         closing_issues, code_span, layout_errors, parse_rendered,
@@ -18,6 +19,7 @@ if __package__:
         retains_instruction_comment,
     )
 else:
+    from pr_content import bug_issue_errors, section_content
     from pr_body import (
         closing_issues, code_span, layout_errors, parse_rendered,
         referenced_issues, related_may_reference,
@@ -200,20 +202,29 @@ def _revalidate(api, pull_endpoint, state, timeline_endpoint=None,
     return current_closer
 
 
-def _claim(api, repo, issues, closing, actor):
-    claimed = None
-    unassigned = []
-    for number in issues[:20]:
+def _issue_records(api, repo, numbers):
+    records = {}
+    for number in numbers[:20]:
         endpoint = f'repos/{repo}/issues/{number}'
         response = _response(api, 'GET', endpoint)
         if response.status == 404:
+            records[number] = None
             continue
         if response.status != 200 or not isinstance(response.data, dict):
             raise _GateError(
                 f'GitHub returned {response.status} for {endpoint}')
-        if 'pull_request' in response.data:
+        records[number] = response.data
+    return records
+
+
+def _claim(issues, closing, actor, records):
+    claimed = None
+    unassigned = []
+    for number in issues[:20]:
+        issue = records[number]
+        if issue is None or 'pull_request' in issue:
             continue
-        assignees = response.data.get('assignees') or []
+        assignees = issue.get('assignees') or []
         if any(item.get('login') == actor for item in assignees):
             claimed = claimed or number
         elif number in closing:
@@ -334,6 +345,8 @@ def _run(api, repo, pr, actor, template):
     layout = layout_errors(sections, template) + list(parsed.notes)
     if retains_instruction_comment(body, template):
         layout.append(INSTRUCTION_REASON)
+    content_errors, bug_pointers = section_content(body, sections)
+    layout.extend(content_errors)
     references = referenced_issues(sections)
     closing = closing_issues(parsed)
     known = set(references)
@@ -341,10 +354,13 @@ def _run(api, repo, pr, actor, template):
         if number not in known:
             known.add(number)
             references.append(number)
-    claimed, unassigned = _claim(
-        api, repo, references, set(closing), actor)
+    all_references = list(dict.fromkeys([
+        *references, *(number for number, _title in bug_pointers)]))
+    records = _issue_records(api, repo, all_references)
+    claimed, unassigned = _claim(references, set(closing), actor, records)
+    layout.extend(bug_issue_errors(bug_pointers, records))
     reasons = list(layout)
-    if len(references) > 20:
+    if len(all_references) > 20:
         reasons.append(OVERFLOW_REASON)
     elif unassigned:
         reasons.append(_unassigned_reason(unassigned))
@@ -357,10 +373,17 @@ def _run(api, repo, pr, actor, template):
         if state == 'closed':
             _revalidate(
                 api, pull_endpoint, state, timeline_endpoint, closer)
-            _write_comment(api, repo, pr, comment, _reopen_text(actor))
+            # Keep close ownership through every fallible reopen boundary.
+            # A retry can finish the transition or reconcile an already-open PR.
+            _write_comment(
+                api, repo, pr, comment,
+                _reopen_text(actor) + f'{CLOSED_MARKER}\n')
             _revalidate(
                 api, pull_endpoint, state, timeline_endpoint, closer)
             _write(api, 'PATCH', pull_endpoint, {'state': 'open'})
+            _revalidate(
+                api, pull_endpoint, 'open', timeline_endpoint, closer)
+            _write_comment(api, repo, pr, comment, _reopen_text(actor))
             print('reopened')
         elif comment is not None:
             _revalidate(api, pull_endpoint, state)
