@@ -7,12 +7,13 @@ export async function mapWithConcurrency<Input, Output>(
     throw new RangeError("Concurrency must be a positive integer.");
   }
 
-  const results = new Array<Output>(inputs.length);
+  const total = inputs.length;
+  const results = new Array<Output>(total);
   let nextIndex = 0;
   let failed = false;
   let firstError: unknown;
   const worker = async () => {
-    while (!failed && nextIndex < inputs.length) {
+    while (!failed && nextIndex < total) {
       const index = nextIndex++;
       try {
         results[index] = await operation(inputs[index]);
@@ -23,7 +24,7 @@ export async function mapWithConcurrency<Input, Output>(
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, inputs.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker));
   if (failed) throw firstError;
   return results;
 }
