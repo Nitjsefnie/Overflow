@@ -11,6 +11,7 @@ import {
 } from "@/lib/fold/reconciliation-worker";
 import * as budgets from "@/lib/github/rate-limit-budget";
 import { GitHubGateway } from "@/lib/github/client";
+import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 const now = new Date("2026-09-07T10:00:00Z");
 const resetAt = new Date("2026-09-07T11:00:00Z");
@@ -72,6 +73,101 @@ function fixture(remaining?: number) {
 }
 
 describe("reconciliation budget holds under the repository lock", () => {
+  it("rechecks immediately before transport when the budget falls after admission", async () => {
+    const { fold, worker, budgetStore } = fixture(500);
+    const requests: string[] = [];
+    fold.store.recordVerifiedRepositoryIdentity = async () => {
+      budgetStore.record("sponsor-1", reading(499));
+    };
+    fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: budgetStore,
+      fetch: async (input) => {
+        requests.push(String(input));
+        if (String(input).endsWith("/repositories/4242")) {
+          return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+        }
+        return Response.json({ data: { repository: { issues: {
+          nodes: [], pageInfo: { hasNextPage: false, endCursor: null },
+        } } } });
+      },
+    });
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
+    expect(requests).toEqual(["https://api.github.com/repositories/4242"]);
+  });
+
+  it.each(["read", "record"] as const)("keeps transport and folding available when the mid-pass observer %s fails", async (fault) => {
+    const { fold, worker, budgetStore } = fixture(500);
+    let requests = 0;
+    const materialize = vi.fn(fold.store.materialize);
+    fold.store.materialize = materialize;
+    fold.store.recordVerifiedRepositoryIdentity = async () => {
+      vi.spyOn(budgetStore, fault).mockImplementation(() => { throw new Error("observer unavailable"); });
+    };
+    fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: budgetStore,
+      fetch: async (input) => {
+        if (String(input).endsWith("/repositories/4242")) {
+          return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+        }
+        requests++;
+        return Response.json({ data: { rateLimit: { remaining: 499, resetAt: resetAt.toISOString() },
+          repository: { issues: { nodes: [], pageInfo: { hasNextPage: requests === 1, endCursor: "next" } } },
+        } });
+      },
+    });
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
+    expect(requests).toBe(2);
+    expect(materialize).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("holds an admitted crawl after a low response (more pages: %s) and refunds its attempt", async (hasNextPage) => {
+    const { fold, worker, budgetStore } = fixture(500);
+    let requests = 0;
+    let attempts = 0;
+    let state = "PENDING";
+    let runAfter = now;
+    const runStates: string[] = [];
+    const materialize = vi.fn(fold.store.materialize);
+    const cooldown = vi.fn(fold.store.setReconciliationCooldown);
+    fold.store.materialize = materialize;
+    fold.store.setReconciliationCooldown = cooldown;
+    fold.store.beginRun = async () => { runStates.push("RUNNING"); return "run-1"; };
+    fold.store.failRun = async () => { runStates.push("FAILED"); };
+    fold.store.completeRun = async () => { runStates.push("COMPLETED"); };
+    fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: budgetStore,
+      fetch: async (input) => {
+        if (String(input).endsWith("/repositories/4242")) {
+          return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+        }
+        requests++;
+        return Response.json({ data: {
+          rateLimit: { remaining: 499, resetAt: resetAt.toISOString() },
+          repository: { issues: { nodes: [], pageInfo: {
+            hasNextPage: hasNextPage && requests === 1, endCursor: "next",
+          } } },
+        } });
+      },
+    });
+    worker.store.claimNextReconciliationJob = async () => {
+      if (state !== "PENDING" || runAfter > now) return null;
+      state = "RUNNING";
+      attempts++;
+      return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts,
+        leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0 };
+    };
+    worker.store.deferReconciliationJob = async (_id, _lease, deadline) => {
+      state = "PENDING"; attempts--; runAfter = deadline; return true;
+    };
+    const result = await runNextReconciliationJob(worker);
+    expect(requests).toBe(1);
+    expect(materialize).not.toHaveBeenCalled();
+    expect(result).toBe("BUDGET_HELD");
+    expect(runStates).toEqual(["RUNNING", "FAILED"]);
+    expect({ state, attempts, runAfter }).toEqual({ state: "PENDING", attempts: 0, runAfter: resetAt });
+    expect(cooldown).not.toHaveBeenCalled();
+    expect(worker.store.retryReconciliationJob).not.toHaveBeenCalled();
+    expect(worker.store.completeReconciliationJob).not.toHaveBeenCalled();
+    await expect(runNextReconciliationJob(worker)).resolves.toBe("IDLE");
+  });
+
   it.each(["expired verdict", "exact reset", "unrepresentable default reading"])(
     "admits a due job with an unusable deadline from %s", async (fault) => {
       const { fold, worker, budgetStore, reconcile, onBudgetChange } = fixture(42);
