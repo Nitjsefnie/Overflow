@@ -186,6 +186,7 @@ scripts/ci/*
 !scripts/ci/pr_gate.py
 !scripts/ci/pr_body.py
 !scripts/ci/pr_body_closing.py
+!scripts/ci/pr_content.py
 
 !tests/
 tests/*
@@ -201,6 +202,9 @@ tests/*
 !tests/test_pr_body_closing.py
 !tests/test_pr_body_elements.py
 !tests/test_pr_body_overflow.py
+!tests/test_pr_gate_recovery.py
+!tests/test_pr_gate_context.py
+!tests/test_pr_content.py
 !tests/async/
 tests/async/*
 !tests/async/*.ts

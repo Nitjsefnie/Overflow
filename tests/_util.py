@@ -22,6 +22,9 @@ def collect(namespace):
 
 
 def runner(tests, *, tmp_prefix):
+    if not tests:
+        print('No tests collected', file=sys.stderr)
+        return 1
     failures = 0
     for test in tests:
         try:
