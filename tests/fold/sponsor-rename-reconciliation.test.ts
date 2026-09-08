@@ -431,6 +431,7 @@ function openIssue(input: {
     id: input.id,
     number: input.number,
     title: `An issue the sponsor opened and priced ${input.number}`,
+    updatedAt: ISSUE_CREATED_AT,
     body: "Issue evidence",
     url: `https://github.com/${input.ownerName}/issues/${input.number}`,
     state: "OPEN",

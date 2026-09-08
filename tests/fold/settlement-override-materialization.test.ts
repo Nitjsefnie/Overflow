@@ -486,6 +486,7 @@ function unsettledIssue(input: {
     id: input.id,
     number: input.number,
     title: `An issue settled by the wrong bookkeeping ${input.number}`,
+    updatedAt: "2026-09-01T12:05:00.000Z",
     body: "Issue evidence",
     url: `https://github.com/${input.repository}/issues/${input.number}`,
     state: "CLOSED",

@@ -10,6 +10,12 @@ import {
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import {
+  RECONCILIATION_EVIDENCE_FORMAT,
+  type DirtyReconciliationSubject,
+  type ReconciliationEvidence,
+  type ReconciliationSynchronization,
+} from "@/lib/fold/reconciliation-evidence";
 import { RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
 import type {
   FoldModerationEvent,
@@ -316,6 +322,36 @@ export type RepositoryRederivationRequest = {
   ownerName: string;
   rederivationRequestedAt: Date | null;
 };
+
+async function synchronizeReconciliationEvidence(
+  transaction: TransactionClient,
+  repositoryId: string,
+  synchronization: ReconciliationSynchronization,
+): Promise<void> {
+  // Lock a row that exists even before bootstrap so two cold publishers cannot
+  // both pass the absence check. The version compare also fences expired workers.
+  await transaction`select id from registered_repositories where id = ${repositoryId} for update`;
+  const [current] = await transaction<{ version: number; last_full_pass_at: Date }[]>`
+    select version, last_full_pass_at from repository_reconciliation_evidence where repository_id = ${repositoryId}
+  `;
+  if ((current?.version ?? null) !== synchronization.expectedVersion) {
+    throw new Error("Stale reconciliation evidence publisher.");
+  }
+  await transaction`insert into repository_reconciliation_evidence
+    (repository_id, version, format_version, checkpoint, last_full_pass_at, issues, pull_requests)
+    values (${repositoryId}, ${(current?.version ?? 0) + 1}, ${RECONCILIATION_EVIDENCE_FORMAT},
+      ${synchronization.scanStartedAt}, ${synchronization.full ? synchronization.scanStartedAt : current?.last_full_pass_at ?? null},
+      ${transaction.json(synchronization.issues as unknown as JSONValue)},
+      ${transaction.json(synchronization.pullRequests as unknown as JSONValue)})
+    on conflict (repository_id) do update set version = excluded.version, format_version = excluded.format_version,
+      checkpoint = excluded.checkpoint, last_full_pass_at = excluded.last_full_pass_at,
+      issues = excluded.issues, pull_requests = excluded.pull_requests`;
+  for (const subject of synchronization.dirtySubjects) {
+    await transaction`delete from repository_reconciliation_dirty_subjects
+      where repository_id = ${repositoryId} and kind = ${subject.kind}
+        and github_subject_id = ${subject.id} and generation = ${subject.generation}`;
+  }
+}
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
   public constructor(
@@ -736,8 +772,12 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     repositoryId: string;
     runId: string;
     fold: FoldResult;
+    synchronization?: ReconciliationSynchronization;
   }): Promise<ReconciliationDeltas> {
     return this.sql.begin(async (transaction) => {
+      if (input.synchronization !== undefined) {
+        await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
+      }
       // One snapshot of the granted corrections for the whole run: settlements
       // and calibrations are two ways of recording the same issue's outcome, so
       // reading the table twice could price one against a grant the other never
@@ -780,6 +820,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         input.runId,
       );
       await recordPolicyViolations(transaction, input.runId, input.fold);
+      if (input.synchronization !== undefined) {
+        await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;
+      }
       await transaction`
         update reconciliation_runs
         set status = ${"COMPLETED"}, completed_at = now(), error_message = null
@@ -787,6 +830,27 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       `;
       return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
     }) as Promise<ReconciliationDeltas>;
+  }
+
+  public async getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null> {
+    const [row] = await this.sql<{
+      version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
+      issues: ReconciliationEvidence["issues"]; pull_requests: ReconciliationEvidence["pullRequests"];
+    }[]>`select * from repository_reconciliation_evidence where repository_id = ${repositoryId}`;
+    return row === undefined ? null : {
+      version: row.version, formatVersion: row.format_version, checkpoint: row.checkpoint,
+      lastFullPassAt: row.last_full_pass_at, issues: row.issues, pullRequests: row.pull_requests,
+    };
+  }
+
+  public async getDirtyReconciliationSubjects(repositoryId: string): Promise<DirtyReconciliationSubject[]> {
+    const rows = await this.sql<{
+      kind: DirtyReconciliationSubject["kind"]; github_subject_id: string; subject_number: number; generation: string;
+    }[]>`select kind, github_subject_id, subject_number, generation
+      from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}
+      order by kind, github_subject_id`;
+    return rows.map((row) => ({ kind: row.kind, id: Number(row.github_subject_id),
+      number: row.subject_number, generation: Number(row.generation) }));
   }
 
   public async claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim> {
