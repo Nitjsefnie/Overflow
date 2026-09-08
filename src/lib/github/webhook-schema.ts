@@ -18,7 +18,7 @@ export type GitHubWebhookDelivery = {
   repositoryGitHubId: number;
   repositoryFullName: string;
   subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
-  /** Present for issue subjects; pull requests remain fold-only. */
+  /** Present only for genuine issue envelopes; PR comments remain enqueue-only. */
   issue?: GitHubWebhookIssue;
 };
 
@@ -73,15 +73,15 @@ export function parseGitHubWebhookDelivery(
   const subject = subjectSchema.safeParse(isIssueEvent ? parsed.data.issue : parsed.data.pull_request);
   if (!subject.success) return null;
   let issue: GitHubWebhookIssue | undefined;
-  let kind: GitHubWebhookDelivery["subject"]["kind"] = "PULL_REQUEST";
+  const kind = isIssueEvent ? "ISSUE" : "PULL_REQUEST";
   if (isIssueEvent) {
     const envelope = issueEnvelopeSchema.safeParse(parsed.data.issue);
     if (!envelope.success) return null;
-    // GitHub sends PR comments as issue_comment with issue.pull_request set.
+    // PR comments carry issue IDs, not PR database IDs. Preserve their issue
+    // subject for enqueueing, but do not apply a raw issue view.
     if (envelope.data.pull_request === undefined) {
       const view = issueViewSchema.safeParse(parsed.data.issue);
       if (!view.success) return null;
-      kind = "ISSUE";
       issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
         title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
     }
