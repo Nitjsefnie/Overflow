@@ -54,6 +54,8 @@ it("drains active PR collectors before releasing coordination and retains their 
     },
   });
   const store: ReconciliationStore = {
+    assessReconciliationFairness: async ({ now }) => ({ state: "ADMITTED", holdUntil: null,
+      usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async (_id, work) => {
@@ -164,6 +166,8 @@ it("settles every started HTTP request before a failed fold rejects and releases
   });
   const store: ReconciliationStore = {
     getReconciliationEvidence: async () => null,
+    assessReconciliationFairness: async ({ now }) => ({ state: "ADMITTED", holdUntil: null,
+      usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async (_id, work) => {
       try { return await work(); } finally { events.push({ event: "released", outstanding: outstanding() }); }
@@ -272,6 +276,8 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     },
   });
   const store: ReconciliationStore = {
+    assessReconciliationFairness: async ({ now }) => ({ state: "ADMITTED", holdUntil: null,
+      usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async (_id, work) => work(),

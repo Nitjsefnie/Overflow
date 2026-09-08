@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
-import { reconcileRepository, type ReconciliationDependencies } from "@/lib/fold/reconcile";
+import { createReconciliationBudgetGate, reconciliationBudgetHoldUntil } from "@/lib/fold/reconciliation-budget";
+import { reconcileRepository, type ReconciliationDependencies, type ReconciliationStore } from "@/lib/fold/reconcile";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import {
   drainReconciliationJobs,
@@ -31,7 +31,7 @@ function fixture(remaining?: number) {
   const budgetStore = budgets.createGitHubGraphqlBudgetStore();
   if (remaining !== undefined) budgetStore.record("sponsor-1", reading(remaining));
   const store = {
-    claimNextReconciliationJob: vi.fn(async () => ({
+    claimNextReconciliationJob: vi.fn<ReconciliationWorkerStore["claimNextReconciliationJob"]>(async () => ({
       id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
       attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0,
     })),
@@ -47,6 +47,9 @@ function fixture(remaining?: number) {
   const onBudgetChange = vi.fn();
   const fold: ReconciliationDependencies = {
     store: {
+      assessReconciliationFairness: vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async () => ({
+        state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 1 },
+      })),
       getReconciliationEvidence: async () => null,
       getDirtyReconciliationSubjects: async () => [],
       withRepositoryReconciliation: async (_id, work) => work(),
@@ -55,7 +58,7 @@ function fixture(remaining?: number) {
         sponsor: { id: "sponsor-1", githubUserId: 1, githubLogin: "octo", enforcementState: "ACTIVE" } }),
       getReconciliationCooldown: async () => null,
       setReconciliationCooldown: async () => {},
-      getGitHubAccessToken: async () => "test-token",
+      getGitHubAccessToken: vi.fn<ReconciliationStore["getGitHubAccessToken"]>(async () => "test-token"),
       hasDerivedRowsBelowFoldRevision: async () => false,
       beginRun: vi.fn(async () => "run-1"), completeRun: async () => {},
       findUsersByGitHubUserIds: async () => [],
@@ -75,7 +78,193 @@ function fixture(remaining?: number) {
   return { budgetStore, store, reconcile, onBudgetChange, fold, worker };
 }
 
+function pagedCostGateway(f: ReturnType<typeof fixture>, costs: readonly (number | null)[], finalRemaining = 4000) {
+  const materialize = vi.spyOn(f.fold.store, "materialize");
+  let page = 0;
+  f.fold.github = new GitHubGateway({ accessToken: "test-token", owner: "sponsor-1", budget: f.budgetStore,
+    fetch: async (input) => {
+      if (String(input).endsWith("/repositories/4242")) {
+        return Response.json(verifiedRepositoryPayload(4242, "octo/overflow"));
+      }
+      const cost = costs[page++];
+      const hasNextPage = page < costs.length;
+      return Response.json({ data: {
+        rateLimit: { remaining: hasNextPage ? 4000 : finalRemaining, limit: 5000,
+          ...(cost === null ? {} : { cost }), resetAt: resetAt.toISOString() },
+        repository: { issues: { nodes: [], pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null } } },
+      } });
+    },
+  });
+  return materialize;
+}
+
 describe("reconciliation budget holds under the repository lock", () => {
+  it("publishes the current fold's summed observed costs with its captured sponsor", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [2, 3]);
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      repositoryId: "repository-1",
+      cost: { sponsorId: "sponsor-1", completedAt: now, observedCost: 5, observedResponses: 2, unmeasuredResponses: 0 },
+    }));
+  });
+
+  it("publishes unknown cost with coverage for both unmeasured responses", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [null, null]);
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(materialize).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      cost: { sponsorId: "sponsor-1", completedAt: now, observedCost: null, observedResponses: 0, unmeasuredResponses: 2 },
+    }));
+  });
+
+  it("keeps costs unpublished when the final page reaches the reserve", async () => {
+    const f = fixture(4000);
+    const materialize = pagedCostGateway(f, [2, 3], 499);
+    const failRun = vi.spyOn(f.fold.store, "failRun");
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(materialize).not.toHaveBeenCalled();
+    expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for GraphQL budget.");
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+  });
+
+  it("defers fairness for 30 seconds before credentials or run creation and retains rederivation", async () => {
+    const f = fixture(4000);
+    const held = new Date(now.getTime() + 30_000);
+    f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async () => ({ state: "HELD", holdUntil: held,
+      usage: { debt: 100, measuredAt: now, ratePerSecond: 1 } }));
+    f.store.claimNextReconciliationJob.mockResolvedValueOnce({ id: "job-1", repositoryId: "repository-1",
+      reason: "SWEEP", attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2 });
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("DEFERRED");
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
+    expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
+    expect(f.fold.store.beginRun).not.toHaveBeenCalled();
+    expect(f.reconcile).not.toHaveBeenCalled();
+    expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
+    expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
+    expect(f.store.completeReconciliationJob).not.toHaveBeenCalled();
+  });
+
+  it("continues draining a cheap repository after a fairness hold", async () => {
+    const f = fixture(4000);
+    const held = new Date(now.getTime() + 30_000);
+    const expensive = { id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2 };
+    f.store.claimNextReconciliationJob.mockResolvedValueOnce(expensive)
+      .mockResolvedValueOnce({ ...expensive, id: "job-2", repositoryId: "repository-2", leaseToken: "lease-2",
+        rederivationRequestedAt: null, rederivationGeneration: 0 }).mockResolvedValueOnce(null);
+    const repository = (await f.fold.store.getRepository("repository-1"))!;
+    f.fold.store.getRepository = async (id) => ({ ...repository, id, githubRepositoryId: id === "repository-1" ? 4242 : 4243 });
+    f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>()
+      .mockResolvedValueOnce({ state: "HELD", holdUntil: held, usage: { debt: 100, measuredAt: now, ratePerSecond: 1 } })
+      .mockResolvedValueOnce({ state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 1 } });
+    await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["DEFERRED", "RECONCILED"]);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
+    expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
+    expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
+    expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-2", { rederivation: false });
+    expect(f.reconcile).toHaveBeenCalledExactlyOnceWith(4243);
+  });
+
+  it("keeps the reserve deadline ahead of fairness", async () => {
+    const f = fixture(499);
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
+    expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
+    expect(f.fold.store.beginRun).not.toHaveBeenCalled();
+  });
+
+  it("bypasses fairness debt when the sponsor budget is UNKNOWN", async () => {
+    const f = fixture();
+    f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async () => ({ state: "HELD",
+      holdUntil: new Date(now.getTime() + 30_000), usage: { debt: 100, measuredAt: now, ratePerSecond: 1 } }));
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
+    expect(f.reconcile).toHaveBeenCalledExactlyOnceWith(4242);
+  });
+
+  it.each(["expired", "invalid Date", "unrepresentable reset", "throwing reset", "negative remaining", "invalid observation"])(
+    "bypasses fairness for an AVAILABLE assessment with %s", async (fault) => {
+      const f = fixture(4000);
+      const observed = { ...reading(4000), resetAt: new Date(resetAt) };
+      if (fault === "expired") observed.resetAt = now;
+      if (fault === "invalid Date") observed.resetAt = new Date("invalid");
+      if (fault === "unrepresentable reset") observed.resetAt.getTime = () => Number.MAX_VALUE;
+      if (fault === "throwing reset") Object.defineProperty(observed, "resetAt", { get: () => { throw new Error("unreadable reset"); } });
+      if (fault === "negative remaining") observed.remaining = -1;
+      if (fault === "invalid observation") observed.observedAt = new Date("invalid");
+      f.fold.budget = { check: () => ({ state: "AVAILABLE", reading: observed, reserve: 500, changed: false, owner: "sponsor-1" }) };
+      await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+      expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
+      expect(f.reconcile).toHaveBeenCalledExactlyOnceWith(4242);
+    },
+  );
+
+  it.each([null, now, new Date(now.getTime() - 1), new Date("invalid")])(
+    "ignores an unusable fairness deadline %s", async (holdUntil) => {
+      const f = fixture(4000);
+      f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async () => ({
+        state: "HELD", holdUntil, usage: { debt: 100, measuredAt: now, ratePerSecond: 1 },
+      }));
+      await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+      expect(f.store.deferReconciliationJob).not.toHaveBeenCalled();
+      expect(f.reconcile).toHaveBeenCalledExactlyOnceWith(4242);
+    },
+  );
+
+  it("leaves assessment capture untouched when the admission clock is invalid", () => {
+    const f = fixture(499);
+    const capture = vi.fn();
+    expect(reconciliationBudgetHoldUntil(f.fold, "sponsor-1", () => new Date("invalid"), capture)).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
+    expect(f.onBudgetChange).not.toHaveBeenCalled();
+  });
+
+  it("completes an inactive repository without fairness or credentials", async () => {
+    const f = fixture(4000);
+    const repository = (await f.fold.store.getRepository("repository-1"))!;
+    f.fold.store.getRepository = async () => ({ ...repository, active: false });
+    vi.mocked(f.fold.store.getGitHubAccessToken).mockResolvedValue(null);
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
+    expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
+    expect(f.reconcile).not.toHaveBeenCalled();
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0);
+  });
+
+  it("uses the single guarded admission assessment before diagnostics", async () => {
+    const f = fixture(4000);
+    const check = vi.spyOn(f.fold.budget!, "check");
+    f.fold.onBudgetChange = () => { f.budgetStore.record("sponsor-1", reading(499)); };
+    await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
+    expect(check).toHaveBeenCalledExactlyOnceWith("sponsor-1", now);
+    expect(f.fold.store.assessReconciliationFairness).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository-1", sponsorId: "sponsor-1", now,
+      budget: expect.objectContaining({ state: "AVAILABLE", reading: reading(4000), reserve: 500 }),
+    });
+  });
+
+  it("preserves a reserve hold and diagnostics when assessment capture throws", () => {
+    const f = fixture(499);
+    const capture = vi.fn(() => { throw new Error("capture failed"); });
+    expect(reconciliationBudgetHoldUntil(f.fold, "sponsor-1", () => now, capture)).toEqual(resetAt);
+    expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: "BELOW_RESERVE" }));
+    expect(f.onBudgetChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: "BELOW_RESERVE", changed: true }));
+  });
+
+  it.each(["unreadable", "expired"])("captures UNKNOWN for an %s assessment", (mode) => {
+    const f = fixture(499);
+    f.fold.budget = { check: () => {
+      if (mode === "unreadable") throw new Error("cannot observe");
+      return { owner: "sponsor-1", state: "BELOW_RESERVE", reading: { ...reading(499), resetAt: now }, reserve: 500, changed: true };
+    } };
+    const capture = vi.fn();
+    expect(reconciliationBudgetHoldUntil(f.fold, "sponsor-1", () => now, capture)).toBeNull();
+    expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: "UNKNOWN", reading: null, reserve: 500 }));
+  });
+
   it("rechecks immediately before transport when the budget falls after admission", async () => {
     const { fold, worker, budgetStore } = fixture(500);
     const requests: string[] = [];

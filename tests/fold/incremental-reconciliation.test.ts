@@ -10,6 +10,7 @@ import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
 import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { GitHubGateway } from "@/lib/github/client";
+import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -35,6 +36,66 @@ afterAll(async () => {
 });
 
 describe("incremental reconciliation", () => {
+  it("charges quiet retained history only for current observations", async () => {
+    const f = await fixture();
+    f.issues[0]!.updatedAt = "2026-09-08T09:58:00Z";
+    f.measuredIssueCost = 1;
+    f.measuredReviewCost = 5;
+    const full = await f.run();
+    expect(full.skipped).toBe(false);
+    f.clock = new Date("2026-09-08T10:04:00Z");
+    const quiet = await f.run();
+    expect(quiet.skipped).toBe(false);
+    expect(f.reviewReads).toEqual([11, 12]);
+    f.issues[0]!.updatedAt = "2026-09-08T10:05:00Z";
+    f.clock = new Date("2026-09-08T10:06:00Z");
+    const active = await f.run();
+    expect(active.skipped).toBe(false);
+    const costs = [];
+    for (const result of [full, quiet, active]) {
+      if (result.skipped) throw new Error("Expected a completed test fold.");
+      const [row] = await sql<{ cost: number }[]>`select graphql_cost::int as cost
+        from reconciliation_runs where id = ${result.runId}`;
+      costs.push(row!.cost);
+    }
+    expect(costs).toEqual([11, 1, 6]);
+  });
+
+  it("charges one current scan for a larger retained history and only refreshed reviews after a dirty event", async () => {
+    const f = await fixture();
+    f.issues[0]!.updatedAt = "2026-09-08T09:58:00Z";
+    const template = f.issues[0]!;
+    for (let index = 0; index < 20; index++) {
+      const issue = structuredClone(template);
+      issue.id = externalId++;
+      issue.number = 100 + index;
+      issue.closingPullRequests[0]!.id = externalId++;
+      issue.closingPullRequests[0]!.number = 200 + index;
+      f.issues.push(issue);
+    }
+    f.measuredIssueCost = 1;
+    f.measuredReviewCost = 5;
+    const full = await f.run();
+    f.clock = new Date("2026-09-08T10:04:00Z");
+    const quiet = await f.run();
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(23);
+    expect(f.reviewReads).toHaveLength(22);
+    await f.dirty("ISSUE", f.issues[0]!);
+    f.clock = new Date("2026-09-08T10:06:00Z");
+    const dirty = await f.run();
+    expect(f.issueReads).toEqual([1]);
+    expect(f.reviewReads).toHaveLength(23);
+    expect(f.reviewReads.at(-1)).toBe(11);
+    const costs = [];
+    for (const result of [full, quiet, dirty]) {
+      if (result.skipped) throw new Error("Expected a completed test fold.");
+      const [row] = await sql<{ cost: number }[]>`select graphql_cost::int as cost
+        from reconciliation_runs where id = ${result.runId}`;
+      costs.push(row!.cost);
+    }
+    expect(costs).toEqual([111, 1, 6]);
+  });
+
   // Mutants: DROP_MIDPASS_INVALIDATION, ISSUE_WATERMARK_GATES_DIRTY_FETCH.
   it("retains a mid-pass invalidation and repairs its issue through the sponsor gateway on the next quiet pass", async () => {
     const f = await fixture();
@@ -204,7 +265,10 @@ describe("incremental reconciliation", () => {
   // CACHE_OUTSIDE_TRANSACTION, DROP_MIDPASS_INVALIDATION.
   it.each(["issue page two", "PR evidence", "materialization", "cooldown"])("keeps synchronization state unchanged after %s failure", async (failure) => {
     const f = await fixture();
+    f.measuredIssueCost = 1;
+    f.measuredReviewCost = 5;
     await f.run();
+    const usageBefore = await sql`select * from repository_reconciliation_usage where repository_id = ${f.id}`;
     await f.dirty("ISSUE", f.issues[0]!);
     const before = await f.store.getReconciliationEvidence(f.id);
     const dirty = await f.store.getDirtyReconciliationSubjects(f.id);
@@ -237,6 +301,10 @@ describe("incremental reconciliation", () => {
     if (failure === "issue page two") expect(f.failedPageCursors).toEqual([null, "page-two"]);
     expect(await sql`select status from reconciliation_runs where repository_id = ${f.id} order by started_at`)
       .toEqual([{ status: "COMPLETED" }, { status: "FAILED" }]);
+    expect(await sql`select graphql_cost, graphql_cost_sponsor_id, graphql_observed_responses, graphql_unmeasured_responses
+      from reconciliation_runs where repository_id = ${f.id} and status = 'FAILED'`)
+      .toEqual([{ graphql_cost: null, graphql_cost_sponsor_id: null, graphql_observed_responses: null, graphql_unmeasured_responses: null }]);
+    expect(await sql`select * from repository_reconciliation_usage where repository_id = ${f.id}`).toEqual(usageBefore);
   });
 });
 
@@ -273,6 +341,8 @@ async function fixture() {
     scans: [] as Array<string | undefined>, issueReads: [] as number[], reverseReads: [] as number[],
     reviewReads: [] as number[], diffReads: [] as number[],
     failedPageCursors: [] as Array<string | null>,
+    measuredIssueCost: null as number | null,
+    measuredReviewCost: null as number | null,
     afterList: async () => {},
     async dirty(kind: "ISSUE" | "PULL_REQUEST", subject: GitHubSubject) {
       await f.store.enqueueWebhookReconciliation(f.id, { deliveryId: `event-${f.id}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
@@ -305,6 +375,7 @@ async function fixture() {
       }
       const issues = structuredClone(f.issues.filter((issue) => options?.since === undefined || Date.parse(issue.updatedAt) >= Date.parse(options.since)));
       await f.afterList();
+      if (f.measuredIssueCost !== null) recordGraphqlResponseCost({ cost: f.measuredIssueCost });
       return issues;
     },
     getIssue: async (_reference, subject) => {
@@ -315,6 +386,7 @@ async function fixture() {
     getPullRequestReviews: async (_reference, number) => {
       f.reviewReads.push(number);
       if (f.failure === "PR evidence") throw new Error("PR evidence failed");
+      if (f.measuredReviewCost !== null) recordGraphqlResponseCost({ cost: f.measuredReviewCost });
       return structuredClone(f.reviews);
     },
     getPullRequestDiff: async (_reference, number) => { f.diffReads.push(number); return f.diff; },

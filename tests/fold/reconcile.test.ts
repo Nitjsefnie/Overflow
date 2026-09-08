@@ -894,6 +894,9 @@ function reconciliationDependencies(
   };
   const failRun = vi.fn().mockResolvedValue(undefined);
   const store = {
+    assessReconciliationFairness: vi.fn<ReconciliationDependencies["store"]["assessReconciliationFairness"]>(async ({ now }) => ({
+      state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 0 },
+    })),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
     getReconciliationCooldown: vi.fn().mockResolvedValue(null),

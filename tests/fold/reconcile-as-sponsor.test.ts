@@ -97,6 +97,9 @@ function createHarness(options: {
       : options.repository;
 
   const store = {
+    assessReconciliationFairness: vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async ({ now }) => ({
+      state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 0 },
+    })),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async <T>(_repositoryId: string, work: () => Promise<T>) => work(),
