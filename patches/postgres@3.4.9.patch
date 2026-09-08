@@ -187,18 +187,21 @@ diff --git a/src/index.js b/src/index.js
 index c7fba3dace20173f4cb13f3f138bb6d213b43683..06d04f117754700ce4863f33fa0d136339f2e3c4 100644
 --- a/src/index.js
 +++ b/src/index.js
-@@ -201,23 +201,51 @@ function Postgres(a, b) {
+@@ -53,1 +53,2 @@ function Postgres(a, b) {
+   let ending = false
++    , endRequested = false
+@@ -201,23 +202,53 @@ function Postgres(a, b) {
    }
  
    async function reserve() {
 +    // A reservation asks the pool for work the same way a query does, and has to be refused
 +    // the same way once the pool is ending -- handler() consults this flag and reserve() did
 +    // not, so a reservation requested after the shutdown was pushed into a queue that will
-+    // never be dispatched and, since end() drains once and before this flag is set, never
-+    // drained either. Against a reachable server it was worse than a stranded promise: the
++    // never be dispatched or drained after end() had already disposed of its backlog.
++    // Against a reachable server it was worse than a stranded promise: the
 +    // pool opened a fresh socket for it after the shutdown had already resolved. Overflow
 +    // issue 223.
-+    if (ending)
++    if (ending || endRequested)
 +      throw Errors.connection('CONNECTION_ENDED', options, options)
 +
      const queue = Queue()
@@ -239,10 +242,19 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..06d04f117754700ce4863f33fa0d1363
 +        return
 +
        c.reserved = null
-       onopen(c)
+-      onopen(c)
++      // An ending connection waits for its holder to release it. Returning it to the pool
++      // leaves that shutdown with no future event to settle it. Overflow issue 226.
++      ending ? c.terminate() : onopen(c)
      }
-@@ -368,6 +396,24 @@ function Postgres(a, b) {
+@@ -365,9 +396,30 @@ function Postgres(a, b) {
+   async function end({ timeout = null } = {}) {
+     if (ending)
+       return ending
  
++    // reserve() reaches the pool synchronously, before this yield. Refuse it immediately,
++    // but let queries already execute()d reach handler() in their queued microtask. Issue 226.
++    endRequested = true
      await 1
      let timer
 +    // Work the pool accepted and never dispatched is settled here, with the disposition
@@ -266,7 +278,7 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..06d04f117754700ce4863f33fa0d1363
      return ending = Promise.race([
        new Promise(r => timeout !== null && (timer = setTimeout(destroy, timeout * 1000, r))),
        Promise.all(connections.map(c => c.end()).concat(
-@@ -423,7 +469,11 @@ function Postgres(a, b) {
+@@ -423,7 +475,11 @@ function Postgres(a, b) {
      c.reserved = null
      c.onclose && (c.onclose(e), c.onclose = null)
      options.onclose && options.onclose(c.id)
