@@ -219,6 +219,7 @@ describe("initial PostgreSQL materialization", () => {
       "025_rederivation_generation.sql",
       "026_incremental_reconciliation.sql",
       "027_issue_github_updated_at.sql",
+      "028_repository_reconciliation_cost.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 

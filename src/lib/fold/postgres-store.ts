@@ -12,6 +12,12 @@ import {
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import {
+  assessReconciliationFairness,
+  type ReconciliationCostCharge,
+  type ReconciliationFairnessAssessment,
+} from "@/lib/fold/reconciliation-fairness";
+import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
+import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type DirtyReconciliationSubject,
   type ReconciliationEvidence,
@@ -647,6 +653,39 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     });
   }
 
+  public async assessReconciliationFairness(input: {
+    repositoryId: string;
+    sponsorId: string;
+    budget: GitHubGraphqlBudgetAssessment;
+    now: Date;
+  }): Promise<ReconciliationFairnessAssessment> {
+    return this.withRepositoryPublication(input.repositoryId, async (transaction) => {
+      const [active] = await transaction<{ count: number }[]>`
+        select count(*)::int as count from registered_repositories
+        where sponsor_id = ${input.sponsorId} and active = true
+      `;
+      const [row] = await transaction<{ debt: number; measured_at: Date; rate_per_second: number }[]>`
+        select debt, measured_at, rate_per_second from repository_reconciliation_usage
+        where sponsor_id = ${input.sponsorId} and repository_id = ${input.repositoryId} for update
+      `;
+      const assessment = assessReconciliationFairness({
+        usage: row === undefined ? null : { debt: row.debt, measuredAt: row.measured_at, ratePerSecond: row.rate_per_second },
+        budget: input.budget, activeRepositoryCount: active.count, now: input.now,
+      });
+      // The pure invalid-clock verdict may carry an epoch fallback. Neither that
+      // synthetic instant nor its unallocated rate belongs in durable state.
+      if (!Number.isFinite(input.now.getTime())) return assessment;
+      const { usage } = assessment;
+      await transaction`
+        insert into repository_reconciliation_usage (sponsor_id, repository_id, debt, measured_at, rate_per_second)
+        values (${input.sponsorId}, ${input.repositoryId}, ${usage.debt}, ${usage.measuredAt}, ${usage.ratePerSecond})
+        on conflict (sponsor_id, repository_id) do update set
+          debt = excluded.debt, measured_at = excluded.measured_at, rate_per_second = excluded.rate_per_second
+      `;
+      return assessment;
+    });
+  }
+
   private async withRepositoryPublication<T>(
     repositoryId: string,
     publish: (transaction: TransactionClient) => Promise<T>,
@@ -860,8 +899,30 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     runId: string;
     fold: FoldResult;
     synchronization?: ReconciliationSynchronization;
+    cost?: ReconciliationCostCharge;
   }): Promise<ReconciliationDeltas> {
+    const cost = input.cost;
+    if (cost !== undefined && (
+      !Number.isSafeInteger(cost.observedResponses) || cost.observedResponses < 0
+      || !Number.isSafeInteger(cost.unmeasuredResponses) || cost.unmeasuredResponses < 0
+      || !(cost.completedAt instanceof Date) || !Number.isFinite(cost.completedAt.getTime())
+      || (cost.observedCost === null ? cost.observedResponses !== 0
+        : !Number.isSafeInteger(cost.observedCost) || cost.observedCost < 0 || cost.observedResponses === 0)
+    )) {
+      throw new Error("Invalid reconciliation cost observation.");
+    }
     return this.withRepositoryPublication(input.repositoryId, async (transaction) => {
+      if (cost !== undefined) {
+        const [run] = await transaction<{ status: string; graphql_cost_sponsor_id: string | null }[]>`
+          select status, graphql_cost_sponsor_id from reconciliation_runs
+          where id = ${input.runId} and repository_id = ${input.repositoryId} for update
+        `;
+        // Reject before synchronization: retrying an already charged run must
+        // neither charge again nor replay any publication side effect.
+        if (run?.status !== "PENDING" || run.graphql_cost_sponsor_id !== null) {
+          throw new Error("Reconciliation cost publication requires a pending run.");
+        }
+      }
       if (input.synchronization !== undefined) {
         await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
       }
@@ -910,11 +971,35 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       if (input.synchronization !== undefined) {
         await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;
       }
-      await transaction`
-        update reconciliation_runs
-        set status = ${"COMPLETED"}, completed_at = now(), error_message = null
-        where id = ${input.runId}
-      `;
+      if (cost !== undefined) {
+        await transaction`
+          insert into repository_reconciliation_usage
+            (sponsor_id, repository_id, debt, measured_at, rate_per_second)
+          values (${cost.sponsorId}, ${input.repositoryId}, ${cost.observedCost ?? 0}, ${cost.completedAt}, 0)
+          on conflict (sponsor_id, repository_id) do update set
+            debt = greatest(0, repository_reconciliation_usage.debt
+              - repository_reconciliation_usage.rate_per_second
+              * greatest(0, extract(epoch from (excluded.measured_at - repository_reconciliation_usage.measured_at))))
+              + excluded.debt,
+            measured_at = greatest(repository_reconciliation_usage.measured_at, excluded.measured_at)
+        `;
+        const completed = await transaction`
+          update reconciliation_runs
+          set status = ${"COMPLETED"}, completed_at = now(), error_message = null,
+            graphql_cost = ${cost.observedCost}, graphql_cost_sponsor_id = ${cost.sponsorId},
+            graphql_observed_responses = ${cost.observedResponses}, graphql_unmeasured_responses = ${cost.unmeasuredResponses}
+          where id = ${input.runId} and repository_id = ${input.repositoryId}
+            and status = 'PENDING' and graphql_cost_sponsor_id is null
+          returning id
+        `;
+        if (completed.length !== 1) throw new Error("Reconciliation cost publication requires a pending run.");
+      } else {
+        await transaction`
+          update reconciliation_runs
+          set status = ${"COMPLETED"}, completed_at = now(), error_message = null
+          where id = ${input.runId}
+        `;
+      }
       return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
     });
   }

@@ -130,6 +130,7 @@ src/lib/domain/*
 src/lib/fold/*
 !src/lib/fold/*.ts
 !src/lib/fold/reconciliation-evidence.ts
+!src/lib/fold/reconciliation-fairness.ts
 !src/lib/github/
 src/lib/github/*
 !src/lib/github/*.ts
@@ -163,6 +164,7 @@ db/migrations/*
 !db/migrations/*.sql
 !db/migrations/021_reconciliation_lease_duration.sql
 !db/migrations/026_incremental_reconciliation.sql
+!db/migrations/028_repository_reconciliation_cost.sql
 
 !deploy/
 deploy/*
@@ -204,6 +206,7 @@ tests/dashboard/*
 tests/db/*
 !tests/db/*.ts
 !tests/db/reconciliation-evidence.test.ts
+!tests/db/reconciliation-cost.test.ts
 !tests/deploy/
 tests/deploy/*
 !tests/deploy/*.ts
@@ -215,6 +218,7 @@ tests/domain/*
 !tests/fold/
 tests/fold/*
 !tests/fold/*.ts
+!tests/fold/reconciliation-fairness.test.ts
 !tests/fold/incremental-reconciliation.test.ts
 !tests/github/
 tests/github/*
