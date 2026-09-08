@@ -311,6 +311,47 @@ pnpm reconcile
 
 Reconciliation materializes issues, linked pull requests, settlement proof, self-work calibration, and unclaimed contributor records. PostgreSQL serializes each repository from snapshot collection through materialization. Eligibility is reconstructed at merge time from immutable moderation history, so a later sanction cannot rewrite eligible historical facts.
 
+### Upgrade existing webhook subscriptions
+
+New registrations subscribe to `issues`, `pull_request`, `pull_request_review`,
+and `issue_comment`. Comment creation, editing and deletion each queue a full
+repository reconciliation, regardless of the comment text, author or issue state.
+The fold's pricing, author/edit evidence rules and fifteen-minute grace are unchanged.
+
+Deploy and verify the comment-capable release before upgrading existing hooks.
+With the deployment's `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, and original
+`GITHUB_WEBHOOK_SECRET` loaded, run:
+
+```bash
+pnpm webhooks:upgrade
+```
+
+This enumerates active registrations, decrypts each sponsor's OAuth token, and
+resolves the current public repository by its immutable GitHub ID. It updates
+the persisted hook ID at that repository's current owner/name. GitHub's
+[additive webhook update](https://docs.github.com/en/rest/repos/webhooks#update-a-repository-webhook)
+retains unrelated subscriptions; the command retains the hook's callback
+configuration and active state, and resends the original secret because GitHub
+warns that omitting it can remove it. Do not substitute a new secret or run this
+while someone is editing hook configuration. Hooks already covering all required
+events (including wildcard hooks) need no write.
+
+Each JSON outcome identifies the registration by its local ID, reports
+`subscription` separately from `queue`, and names a sanitized failure stage.
+`VERIFIED` means the subscription was confirmed; `QUEUED` means repair was
+durably scheduled, not that the fold has finished. A hook that was disabled stays
+disabled. Every verified run queues repair, including reruns after a queue failure.
+The summary counts succeeded and failed registrations. Exit 0 requires every
+registration to succeed; exit 1 indicates a failed step; exit 2 indicates invalid
+arguments. Missing tokens, missing/inaccessible hooks, lost admin rights, private
+repositories and mismatched IDs remain failures. Restore the sponsor's access or
+correct the reported registration problem, then rerun. `UPGRADE_FAILED` indicates
+configuration or enumeration failed before a complete summary was available.
+
+Retain the JSON output and real exit status with the deployment record, as the
+[ordinary deployment procedure](deploy/README.md#10-deploying-a-new-revision)
+does. The startup sweep reconciles evidence but does not upgrade subscriptions.
+
 ## Continuous integration
 
 GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.

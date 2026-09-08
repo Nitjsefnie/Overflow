@@ -249,7 +249,7 @@ describe("GitHubGateway REST transport", () => {
         secret: "webhook-secret-for-test",
         url: "https://overflow.example/api/github/webhooks",
       },
-      events: ["issues", "pull_request", "pull_request_review"],
+      events: ["issues", "pull_request", "pull_request_review", "issue_comment"],
       name: "web",
     });
     expect(requests[1]?.method).toBe("DELETE");

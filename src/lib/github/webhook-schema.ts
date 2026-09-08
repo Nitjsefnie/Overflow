@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type SupportedGitHubWebhookEvent = "issues" | "pull_request" | "pull_request_review";
+export type SupportedGitHubWebhookEvent = keyof typeof supportedActions;
 
 export type GitHubWebhookDelivery = {
   deliveryId: string;
@@ -23,11 +23,14 @@ const payloadSchema = z
   })
   .passthrough();
 
-const supportedActions: Record<SupportedGitHubWebhookEvent, ReadonlySet<string>> = {
+const supportedActions = {
   issues: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned"]),
   pull_request: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "synchronize"]),
   pull_request_review: new Set(["submitted", "edited", "dismissed"]),
+  issue_comment: new Set(["created", "edited", "deleted"]),
 };
+
+export const githubWebhookEvents = Object.keys(supportedActions) as SupportedGitHubWebhookEvent[];
 
 export function parseGitHubWebhookDelivery(
   eventName: string | null,
@@ -61,5 +64,5 @@ export function parseGitHubWebhookDelivery(
 }
 
 function isSupportedEvent(value: string): value is SupportedGitHubWebhookEvent {
-  return value === "issues" || value === "pull_request" || value === "pull_request_review";
+  return Object.hasOwn(supportedActions, value);
 }
