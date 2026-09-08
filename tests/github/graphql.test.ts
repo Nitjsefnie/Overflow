@@ -2071,6 +2071,29 @@ describe("GitHubGateway issue timeline query shape", () => {
     },
   );
 
+  it.each(["history", "comment"])("rejects duplicate %s IDs in an exact reread with the expected item count", async (kind) => {
+    const exactCursors: unknown[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const manifest = manifestResponse(input, { 1: [openingEvent(1), rationale] });
+      if (manifest !== null) return manifest;
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [{ ...issueNode(101, 1, "Duplicate exact evidence", { nodes: [], pageInfo }),
+          timelineItems: { nodes: [], totalCount: 0, pageInfo } }], pageInfo,
+      } } } });
+      if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
+      if (query.includes("query IssueTimeline(")) {
+        exactCursors.push(variables.cursor);
+        const node = kind === "history" ? openingEvent(1) : rationale;
+        return timelineResponse([node, node]);
+      }
+      throw new Error("Unexpected GraphQL operation");
+    } });
+
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
+    expect(exactCursors).toEqual([null]);
+  });
+
   function manifestResponse(input: RequestInfo | URL, timelines: Record<number, Array<{ __typename: string; id: string }>>) {
     const path = new URL(String(input)).pathname;
     if (!path.endsWith("/issues/events") && !path.endsWith("/issues/comments")) return null;
