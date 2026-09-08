@@ -49,8 +49,8 @@ describe("durable reconciliation evidence", () => {
     expect(latest[1]!.generation).toBeGreaterThan(captured[1]!.generation);
     expect(await sql`select repository_id, reason from repository_reconciliation_jobs order by repository_id`)
       .toEqual([one.repositoryId, two.repositoryId].sort().map((repository_id) => ({ repository_id, reason: "WEBHOOK" })));
-    await one.store.materialize({ repositoryId: one.repositoryId, runId: await one.store.beginRun(one.repositoryId),
-      fold: one.fold, synchronization: { ...synchronization(), dirtySubjects: captured } });
+    await one.store.withRepositoryReconciliation(one.repositoryId, async () => one.store.materialize({ repositoryId: one.repositoryId, runId: await one.store.beginRun(one.repositoryId),
+      fold: one.fold, synchronization: { ...synchronization(), dirtySubjects: captured } }));
     expect(await one.store.getDirtyReconciliationSubjects(one.repositoryId)).toEqual([latest[1]]);
     expect(await two.store.getDirtyReconciliationSubjects(two.repositoryId)).toHaveLength(1);
     await expect(one.store.enqueueWebhookReconciliation(one.repositoryId, await delivery(two.repositoryId, "ISSUE")))
@@ -83,8 +83,8 @@ describe("durable reconciliation evidence", () => {
     expect(await store.getReconciliationEvidence(repositoryId)).toBeNull();
     expect(await store.getDirtyReconciliationSubjects(repositoryId)).toEqual([]);
     const runId = await store.beginRun(repositoryId);
-    await store.setReconciliationCooldown(repositoryId, second);
-    await store.materialize({ repositoryId, runId, fold, synchronization: synchronization() });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.setReconciliationCooldown(repositoryId, second));
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold, synchronization: synchronization() }));
     const restarted = new PostgresFoldStore(sql);
     expect(await restarted.getReconciliationEvidence(repositoryId)).toEqual({
       version: 1, formatVersion: 1, checkpoint: first, lastFullPassAt: first,
@@ -97,15 +97,15 @@ describe("durable reconciliation evidence", () => {
   // Mutants: KEEP_FULL_PASS_ABSENT_ISSUE, ADVANCE_FULL_AGE_ON_FAILURE.
   it("replaces the complete cache and advances full age only for a full synchronization", async () => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() });
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 1, scanStartedAt: second, full: false,
-        issues: [{ ...rawIssue(), body: "edited" }], pullRequests: [] } });
+        issues: [{ ...rawIssue(), body: "edited" }], pullRequests: [] } }));
     expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({
       version: 2, checkpoint: second, lastFullPassAt: first, issues: [{ body: "edited" }], pullRequests: [],
     });
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
-      synchronization: { ...synchronization(), expectedVersion: 2, scanStartedAt: second, issues: [], pullRequests: [] } });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+      synchronization: { ...synchronization(), expectedVersion: 2, scanStartedAt: second, issues: [], pullRequests: [] } }));
     expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({
       version: 3, checkpoint: second, lastFullPassAt: second, issues: [], pullRequests: [],
     });
@@ -114,12 +114,12 @@ describe("durable reconciliation evidence", () => {
   // Mutant: ACCEPT_STALE_CACHE_VERSION.
   it.each([null, 0, 2])("rejects a stale publisher expecting version %s without modifying any committed state", async (expectedVersion) => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
     const before = await store.getReconciliationEvidence(repositoryId);
     const runId = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId, fold: { ...fold, issues: [], pullRequests: [],
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold: { ...fold, issues: [], pullRequests: [],
       settlements: [], selfWorkCalibrations: [], unwritableClosures: [] },
-    synchronization: { ...synchronization(), expectedVersion, scanStartedAt: second } })).rejects.toThrow(/stale/i);
+    synchronization: { ...synchronization(), expectedVersion, scanStartedAt: second } }))).rejects.toThrow(/stale/i);
     expect(await store.getReconciliationEvidence(repositoryId)).toEqual(before);
     expect(await sql`select status from reconciliation_runs where id = ${runId}`).toEqual([{ status: "PENDING" }]);
     expect(await sql`select count(*)::int as count from issues where repository_id = ${repositoryId}`).toEqual([{ count: 3 }]);
@@ -134,18 +134,18 @@ describe("durable reconciliation evidence", () => {
     expect(captured).toEqual(expect.arrayContaining([{ kind: "ISSUE", id: 101, number: 1, generation: firstGeneration }]));
     const newer = await dirty(repositoryId, 101);
     await dirty(repositoryId, 103);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
-      synchronization: { ...synchronization(), dirtySubjects: captured } });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+      synchronization: { ...synchronization(), dirtySubjects: captured } }));
     expect((await store.getDirtyReconciliationSubjects(repositoryId)).map(({ id, generation }) => ({ id, generation })))
       .toEqual([{ id: 101, generation: newer }, { id: 103, generation: newer + 1 }]);
     // Delete/reinsert must not recycle a generation an older pass still holds.
     const current = await store.getDirtyReconciliationSubjects(repositoryId);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
-      synchronization: { ...synchronization(), expectedVersion: 1, dirtySubjects: current } });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+      synchronization: { ...synchronization(), expectedVersion: 1, dirtySubjects: current } }));
     const reinserted = await dirty(repositoryId, 101);
     expect(reinserted).toBeGreaterThan(newer);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
-      synchronization: { ...synchronization(), expectedVersion: 2, dirtySubjects: current } });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
+      synchronization: { ...synchronization(), expectedVersion: 2, dirtySubjects: current } }));
     expect(await store.getDirtyReconciliationSubjects(repositoryId)).toEqual([
       { kind: "ISSUE", id: 101, number: 1, generation: reinserted },
     ]);
@@ -155,8 +155,8 @@ describe("durable reconciliation evidence", () => {
   // POSTCOMMIT_COOLDOWN_RELABELS_SUCCESS_FAILED, CHECKPOINT_COMMITS_BEFORE_RUN_SUCCESS.
   it.each(["materialization", "cooldown", "run completion"])("rolls back evidence, acknowledgements and derived changes on %s failure", async (failure) => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() });
-    await store.setReconciliationCooldown(repositoryId, second);
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
+    await store.withRepositoryReconciliation(repositoryId, async () => store.setReconciliationCooldown(repositoryId, second));
     await dirty(repositoryId, 101);
     const captured = await store.getDirtyReconciliationSubjects(repositoryId);
     const before = await store.getReconciliationEvidence(repositoryId);
@@ -168,10 +168,10 @@ describe("durable reconciliation evidence", () => {
     await sql`create trigger reject_evidence_test_write before update of ${sql(column)} on ${sql(table)}
       for each row execute function reject_evidence_test_write()`;
     try {
-      await expect(store.materialize({ repositoryId, runId,
+      await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId,
         fold: { ...fold, issues: fold.issues.map((issue) => ({ ...issue, title: "changed" })) },
         synchronization: { ...synchronization(), expectedVersion: 1, scanStartedAt: second,
-          issues: [], dirtySubjects: captured } })).rejects.toThrow(/injected atomic completion failure/);
+          issues: [], dirtySubjects: captured } }))).rejects.toThrow(/injected atomic completion failure/);
     } finally {
       await sql`drop trigger reject_evidence_test_write on ${sql(table)}`;
       await sql`drop function reject_evidence_test_write()`;

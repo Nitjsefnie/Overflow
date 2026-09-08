@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { JSONValue } from "postgres";
 import { getCoordinationSql, getSql } from "@/lib/db/client";
 import {
@@ -354,6 +355,15 @@ async function synchronizeReconciliationEvidence(
 }
 
 export class PostgresFoldStore implements ReconciliationStore, WebhookDeliveryStore {
+  private readonly reconciliationOwnership = new AsyncLocalStorage<{
+    repositoryId: string;
+    pid: number;
+    backendStart: string;
+    databaseOid: string;
+    lockKey: string;
+    active: boolean;
+  }>();
+
   public constructor(
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
@@ -419,16 +429,34 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       let locked = false;
       let lockMayStillBeHeld = false;
       try {
-        const [lock] = await connection<{ acquired: boolean }[]>`
+        const [lock] = await connection<{
+          acquired: boolean; pid: number; backend_start: string; database_oid: string; lock_key: string;
+        }[]>`
           select pg_try_advisory_lock(
             hashtextextended(${repositoryId}, ${repositoryLockNamespace})
-          ) as acquired
+          ) as acquired,
+          pg_backend_pid() as pid,
+          (select backend_start::text from pg_stat_activity where pid = pg_backend_pid()) as backend_start,
+          (select oid::text from pg_database where datname = current_database()) as database_oid,
+          hashtextextended(${repositoryId}, ${repositoryLockNamespace})::text as lock_key
         `;
         locked = lock?.acquired === true;
         if (locked) {
+          const ownership = {
+            repositoryId, pid: lock.pid, backendStart: lock.backend_start,
+            databaseOid: lock.database_oid, lockKey: lock.lock_key, active: true,
+          };
           try {
-            return await work();
+            // Keep PostgreSQL's microseconds as text; Date would round away part
+            // of the server-session identity. A reconnected reserved handle has
+            // no authority from the server session that originally took the lock.
+            if (!Number.isInteger(ownership.pid) || !ownership.backendStart
+              || !ownership.databaseOid || !ownership.lockKey) {
+              throw new Error(repositoryCoordinationFailure);
+            }
+            return await this.reconciliationOwnership.run(ownership, work);
           } finally {
+            ownership.active = false;
             let released = false;
             try {
               const [unlock] = await connection<{ released: boolean }[]>`
@@ -517,18 +545,20 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     visibility: "PUBLIC";
   }): Promise<void> {
     try {
-      await this.sql`
-        update registered_repositories
-        set
-          owner_name = ${input.ownerName},
-          visibility = ${input.visibility},
-          unavailable_reason = null,
-          unavailable_since = null,
-          updated_at = now()
-        where id = ${input.repositoryId}
-          and (owner_name, visibility, unavailable_reason)
-            is distinct from (${input.ownerName}, ${input.visibility}, null)
-      `;
+      await this.withRepositoryPublication(input.repositoryId, async (transaction) => {
+        await transaction`
+          update registered_repositories
+          set
+            owner_name = ${input.ownerName},
+            visibility = ${input.visibility},
+            unavailable_reason = null,
+            unavailable_since = null,
+            updated_at = now()
+          where id = ${input.repositoryId}
+            and (owner_name, visibility, unavailable_reason)
+              is distinct from (${input.ownerName}, ${input.visibility}, null)
+        `;
+      });
     } catch (error) {
       if (!isUniqueViolation(error)) {
         throw error;
@@ -541,15 +571,17 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         + "to another repository. The stored path stays stale, so this recurs on every reconciliation "
         + "until the other registration releases the path.",
       );
-      await this.sql`
-        update registered_repositories
-        set
-          visibility = ${input.visibility},
-          unavailable_reason = null,
-          unavailable_since = null,
-          updated_at = now()
-        where id = ${input.repositoryId}
-      `;
+      await this.withRepositoryPublication(input.repositoryId, async (transaction) => {
+        await transaction`
+          update registered_repositories
+          set
+            visibility = ${input.visibility},
+            unavailable_reason = null,
+            unavailable_since = null,
+            updated_at = now()
+          where id = ${input.repositoryId}
+        `;
+      });
     }
   }
 
@@ -564,15 +596,17 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     // already equals the input never reaches this set list, so every row that does
     // is taking on a reason it did not carry before. Relaxing that guard would
     // require unavailable_since to go back to keeping the earlier value.
-    await this.sql`
-      update registered_repositories
-      set
-        unavailable_reason = ${input.reason},
-        unavailable_since = ${input.at},
-        updated_at = now()
-      where id = ${input.repositoryId}
-        and unavailable_reason is distinct from ${input.reason}
-    `;
+    await this.withRepositoryPublication(input.repositoryId, async (transaction) => {
+      await transaction`
+        update registered_repositories
+        set
+          unavailable_reason = ${input.reason},
+          unavailable_since = ${input.at},
+          updated_at = now()
+        where id = ${input.repositoryId}
+          and unavailable_reason is distinct from ${input.reason}
+      `;
+    });
   }
 
   public async findRepositoryByOwnerName(ownerName: string): Promise<{ id: string } | null> {
@@ -600,10 +634,53 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void> {
-    await this.sql`
-      update registered_repositories set reconciliation_not_before = ${notBefore}
-      where id = ${repositoryId}
-    `;
+    await this.withRepositoryPublication(repositoryId, async (transaction) => {
+      await transaction`
+        update registered_repositories set reconciliation_not_before = ${notBefore}
+        where id = ${repositoryId}
+      `;
+    });
+  }
+
+  private async withRepositoryPublication<T>(
+    repositoryId: string,
+    publish: (transaction: TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    const ownership = this.reconciliationOwnership.getStore();
+    if (!ownership?.active || ownership.repositoryId !== repositoryId) {
+      throw new Error(repositoryCoordinationFailure);
+    }
+    return this.sql.begin(async (transaction) => {
+      // Admission is ordered with every other publication before any snapshot
+      // read. An admitted transaction may finish after session loss, but the
+      // successor holds this same row next and therefore publishes last.
+      const repositories = await transaction`
+        select id from registered_repositories where id = ${repositoryId} for update
+      `;
+      await transaction`select pg_stat_clear_snapshot()`;
+      // The text cast on backendStart also prevents the driver's timestamptz
+      // parameter serializer from rounding the value through a JavaScript Date.
+      const [admission] = await transaction<{ owned: boolean }[]>`
+        select exists (
+          select 1 from pg_locks locks join pg_stat_activity backend on backend.pid = locks.pid
+          where locks.locktype = 'advisory' and locks.granted and locks.mode = 'ExclusiveLock'
+            and locks.database = ${ownership.databaseOid}::oid
+            and locks.database = (select oid from pg_database where datname = current_database())
+            and locks.classid = ((${ownership.lockKey}::bigint >> 32) & 4294967295)::oid
+            and locks.objid = (${ownership.lockKey}::bigint & 4294967295)::oid
+            and locks.objsubid = 1 and locks.pid = ${ownership.pid}
+            and backend.backend_start = ${ownership.backendStart}::text::timestamptz
+            and backend.datid = locks.database
+        ) as owned
+      `;
+      if (repositories.length !== 1 || !ownership.active || admission?.owned !== true) {
+        throw new Error(repositoryCoordinationFailure);
+      }
+      const result = await publish(transaction);
+      // A detached continuation can outlive the callback while queued on SQL.
+      if (!ownership.active) throw new Error(repositoryCoordinationFailure);
+      return result;
+    }) as Promise<T>;
   }
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
@@ -774,7 +851,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     fold: FoldResult;
     synchronization?: ReconciliationSynchronization;
   }): Promise<ReconciliationDeltas> {
-    return this.sql.begin(async (transaction) => {
+    return this.withRepositoryPublication(input.repositoryId, async (transaction) => {
       if (input.synchronization !== undefined) {
         await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
       }
@@ -829,7 +906,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         where id = ${input.runId}
       `;
       return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
-    }) as Promise<ReconciliationDeltas>;
+    });
   }
 
   public async getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null> {
