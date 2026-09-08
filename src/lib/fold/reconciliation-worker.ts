@@ -15,7 +15,7 @@ type LeaseRenewalCancellation = () => void | PromiseLike<unknown>;
 
 export type ReconciliationWorkerDependencies = {
   store: ReconciliationWorkerStore;
-  reconcile(repositoryId: string, options: { rederive: boolean }): Promise<{ skipped?: boolean; budgetHeldUntil?: Date } | void>;
+  reconcile(repositoryId: string, options: { rederive: boolean }): Promise<{ skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date } | void>;
   now?: () => Date;
   /** Setup owns its cleanup; stopping awaits even a cancellation handle delivered late. */
   scheduleLeaseRenewal?(
@@ -240,7 +240,7 @@ export async function runNextReconciliationJob(
     stopRenewal = startLeaseRenewal(dependencies, job);
     const now = dependencies.now ?? (() => new Date());
 
-    let result: { skipped?: boolean; budgetHeldUntil?: Date } | void;
+    let result: { skipped?: boolean; budgetHeldUntil?: Date; fairnessHeldUntil?: Date } | void;
     try {
       result = await dependencies.reconcile(job.repositoryId, { rederive: job.rederivationRequestedAt !== null });
     } catch (error) {
@@ -264,7 +264,7 @@ export async function runNextReconciliationJob(
       await store.deferReconciliationJob(
         job.id,
         job.leaseToken,
-        result.budgetHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
+        result.budgetHeldUntil ?? result.fairnessHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
       );
       return result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }

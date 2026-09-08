@@ -56,6 +56,7 @@ export function reconciliationBudgetHoldUntil(
   dependencies: ReconciliationBudgetDependencies,
   owner: string,
   now: () => Date,
+  onAssessment?: (assessment: GitHubGraphqlBudgetAssessment) => void,
 ): Date | null {
   let check: ReconciliationBudgetCheck | undefined;
   let holdUntil: Date | null = null;
@@ -74,6 +75,11 @@ export function reconciliationBudgetHoldUntil(
   } catch {
     // Missing or unreadable observation means UNKNOWN and admits the pass.
     check = undefined;
+  }
+  try {
+    onAssessment?.(check ?? { state: "UNKNOWN", reading: null, reserve: DEFAULT_GRAPHQL_BUDGET_RESERVE });
+  } catch {
+    // Capturing the assessment cannot revoke the reserve verdict or diagnostics.
   }
   try {
     if (check?.changed) {

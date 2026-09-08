@@ -110,6 +110,9 @@ describe("repository re-derivation", () => {
 
 function fixture(request: Date | null = null, attemptCount = 1) {
   const store = {
+    assessReconciliationFairness: vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async ({ now }) => ({
+      state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 0 },
+    })),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async <T>(_id: string, work: () => Promise<T>) => work(),

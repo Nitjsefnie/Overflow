@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -9,6 +9,11 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import { drainReconciliationJobs, RECONCILIATION_LEASE_MS } from "@/lib/fold/reconciliation-worker";
+import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
+import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
+import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
+import { encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -28,6 +33,8 @@ type JobSnapshot = {
   lease_duration_ms: number | null;
   last_failure_at: Date | null;
   follow_up_requested: boolean;
+  rederivation_requested_at: Date | null;
+  rederivation_generation: number;
   /** Computed in the database so the assertion never compares two machines' clocks. */
   due_now: boolean;
 };
@@ -95,7 +102,8 @@ async function jobsFor(repositoryId: string): Promise<JobSnapshot[]> {
   return sql<JobSnapshot[]>`
     select id, repository_id, reason, state::text as state, attempt_count, run_after,
            lease_token::text as lease_token, lease_expires_at, lease_duration_ms, last_failure_at,
-           follow_up_requested, run_after <= now() as due_now
+           follow_up_requested, rederivation_requested_at, rederivation_generation::float8 as rederivation_generation,
+           run_after <= now() as due_now
     from repository_reconciliation_jobs
     where repository_id = ${repositoryId}
     order by created_at
@@ -112,7 +120,8 @@ async function jobById(jobId: string): Promise<JobSnapshot | undefined> {
   const [row] = await sql<JobSnapshot[]>`
     select id, repository_id, reason, state::text as state, attempt_count, run_after,
            lease_token::text as lease_token, lease_expires_at, lease_duration_ms, last_failure_at,
-           follow_up_requested, run_after <= now() as due_now
+           follow_up_requested, rederivation_requested_at, rederivation_generation::float8 as rederivation_generation,
+           run_after <= now() as due_now
     from repository_reconciliation_jobs
     where id = ${jobId}
   `;
@@ -702,6 +711,77 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.lease_expires_at).toBeNull();
     expect(job.lease_duration_ms).toBeNull();
     expect(job.last_failure_at).toBeNull();
+  });
+
+  it("preserves a fairness deadline and rederivation through webhook coalescing", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
+    const requestedAt = new Date();
+    await store.requestRepositoryRederivation(repositoryId, requestedAt);
+    const claimed = await claimOrFail();
+    expect(claimed.rederivationRequestedAt).toEqual(requestedAt);
+    expect(claimed.rederivationGeneration).toBe(1);
+    const held = new Date(Date.now() + 30_000);
+    expect(await store.deferReconciliationJob(claimed.id, claimed.leaseToken, held)).toBe(true);
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    expect(await onlyJobFor(repositoryId)).toMatchObject({
+      state: "PENDING", attempt_count: 0, run_after: held,
+      rederivation_requested_at: requestedAt, rederivation_generation: 1,
+      lease_token: null, lease_expires_at: null, lease_duration_ms: null, last_failure_at: null,
+    });
+    const before = await jobById(claimed.id);
+    const fullRow = await sql`select * from repository_reconciliation_jobs where id = ${claimed.id}`;
+    expect(await store.deferReconciliationJob(claimed.id, randomUUID(), new Date(held.getTime() + 30_000))).toBe(false);
+    expect(await jobById(claimed.id)).toEqual(before);
+    expect(await sql`select * from repository_reconciliation_jobs where id = ${claimed.id}`).toEqual(fullRow);
+  });
+
+  it("drains a cheap sponsor peer through the durable fairness policy after holding a costly repository", async () => {
+    const expensive = await insertRepository();
+    const cheap = await insertRepository();
+    const sponsorId = (await store.getRepository(expensive))!.sponsor.id;
+    const encryptionKey = Buffer.alloc(32, 32).toString("base64url");
+    await sql`update registered_repositories set sponsor_id = ${sponsorId} where id = ${cheap}`;
+    await sql`update users set encrypted_oauth_token = ${Buffer.from(encryptToken("test-token", encryptionKey), "utf8")}
+      where id = ${sponsorId}`;
+    const foldingStore = new PostgresFoldStore(sql, encryptionKey);
+    const admissionAt = new Date();
+    const held = new Date(admissionAt.getTime() + 30_000);
+    await sql`insert into repository_reconciliation_usage (repository_id, sponsor_id, debt, measured_at, rate_per_second)
+      values (${expensive}, ${sponsorId}, 50, ${admissionAt}, 0), (${cheap}, ${sponsorId}, 0, ${admissionAt}, 0)`;
+    const budgetStore = createGitHubGraphqlBudgetStore();
+    budgetStore.record(sponsorId, { remaining: 6500, limit: 10000, cost: 1, observedAt: admissionAt,
+      resetAt: new Date(admissionAt.getTime() + 3_600_000) });
+    await store.enqueueReconciliationJob(expensive, "SWEEP");
+    await sql`update repository_reconciliation_jobs set run_after = now() - interval '1 minute' where repository_id = ${expensive}`;
+    await store.enqueueReconciliationJob(cheap, "SWEEP");
+    const cheapRepository = (await foldingStore.getRepository(cheap))!;
+    const getRepositoryById = vi.fn<ReconciliationGateway["getRepositoryById"]>(async (id) => ({
+      id, owner: "example", name: `repository-${id}`, fullName: `example/repository-${id}`,
+      visibility: "PUBLIC", ownerType: "USER", canAdminister: true, url: `https://github.com/example/repository-${id}`,
+    }));
+    const github: ReconciliationGateway = { getRepositoryById,
+      listIssues: async () => { recordGraphqlResponseCost({ cost: 1 }); return []; },
+      getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+      getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+    };
+    await expect(drainReconciliationJobs({
+      store: foldingStore, now: () => admissionAt, scheduleLeaseRenewal: () => () => {},
+      reconcile: (id, options) => reconcileRepository({ store: foldingStore, github, now: () => admissionAt,
+        budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }), onBudgetChange: () => {},
+      }, id, options),
+    }, { maxJobs: 3 })).resolves.toEqual(["DEFERRED", "RECONCILED"]);
+    expect(getRepositoryById).toHaveBeenCalledExactlyOnceWith(cheapRepository.githubRepositoryId);
+    expect(await onlyJobFor(expensive)).toMatchObject({ state: "PENDING", run_after: held, attempt_count: 0,
+      lease_token: null, last_failure_at: null });
+    expect(await jobsFor(cheap)).toEqual([]);
+    expect(await sql`select repository_id, status, graphql_cost::int as cost from reconciliation_runs
+      where repository_id in (${expensive}, ${cheap})`).toEqual([{ repository_id: cheap, status: "COMPLETED", cost: 1 }]);
+    // (6500 - 500) / 3600 / 2 gives each active registration a 25-point allowance over 30 seconds.
+    expect(await sql`select debt, rate_per_second from repository_reconciliation_usage where repository_id = ${expensive}`)
+      .toEqual([{ debt: 50, rate_per_second: 5 / 6 }]);
+    expect(await sql`select debt, rate_per_second from repository_reconciliation_usage where repository_id = ${cheap}`)
+      .toEqual([{ debt: 1, rate_per_second: 5 / 6 }]);
   });
 
   it("returns a retried job to PENDING at the given time, keeping the attempt and recording the failure", async () => {
