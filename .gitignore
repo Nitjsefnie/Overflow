@@ -134,6 +134,7 @@ src/lib/fold/*
 src/lib/github/*
 !src/lib/github/*.ts
 !src/lib/github/graphql-request-budget.ts
+!src/lib/github/graphql-cost.ts
 !src/lib/moderation/
 src/lib/moderation/*
 !src/lib/moderation/*.ts
@@ -218,6 +219,7 @@ tests/fold/*
 !tests/github/
 tests/github/*
 !tests/github/*.ts
+!tests/github/graphql-cost.test.ts
 !tests/github/webhook-upgrade.test.ts
 !tests/moderation/
 tests/moderation/*
