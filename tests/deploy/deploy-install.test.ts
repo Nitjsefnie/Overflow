@@ -1,83 +1,123 @@
-import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 
-it("passes copy import to every install in the documented deployment blocks", async () => {
-  const markdown = await readFile("deploy/README.md", "utf8");
-  const blocks = [...markdown.matchAll(/```bash\n([\s\S]*?)\n```/g)]
-    .map(([, block]) => block)
-    .filter((block) => block.includes("--frozen-lockfile")
-      || (/\bpnpm\b/.test(block) && /(?:^|\s)install(?:\s|$)/m.test(block.replaceAll("\\\n", ""))));
-  expect(blocks.length).toBeGreaterThan(0);
-  const fixture = await mkdtemp(join(tmpdir(), "overflow-deploy-install-"));
-  try {
-    const bin = join(fixture, "bin");
-    await mkdir(bin);
-    await writeFile(join(bin, "pnpm"), `#!${process.execPath}
-const { appendFileSync } = require("node:fs");
-appendFileSync(process.env.INSTALL_LOG, JSON.stringify({
-  args: process.argv.slice(2),
-  importMethod: process.env.npm_config_package_import_method,
-}) + "\\n");
-`, { mode: 0o755 });
-    for (const [index, block] of blocks.entries()) {
-      // A negated install can hide failure even with set -e. Reject that shell
-      // syntax explicitly instead of accepting a later command's exit status.
-      expect(block.replaceAll("\\\n", ""), "pnpm commands must not be negated")
-        .not.toMatch(/^\s*!\s.*\bpnpm\b/m);
-      const tree = join(fixture, `tree-${index}`);
-      await mkdir(join(tree, ".next-current/cache"), { recursive: true });
-      await mkdir(join(tree, "logs"));
-      await writeFile(join(tree, "overflow.env"), "");
-      const log = join(tree, "pnpm.jsonl");
-      await writeFile(log, "");
-      const script = block.replaceAll("/srv/overflow", tree)
-        .replaceAll("/etc/overflow/overflow.env", join(tree, "overflow.env"))
-        .replaceAll("/var/log/overflow", join(tree, "logs"));
-      // Keep the documented shell context, including any pnpm wrapper. Only
-      // the external pnpm is recorded; PATH contains no real package manager.
-      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-ec", `
-        git() { if [ "$1" = rev-parse ]; then printf 'abc1234\\n'; fi; }
-        date() { printf '20260908T000000Z\\n'; }
-        readlink() { printf '%s/.next-current\\n' "$PWD"; }
-        node() { :; }
-        chown() { :; }
-        chmod() { :; }
-        find() { :; }
-        systemctl() { :; }
-        curl() { :; }
-        mkdir() { :; }
-        install() { :; }
-        rm() { :; }
-        cat() { :; }
-        ${script}
-      `], {
-        cwd: tree,
-        env: {
-          NODE_ENV: "test",
-          PATH: bin,
-          BASH_ENV: "",
-          INSTALL_LOG: log,
-          npm_config_package_import_method: "",
-        },
-        encoding: "utf8",
-      });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      const invocations: { args: string[]; importMethod: string }[] = (await readFile(log, "utf8"))
-        .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      const installs = invocations.filter(({ args }) => args.includes("install"));
-      expect(installs.length, block).toBeGreaterThan(0);
-      for (const invocation of installs) {
-        expect(invocation, block).toEqual({
-          args: ["install", "--frozen-lockfile"],
-          importMethod: "copy",
-        });
-      }
-    }
-  } finally {
-    await rm(fixture, { recursive: true, force: true });
+const canonicalInstall = "npm_config_package_import_method=copy pnpm install --frozen-lockfile";
+const assignment = String.raw`[A-Za-z_][A-Za-z0-9_]*=(?:[A-Za-z0-9_./:-]+|"[A-Za-z0-9_ ./:-]*"|'[A-Za-z0-9_ ./:-]*')`;
+const installGrammar = new RegExp(`^(?:${assignment} )*${canonicalInstall}$`);
+const otherPnpmShapes = [
+  /^pnpm (?:--version|db:migrate|build|test|lint|typecheck)$/,
+  /^NEXT_DIST_DIR="\$release" pnpm build$/,
+  /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)"$/,
+  /^pnpm release:prune \/srv\/overflow --keep [1-9][0-9]*$/,
+  /^pnpm --silent webhooks:upgrade > "\$upgrade_log" 2>&1 \|\| upgrade_status=\$\?$/,
+  /^corepack prepare pnpm@10\.33\.0 --activate$/,
+  /^for path in \/root\/overflow\.service\.pre-hardening \/root\/overflow \/root\/\.nvm\/versions\/node\/v24\.17\.0\/bin\/pnpm; do$/,
+];
+
+// Quote/escape spellings must not hide a pnpm occurrence from the closed grammar.
+function mentionsPnpm(text: string) {
+  return text.replace(/\\\r?\n/g, "").replace(/["'\\]/g, "").includes("pnpm");
+}
+
+function validateBlock(info: string, body: string): number {
+  if (!mentionsPnpm(body)) return 0;
+  if (!/^(?:bash|sh|shell)(?:\s|$)/.test(info)) {
+    throw new Error(`Unrecognized pnpm fence: ${info || "(no language)"}`);
   }
+  let installs = 0;
+  for (const source of body.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    if (!mentionsPnpm(source)) continue;
+    const fail = () => { throw new Error(`Unsupported pnpm shape in ${info}: ${source}`); };
+    // This is a deliberately bounded lexer, not a shell interpreter. Preserve
+    // quoting in words; recognize command separators and unquoted comments.
+    const tokens: string[] = [];
+    const lexer = /\s+|(?:[^\s;&|()"'\\]+|"[^"\r\n]*"|'[^'\r\n]*'|\\[^\r\n])+|[;&|()]/y;
+    let offset = 0;
+    while (offset < source.length) {
+      if (source[offset] === "#") break;
+      lexer.lastIndex = offset;
+      const match = lexer.exec(source);
+      if (!match) fail();
+      const token = match![0];
+      offset = lexer.lastIndex;
+      if (!/^\s+$/.test(token)) tokens.push(token);
+    }
+    // An unquoted ! in command position is forbidden even after :; or a pipe.
+    let commandPosition = true;
+    for (const token of tokens) {
+      if (/^[;&|()]$/.test(token)) commandPosition = true;
+      else if (commandPosition && token === "!") fail();
+      else if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) commandPosition = false;
+    }
+    const line = source.slice(0, offset).trim().replace(/[ \t]+/g, " ");
+    if (!mentionsPnpm(line)) continue; // Only a trailing comment mentioned pnpm.
+    if (installGrammar.test(line)) installs++;
+    else if (!otherPnpmShapes.some((shape) => shape.test(line))) fail();
+  }
+  return installs;
+}
+
+function validateDocument(markdown: string): number {
+  let fence: { marker: string; info: string; lines: string[] } | undefined;
+  let installs = 0;
+  for (const line of markdown.split(/\r?\n/)) {
+    const boundary = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!fence) {
+      if (boundary) fence = { marker: boundary[1], info: boundary[2].trim(), lines: [] };
+    } else if (boundary && boundary[1][0] === fence.marker[0]
+      && boundary[1].length >= fence.marker.length && !boundary[2].trim()) {
+      installs += validateBlock(fence.info, fence.lines.join("\n"));
+      fence = undefined;
+    } else fence.lines.push(line);
+  }
+  if (fence && mentionsPnpm(fence.lines.join("\n"))) {
+    throw new Error(`Unclosed pnpm fence: ${fence.info}`);
+  }
+  return installs;
+}
+
+it("requires the copy-import grammar for every fenced pnpm occurrence", async () => {
+  expect(validateDocument(await readFile("deploy/README.md", "utf8"))).toBeGreaterThan(0);
+});
+
+it.each(["bash", "sh", 'bash title="Install"', "shell"])("accepts canonical installs in %s fences", (info) => {
+  expect(validateDocument(`\`\`\`${info}\nCI=true ${canonicalInstall} # install packages\n\`\`\``)).toBe(1);
+});
+
+it("joins continuations before validating the canonical install", () => {
+  const continued = canonicalInstall.replace("pnpm install", "pnpm \\\ninstall");
+  expect(validateDocument(`\`\`\`bash\n${continued}\n\`\`\``)).toBe(1);
+});
+
+it.each([
+  "pnpm install --frozen-lockfile",
+  canonicalInstall.replace("=copy", "=hardlink"),
+  "pnpm  install --frozen-lockfile",
+  "pnpm \\\n install --frozen-lockfile",
+  "pn\\\npm install --frozen-lockfile",
+  `! ${canonicalInstall}`,
+  `:; ! ${canonicalInstall}`,
+  `:; \\\n ! ${canonicalInstall}`,
+  'pnpm() { command pnpm --package-import-method=hardlink "$@"; }',
+  "pnpm --package-import-method=hardlink install --frozen-lockfile",
+  `${canonicalInstall} > /tmp/unsafe-install-log`,
+  "npm_config_package_import_method='copy' pnpm install --frozen-lockfile",
+])("rejects unsupported pnpm syntax: %s", (line) => {
+  expect(() => validateDocument(`\`\`\`bash\n${line}\n\`\`\``)).toThrow("Unsupported pnpm shape");
+});
+
+it.each(["text", "python", ""])("rejects pnpm in an unrecognized %s fence", (info) => {
+  expect(() => validateDocument(`\`\`\`${info}\n${canonicalInstall}\n\`\`\``)).toThrow("Unrecognized pnpm fence");
+});
+
+it("accepts pnpm version checks alongside Unix install without inventing a dependency install", () => {
+  expect(validateDocument("```sh\npnpm --version\ninstall -d /tmp/example\n```\n")).toBe(0);
+});
+
+it("only parses unrelated commands and their redirections", () => {
+  expect(validateDocument(`~~~bash title="Install"\nprintf touched > /must-not-be-written\n${canonicalInstall}\n~~~`)).toBe(1);
+});
+
+it("rejects an unclosed pnpm fence", () => {
+  expect(() => validateDocument(`\`\`\`bash\n${canonicalInstall}`)).toThrow("Unclosed pnpm fence");
 });
