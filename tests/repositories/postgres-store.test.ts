@@ -45,6 +45,15 @@ describe("registering a repository against the real registered_repositories cons
     }
   });
 
+  it("reads the persisted webhook and sponsor only for an active registration", async () => {
+    const created = await store.createRepository(newRepository({ sponsorId: await sponsor() }));
+    expect(created).not.toBeNull();
+    expect(await store.findActiveRepositoryById(created!.id)).toEqual(created);
+    await sql`update registered_repositories set active = false where id = ${created!.id}`;
+    expect(await store.findActiveRepositoryById(created!.id)).toBeNull();
+    expect(await store.findActiveRepositoryById("00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
   it("names the held owner/name path when a new numeric identity is submitted under a claimed path", async () => {
     const held = await registeredRepository();
     const submission = newRepository({ sponsorId: await sponsor(), ownerName: held.ownerName });

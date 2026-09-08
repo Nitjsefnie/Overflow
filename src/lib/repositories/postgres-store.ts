@@ -116,6 +116,16 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     }
   }
 
+  public async findActiveRepositoryById(repositoryId: string): Promise<RegisteredRepository | null> {
+    const [row] = await this.sql<RepositoryRow[]>`
+      select id, github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id
+      from registered_repositories
+      where id = ${repositoryId} and active = true
+      limit 1
+    `;
+    return row === undefined ? null : toRegisteredRepository(row);
+  }
+
   public async getEnforcementState(userId: string): Promise<EnforcementState | null> {
     const [row] = await this.sql<EnforcementStateRow[]>`
       select enforcement_state
