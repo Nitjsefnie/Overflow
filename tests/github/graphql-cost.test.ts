@@ -41,6 +41,21 @@ describe("fold GraphQL cost", () => {
     expect(outer.cost.observedCost).toBe(1);
   });
 
+  it("binds each reader to its own fold while a nested fold is active", async () => {
+    const outer = await withGraphqlFoldCost(async (readOuter) => {
+      recordGraphqlResponseCost({ cost: 1 });
+      const inner = await withGraphqlFoldCost(async (readInner) => {
+        recordGraphqlResponseCost({ cost: 10 });
+        await Promise.resolve();
+        expect([readOuter().observedCost, readInner().observedCost]).toEqual([1, 10]);
+      });
+      recordGraphqlResponseCost({ cost: 2 });
+      expect(readOuter()).toEqual({ observedCost: 3, observedResponses: 2, unmeasuredResponses: 0 });
+      expect(inner.cost).toEqual({ observedCost: 10, observedResponses: 1, unmeasuredResponses: 0 });
+    });
+    expect(outer.cost).toEqual({ observedCost: 3, observedResponses: 2, unmeasuredResponses: 0 });
+  });
+
   it("distinguishes unknown costs, observed zero, and partially measured totals", async () => {
     const unknown = await withGraphqlFoldCost(async () => {
       for (const cost of [undefined, null, -1, 1.5, NaN, Infinity, "3"]) recordGraphqlResponseCost({ cost });

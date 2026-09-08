@@ -35,7 +35,8 @@ export function withGraphqlFoldCost<T>(
   work: (readCost: () => GraphqlFoldCost) => Promise<T>,
 ): Promise<{ value: T; cost: GraphqlFoldCost }> {
   return storage.run({ observedCost: null, observedResponses: 0, unmeasuredResponses: 0 }, async () => {
-    const readCost = (): GraphqlFoldCost => ({ ...storage.getStore()! });
+    const scope = storage.getStore()!;
+    const readCost = (): GraphqlFoldCost => ({ ...scope });
     const value = await work(readCost);
     return { value, cost: readCost() };
   });
