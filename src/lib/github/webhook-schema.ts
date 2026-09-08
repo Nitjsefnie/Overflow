@@ -8,7 +8,10 @@ export type GitHubWebhookDelivery = {
   action: string;
   repositoryGitHubId: number;
   repositoryFullName: string;
+  subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
 };
+
+const subjectSchema = z.object({ id: z.number().int().positive(), number: z.number().int().positive() });
 
 const payloadSchema = z
   .object({
@@ -44,6 +47,8 @@ export function parseGitHubWebhookDelivery(
   if (!parsed.success || !supportedActions[eventName].has(parsed.data.action)) {
     return null;
   }
+  const subject = subjectSchema.safeParse(eventName === "issues" ? parsed.data.issue : parsed.data.pull_request);
+  if (!subject.success) return null;
 
   return {
     deliveryId,
@@ -51,6 +56,7 @@ export function parseGitHubWebhookDelivery(
     action: parsed.data.action,
     repositoryGitHubId: parsed.data.repository.id,
     repositoryFullName: parsed.data.repository.full_name,
+    subject: { kind: eventName === "issues" ? "ISSUE" : "PULL_REQUEST", ...subject.data },
   };
 }
 

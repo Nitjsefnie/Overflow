@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
 import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
+import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { drainReconciliationJobs, type ReconciliationWorkerStore } from "@/lib/fold/reconciliation-worker";
 import { processWebhook, type WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
@@ -13,7 +14,7 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
  */
 
 const { enqueued, readSession, registerRepositoryMock } = vi.hoisted(() => ({
-  enqueued: [] as { repositoryId: string; reason: string }[],
+  enqueued: [] as { repositoryId: string; reason: string; subject?: GitHubWebhookDelivery["subject"] }[],
   readSession: vi.fn(),
   registerRepositoryMock: vi.fn(),
 }));
@@ -36,6 +37,9 @@ vi.mock("@/lib/fold/postgres-store", () => ({
     }
     async enqueueReconciliationJob(repositoryId: string, reason: ReconciliationJobReason) {
       enqueued.push({ repositoryId, reason });
+    }
+    async enqueueWebhookReconciliation(repositoryId: string, delivery: GitHubWebhookDelivery) {
+      enqueued.push({ repositoryId, reason: "WEBHOOK", subject: delivery.subject });
     }
   },
 }));
@@ -85,7 +89,7 @@ describe("production reconciliation wiring", () => {
     // A swap between two valid members of the reason union compiles, so the
     // pairing of route to literal is what this asserts.
     expect(enqueued).toEqual([
-      { repositoryId: "repository-from-webhook", reason: "WEBHOOK" },
+      { repositoryId: "repository-from-webhook", reason: "WEBHOOK", subject: { kind: "PULL_REQUEST", id: 201, number: 11 } },
       { repositoryId: "repository-from-registration", reason: "REGISTRATION" },
     ]);
   });
@@ -130,6 +134,7 @@ function webhookRequest(): Request {
   const body = JSON.stringify({
     action: "closed",
     repository: { id: 42, full_name: "octo/example" },
+    pull_request: { id: 201, number: 11 },
   });
   const signature = createHmac("sha256", secret).update(body).digest("hex");
   return new Request("https://overflow.test/api/github/webhooks", {
