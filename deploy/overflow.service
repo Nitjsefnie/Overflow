@@ -84,11 +84,10 @@ SystemCallErrorNumber=EPERM
 # writable-executable pages, and the process does not start without them.
 
 # Next's default SIGTERM cleanup handler closes the server and exits with
-# status 143 (128+SIGTERM), so a deliberate stop or restart shows up in the
-# journal as code=exited, status=143. Declaring that exit status successful
-# keeps a completed shutdown from being recorded as a failure. It also
-# suppresses Restart=on-failure for any exit 143; other failure exits remain
-# failures and are still eligible for automatic restart.
+# status 143 (128+SIGTERM). Declaring that exit status successful keeps a
+# completed shutdown from being recorded as a failure. It also suppresses
+# Restart=on-failure for any exit 143; other failure exits remain failures
+# and are still eligible for automatic restart.
 SuccessExitStatus=143
 Restart=on-failure
 RestartSec=5s
