@@ -212,6 +212,8 @@ async function cooledRepository() {
   const calls: string[] = [];
   const verifyIdentity = verifiedRepositoryAt(ownerName);
   const github: ReconciliationGateway = {
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
     // Counted like every other read, so an empty array proves no GitHub traffic at
     // all under cooldown rather than only no crawl traffic.
     getRepositoryById: async (githubRepositoryId) => {

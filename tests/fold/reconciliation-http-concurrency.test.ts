@@ -33,6 +33,11 @@ it("latches a mid-pass hold across active PR collectors even after coordination 
           repository: { issues: { nodes: Array.from({ length: 9 }, (_, index) => issueNode(index + 1)), pageInfo } },
         } });
       }
+      if (operation === "IssueTimeline") {
+        return Response.json({ data: { repository: { issue: {
+          timelineItems: issueTimeline(request.variables.issueNumber),
+        } } } });
+      }
       if (operation !== "PullRequestReviews") throw new Error(`Unexpected request: ${operation}`);
       const index = request.variables.pullRequestNumber - 1;
       if (request.variables.cursor === null && index < 4) {
@@ -49,6 +54,8 @@ it("latches a mid-pass hold across active PR collectors even after coordination 
     },
   });
   const store: ReconciliationStore = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async (_id, work) => {
       coordinated = true;
       try { return await work(); } finally { coordinated = false; released = true; }
@@ -77,24 +84,24 @@ it("latches a mid-pass hold across active PR collectors even after coordination 
     expect(coordinated).toBe(true);
     gates[0].resolve();
     const result = await outcome;
-    expect(calls).toEqual(["RepositoryIssues", ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
     expect(result).toEqual({ value: expect.objectContaining({ skipped: true, budgetHeldUntil: resetAt }) });
     expect(released).toBe(true);
     expect(active).toBe(3);
-    expect(calls).toEqual(["RepositoryIssues", ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
     // The same owned gateway remains available outside the held reconciliation,
     // even while the observation is current and its old collectors are active.
     await github.listIssues({ owner: "sponsor", name: "repository" }, {
       timelineCriticalLabels: new Set(["delivered/6"]), timelineWatchedLabels: new Set(["M"]),
     });
-    expect(calls[5]).toBe("RepositoryIssues");
+    expect(calls[14]).toBe("RepositoryIssues");
     // Detached collectors retain their original hold even if the next fold can be admitted.
     now = resetAt;
     for (const gate of gates) gate.resolve();
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(4);
     expect(active).toBe(0);
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(15);
     expect(materialize).not.toHaveBeenCalled();
   } finally {
     gates.forEach(({ resolve }) => resolve());
@@ -105,10 +112,9 @@ it("latches a mid-pass hold across active PR collectors even after coordination 
 
 it("bounds actual HTTP requests across worker cohorts and both review paginators", async () => {
   const count = 9;
-  // One issue page + nine PRs * (two review pages + two dismissal pages + one diff) = 46.
-  // All nine nested timelines contain their watched opening event; none carries
-  // a critical label, so no per-issue timeline read is needed. Identity REST is excluded.
-  const total = 46;
+  // One issue page + nine authoritative timelines + nine PRs * five requests.
+  // Identity REST precedes the crawl and is excluded from this count.
+  const total = 55;
   const gates = Array.from({ length: total }, signal);
   const starts = Array.from({ length: total }, signal);
   const calls: Array<{ operation: string; number: number | null; cursor: string | null }> = [];
@@ -168,6 +174,8 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     },
   });
   const store: ReconciliationStore = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async (_id, work) => work(),
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
@@ -205,7 +213,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     expect(active).toBe(0);
     expect(calls).toHaveLength(total);
     expect(calls.filter(({ operation }) => operation === "RepositoryIssues")).toHaveLength(1);
-    expect(calls.filter(({ operation }) => operation === "IssueTimeline")).toHaveLength(0);
+    expect(calls.filter(({ operation }) => operation === "IssueTimeline")).toHaveLength(9);
     for (let number = 1; number <= count; number++) {
       expect(calls.filter((call) => call.number === number)).toEqual(expect.arrayContaining([
         { operation: "PullRequestReviews", number, cursor: null },

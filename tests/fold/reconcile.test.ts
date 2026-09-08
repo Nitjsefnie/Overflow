@@ -44,7 +44,14 @@ describe("reconcileRepository", () => {
     const repository = await dependencies.store.getRepository("repository");
     repository!.active = active;
     await reconcileRepository({ ...dependencies, now }, "repository");
-    expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
+    if (active) {
+      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
+        synchronization: expect.objectContaining({ full: true }),
+      }));
+      expect(dependencies.store.setReconciliationCooldown).not.toHaveBeenCalled();
+    } else {
+      expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
+    }
     expect(dependencies.store.beginRun).toHaveBeenCalledOnce();
     expect(dependencies.github.listIssues).toHaveBeenCalledTimes(active ? 1 : 0);
   });
@@ -76,6 +83,8 @@ describe("reconcileRepository", () => {
       store,
       github: {
         getRepositoryById: async () => verifiedRepository(),
+        getIssue: async () => null,
+        getPullRequestClosingIssues: async () => [],
         listIssues: () => record("issues", issues),
         getPullRequestReviews: (_repository, number) => record("reviews", [], number),
         getPullRequestDiff: (_repository, number) => record("diff", `diff ${number}`, number),
@@ -596,9 +605,7 @@ describe("reconcileRepository", () => {
         changes: 0,
         removals: 0,
       });
-      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({
-        timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
-      }));
+      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, undefined);
       expect(materialize).toHaveBeenCalledOnce();
     },
   );
@@ -618,9 +625,7 @@ describe("reconcileRepository", () => {
     await reconcileRepository(dependencies, "repository");
 
     const reference = { owner: "new-owner", name: "repo" };
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference, expect.objectContaining({
-      timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
-    }));
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference, undefined);
     expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getRepositoryById).toHaveBeenCalledWith(5001);
@@ -684,9 +689,7 @@ describe("reconcileRepository", () => {
       visibility: "PUBLIC",
     });
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({
-        timelineCriticalLabels: expect.any(Set), timelineWatchedLabels: new Set(["M"]),
-      }));
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, undefined);
     expect(dependencies.store.materialize).toHaveBeenCalledOnce();
   });
 
@@ -829,6 +832,8 @@ function reconciliationDependencies(
   };
 } {
   const github = {
+    getIssue: vi.fn().mockResolvedValue(null),
+    getPullRequestClosingIssues: vi.fn().mockResolvedValue([]),
     listIssues: vi.fn().mockResolvedValue([
       {
         closingPullRequests: [
@@ -884,6 +889,8 @@ function reconciliationDependencies(
   };
   const failRun = vi.fn().mockResolvedValue(undefined);
   const store = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
     getReconciliationCooldown: vi.fn().mockResolvedValue(null),
     setReconciliationCooldown: vi.fn().mockResolvedValue(undefined),
     withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),

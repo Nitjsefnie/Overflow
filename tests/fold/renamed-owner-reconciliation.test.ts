@@ -49,6 +49,8 @@ describe("reconciliation after the opening account is renamed", () => {
     let issue = openedIssue({ githubIssueId, authorLogin, raterLogin, title: "An opened issue" });
     const github: ReconciliationGateway = {
       listIssues: async () => [issue],
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
       getRepositoryById: verifiedRepositoryAt(ownerName),
@@ -91,6 +93,8 @@ describe("reconciliation after the opening account is renamed", () => {
     let issue = openedIssue({ githubIssueId, authorLogin, raterLogin, title: "An opened issue" });
     const github: ReconciliationGateway = {
       listIssues: async () => [issue],
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
       getRepositoryById: verifiedRepositoryAt(ownerName),
