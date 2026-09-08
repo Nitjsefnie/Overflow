@@ -2,35 +2,47 @@ diff --git a/src/connection.js b/src/connection.js
 index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125b777733c 100644
 --- a/src/connection.js
 +++ b/src/connection.js
-@@ -96,6 +96,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -96,6 +96,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      , serverSignature = null
      , nextWriteTimer = null
      , terminated = false
 +    , retryTimer = null
++    , initialAttempt = false
      , incomings = null
      , results = null
      , initial = null
-@@ -333,6 +334,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -111,7 +113,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     idleTimer,
+     connect(query) {
+       initial = query
+-      reconnect()
++      initialAttempt = true
++      retryTimer = reconnect()
+     },
+     terminate,
+     execute,
+@@ -333,6 +336,10 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    async function connect() {
 +    // Spent: whether this ran from a retry a close scheduled or straight from the pool, there
 +    // is no longer an attempt pending for end() to cancel.
 +    retryTimer = null
++    initialAttempt = false
      terminated = false
      backendParameters = {}
      socket || (socket = await createSocket())
-@@ -359,7 +363,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -359,7 +366,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function reconnect() {
 -    setTimeout(connect, closedTime ? Math.max(0, closedTime + delay - performance.now()) : 0)
-+    // Returned so a caller can keep the handle; end() cancels a retry that a close scheduled.
++    // Retained for both pool dispatch and retries; end() cancels or accelerates the attempt.
 +    return setTimeout(connect, closedTime ? Math.max(0, closedTime + delay - performance.now()) : 0)
    }
  
    function connected() {
-@@ -383,6 +388,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -383,6 +391,11 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        return
  
      errored(err)
@@ -42,7 +54,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
      while (sent.length)
        queryError(sent.shift(), err)
    }
-@@ -411,12 +421,29 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -411,12 +424,33 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function end() {
@@ -63,14 +75,18 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
 +    // spacing those retries is what made the interval long in the first place. Cancelling the
 +    // scheduled attempt instead turns this into the same nothing-in-flight case as a
 +    // connection that never opened, which terminate() settles at once, rejecting the startup
-+    // query it strands exactly as it does everywhere else. Only a close arms this handle:
-+    // the pool's own connection.connect() discards what reconnect() hands back, so a query
-+    // it has just dispatched -- socketless and holding it as `initial` in the same way -- is
-+    // untouched and still runs, and a shutdown arriving inside THAT scheduled window still
-+    // waits it out. Covering it here would reject the freshly dispatched query along with
-+    // it, so it is left to Overflow issue 224. Overflow issue 164.
++    // query it strands exactly as it does everywhere else. Overflow issue 164.
 +    const scheduled = retryTimer !== null && !connection.reserved && !query && sent.length === 0
 +    scheduled && (clearTimeout(retryTimer), retryTimer = null)
++
++    // Freshly dispatched work has not failed an attempt yet and must still be served. Skip
++    // its remaining backoff instead of cancelling the query, then wait for the live attempt.
++    // connect() clears initialAttempt and the spent handle before opening the socket, so an
++    // end during a live handshake still waits for that handshake. Overflow issue 224.
++    if (scheduled && initialAttempt) {
++      connect()
++      return ending = new Promise(r => ended = r)
++    }
 +
 +    return !connection.reserved && (scheduled || !initial) && !query && sent.length === 0
 +      ? (terminate(), new Promise(r => socket && socket.readyState !== 'closed' ? socket.once('close', r) : r()))
@@ -78,7 +94,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
    }
  
    function terminate() {
-@@ -437,6 +464,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -437,6 +471,13 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      incoming = Buffer.alloc(0)
      remaining = 0
      incomings = null
@@ -92,7 +108,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
      clearImmediate(nextWriteTimer)
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
-@@ -447,10 +481,54 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +488,54 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      socket.removeAllListeners()
      socket = null
  
@@ -149,7 +165,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +642,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,9 +649,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
