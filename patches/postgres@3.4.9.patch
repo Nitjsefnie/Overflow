@@ -1,5 +1,5 @@
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125b777733c 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..59c571e85725ee9caa957a7ed81161f1c9de5fa8 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -96,6 +96,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -184,7 +184,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..5fb8bdc4b1343ec32945b33cc5199125
      }
  
 diff --git a/src/index.js b/src/index.js
-index c7fba3dace20173f4cb13f3f138bb6d213b43683..06d04f117754700ce4863f33fa0d136339f2e3c4 100644
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e21511d4c 100644
 --- a/src/index.js
 +++ b/src/index.js
 @@ -53,1 +53,2 @@ function Postgres(a, b) {
