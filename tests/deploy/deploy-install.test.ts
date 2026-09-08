@@ -173,6 +173,7 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
   const thematicBreak = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
   let block: { marker?: string; info: string; depth: number; lines: string[] } | undefined;
   let paragraphDepth: number | undefined;
+  let commentDepth: number | undefined;
   const sources = markdown.split(/\r?\n/);
   for (let index = 0; index < sources.length; index++) {
     const source = sources[index];
@@ -185,6 +186,17 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
         column += expanded.length;
         return expanded;
       }).join(""));
+    if (commentDepth !== undefined) {
+      // Comment contents cannot establish Markdown containers or code blocks.
+      // Preserve the quote container in which the HTML block began.
+      for (let depth = 0; depth < commentDepth; depth++) {
+        const quote = /^ {0,3}> ?/.exec(line);
+        if (!quote) throw new Error(`Unsupported HTML comment container: ${source}`);
+        line = line.slice(quote[0].length);
+      }
+      if (line.includes("-->")) commentDepth = undefined;
+      continue;
+    }
     let depth = 0;
     let list = false;
     let listLevel = 0;
@@ -240,6 +252,21 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
       index--;
       continue;
     }
+    if (/^ {0,3}<!--/.test(line)) {
+      if (!line.includes("-->")) commentDepth = depth;
+      paragraphDepth = undefined;
+      continue;
+    }
+    const reference = /^ {0,3}\[((?:\\.|[^\[\]\\])+)\]:[ \t]*(.*)$/.exec(line);
+    if (paragraphDepth !== depth && reference) {
+      // Accept a complete, single-line definition. Other reference layouts
+      // need a named rejection rather than silently becoming a paragraph.
+      if (!reference[1].trim() || !/^(?:<[^<>]*>|[^\s<>]+)(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))?[ \t]*$/.test(reference[2])) {
+        throw new Error(`Unsupported link reference definition: ${source}`);
+      }
+      paragraphDepth = undefined;
+      continue;
+    }
     if (boundary) {
       if (list) throw new Error(`Unsupported fence container: ${source}`);
       if (mentionsPnpm(boundary[2])) throw new Error(`Unsupported fence info: ${source}`);
@@ -259,6 +286,7 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
       paragraphDepth = undefined;
     }
   }
+  if (commentDepth !== undefined) throw new Error("Unsupported unclosed HTML comment");
   if (block?.marker) throw new Error(`Unsupported unclosed code fence: ${block.info}`);
   return regions;
 }
@@ -267,8 +295,66 @@ function validateDocument(markdown: string): number {
   return codeRegions(markdown).reduce((installs, region) => installs + validateBlock(region.info, region.lines.join("\n")), 0);
 }
 
+function validateDeploymentGuide(markdown: string): void {
+  // Initial install, routine deploy, and the one-time dependency migration.
+  const expectedInstalls = 3;
+  const installs = validateDocument(markdown);
+  if (installs !== expectedInstalls) {
+    throw new Error(`Unsupported deployment install count: expected ${expectedInstalls} canonical copy-prefixed installs in code regions, found ${installs}`);
+  }
+}
+
 it("requires the closed shell grammar and copy imports throughout the deployment guide", async () => {
-  expect(validateDocument(await readFile("deploy/README.md", "utf8"))).toBeGreaterThan(0);
+  validateDeploymentGuide(await readFile("deploy/README.md", "utf8"));
+});
+
+it.each(["initial install", "routine deploy", "one-time migration"].flatMap((name, index) =>
+  [false, true].map((removePrefix) => ({ name, index, removePrefix }))))(
+  "rejects an unfenced $name (remove copy prefix: $removePrefix)", ({ index, removePrefix }) => {
+    const blocks = [0, 1, 2].map((blockIndex) => {
+      if (blockIndex !== index) return `\`\`\`bash\n${canonicalInstall}\n\`\`\``;
+      return removePrefix ? "pnpm install --frozen-lockfile" : canonicalInstall;
+    });
+    expect(() => validateDeploymentGuide(blocks.join("\n\n")))
+      .toThrow("Unsupported deployment install count: expected 3 canonical copy-prefixed installs in code regions, found 2");
+  },
+);
+
+it.each([0, 4])("rejects a deployment guide with %i canonical installs", (count) => {
+  const markdown = Array.from({ length: count }, () => `\`\`\`bash\n${canonicalInstall}\n\`\`\``).join("\n\n");
+  expect(() => validateDeploymentGuide(markdown))
+    .toThrow(`Unsupported deployment install count: expected 3 canonical copy-prefixed installs in code regions, found ${count}`);
+});
+
+it.each([
+  ["<!-- comment -->\n    pnpm install --frozen-lockfile", "Unsupported pnpm shape"],
+  ["[ref]: /url\n    pnpm install --frozen-lockfile", "Unsupported pnpm shape"],
+  ["<!-- comment -->\n    $'p\\x6epm' install --frozen-lockfile", "Non-literal command word"],
+])("validates indented code after a Markdown paragraph boundary: %s", (markdown, error) => {
+  expect(() => validateDocument(markdown)).toThrow(error);
+});
+
+it.each(["<!-- comment -->", "[ref]: /url"])("accepts canonical indented code after %s", (boundary) => {
+  expect(validateDocument(`${boundary}\n    ${canonicalInstall}`)).toBe(1);
+});
+
+it("ends a multiline HTML comment before recognizing indented code", () => {
+  const comment = "<!--\nThe pnpm command below is only comment text.\n    pnpm install --frozen-lockfile\n-->";
+  expect(validateDocument(`${comment}\n    ${canonicalInstall}`)).toBe(1);
+  expect(() => validateDocument(`${comment}\n    pnpm install --frozen-lockfile`)).toThrow("Unsupported pnpm shape");
+});
+
+it("keeps inline comments and reference-like paragraph text in prose", () => {
+  expect(validateDocument("The pnpm commands <!-- inline comment -->\n    copy package files into private inodes.")).toBe(0);
+  expect(validateDocument("The pnpm commands\n[ref]: /url\n    copy package files into private inodes.")).toBe(0);
+});
+
+it.each([
+  ["<!-- unclosed comment", "Unsupported unclosed HTML comment"],
+  ["> <!--\n```bash\npnpm install --frozen-lockfile\n```", "Unsupported HTML comment container"],
+  ["[ref]:\n/url\n    pnpm install --frozen-lockfile", "Unsupported link reference definition"],
+])("names unsupported Markdown boundary syntax: %s", (markdown, error) => {
+  expect(() => validateDocument(markdown)).toThrow(error);
 });
 
 it.each(["bash", "sh", 'bash title="Install"', "shell"])("accepts canonical installs in %s fences", (info) => {
