@@ -4,16 +4,7 @@ type UnwritableClosureQueueProps = {
   closures: readonly UnwritableClosureProjection[];
 };
 
-/**
- * Closures whose evidence the fold refused, each with the path a member can
- * take to correct the outcome it did write.
- *
- * That outcome is a settlement when someone else closed the issue and a
- * self-work calibration when its sponsor closed it themselves. Only the
- * accounts named on the row can open either page, so the queue names them: a
- * moderator who is not a party has no way in, and saying nothing is correctable
- * is true only for a closure that produced neither row.
- */
+/** Rejected evidence with a correction link for an eligible viewer, or the parties to contact. */
 export function UnwritableClosureQueue({ closures }: UnwritableClosureQueueProps) {
   if (closures.length === 0) {
     return <p>No closures are waiting on evidence.</p>;
@@ -41,12 +32,14 @@ export function UnwritableClosureQueue({ closures }: UnwritableClosureQueueProps
           <p className="override-reason">{closure.reason}</p>
           {closure.settlementId !== null ? (
             <>
-              <p>
-                <a href={`/settlements/${closure.settlementId}`}>Open the settlement to request a correction</a>
-              </p>
+              {closure.viewerCanRequestCorrection ? (
+                <p>
+                  <a href={`/settlements/${closure.settlementId}`}>Open the settlement to request a correction</a>
+                </p>
+              ) : null}
               {closure.settlementParties === null ? null : (
                 <p className="mono-meta">
-                  Only a party can request a correction: {closure.settlementParties.creditorLogin === null ? null : (
+                  {closure.viewerCanRequestCorrection ? "Only a party can request a correction: " : "To request a correction, contact "}{closure.settlementParties.creditorLogin === null ? null : (
                     <><code>{closure.settlementParties.creditorLogin}</code> or </>
                   )}<code>{closure.settlementParties.debtorLogin}</code>.
                 </p>
@@ -55,12 +48,14 @@ export function UnwritableClosureQueue({ closures }: UnwritableClosureQueueProps
             </>
           ) : closure.calibrationId !== null ? (
             <>
-              <p>
-                <a href={`/calibration/${closure.calibrationId}`}>Open the calibration to request a correction</a>
-              </p>
+              {closure.viewerCanRequestCorrection ? (
+                <p>
+                  <a href={`/calibration/${closure.calibrationId}`}>Open the calibration to request a correction</a>
+                </p>
+              ) : null}
               {closure.calibrationOwnerLogin === null ? null : (
                 <p className="mono-meta">
-                  Only the sponsor can request a correction: <code>{closure.calibrationOwnerLogin}</code>.
+                  {closure.viewerCanRequestCorrection ? "Only the sponsor can request a correction: " : "To request a correction, contact the sponsor "}<code>{closure.calibrationOwnerLogin}</code>.
                 </p>
               )}
               <LatestCorrection correction={closure.latestCorrection} />
