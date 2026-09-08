@@ -235,8 +235,10 @@ def test_gate_closed_admissible_pull_is_commented_then_reopened(tmp):
     assert code == 0
     assert _write_sequence(writes) == [
         ('PATCH', 'repos/owner/repo/issues/comments/7'),
-        ('PATCH', 'repos/owner/repo/pulls/99')]
-    _assert_gate_message(writes[0], REOPEN_FIRST)
+        ('PATCH', 'repos/owner/repo/pulls/99'),
+        ('PATCH', 'repos/owner/repo/issues/comments/7')]
+    _assert_gate_message(writes[0], REOPEN_FIRST, closed=True)
+    _assert_gate_message(writes[2], REOPEN_FIRST)
     assert writes[1][2] == {'state': 'open'}
 
 

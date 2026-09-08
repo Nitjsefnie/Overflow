@@ -32,7 +32,8 @@ def _assert_two_run_replay():
     assert (code, output, error) == (0, 'reopened\n', '')
     assert _write_sequence(writes[2:]) == [
         ('PATCH', 'repos/owner/repo/issues/comments/100'),
-        ('PATCH', 'repos/owner/repo/pulls/99')]
+        ('PATCH', 'repos/owner/repo/pulls/99'),
+        ('PATCH', 'repos/owner/repo/issues/comments/100')]
     assert api.pull['state'] == 'open'
     assert len(api.comments) == 1
     assert '<!-- pr-gate: closed -->' not in (
