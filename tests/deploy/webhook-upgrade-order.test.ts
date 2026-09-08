@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("ordinary deployment webhook upgrade", () => {
-  it.each([0, 1, 7])("runs after the serving release is ready and retains the actual upgrade status %s", async (upgradeStatus) => {
+  it.each([
+    { readinessStatus: 0, upgradeStatus: 0 },
+    { readinessStatus: 0, upgradeStatus: 1 },
+    { readinessStatus: 0, upgradeStatus: 7 },
+    { readinessStatus: 23, upgradeStatus: 0 },
+  ])("gates upgrades on readiness $readinessStatus and retains upgrade status $upgradeStatus", async ({ readinessStatus, upgradeStatus }) => {
     const markdown = await readFile("deploy/README.md", "utf8");
     const section = markdown.split("## 10. Deploying a new revision")[1]!;
     const block = /```bash\n([\s\S]*?)\n```/.exec(section)![1]!;
@@ -24,6 +29,7 @@ describe("ordinary deployment webhook upgrade", () => {
             release:switch) printf 'SWITCH\\n';;
             build) printf 'BUILD\\n';;
             webhooks:upgrade)
+              printf 'INVOKED\\n' >> upgrade-invocations
               [ "$ready" = yes ] || return 88
               printf '{"upgradeFixture":true}\\n'
               return ${upgradeStatus};;
@@ -35,10 +41,19 @@ describe("ordinary deployment webhook upgrade", () => {
         find() { :; }
         readlink() { printf '%s/.next-current\\n' "$PWD"; }
         systemctl() { if [ "$1" = restart ]; then printf 'RESTART\\n'; fi; }
-        curl() { ready=yes; printf 'READY\\n'; }
+        curl() {
+          if [ ${readinessStatus} -ne 0 ]; then return ${readinessStatus}; fi
+          ready=yes; printf 'READY\\n'
+        }
         ${script}
       `], { cwd: fixture, encoding: "utf8", timeout: 10_000 });
       expect(result.error).toBeUndefined();
+      if (readinessStatus !== 0) {
+        await expect(readFile(join(fixture, "upgrade-invocations"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result.status, result.stderr).toBe(readinessStatus);
+        expect(result.stdout).not.toContain("Webhook upgrade log:");
+        return;
+      }
       expect(result.status, result.stderr).toBe(upgradeStatus);
       const output = result.stdout;
       expect(output.indexOf("BUILD")).toBeLessThan(output.indexOf("SWITCH"));
