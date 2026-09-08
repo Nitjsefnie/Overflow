@@ -33,7 +33,7 @@ describe("GitHub Actions release gates", () => {
     expect(gate["runs-on"]).toBe("ubuntu-latest");
     expect(gate["timeout-minutes"]).toBe(5);
     expect(gate.steps).toEqual([{
-      uses: "Nitjsefnie-Actions/pr-gate@50ace1bb77b0599079a3ba0590a7f81794402a19",
+      uses: "Nitjsefnie-Actions/pr-gate@0f43e054dd77c35f5490255022a9abc189489160",
       with: {
         "github-token": "${{ github.token }}",
         repository: "${{ github.repository }}",
