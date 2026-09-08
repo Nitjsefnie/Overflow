@@ -281,7 +281,7 @@ before submitting, confirm its assignment, and put closing references under
 Related Issues and Pull Requests.
 
 Overflow's [caller workflow](.github/workflows/pr-gate.yml) uses the
-[shared admission action at the reviewed revision](https://github.com/Nitjsefnie-Actions/pr-gate/tree/50ace1bb77b0599079a3ba0590a7f81794402a19).
+[shared admission action at the reviewed revision](https://github.com/Nitjsefnie-Actions/pr-gate/tree/0f43e054dd77c35f5490255022a9abc189489160).
 That SHA-pinned action is the implementation authority; its documentation
 describes the admission and recovery rules.
 
