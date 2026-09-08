@@ -67,6 +67,7 @@ describe("upgrading persisted GitHub webhook subscriptions", () => {
     hook,
     { ...hook, id: 82, events: ["issue_comment"] },
     { ...hook, events: ["issue_comment"] },
+    { ...hook, events: ["issues", "pull_request", "pull_request_review", "issue_comment"] },
     { ...hook, events: [...hook.events, "issue_comment"], active: true },
     { ...hook, events: [...hook.events, "issue_comment"], config: { ...hook.config, url: "https://changed.example" } },
     null,
