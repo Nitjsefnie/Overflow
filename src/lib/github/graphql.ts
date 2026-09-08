@@ -1,6 +1,7 @@
 import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, type GitHubRateLimitDetails } from "@/lib/github/errors";
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
+import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
 
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
@@ -191,6 +192,8 @@ export class GitHubGraphqlClient {
         const { rateLimited, retryAfterSeconds } = classifyGitHubGraphqlRateLimit(payload?.errors, response.headers);
         throw new GitHubGraphqlRequestError(graphqlFailureMessage(payload?.errors, this.accessToken), rateLimited, retryAfterSeconds);
       }
+
+      recordGraphqlResponseCost((payload.data as { rateLimit?: unknown } | null)?.rateLimit);
 
       try {
         const reading = readGraphqlBudgetPayload((payload.data as { rateLimit?: unknown }).rateLimit, new Date());
