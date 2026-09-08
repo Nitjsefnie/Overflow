@@ -124,6 +124,18 @@ describe("incremental reconciliation", () => {
       .toMatchObject({ stateReason: "NOT_PLANNED" });
   });
 
+  it("refreshes legacy evidence before an unchanged timeline can reach the fold", async () => {
+    const f = await fixture();
+    await f.run();
+    await sql`update repository_reconciliation_evidence set format_version = 1 where repository_id = ${f.id}`;
+    f.issues = [f.issues[0]!];
+    f.clock = new Date("2026-09-08T10:05:00Z");
+    await f.run();
+    expect(f.scans.at(-1)).toBeUndefined();
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
+    expect((await derived(f.id)).issues).toHaveLength(1);
+  });
+
   // Mutants: DROP_MIDPASS_INVALIDATION, ISSUE_WATERMARK_GATES_DIRTY_FETCH.
   it("retains a mid-pass invalidation and repairs its issue through the sponsor gateway on the next quiet pass", async () => {
     const f = await fixture();
@@ -281,7 +293,7 @@ describe("incremental reconciliation", () => {
     await f.run();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(3);
     if (reason === "six hours") f.clock = new Date("2026-09-08T16:00:00Z");
-    if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 1 where repository_id = ${f.id}`;
+    if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 99 where repository_id = ${f.id}`;
     await f.run({ rederive: reason === "rederive" });
     expect(f.scans.at(-1)).toBeUndefined();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);

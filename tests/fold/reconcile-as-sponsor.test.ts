@@ -49,7 +49,10 @@ describe("reconciling a repository as its sponsor", () => {
       }),
       listIssues, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
     }));
-    expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, undefined);
+    expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, {
+      timelineCriticalLabels: new Set(Array.from({ length: 10 }, (_, index) => `delivered/${index + 1}`)),
+      timelineWatchedLabels: new Set(["S", "M", "L"]),
+    });
   });
 
   it("refuses an active repository whose sponsor has no token", async () => {

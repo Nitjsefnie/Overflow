@@ -277,6 +277,12 @@ function successResponse(
     }
     return { data: { repository: { issues: { nodes: changed ? [issue, issueNode(fixture, 2, true)] : [issue], pageInfo } } } };
   }
+  if (operation === "IssueTimelineCounts") {
+    return { data: { repository: Object.fromEntries((changed ? [1, 2] : [1]).map((number) => [
+      `i${number}`, { databaseId: issueNode(fixture, number, changed).databaseId,
+        timelineItems: { totalCount: issueTimeline(fixture, number, changed).nodes.length } },
+    ])) } };
+  }
   if (operation === "IssueTimeline") {
     return { data: { repository: { issue: {
       timelineItems: issueTimeline(fixture, variables.issueNumber!, changed),

@@ -1,5 +1,6 @@
 import type { GitHubIssue, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
 
+// Earlier evidence may contain unchecked bulk timelines; force a complete refresh.
 export const RECONCILIATION_EVIDENCE_FORMAT = 2;
 
 export type ReconciliationPullRequestEvidence = {

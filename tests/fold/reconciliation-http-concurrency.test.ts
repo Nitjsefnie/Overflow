@@ -33,6 +33,11 @@ it("drains active PR collectors before releasing coordination and retains their 
           repository: { issues: { nodes: Array.from({ length: 9 }, (_, index) => issueNode(index + 1)), pageInfo } },
         } });
       }
+      if (operation === "IssueTimelineCounts") {
+        return Response.json({ data: { repository: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
+          `i${index + 1}`, { databaseId: 101 + index, timelineItems: { totalCount: 1 } },
+        ])) } });
+      }
       if (operation === "IssueTimeline") {
         return Response.json({ data: { repository: { issue: {
           timelineItems: issueTimeline(request.variables.issueNumber),
@@ -93,18 +98,18 @@ it("drains active PR collectors before releasing coordination and retains their 
     now = resetAt;
     for (const gate of gates) gate.resolve();
     const result = await outcome;
-    expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", ...Array(4).fill("PullRequestReviews")]);
     expect(result).toEqual({ value: expect.objectContaining({ skipped: true, budgetHeldUntil: resetAt }) });
     expect(released).toBe(true);
     expect(active).toBe(0);
     expect(settled).toBe(4);
-    expect(calls).toEqual(["RepositoryIssues", ...Array(9).fill("IssueTimeline"), ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", ...Array(4).fill("PullRequestReviews")]);
     // The same owned gateway remains available outside the held reconciliation.
     await github.listIssues({ owner: "sponsor", name: "repository" }, {
       timelineCriticalLabels: new Set(["delivered/6"]), timelineWatchedLabels: new Set(["M"]),
     });
-    expect(calls[14]).toBe("RepositoryIssues");
-    expect(calls).toHaveLength(15);
+    expect(calls[6]).toBe("RepositoryIssues");
+    expect(calls).toHaveLength(8);
     expect(materialize).not.toHaveBeenCalled();
   } finally {
     gates.forEach(({ resolve }) => resolve());
@@ -138,6 +143,11 @@ it("settles every started HTTP request before a failed fold rejects and releases
           return Response.json({ data: { repository: { issues: {
             nodes: Array.from({ length: 9 }, (_, index) => issueNode(index + 1)), pageInfo,
           } } } });
+        }
+        if (operation === "IssueTimelineCounts") {
+          return Response.json({ data: { repository: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
+            `i${index + 1}`, { databaseId: 101 + index, timelineItems: { totalCount: 1 } },
+          ])) } });
         }
         if (operation === "IssueTimeline") {
           return Response.json({ data: { repository: { issue: {
@@ -214,9 +224,9 @@ it("settles every started HTTP request before a failed fold rejects and releases
 
 it("bounds actual HTTP requests across worker cohorts and both review paginators", async () => {
   const count = 9;
-  // One issue page + nine authoritative timelines + nine PRs * five requests.
+  // One issue page + one count batch + nine PRs * five requests.
   // Identity REST precedes the crawl and is excluded from this count.
-  const total = 55;
+  const total = 47;
   const gates = Array.from({ length: total }, signal);
   const starts = Array.from({ length: total }, signal);
   const calls: Array<{ operation: string; number: number | null; cursor: string | null }> = [];
@@ -250,6 +260,11 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
         } } } });
       }
       if (operation === "diff") return new Response(`diff ${number}`);
+      if (operation === "IssueTimelineCounts") {
+        return Response.json({ data: { repository: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
+          `i${index + 1}`, { databaseId: 101 + index, timelineItems: { totalCount: 1 } },
+        ])) } });
+      }
       if (operation === "IssueTimeline") {
         return Response.json({ data: { repository: { issue: {
           timelineItems: issueTimeline(request.variables.issueNumber),
@@ -317,7 +332,8 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     expect(active).toBe(0);
     expect(calls).toHaveLength(total);
     expect(calls.filter(({ operation }) => operation === "RepositoryIssues")).toHaveLength(1);
-    expect(calls.filter(({ operation }) => operation === "IssueTimeline")).toHaveLength(9);
+    expect(calls.filter(({ operation }) => operation === "IssueTimeline")).toHaveLength(0);
+    expect(calls.filter(({ operation }) => operation === "IssueTimelineCounts")).toHaveLength(1);
     for (let number = 1; number <= count; number++) {
       expect(calls.filter((call) => call.number === number)).toEqual(expect.arrayContaining([
         { operation: "PullRequestReviews", number, cursor: null },

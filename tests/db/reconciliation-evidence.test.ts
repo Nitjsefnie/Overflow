@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { GitHubIssue } from "@/lib/github/types";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
@@ -87,7 +88,7 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold, synchronization: synchronization() }));
     const restarted = new PostgresFoldStore(sql);
     expect(await restarted.getReconciliationEvidence(repositoryId)).toEqual({
-      version: 1, formatVersion: 2, checkpoint: first, lastFullPassAt: first,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first,
       issues: [rawIssue()], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(await restarted.getReconciliationCooldown(repositoryId)).toBeNull();
