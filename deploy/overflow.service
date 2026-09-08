@@ -83,11 +83,12 @@ SystemCallErrorNumber=EPERM
 # MemoryDenyWriteExecute is deliberately not set: V8 compiles JavaScript into
 # writable-executable pages, and the process does not start without them.
 
-# `next start` does not handle SIGTERM: on a systemd stop or restart the main
-# process dies from the signal and exits 143 (128+SIGTERM). Declaring that
-# exit status successful keeps a deliberate stop or restart from being
-# recorded as a failure; a genuine crash still fails the unit and Restart=
-# still fires on it.
+# Next's default SIGTERM cleanup handler closes the server and exits with
+# status 143 (128+SIGTERM), so a deliberate stop or restart shows up in the
+# journal as code=exited, status=143. Declaring that exit status successful
+# keeps a completed shutdown from being recorded as a failure. It also
+# suppresses Restart=on-failure for any exit 143; other failure exits remain
+# failures and are still eligible for automatic restart.
 SuccessExitStatus=143
 Restart=on-failure
 RestartSec=5s
