@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -204,6 +205,78 @@ describe("repository publication fencing", () => {
     } finally {
       releaseFirst.resolve();
       await firstRun;
+    }
+  });
+
+  it.each([false, true])("retains coordination through detached COMMIT when callback failure is %s", async (failCallback) => {
+    const { repositoryId } = await fixture();
+    const before = await repositoryState(repositoryId);
+    const work = postgres(process.env.DATABASE_URL!, { connection: { application_name: "fence-detached-commit" } });
+    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const reserve = coordination.reserve.bind(coordination);
+    let connection!: Awaited<ReturnType<Sql["reserve"]>>;
+    coordination.reserve = async () => { connection = await reserve(); return connection; };
+    const store = new PostgresFoldStore(work, key, coordination);
+    await sql.unsafe(`create function fence_scope_exit_probe() returns trigger language plpgsql as $$
+      begin perform pg_advisory_xact_lock(210321984); return new; end $$`);
+    await sql.unsafe(`create constraint trigger fence_scope_exit_probe
+      after update on registered_repositories deferrable initially deferred
+      for each row execute function fence_scope_exit_probe()`);
+    const locked = signal();
+    const release = signal();
+    const callbackReturning = signal();
+    let blockerPid!: number;
+    const blocker = sql.begin(async (transaction) => {
+      const [backend] = await transaction`select pg_backend_pid() as pid`;
+      blockerPid = backend.pid;
+      await transaction`select pg_advisory_xact_lock(210321984)`;
+      locked.resolve();
+      await release.promise;
+    });
+    let publication: Promise<unknown> | undefined;
+    let scope: Promise<unknown> | undefined;
+    let scopeSettled = false;
+    try {
+      await locked.promise;
+      scope = store.withRepositoryReconciliation(repositoryId, async () => {
+        publication = store.recordVerifiedRepositoryIdentity({
+          repositoryId, ownerName: `after-scope/${repositoryId}`, visibility: "PUBLIC",
+        });
+        void publication.catch(() => undefined);
+        await expect.poll(() => blockingPids("fence-detached-commit")).toContain(blockerPid);
+        expect(await sql`select query from pg_stat_activity
+          where application_name = 'fence-detached-commit' and wait_event_type = 'Lock'`)
+          .toEqual([{ query: "commit" }]);
+        callbackReturning.resolve();
+        if (failCallback) throw new Error("Callback failed while publication commits.");
+      });
+      const outcome = scope.then(
+        () => { scopeSettled = true; return "fulfilled"; },
+        () => { scopeSettled = true; return "rejected"; },
+      );
+      await Promise.race([callbackReturning.promise, scope]);
+      // Let callback-return microtasks run, then queue a real statement on the
+      // same session. Any premature unlock must complete before this barrier.
+      await nextTurn();
+      await connection`select 1`;
+      expect(await repositoryState(repositoryId)).toEqual(before);
+      expect(await sql`select pid from pg_locks where locktype = 'advisory' and granted
+        and database = (select oid from pg_database where datname = current_database())
+        and classid = ((hashtextextended(${repositoryId}, 684029183) >> 32) & 4294967295)::oid
+        and objid = (hashtextextended(${repositoryId}, 684029183) & 4294967295)::oid
+        and objsubid = 1 and mode = 'ExclusiveLock'`).toHaveLength(1);
+      expect(scopeSettled).toBe(false);
+      release.resolve();
+      await blocker;
+      expect(await outcome).toBe(failCallback ? "rejected" : "fulfilled");
+      expect((await repositoryState(repositoryId)).owner_name).toBe(`after-scope/${repositoryId}`);
+      await publication;
+    } finally {
+      release.resolve();
+      await Promise.allSettled([blocker, publication, scope]);
+      await sql.unsafe("drop trigger fence_scope_exit_probe on registered_repositories");
+      await sql.unsafe("drop function fence_scope_exit_probe()");
+      await Promise.all([work.end(), coordination.end()]);
     }
   });
 
