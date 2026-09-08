@@ -1915,6 +1915,95 @@ describe("GitHubGateway issue timeline query shape", () => {
   };
 
   it.each(["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "IssueComment"])(
+    "detects correlated GraphQL loss of %s against repository REST evidence",
+    async (kind) => {
+      const truth = [
+        settledEvent,
+        { ...settledEvent, id: "removed", __typename: "UnlabeledEvent" },
+        { ...settledEvent, id: "assigned", __typename: "AssignedEvent", assignee: { login: "worker" } },
+        { ...settledEvent, id: "unassigned", __typename: "UnassignedEvent", assignee: { login: "worker" } },
+        rationale,
+      ];
+      const short = truth.filter((node) => node.__typename !== kind);
+      const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+        const manifest = manifestResponse(input, { 1: truth });
+        if (manifest !== null) return manifest;
+        const { query } = JSON.parse(String(init?.body));
+        if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+          nodes: [{ ...issueNode(101, 1, "Correlated loss", { nodes: [], pageInfo }),
+            timelineItems: { nodes: short, totalCount: 4, pageInfo } }], pageInfo,
+        } } } });
+        if (query.includes("query IssueTimelineCounts")) return countsResponse({ number1: 1 }, () => 4);
+        // Even an exact read sharing the loss cannot reach the fold.
+        return timelineResponse(short);
+      } });
+      await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
+    },
+  );
+
+  it.each([false, true])("checks all repository manifest pages by ID (substituted item: %s)", async (substituted) => {
+    const calls: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      const collection = url.pathname.split("/").at(-1);
+      if (collection === "events" || collection === "comments") {
+        const page = Number(url.searchParams.get("page"));
+        calls.push(`${collection}:${page}`);
+        if (page === 1) return Response.json(collection === "events" ? [
+          { node_id: "irrelevant", event: "closed", issue: { id: 101, number: 1 } },
+          { node_id: "another-issue", event: "labeled", issue: { id: 102, number: 2 } },
+        ] : [{ node_id: "another-comment", issue_url: "https://api.github.com/repos/octo/overflow/issues/2" }], {
+          headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` },
+        });
+        return manifestResponse(input, { 1: [openingEvent(1), rationale] })!;
+      }
+      const { query } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)![1]!;
+      calls.push(operation);
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [{ ...issueNode(101, 1, "Equal cardinality", { nodes: [], pageInfo }),
+          timelineItems: { nodes: [openingEvent(1), { ...rationale, id: substituted ? "wrong-id" : rationale.id }], totalCount: 2, pageInfo } }], pageInfo,
+      } } } });
+      if (operation === "IssueTimelineCounts") return countsResponse({ number1: 1 }, () => 2);
+      return timelineResponse([openingEvent(1), rationale]);
+    } });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(issue?.comments.map(({ id }) => id)).toEqual([rationale.id]);
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", "events:1", "events:2", "comments:1", "comments:2",
+      ...(substituted ? ["IssueTimeline"] : [])]);
+  });
+
+  it("does not read repository manifests for an empty incremental issue scan", async () => {
+    const requests: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input) => {
+      requests.push(String(input));
+      return Response.json({ data: { repository: { issues: { nodes: [], pageInfo } } } });
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, { ...timelineOptions, since: "2026-09-07T00:00:00Z" })).resolves.toEqual([]);
+    expect(requests).toEqual(["https://api.github.com/graphql"]);
+  });
+
+  it("bounds repository manifest pagination and rejects an unfinished manifest", async () => {
+    const pages: number[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events")) {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        return Response.json([], { headers: { link: `<https://api.github.com/repos/octo/overflow/issues/events?page=${page + 1}>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
+      const { query } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [{ ...issueNode(101, 1, "Unbounded upstream", { nodes: [], pageInfo }), timelineItems: { nodes: [], pageInfo } }], pageInfo,
+      } } } });
+      return countsResponse({ number1: 1 }, () => 0);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
+    expect(pages).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+  });
+
+  it.each(["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "IssueComment"])(
     "repairs a missing %s with no standing catalog label using an independent count",
     async (kind) => {
       const truth = [
@@ -1929,7 +2018,9 @@ describe("GitHubGateway issue timeline query shape", () => {
       const operations: string[] = [];
       const gateway = new GitHubGateway({
         accessToken: "test-access-token",
-        fetch: async (_input, init) => {
+        fetch: async (input, init) => {
+          const manifest = manifestResponse(input, { 1: truth });
+          if (manifest !== null) return manifest;
           const { query } = JSON.parse(String(init?.body));
           const operation = /query (\w+)/.exec(query)![1]!;
           operations.push(operation);
@@ -1957,7 +2048,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     async (failure) => {
       const gateway = new GitHubGateway({
         accessToken: "test-access-token",
-        fetch: async (_input, init) => {
+        fetch: async (input, init) => {
+          const manifest = manifestResponse(input, { 1: [openingEvent(1), rationale] });
+          if (manifest !== null) return manifest;
           const { query } = JSON.parse(String(init?.body));
           if (query.includes("query RepositoryIssues")) {
             return Response.json({ data: { repository: { issues: { nodes: [{
@@ -1978,6 +2071,21 @@ describe("GitHubGateway issue timeline query shape", () => {
     },
   );
 
+  function manifestResponse(input: RequestInfo | URL, timelines: Record<number, Array<{ __typename: string; id: string }>>) {
+    const path = new URL(String(input)).pathname;
+    if (!path.endsWith("/issues/events") && !path.endsWith("/issues/comments")) return null;
+    const eventNames: Record<string, string> = { LabeledEvent: "labeled", UnlabeledEvent: "unlabeled", AssignedEvent: "assigned", UnassignedEvent: "unassigned" };
+    const nodes = Object.entries(timelines).flatMap(([number, nodes]) => nodes.flatMap<unknown>((node) => {
+      if (path.endsWith("/issues/comments")) return node.__typename === "IssueComment"
+        ? [{ node_id: node.id, issue_url: `https://api.github.com/repos/octo/overflow/issues/${number}` }]
+        : [];
+      return eventNames[node.__typename]
+        ? [{ node_id: node.id, event: eventNames[node.__typename], issue: { id: 100 + Number(number), number: Number(number) } }]
+        : [];
+    }));
+    return Response.json(nodes);
+  }
+
   function countsResponse(variables: Record<string, unknown>, count: (number: number) => number) {
     const numbers = Object.entries(variables).filter(([key]) => key.startsWith("number")).map(([, value]) => Number(value));
     return Response.json({ data: { repository: Object.fromEntries(numbers.map((number) => [
@@ -1996,7 +2104,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     const queries: string[] = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async (_input, init) => {
+      fetch: async (input, init) => {
+        const manifest = manifestResponse(input, { 1: [openingEvent(1), settledEvent, rationale] });
+        if (manifest !== null) return manifest;
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, cursor: variables.cursor });
@@ -2036,7 +2146,13 @@ describe("GitHubGateway issue timeline query shape", () => {
     const requests: Array<{ operation: string; issueNumber: unknown; cursor: unknown }> = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async (_input, init) => {
+      fetch: async (input, init) => {
+        const manifest = manifestResponse(input, Object.fromEntries(Array.from({ length: count }, (_, index) => {
+          const number = index + 1;
+          return [number, number === 2 || number === 3 ? [openingEvent(number), settledEvent, rationale]
+            : number === 4 ? [openingEvent(number)] : []];
+        })));
+        if (manifest !== null) return manifest;
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, issueNumber: variables.issueNumber, cursor: variables.cursor });
@@ -2080,7 +2196,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     const label = kind === "critical" ? "settled: 6" : "size/M";
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async (_input, init) => {
+      fetch: async (input, init) => {
+        const manifest = manifestResponse(input, { 1: [openingEvent(1), settledEvent, rationale] });
+        if (manifest !== null) return manifest;
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, cursor: variables.cursor });
@@ -2115,7 +2233,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     const cursors: unknown[] = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async (_input, init) => {
+      fetch: async (input, init) => {
+        const manifest = manifestResponse(input, { 1: [rationale, openingEvent(1)] });
+        if (manifest !== null) return manifest;
         const { query, variables } = JSON.parse(String(init?.body));
         if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
         if (query.includes("query RepositoryIssues")) {
@@ -2143,7 +2263,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     const count = 100;
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
-      fetch: async (_input, init) => {
+      fetch: async (input, init) => {
+        const manifest = manifestResponse(input, Object.fromEntries(Array.from({ length: count }, (_, index) => [index + 1, [openingEvent(index + 1), settledEvent]])));
+        if (manifest !== null) return manifest;
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 2);
