@@ -221,6 +221,7 @@ export type UnwritableClosureProjection = {
   settlementParties: { creditorLogin: string | null; debtorLogin: string } | null;
   calibrationId: string | null;
   calibrationOwnerLogin: string | null;
+  viewerCanRequestCorrection: boolean;
   latestCorrection: { state: "OPEN" | "GRANTED" | "DECLINED"; requestedAt: string } | null;
 };
 
@@ -458,6 +459,7 @@ type UnwritableClosureRow = {
   debtor_login: string | null;
   calibration_id: string | null;
   calibration_owner_login: string | null;
+  viewer_can_request_correction: boolean;
   correction_state: "OPEN" | "GRANTED" | "DECLINED" | null;
   correction_requested_at: string | Date | null;
 };
@@ -1044,6 +1046,7 @@ export async function getCalibrationComparison(
 }
 
 export async function listUnwritableClosures(
+  viewerId: string,
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<UnwritableClosureQueues> {
   const sql = resolveSql(dependencies);
@@ -1065,6 +1068,12 @@ export async function listUnwritableClosures(
       debtors.github_login as debtor_login,
       calibrations.id as calibration_id,
       calibration_owners.github_login as calibration_owner_login,
+      case
+        when settlements.id is not null then
+          coalesce(settlements.creditor_id = ${viewerId}, false) or settlements.debtor_id = ${viewerId}
+        when calibrations.id is not null then calibrations.user_id = ${viewerId}
+        else false
+      end as viewer_can_request_correction,
       latest_correction.state::text as correction_state,
       latest_correction.created_at as correction_requested_at
     from unwritable_closures
@@ -1110,6 +1119,7 @@ export async function listUnwritableClosures(
       row.calibration_owner_login === null
         ? null
         : readText(row.calibration_owner_login, "Calibration owner login"),
+    viewerCanRequestCorrection: row.viewer_can_request_correction,
     latestCorrection: row.correction_state === null ? null : {
       state: row.correction_state,
       requestedAt: readTimestamp(row.correction_requested_at!, "Correction request time"),

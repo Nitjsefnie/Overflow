@@ -87,7 +87,7 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold, synchronization: synchronization() }));
     const restarted = new PostgresFoldStore(sql);
     expect(await restarted.getReconciliationEvidence(repositoryId)).toEqual({
-      version: 1, formatVersion: 1, checkpoint: first, lastFullPassAt: first,
+      version: 1, formatVersion: 2, checkpoint: first, lastFullPassAt: first,
       issues: [rawIssue()], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(await restarted.getReconciliationCooldown(repositoryId)).toBeNull();
@@ -192,7 +192,7 @@ function synchronization() {
 
 function rawIssue(): GitHubIssue {
   return { id: 101, number: 1, title: "Unpriced raw issue", body: "Raw body", url: "https://github.com/octo/repo/issues/1",
-    state: "OPEN", createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-08T08:00:00Z", closedAt: null,
+    state: "OPEN", stateReason: null, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-08T08:00:00Z", closedAt: null,
     authorLogin: null, authorGitHubUserId: null, labels: [], claimAssigneeGitHubLogin: null,
     history: [], comments: [], closingPullRequests: [] };
 }

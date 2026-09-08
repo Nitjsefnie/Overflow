@@ -19,6 +19,7 @@ const granted: UnwritableClosureProjection = {
   settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
   calibrationId: null,
   calibrationOwnerLogin: null,
+  viewerCanRequestCorrection: false,
   latestCorrection: { state: "GRANTED", requestedAt: "2026-09-05T12:00:00.000Z" },
 };
 

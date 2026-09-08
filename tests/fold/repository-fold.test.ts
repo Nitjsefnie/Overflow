@@ -7,6 +7,29 @@ import {
 } from "@/lib/fold/repository-fold";
 
 describe("foldRepository", () => {
+  it("does not record a missing closing PR for a not-planned closure", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0] = { ...snapshot.issues[0]!, stateReason: "NOT_PLANNED", closingPullRequests: [] };
+
+    const result = foldRepository(snapshot);
+
+    expect(result.issues).toHaveLength(1);
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.settlements).toEqual([]);
+  });
+
+  it.each(["COMPLETED", "REOPENED", null])("records a missing closing PR for a closed issue with reason %s", (stateReason) => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0] = { ...snapshot.issues[0]!, stateReason, closingPullRequests: [] };
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "NO_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "No merged GitHub GraphQL closing pull request was found.",
+    }]);
+  });
+
   it.each(["OPEN", "CLOSED"] as const)("retains GitHub state %s and its update timestamp even with a merged closing PR", (state) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0] = { ...snapshot.issues[0], state, updatedAt: "2026-09-08T10:00:00Z" };
@@ -565,6 +588,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
+        stateReason: "COMPLETED",
         createdAt: "2026-08-30T09:00:00.000Z",
         updatedAt: "2026-09-01T12:05:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",

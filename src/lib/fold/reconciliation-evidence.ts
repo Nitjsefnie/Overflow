@@ -1,6 +1,6 @@
 import type { GitHubIssue, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
 
-export const RECONCILIATION_EVIDENCE_FORMAT = 1;
+export const RECONCILIATION_EVIDENCE_FORMAT = 2;
 
 export type ReconciliationPullRequestEvidence = {
   id: number;

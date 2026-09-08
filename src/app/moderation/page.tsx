@@ -49,7 +49,7 @@ export default async function ModerationPage() {
     githubBudget = null;
   }
   const settlementCorrections = await listSettlementCorrections(session.user);
-  const unwritableClosures = await loadUnwritableClosures();
+  const unwritableClosures = await loadUnwritableClosures(session.user.id);
   try {
     const {
       listEnforcementHistory,
@@ -156,7 +156,7 @@ export default async function ModerationPage() {
           evidence window. The reason is recorded here so a moderator can review it, and the account named on
           each entry can request a correction: a party from the settlement page, a sponsor who closed their own
           issue from the calibration page.
-          A moderator who is not a party cannot open either page.
+          If you cannot request a correction, contact the party or sponsor named on the entry.
         </p>
         {unwritableClosures === null ? (
           <p role="alert">The closure queue could not be loaded.</p>
@@ -256,10 +256,10 @@ async function listSettlementCorrections(
   }
 }
 
-async function loadUnwritableClosures(): Promise<UnwritableClosureQueues | null> {
+async function loadUnwritableClosures(viewerId: string): Promise<UnwritableClosureQueues | null> {
   try {
     const { listUnwritableClosures } = await import("@/lib/dashboard/queries");
-    return await listUnwritableClosures();
+    return await listUnwritableClosures(viewerId);
   } catch {
     return null;
   }

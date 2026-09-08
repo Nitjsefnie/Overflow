@@ -21,6 +21,8 @@ export type GitHubIssue = {
   body: string;
   url: string;
   state: IssueState;
+  /** GraphQL `Issue.stateReason`; null when GitHub supplies no reason. */
+  stateReason: string | null;
   createdAt: string;
   /** Upstream update time, independent of local materialization timestamps. */
   updatedAt: string;

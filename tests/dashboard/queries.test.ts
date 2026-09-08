@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import postgres, { type Sql } from "postgres";
+import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   getCalibrationComparison,
   getDashboard,
@@ -35,6 +37,59 @@ function sqlHarness(responses: unknown[][]): { sql: DashboardSql; captures: Quer
 
 const proof = "a".repeat(64);
 
+describe("unwritable closure correction eligibility in PostgreSQL", () => {
+  let database: StartedPostgres | undefined;
+  let sql: Sql;
+
+  beforeAll(async () => {
+    database = await startPostgresContainer({ database: "eligibility", user: "test", password: "test" });
+    sql = postgres(database.databaseUrl, { max: 1 });
+    // Minimal relations let the complete production query run with independently chosen parties.
+    await sql.unsafe(`
+      create table users (id text, github_login text);
+      create table registered_repositories (id text, owner_name text);
+      create table issues (id text, repository_id text, issue_number integer, github_issue_id bigint, title text, url text);
+      create table pull_requests (id text, pull_request_number integer, title text, url text);
+      create table settlements (id text, issue_id text, creditor_id text, debtor_id text);
+      create table self_work_calibrations (id text, issue_id text, user_id text);
+      create table settlement_override_requests (id text, issue_id text, state text, created_at timestamptz);
+      create table unwritable_closures (id text, issue_id text, pull_request_id text, kind text, reason text, created_at timestamptz);
+      insert into users values ('creditor', 'mira'), ('debtor', 'quinn'), ('sponsor', 'grace');
+      insert into registered_repositories values ('repo', 'co-op/harbour');
+      insert into issues
+        select id, 'repo', n, n, 'Issue ' || n, 'https://github.com/co-op/harbour/issues/' || n
+        from (values ('settlement', 1), ('null-creditor', 2), ('calibration', 3), ('neither', 4), ('both', 5)) as cases(id, n);
+      insert into unwritable_closures
+        select id, id, null, 'SETTLEMENT_EVIDENCE_REJECTED', 'Rejected evidence', now() from issues;
+      insert into settlements values
+        ('settlement', 'settlement', 'creditor', 'debtor'),
+        ('null-creditor', 'null-creditor', null, 'debtor'),
+        ('both', 'both', 'creditor', 'debtor');
+      insert into self_work_calibrations values ('calibration', 'calibration', 'sponsor'), ('both', 'both', 'sponsor');
+    `);
+  });
+
+  afterAll(async () => {
+    await sql?.end();
+    await database?.container.stop();
+  });
+
+  it.each([
+    { viewer: "creditor", eligible: [true, false, false, false, true] },
+    { viewer: "debtor", eligible: [true, true, false, false, true] },
+    { viewer: "sponsor", eligible: [false, false, true, false, false] },
+    { viewer: "unrelated", eligible: [false, false, false, false, false] },
+    { viewer: "creditor' OR true --", eligible: [false, false, false, false, false] },
+  ])("projects each row's eligibility for $viewer", async ({ viewer, eligible }) => {
+    const closures = await listUnwritableClosures(viewer, { sql: sql as unknown as DashboardSql });
+
+    expect(closures.queue.map((row) => row.id)).toEqual([
+      "settlement", "null-creditor", "calibration", "neither", "both",
+    ]);
+    expect(closures.queue.map((row) => row.viewerCanRequestCorrection)).toEqual(eligible);
+  });
+});
+
 describe("unwritable closures", () => {
   const rejected = {
     id: "closure-1",
@@ -53,6 +108,7 @@ describe("unwritable closures", () => {
     debtor_login: "quinn",
     calibration_id: null,
     calibration_owner_login: null,
+    viewer_can_request_correction: true,
     correction_state: null,
     correction_requested_at: null,
   };
@@ -78,7 +134,7 @@ describe("unwritable closures", () => {
       { ...rejected, id: "closure-4", creditor_login: null },
     ]]);
 
-    const closures = await listUnwritableClosures({ sql });
+    const closures = await listUnwritableClosures("creditor", { sql });
 
     expect(closures.queue).toEqual([
       {
@@ -99,6 +155,7 @@ describe("unwritable closures", () => {
         settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
         calibrationId: null,
         calibrationOwnerLogin: null,
+        viewerCanRequestCorrection: true,
         latestCorrection: null,
       },
       expect.objectContaining({
@@ -157,7 +214,7 @@ describe("unwritable closures", () => {
       },
     ]]);
 
-    const closures = await listUnwritableClosures({ sql });
+    const closures = await listUnwritableClosures("creditor", { sql });
 
     expect(closures.queue[0]).toMatchObject({
       settlementId: null,
@@ -182,7 +239,7 @@ describe("unwritable closures", () => {
       },
     ]]);
 
-    const closures = await listUnwritableClosures({ sql });
+    const closures = await listUnwritableClosures("creditor", { sql });
 
     expect(closures.history[0]?.latestCorrection).toEqual({
       state: "GRANTED",
@@ -215,7 +272,7 @@ describe("unwritable closures", () => {
       { ...rejected, id: "open", correction_state: "OPEN", correction_requested_at: requestedAt },
     ]]);
 
-    const closures = await listUnwritableClosures({ sql });
+    const closures = await listUnwritableClosures("creditor", { sql });
 
     expect(closures.queue?.map(({ id }) => id)).toEqual(["no-request", "declined", "open"]);
     expect(closures.history?.map(({ id }) => id)).toEqual(["granted-settlement", "granted-calibration"]);
@@ -232,7 +289,7 @@ describe("unwritable closures", () => {
   it("returns two empty lists when there are no closures", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
-    expect(await listUnwritableClosures({ sql })).toEqual({ queue: [], history: [] });
+    expect(await listUnwritableClosures("creditor", { sql })).toEqual({ queue: [], history: [] });
     expect(captures).toHaveLength(1);
   });
 });

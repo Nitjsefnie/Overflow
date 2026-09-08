@@ -3524,7 +3524,7 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ count: 0 }]);
 
     // Reads through getSql(), the same pool this suite holds.
-    const projected = (await listUnwritableClosures()).queue.find(({ id }) => id === closure.id);
+    const projected = (await listUnwritableClosures(sponsorId)).queue.find(({ id }) => id === closure.id);
     expect(projected).toMatchObject({
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
       pullRequest: null,
@@ -3579,7 +3579,7 @@ describe("initial PostgreSQL materialization", () => {
       `;
     }
 
-    const closures = await listUnwritableClosures();
+    const closures = await listUnwritableClosures(moderatorId);
     const grantedClosure = { id: closureIds[0] };
     const declinedClosure = { id: closureIds[1] };
     const openClosure = { id: closureIds[2] };
@@ -4257,6 +4257,7 @@ function materializationSnapshot(input: {
         body: "Issue body",
         url: "https://github.com/example/materialized/issues/1",
         state: "CLOSED",
+        stateReason: "COMPLETED",
         createdAt: "2026-09-01T08:00:00.000Z",
         updatedAt: "2026-09-01T12:05:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
@@ -4337,6 +4338,7 @@ function authoritativeIssue(input: { id: number; number: number; ownerLogin: str
     body: `Reconciled issue ${input.number} body`,
     url: `https://github.com/example/materialized/issues/${input.number}`,
     state: "CLOSED",
+    stateReason: "COMPLETED",
     createdAt: "2026-09-01T08:00:00.000Z",
     closedAt: "2026-09-01T12:05:00.000Z",
     authorLogin: input.ownerLogin,
@@ -4505,6 +4507,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     body: issue.body,
     url: issue.url,
     state: issue.state,
+    stateReason: issue.stateReason,
     createdAt: issue.createdAt,
     closedAt: issue.closedAt,
     authorLogin: issue.authorLogin,

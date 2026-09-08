@@ -464,6 +464,7 @@ function openingFixture(actors: { opening?: FixtureActor } = {}): RepositoryFold
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "OPEN",
+        stateReason: null,
         createdAt: ISSUE_CREATED_AT,
         updatedAt: "2026-09-01T12:05:00.000Z",
         closedAt: null,

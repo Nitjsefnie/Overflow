@@ -5,6 +5,7 @@ import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import type {
+  GitHubIssue,
   GitHubIssueComment,
   GitHubIssueHistoryEvent,
   GitHubPullRequestReview,
@@ -49,6 +50,7 @@ export type RepositoryFoldIssue = {
   body: string;
   url: string;
   state: IssueState;
+  stateReason: GitHubIssue["stateReason"];
   /** GitHub's update time for this view, including when reused from evidence. */
   updatedAt: string;
   createdAt: string;
@@ -411,7 +413,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
           githubPullRequestId: null,
           reason: crossRepositoryReason(selection.pullRequest, snapshot.repository),
         });
-      } else if (evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)) {
+      } else if (issue.stateReason !== "NOT_PLANNED" && evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)) {
         unwritableClosures.push({
           githubIssueId: issue.id,
           kind: "NO_CLOSING_PULL_REQUEST",

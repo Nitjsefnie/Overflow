@@ -150,6 +150,7 @@ function openedIssue(
     body: "Issue body",
     url: "https://github.com/example/renamed/issues/1",
     state: "OPEN",
+    stateReason: null,
     createdAt: "2026-09-01T08:00:00.000Z",
     closedAt: null,
     authorLogin: input.authorLogin,
