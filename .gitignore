@@ -181,9 +181,26 @@ public/*
 scripts/*
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
+!scripts/ci/
+scripts/ci/*
+!scripts/ci/pr_gate.py
+!scripts/ci/pr_body.py
+!scripts/ci/pr_body_closing.py
 
 !tests/
 tests/*
+!tests/_util.py
+!tests/_prgate.py
+!tests/_prgate_message.py
+!tests/_prgate_race.py
+!tests/_prfootnotes.py
+!tests/_parser_guard.py
+!tests/test_pr_gate.py
+!tests/test_pr_gate_claims.py
+!tests/test_pr_body.py
+!tests/test_pr_body_closing.py
+!tests/test_pr_body_elements.py
+!tests/test_pr_body_overflow.py
 !tests/async/
 tests/async/*
 !tests/async/*.ts
