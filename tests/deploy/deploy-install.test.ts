@@ -98,48 +98,64 @@ const otherShellLines = new Set([
   "rm -rf -- node_modules",
   "set -o pipefail",
   "LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1   -type d -regex '.*/\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'   -printf '%f\\n' | LC_ALL=C sort -r",
-].map((line) => tokenize(line).join(" ")));
+].map((line) => tokenizeLines(line)[0].join(" ")));
 
 function mentionsPnpm(text: string) {
   return text.replace(/\\\r?\n/g, "").replace(/["'\\]/g, "").includes("pnpm");
 }
 
-function tokenize(source: string): string[] {
-  const tokens: string[] = [];
-  const lexer = /[ \t]+|(?:[^\s;&|()"'\\]+|"[^"\r\n]*"|'[^'\r\n]*'|\\[^\r\n])+|&&|\|\||[;&|()]/y;
+function tokenizeLines(source: string): string[][] {
+  const lines: string[][] = [[]];
+  const lexer = /[ \t]+|(?:[^\s;&|()"'\\]+|"(?:[^"\\\r\n]|\\(?:\r?\n|[^\r\n]))*"|'[^'\r\n]*'|\\(?:\r?\n|[^\r\n]))+|&&|\|\||[;&|()]/y;
   let offset = 0;
   while (offset < source.length) {
-    if (source[offset] === "#") break;
+    // Comments are recognized at word boundaries, before processing any
+    // backslash in them. Their newline always ends the logical command.
+    if (source[offset] === "#") {
+      const newline = source.indexOf("\n", offset);
+      offset = newline < 0 ? source.length : newline;
+      continue;
+    }
+    const newline = /^\r?\n/.exec(source.slice(offset));
+    if (newline) {
+      lines.push([]);
+      offset += newline[0].length;
+      continue;
+    }
+    // A continuation before a word must not turn the next line's comment
+    // into a word. Continuations within a word are consumed by the lexer.
+    const continuation = /^\\\r?\n/.exec(source.slice(offset));
+    if (continuation) {
+      offset += continuation[0].length;
+      continue;
+    }
     lexer.lastIndex = offset;
     const match = lexer.exec(source);
     if (!match) throw new Error(`Unsupported shell token: ${source.slice(offset)}`);
     offset = lexer.lastIndex;
-    if (!/^[ \t]+$/.test(match[0])) tokens.push(match[0]);
+    if (!/^[ \t]+$/.test(match[0])) lines[lines.length - 1].push(match[0].replace(/\\\r?\n/g, ""));
   }
-  return tokens;
+  return lines;
 }
 
 function validateBlock(info: string, body: string): number {
   if (!/^(?:bash|sh|shell)(?:\s|$)/.test(info)) {
-    if (mentionsPnpm(info + "\n" + body)) {
-      throw new Error(`Unrecognized pnpm fence: ${info || "(no language)"}`);
-    }
-    return 0;
+    throw new Error(`Unsupported code fence: ${info || "(no language)"}`);
   }
   let installs = 0;
-  for (const source of body.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
-    const tokens = tokenize(source);
+  for (const tokens of tokenizeLines(body)) {
     if (!tokens.length) continue;
     const line = tokens.join(" ");
-    if (line.includes("<<")) throw new Error(`Heredoc introducer: ${source}`);
-    if (line.includes("`")) throw new Error(`Backtick substitution: ${source}`);
+    const source = line;
+    if (line.includes("<<")) throw new Error(`Unsupported shell syntax: Heredoc introducer: ${source}`);
+    if (line.includes("`")) throw new Error(`Unsupported shell syntax: Backtick substitution: ${source}`);
     let commandPosition = true;
     for (const token of tokens) {
       if (/^(?:[;&|()]|&&|\|\|)$/.test(token)) commandPosition = true;
       else if (commandPosition && token === "!") {
         throw new Error(`Unsupported pnpm shape (command negation): ${source}`);
       } else if (commandPosition && /^["'$\\]/.test(token)) {
-        throw new Error(`Non-literal command word: ${token} in ${source}`);
+        throw new Error(`Unsupported shell syntax: Non-literal command word: ${token} in ${source}`);
       } else if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) commandPosition = false;
     }
     if (line === canonicalInstall) installs++;
@@ -151,41 +167,104 @@ function validateBlock(info: string, body: string): number {
   return installs;
 }
 
-function validateDocument(markdown: string): number {
-  let fence: { marker: string; info: string; depth: number; lines: string[] } | undefined;
-  let installs = 0;
-  for (const source of markdown.split(/\r?\n/)) {
-    let line = source;
+function codeRegions(markdown: string): { info: string; lines: string[] }[] {
+  const regions: { info: string; lines: string[] }[] = [];
+  const lists: { depth: number; width: number }[] = [];
+  const thematicBreak = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+  let block: { marker?: string; info: string; depth: number; lines: string[] } | undefined;
+  let paragraphDepth: number | undefined;
+  const sources = markdown.split(/\r?\n/);
+  for (let index = 0; index < sources.length; index++) {
+    const source = sources[index];
+    // Expand only Markdown's leading indentation/container prefix, never tabs
+    // within a shell argument. Tab stops use columns before container removal.
+    let column = 0;
+    let line = source.replace(/^[ \t]*(?:>[ \t]*|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)*/, (prefix) =>
+      [...prefix].map((character) => {
+        const expanded = character === "\t" ? " ".repeat(4 - column % 4) : character;
+        column += expanded.length;
+        return expanded;
+      }).join(""));
     let depth = 0;
-    // Remove only the container depth established by the opening fence. A >
-    // inside its body remains a shell redirect, never another stripped prefix.
-    while (!fence || depth < fence.depth) {
-      const quote = /^ {0,3}> ?/.exec(line);
-      if (!quote) break;
-      line = line.slice(quote[0].length);
-      depth++;
-    }
-    if (fence && depth !== fence.depth) {
-      throw new Error(`Unsupported fence container: ${source}`);
-    }
-    const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!fence) {
-      if (boundary) {
-        if (mentionsPnpm(boundary[2])) throw new Error(`Unsupported fence info: ${source}`);
-        fence = { marker: boundary[1], info: boundary[2].trim(), depth, lines: [] };
-      } else if (/`{3,}|~{3,}/.test(line)) {
-        throw new Error(`Unsupported fence container: ${source}`);
-      } else if (mentionsPnpm(line)) {
-        throw new Error(`Pnpm outside recognized fence: ${source}`);
+    let list = false;
+    let listLevel = 0;
+    // Only an opening region may establish containers. Inside code, any extra
+    // > or list marker belongs to the shell and must reach the closed grammar.
+    while (!block || depth < block.depth) {
+      const parent = !block && lists[listLevel];
+      if (parent && parent.depth === depth) {
+        if (line.startsWith(" ".repeat(parent.width))) {
+          line = line.slice(parent.width);
+          listLevel++;
+          list = true;
+          continue;
+        }
+        if (line.trim()) lists.splice(listLevel);
       }
-    } else if (boundary && boundary[1][0] === fence.marker[0]
-      && boundary[1].length >= fence.marker.length && !boundary[2].trim()) {
-      installs += validateBlock(fence.info, fence.lines.join("\n"));
-      fence = undefined;
-    } else fence.lines.push(line);
+      if (!block && thematicBreak.test(line)) break;
+      const quote = /^ {0,3}> ?/.exec(line);
+      const item = !block && /^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])( +)/.exec(line);
+      if (quote) {
+        line = line.slice(quote[0].length);
+        depth++;
+      } else if (item) {
+        // With more than four spaces after a list marker, only the first is
+        // container padding; the rest can introduce an indented code block.
+        const width = item[0].length - item[1].length + (item[1].length > 4 ? 1 : item[1].length);
+        lists.splice(listLevel, lists.length, { depth, width });
+        listLevel++;
+        line = line.slice(width);
+        list = true;
+        paragraphDepth = undefined;
+      } else break;
+    }
+    if (!block && line.trim()) lists.splice(listLevel);
+    const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (block?.marker) {
+      if (depth !== block.depth) throw new Error(`Unsupported fence container: ${source}`);
+      if (boundary && boundary[1][0] === block.marker[0]
+        && boundary[1].length >= block.marker.length && !boundary[2].trim()) {
+        block = undefined;
+      } else block.lines.push(line);
+      continue;
+    }
+    const indent = /^ {4}/.exec(line);
+    if (block) {
+      if (depth === block.depth && (indent || !line.trim())) {
+        block.lines.push(indent ? line.slice(indent[0].length) : "");
+        continue;
+      }
+      block = undefined;
+      // Reconsider this line outside the old block so a new container can
+      // establish its own code region instead of being mistaken for prose.
+      index--;
+      continue;
+    }
+    if (boundary) {
+      if (list) throw new Error(`Unsupported fence container: ${source}`);
+      if (mentionsPnpm(boundary[2])) throw new Error(`Unsupported fence info: ${source}`);
+      block = { marker: boundary[1], info: boundary[2].trim(), depth, lines: [] };
+    } else if (indent && paragraphDepth !== depth) {
+      if (list) throw new Error(`Unsupported indented code container: ${source}`);
+      block = { info: "shell (indented code)", depth, lines: [line.slice(indent[0].length)] };
+    } else {
+      // Indented code cannot interrupt a paragraph. Blank lines and Markdown
+      // headings end one; ordinary prose and inline code never enter a region.
+      paragraphDepth = !line.trim() || thematicBreak.test(line)
+        || /^ {0,3}(?:#{1,6}(?:\s|$)|(?:=+|-+)[ \t]*$)/.test(line)
+        ? undefined : depth;
+    }
+    if (block) {
+      regions.push(block);
+      paragraphDepth = undefined;
+    }
   }
-  if (fence) throw new Error(`Unclosed pnpm fence: ${fence.info}`);
-  return installs;
+  if (block?.marker) throw new Error(`Unsupported unclosed code fence: ${block.info}`);
+  return regions;
+}
+
+function validateDocument(markdown: string): number {
+  return codeRegions(markdown).reduce((installs, region) => installs + validateBlock(region.info, region.lines.join("\n")), 0);
 }
 
 it("requires the closed shell grammar and copy imports throughout the deployment guide", async () => {
@@ -199,6 +278,49 @@ it.each(["bash", "sh", 'bash title="Install"', "shell"])("accepts canonical inst
 it("joins continuations before validating the canonical install", () => {
   const continued = canonicalInstall.replace("pnpm install", "pnpm \\\ninstall");
   expect(validateDocument(`\`\`\`bash\n${continued}\n\`\`\``)).toBe(1);
+});
+
+it("does not continue a command through a backslash inside a comment", () => {
+  expect(() => validateDocument("```bash\npnpm --version # comment \\\npnpm install --frozen-lockfile\n```"))
+    .toThrow("Unsupported pnpm shape");
+});
+
+it("rejects a constructed command in an indented code block", () => {
+  expect(() => validateDocument("    $'p\\x6epm' install --frozen-lockfile"))
+    .toThrow("Non-literal command word");
+});
+
+it("leaves ordinary prose mentioning pnpm alone", () => {
+  expect(validateDocument("The documented pnpm commands copy package files into private inodes."))
+    .toBe(0);
+});
+
+it.each([
+  "pnpm --version # comment \\\n" + canonicalInstall,
+  "# comment \\\n" + canonicalInstall,
+  "pnpm --version \\\n# comment \\\n" + canonicalInstall,
+])("preserves the next command after a comment: %s", (body) => {
+  expect(validateDocument(`\`\`\`bash\n${body}\n\`\`\``)).toBe(1);
+});
+
+it.each(["    ", "\t", " \t", ">     ", "> >     "])("validates indented code with prefix %j", (prefix) => {
+  expect(validateDocument(`${prefix}${canonicalInstall}`)).toBe(1);
+  expect(() => validateDocument(`${prefix}pnpm install --frozen-lockfile`)).toThrow("Unsupported pnpm shape");
+});
+
+it("ends an indented code block before the next prose paragraph", () => {
+  expect(validateDocument(`    ${canonicalInstall}\n\nThe pnpm install above uses copy.\n\n\`\`\`sh\n${canonicalInstall}\n\`\`\``)).toBe(2);
+});
+
+it.each([
+  "Use `pnpm install --frozen-lockfile` with the documented prefix.",
+  "pnpm install --frozen-lockfile",
+  "The pnpm commands use ```bash fences and ~~~ fences.",
+  "The documented pnpm commands\n    copy package files into private inodes.",
+  "> The documented pnpm commands copy package files into private inodes.",
+  "- The documented pnpm commands copy package files into private inodes.",
+])("does not validate prose as code: %s", (prose) => {
+  expect(validateDocument(prose)).toBe(0);
 });
 
 it.each([
@@ -219,7 +341,7 @@ it.each([
 });
 
 it.each(["text", "python", ""])("rejects pnpm in an unrecognized %s fence", (info) => {
-  expect(() => validateDocument(`\`\`\`${info}\n${canonicalInstall}\n\`\`\``)).toThrow("Unrecognized pnpm fence");
+  expect(() => validateDocument(`\`\`\`${info}\n${canonicalInstall}\n\`\`\``)).toThrow("Unsupported code fence");
 });
 
 it("accepts pnpm version checks alongside Unix install without inventing a dependency install", () => {
@@ -231,7 +353,7 @@ it("rejects unreviewed redirections without executing them", () => {
 });
 
 it("rejects an unclosed pnpm fence", () => {
-  expect(() => validateDocument(`\`\`\`bash\n${canonicalInstall}`)).toThrow("Unclosed pnpm fence");
+  expect(() => validateDocument(`\`\`\`bash\n${canonicalInstall}`)).toThrow("Unsupported unclosed code fence");
 });
 
 it.each([
@@ -253,8 +375,45 @@ it("accepts canonical installs in nested blockquoted parameterized fences", () =
   expect(validateDocument(`> > ~~~sh title="Install"\n> > ${canonicalInstall}\n> > ~~~`)).toBe(1);
 });
 
-it("rejects pnpm outside fences", () => {
-  expect(() => validateDocument("pnpm install --frozen-lockfile")).toThrow("Pnpm outside recognized fence");
+it("rejects unsafe installs in code outside fences", () => {
+  expect(() => validateDocument("    pnpm install --frozen-lockfile")).toThrow("Unsupported pnpm shape");
+});
+
+it("recognizes a new container after an indented code block ends", () => {
+  expect(() => validateDocument("    pnpm --version\n>     $'p\\x6epm' install --frozen-lockfile"))
+    .toThrow("Non-literal command word");
+});
+
+it.each(["***", "* * *", "___"])("recognizes indented code after a thematic break: %s", (boundary) => {
+  expect(() => validateDocument(`Prose\n${boundary}\n    $'p\\x6epm' install --frozen-lockfile`))
+    .toThrow("Non-literal command word");
+});
+
+it("uses list content indentation when distinguishing prose from code", () => {
+  expect(validateDocument("- The documented pnpm commands\n\n    copy package files into private inodes."))
+    .toBe(0);
+  expect(() => validateDocument("- The documented commands\n\n      $'p\\x6epm' install --frozen-lockfile"))
+    .toThrow("Unsupported indented code container");
+});
+
+it("recognizes indented code on a list item's first line", () => {
+  expect(() => validateDocument("-     $'p\\x6epm' install --frozen-lockfile"))
+    .toThrow("Unsupported indented code container");
+});
+
+it("counts tabs at Markdown column stops inside containers", () => {
+  expect(validateDocument(`>\t\t${canonicalInstall}`)).toBe(1);
+  expect(validateDocument("> \tThe documented pnpm commands copy package files into private inodes.")).toBe(0);
+});
+
+it.each(["- ", "1. ", "> - ", "- > ", "> 1. > - "])("names unsupported code containers with prefix %j", (prefix) => {
+  expect(() => validateDocument(`${prefix}\`\`\`sh\n$'p\\x6epm' install --frozen-lockfile\n\`\`\``))
+    .toThrow("Unsupported fence container");
+});
+
+it.each(["text", "python", ""])("rejects constructed commands in unsupported %s fences", (info) => {
+  expect(() => validateDocument(`\`\`\`${info}\n$'p\\x6epm' install --frozen-lockfile\n\`\`\``))
+    .toThrow("Unsupported code fence");
 });
 
 it("rejects unsupported fence containers", () => {
