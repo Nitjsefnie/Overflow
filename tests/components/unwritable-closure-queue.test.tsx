@@ -6,7 +6,12 @@ import ModerationPage from "@/app/moderation/page";
 import { UnwritableClosureQueue } from "@/components/unwritable-closure-queue";
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
 
-const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
+const { sql, memberSession } = vi.hoisted(() => ({
+  sql: vi.fn(),
+  memberSession: vi.fn(async () => ({
+    user: { id: "moderator-1", role: "MODERATOR", name: "Moderator" },
+  })),
+}));
 
 // The moderation page now renders the client-side open-audit form, which reads the
 // app router; a bare render has no router mounted.
@@ -17,9 +22,7 @@ vi.mock("next/navigation", async (importOriginal) => ({
 vi.mock("@/lib/db/client", () => ({ getSql: () => sql }));
 vi.mock("@/lib/dashboard/session", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/dashboard/session")>(),
-  requireMemberPageSession: async () => ({
-    user: { id: "moderator-1", role: "MODERATOR", name: "Moderator" },
-  }),
+  requireMemberPageSession: memberSession,
 }));
 
 function closure(overrides: Partial<UnwritableClosureProjection> = {}): UnwritableClosureProjection {
@@ -200,6 +203,60 @@ describe("self-worked closure in the queue", () => {
 });
 
 describe("moderation closure section", () => {
+  it.each([
+    { kind: "eligible", viewerId: "00000000-0000-4000-8000-000000000001", eligible: true },
+    { kind: "unrelated", viewerId: "00000000-0000-4000-8000-000000000002", eligible: false },
+  ])("loads correction access for the authenticated $kind viewer", async ({ viewerId, eligible }) => {
+    memberSession.mockResolvedValueOnce({
+      user: { id: viewerId, role: "MODERATOR", name: "Moderator" },
+    });
+    const closureBindings: unknown[][] = [];
+    sql.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (!strings.join("?").includes("from unwritable_closures")) return [];
+      closureBindings.push(values);
+      return [{
+        id: "closure-1",
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        reason: "The settled label was applied after the evidence window.",
+        recorded_at: "2026-09-05T10:00:00.000Z",
+        repository_name: "co-op/harbour",
+        issue_number: 17,
+        issue_title: "Repair the tide gate",
+        issue_url: "https://github.com/co-op/harbour/issues/17",
+        pull_request_number: null,
+        pull_request_title: null,
+        pull_request_url: null,
+        settlement_id: "settlement-1",
+        creditor_login: "mira",
+        debtor_login: "quinn",
+        calibration_id: null,
+        calibration_owner_login: null,
+        viewer_can_request_correction:
+          values[0] === "00000000-0000-4000-8000-000000000001"
+          || values[1] === "00000000-0000-4000-8000-000000000003",
+        correction_state: null,
+        correction_requested_at: null,
+      }];
+    });
+
+    render(await ModerationPage());
+
+    expect.soft(closureBindings).toEqual([[viewerId, viewerId, viewerId]]);
+    const queue = screen.getAllByRole("region").find(
+      (region) => region.getAttribute("aria-labelledby") === "unwritable-closures-heading",
+    )!;
+    const entry = within(queue).getByRole("listitem");
+    const correctionLink = entry.querySelector('a[href="/settlements/settlement-1"]');
+    if (eligible) {
+      expect(correctionLink).toBeVisible();
+    } else {
+      expect(correctionLink).toBeNull();
+      const guidance = entry.querySelector("p.mono-meta");
+      expect(guidance).toBeVisible();
+      expect(Array.from(guidance!.querySelectorAll("code"), (code) => code.textContent)).toEqual(["mira", "quinn"]);
+    }
+  });
+
   it("renders live entries in the queue and grants in a history landmark immediately before enforcement history", async () => {
     sql.mockImplementation(async (strings: TemplateStringsArray) => {
       if (!strings.join("?").includes("from unwritable_closures")) return [];
