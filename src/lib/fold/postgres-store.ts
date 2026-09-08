@@ -469,18 +469,29 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
             // publication has finished COMMIT or ROLLBACK, even if work detached it.
             await Promise.allSettled(ownership.publications);
             let released = false;
+            // Whether the session answering the unlock is still the one that took the lock. A
+            // reservation never outlives its backend: when the backend dies, the pool takes the
+            // connection back and may hand it to the next reservation, so a foreign identity
+            // here means the owning backend is gone and its lock went with it.
+            let sessionChanged = false;
             try {
-              const [unlock] = await connection<{ released: boolean }[]>`
+              const [unlock] = await connection<{
+                released: boolean; same_session: boolean;
+              }[]>`
                 select pg_advisory_unlock(
                   hashtextextended(${repositoryId}, ${repositoryLockNamespace})
-                ) as released
+                ) as released,
+                  pg_backend_pid() = ${ownership.pid}
+                    and (select backend_start from pg_stat_activity where pid = pg_backend_pid())
+                      = ${ownership.backendStart}::text::timestamptz as same_session
               `;
               released = unlock?.released === true;
+              sessionChanged = unlock?.same_session === false;
               if (!released) {
                 warnCoordinationStatementFailed(
                   repositoryId,
                   "pg_advisory_unlock",
-                  { released: unlock?.released },
+                  { released: unlock?.released, sameSession: unlock?.same_session },
                 );
               }
             } catch (cause) {
@@ -488,11 +499,18 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
               released = false;
             }
             if (!released) {
-              // The lock is session-level, so it lives exactly as long as this connection's
-              // server session. Handing that session back to the pool would leave the lock
-              // granted for the life of the process, refusing every later reconciliation of this
-              // repository once its own lock wait ran out.
-              lockMayStillBeHeld = true;
+              if (sessionChanged) {
+                // The session that took the lock is gone, and PostgreSQL released the lock with
+                // it; the connection is already back with the pool. Reclaiming here would run
+                // unlock_all, DISCARD ALL or pg_terminate_backend on a session the pool may have
+                // handed to another coordinator, releasing that coordinator's lock instead.
+              } else {
+                // The lock is session-level, so it lives exactly as long as this connection's
+                // server session. Handing that session back to the pool would leave the lock
+                // granted for the life of the process, refusing every later reconciliation of
+                // this repository once its own lock wait ran out.
+                lockMayStillBeHeld = true;
+              }
               throw new Error(repositoryCoordinationFailure);
             }
           }
