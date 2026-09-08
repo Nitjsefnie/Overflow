@@ -5,6 +5,7 @@ import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import type { ReconciliationCostCharge } from "@/lib/fold/reconciliation-fairness";
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type DirtyReconciliationSubject,
@@ -69,7 +70,7 @@ export type ReconciliationStore = {
   hasDerivedRowsBelowFoldRevision(repositoryId: string, revision: number): Promise<boolean>;
   beginRun(repositoryId: string, options?: { rederivation: boolean }): Promise<string>;
   completeRun(runId: string): Promise<void>;
-  materialize(input: { repositoryId: string; runId: string; fold: FoldResult; synchronization?: ReconciliationSynchronization }): Promise<ReconciliationDeltas>;
+  materialize(input: { repositoryId: string; runId: string; fold: FoldResult; synchronization?: ReconciliationSynchronization; cost?: ReconciliationCostCharge }): Promise<ReconciliationDeltas>;
   failRun(runId: string, errorMessage: string): Promise<void>;
   recordVerifiedRepositoryIdentity(input: {
     repositoryId: string;
