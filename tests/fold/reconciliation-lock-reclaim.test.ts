@@ -5,7 +5,11 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 const coordinationFailure = "Unable to coordinate repository reconciliation.";
 const repositoryId = "repository-whose-unlock-fails";
 
-const tryLockStatement = "select pg_try_advisory_lock( hashtextextended(?, ?) ) as acquired";
+const tryLockStatement = "select pg_try_advisory_lock( hashtextextended(?, ?) ) as acquired, "
+  + "pg_backend_pid() as pid, "
+  + "(select backend_start::text from pg_stat_activity where pid = pg_backend_pid()) as backend_start, "
+  + "(select oid::text from pg_database where datname = current_database()) as database_oid, "
+  + "hashtextextended(?, ?)::text as lock_key";
 const targetedUnlockStatement = "select pg_advisory_unlock( hashtextextended(?, ?) ) as released";
 const unlockAllStatement = "select pg_advisory_unlock_all()";
 const discardAllStatement = "discard all";
@@ -50,7 +54,10 @@ function coordinationPool({ denied = [], unlockRows }: CoordinationOptions): {
       return Promise.resolve(unlockRows);
     }
 
-    return Promise.resolve([{ acquired: true, released: true }]);
+    return Promise.resolve([{
+      acquired: true, released: true, pid: 123, backend_start: "2030-01-01 00:00:00.123456+00",
+      database_oid: "12345", lock_key: "123456789",
+    }]);
   };
   const connection = ((strings: TemplateStringsArray) => (
     run(collapse(Array.from(strings)))

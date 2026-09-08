@@ -89,7 +89,7 @@ describe("persisted reconciliation cooldown", () => {
 
   it("reads a contender's cooldown after acquiring the real repository lock", async () => {
     const { store, repositoryId, github, calls } = await cooledRepository();
-    await store.setReconciliationCooldown(repositoryId, null);
+    await store.withRepositoryReconciliation(repositoryId, () => store.setReconciliationCooldown(repositoryId, null));
     await store.enqueueReconciliationJob(repositoryId, "SWEEP");
     const ownerAcquired = signal();
     const releaseOwner = signal();
@@ -109,6 +109,7 @@ describe("persisted reconciliation cooldown", () => {
     const owner = store.withRepositoryReconciliation(repositoryId, async () => {
       ownerAcquired.resolve();
       await releaseOwner.promise;
+      await store.setReconciliationCooldown(repositoryId, notBefore);
     });
     const folded: string[] = [];
     const now = () => new Date("2030-01-02T03:04:05.678Z");
@@ -132,7 +133,6 @@ describe("persisted reconciliation cooldown", () => {
       expect(folded).toEqual([repositoryId]);
       expect(calls).toEqual([]);
       expect(await runs(repositoryId)).toEqual([]);
-      await store.setReconciliationCooldown(repositoryId, notBefore);
       releaseOwner.resolve();
       await owner;
       const outcome = await contender;
@@ -208,7 +208,7 @@ async function cooledRepository() {
     returning id
   `;
   const store = new PostgresFoldStore(sql, tokenEncryptionKey);
-  await store.setReconciliationCooldown(repositoryId, notBefore);
+  await store.withRepositoryReconciliation(repositoryId, () => store.setReconciliationCooldown(repositoryId, notBefore));
   const calls: string[] = [];
   const verifyIdentity = verifiedRepositoryAt(ownerName);
   const github: ReconciliationGateway = {

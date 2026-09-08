@@ -1896,7 +1896,7 @@ describe("initial PostgreSQL materialization", () => {
 
     const store = new PostgresFoldStore(sql);
     const runId = await store.beginRun(repositoryId);
-    await store.materialize({ repositoryId, runId, fold });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold }));
 
     await expect(sql`
       select opening_label, opening_comparison_points, opening_source_event_id,
@@ -1958,7 +1958,7 @@ describe("initial PostgreSQL materialization", () => {
 
     const store = new PostgresFoldStore(sql);
     const runId = await store.beginRun(repositoryId);
-    await store.materialize({ repositoryId, runId, fold: foldRepository(snapshot) });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold: foldRepository(snapshot) }));
 
     await expect(sql`
       select opening_label, opening_comparison_points, opening_reserve_points,
@@ -2009,11 +2009,11 @@ describe("initial PostgreSQL materialization", () => {
       githubPullRequestId,
     });
     const store = new PostgresFoldStore(sql);
-    await store.materialize({
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
       fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
-    });
+    }));
 
     // GitHub renames both accounts: the snapshot's issue author and its opening
     // label actor each report their own new login while the labelling event
@@ -2024,11 +2024,11 @@ describe("initial PostgreSQL materialization", () => {
     // A rename neither creates nor retires anything. What it does change is the
     // settled evidence's display text, which is the single recorded settlement
     // change below.
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: renameRun,
       fold: foldRepository(snapshotAs({ author: renamedAuthorLogin, sponsor: renamedSponsorLogin })),
-    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
     await expect(sql`
       select before_state, after_state from reconciliation_changes
       where reconciliation_run_id = ${renameRun} and entity_kind = ${"SETTLEMENT"}
@@ -2091,11 +2091,11 @@ describe("initial PostgreSQL materialization", () => {
       githubPullRequestId,
     });
     const store = new PostgresFoldStore(sql);
-    await store.materialize({
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
       fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
-    });
+    }));
     const storedIssue = async () => sql`
       select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
              opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
@@ -2118,11 +2118,11 @@ describe("initial PostgreSQL materialization", () => {
       openingSourceEventId: `opening-rewritten-${githubIssueId}`,
     });
 
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
       fold: rewritten,
-    })).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
+    }))).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
     await expect(storedIssue()).resolves.toEqual(before);
     expect(before).toEqual([expect.objectContaining({
       title: "A materialized issue",
@@ -2165,11 +2165,11 @@ describe("initial PostgreSQL materialization", () => {
       githubPullRequestId,
     });
     const store = new PostgresFoldStore(sql);
-    await store.materialize({
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
       fold: foldRepository(snapshotAs({ author: authorLogin, sponsor: sponsorLogin })),
-    });
+    }));
     const storedIssue = async () => sql`
       select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
              opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
@@ -2194,11 +2194,11 @@ describe("initial PostgreSQL materialization", () => {
       openingSourceAt: "2026-09-01T08:02:00.000Z",
     });
 
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: await store.beginRun(repositoryId),
       fold: redated,
-    })).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
+    }))).rejects.toThrow("Issue opening evidence did not match immutable GitHub history.");
     await expect(storedIssue()).resolves.toEqual(before);
     expect(before).toEqual([expect.objectContaining({
       title: "A materialized issue",
@@ -2239,7 +2239,7 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresFoldStore(sql);
 
     // A row as the previous release wrote it: login only, no id.
-    await store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold: foldRepository(snapshot) });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold: foldRepository(snapshot) }));
     await sql`
       update settlements set creditor_github_user_id = null
       from issues where issues.id = settlements.issue_id and issues.github_issue_id = ${githubIssueId}
@@ -2250,12 +2250,12 @@ describe("initial PostgreSQL materialization", () => {
 
     const unknownAuthorSnapshot = structuredClone(snapshot);
     unknownAuthorSnapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId, runId: await store.beginRun(repositoryId), fold: foldRepository(unknownAuthorSnapshot),
-    })).resolves.toEqual({ adds: 0, changes: 0, removals: 0 });
+    }))).resolves.toEqual({ adds: 0, changes: 0, removals: 0 });
 
     const rebuildRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId: rebuildRun, fold: foldRepository(snapshot) }))
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: rebuildRun, fold: foldRepository(snapshot) })))
       .resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
     const changes = await sql`
       select before_state, after_state from reconciliation_changes
@@ -2305,7 +2305,7 @@ describe("initial PostgreSQL materialization", () => {
     }));
     const initialRun = await store.beginRun(repositoryId);
 
-    await expect(store.materialize({ repositoryId, runId: initialRun, fold: initial })).resolves.toEqual({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: initialRun, fold: initial }))).resolves.toEqual({
       adds: 1,
       changes: 0,
       removals: 0,
@@ -2348,7 +2348,7 @@ describe("initial PostgreSQL materialization", () => {
     });
     const changedRun = await store.beginRun(repositoryId);
 
-    await expect(store.materialize({ repositoryId, runId: changedRun, fold: changed })).resolves.toEqual({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: changedRun, fold: changed }))).resolves.toEqual({
       adds: 0,
       changes: 1,
       removals: 0,
@@ -2373,7 +2373,7 @@ describe("initial PostgreSQL materialization", () => {
 
     const removedRun = await store.beginRun(repositoryId);
     await expect(
-      store.materialize({
+      store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
         repositoryId,
         runId: removedRun,
         fold: foldRepository({
@@ -2390,7 +2390,7 @@ describe("initial PostgreSQL materialization", () => {
           }),
           issues: [],
         }),
-      }),
+      })),
       // Three rows leave: the settlement, and the issue and pull request whose
       // materialization the emptied fold no longer holds.
     ).resolves.toEqual({ adds: 0, changes: 0, removals: 3 });
@@ -2438,7 +2438,7 @@ describe("initial PostgreSQL materialization", () => {
     });
     const store = new PostgresFoldStore(sql);
     const initialRun = await store.beginRun(repositoryId);
-    await store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(snapshot) });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(snapshot) }));
 
     const changedSnapshot = structuredClone(snapshot);
     const issue = changedSnapshot.issues[0]!;
@@ -2449,11 +2449,11 @@ describe("initial PostgreSQL materialization", () => {
     issue.closingPullRequests[0]!.mergeCommitOid = "f".repeat(40);
 
     const changedRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: changedRun,
       fold: foldRepository(changedSnapshot),
-    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
 
     const [change] = await sql<{
       before_state: { settledLabelEventId: string; settledRationaleCommentId: string; mergeCommitOid: string };
@@ -2537,11 +2537,11 @@ describe("initial PostgreSQL materialization", () => {
 
     const store = new PostgresFoldStore(sql, tokenEncryptionKey);
     const staleRunId = await store.beginRun(repositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId: staleRunId,
       fold: foldRepository(staleSnapshot),
-    })).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
+    }))).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
 
     const snapshots: AuthoritativeReconciliationSnapshot[] = [
       {
@@ -3077,7 +3077,7 @@ describe("initial PostgreSQL materialization", () => {
 
     const store = new PostgresFoldStore(sql, tokenEncryptionKey);
     const initialRun = await store.beginRun(repositoryId);
-    await store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(outsiderSnapshot) });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: initialRun, fold: foldRepository(outsiderSnapshot) }));
     const factsBefore = await historicalRepositoryFacts(repositoryId, [sponsorId, contributorId]);
 
     for (const [targetId, newState] of [[contributorId, "BANNED"], [sponsorId, "RECALIBRATING"]] as const) {
@@ -3175,7 +3175,7 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresFoldStore(sql);
     const rejectedFold = foldRepository(rejectedSnapshot);
     const addRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId: addRun, fold: rejectedFold }))
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: addRun, fold: rejectedFold })))
       .resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
     const state = await reconciliationMaterializationState(repositoryId);
     expect(state.unwritableClosures).toEqual([{
@@ -3191,17 +3191,17 @@ describe("initial PostgreSQL materialization", () => {
       where issue_id = (select id from issues where github_issue_id = ${githubIssueId})
     `;
     const repairRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId: repairRun, fold: rejectedFold }))
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: repairRun, fold: rejectedFold })))
       .resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
     expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures)
       .toEqual(state.unwritableClosures);
 
     const repeatRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId: repeatRun, fold: rejectedFold }))
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: repeatRun, fold: rejectedFold })))
       .resolves.toEqual({ adds: 0, changes: 0, removals: 0 });
 
     const acceptedRun = await store.beginRun(repositoryId);
-    await expect(store.materialize({ repositoryId, runId: acceptedRun, fold: foldRepository(acceptedSnapshot) }))
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: acceptedRun, fold: foldRepository(acceptedSnapshot) })))
       .resolves.toEqual({ adds: 0, changes: 1, removals: 1 });
     expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toEqual([]);
     const changes = await sql`
@@ -3256,7 +3256,7 @@ describe("initial PostgreSQL materialization", () => {
     snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T13:00:00.000Z";
     const store = new PostgresFoldStore(sql, tokenEncryptionKey);
     const seedRun = await store.beginRun(repositoryId);
-    await store.materialize({ repositoryId, runId: seedRun, fold: foldRepository(snapshot) });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: seedRun, fold: foldRepository(snapshot) }));
     expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toHaveLength(1);
 
     // Registration after the merge is the production shape: a repository added
@@ -3297,11 +3297,11 @@ describe("initial PostgreSQL materialization", () => {
     selfWorkSnapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = await githubUserIdOf(sql, selfWorkSponsorId);
 
     const selfWorkAddRun = await store.beginRun(selfWorkRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(selfWorkRepositoryId, async () => store.materialize({
       repositoryId: selfWorkRepositoryId,
       runId: selfWorkAddRun,
       fold: foldRepository(selfWorkSnapshot),
-    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+    }))).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
 
     const selfWorkChangedSnapshot = structuredClone(selfWorkSnapshot);
     const changedIssue = selfWorkChangedSnapshot.issues[0]!;
@@ -3313,19 +3313,19 @@ describe("initial PostgreSQL materialization", () => {
     actualEvent.label = "delivered/7";
     changedIssue.comments[0]!.body = "Settled as delivered/7.";
     const selfWorkChangeRun = await store.beginRun(selfWorkRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(selfWorkRepositoryId, async () => store.materialize({
       repositoryId: selfWorkRepositoryId,
       runId: selfWorkChangeRun,
       fold: foldRepository(selfWorkChangedSnapshot),
-    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
 
     const selfWorkRemoveRun = await store.beginRun(selfWorkRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(selfWorkRepositoryId, async () => store.materialize({
       repositoryId: selfWorkRepositoryId,
       runId: selfWorkRemoveRun,
       fold: foldRepository({ ...selfWorkChangedSnapshot, issues: [] }),
       // The calibration, and the issue and pull request the emptied fold drops.
-    })).resolves.toEqual({ adds: 0, changes: 0, removals: 3 });
+    }))).resolves.toEqual({ adds: 0, changes: 0, removals: 3 });
 
     const selfWorkChanges = await sql<{
       entity_kind: string;
@@ -3398,29 +3398,29 @@ describe("initial PostgreSQL materialization", () => {
     closureSnapshot.issues[0]!.closingPullRequests = [];
     const closureAddFold = foldRepository(closureSnapshot);
     const closureAddRun = await store.beginRun(closureRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(closureRepositoryId, async () => store.materialize({
       repositoryId: closureRepositoryId,
       runId: closureAddRun,
       fold: closureAddFold,
-    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+    }))).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
 
     const closureChangeFold = structuredClone(closureAddFold);
     closureChangeFold.unwritableClosures[0]!.reason = "No authoritative closing PR remains after refresh.";
     const closureChangeRun = await store.beginRun(closureRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(closureRepositoryId, async () => store.materialize({
       repositoryId: closureRepositoryId,
       runId: closureChangeRun,
       fold: closureChangeFold,
-    })).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+    }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
 
     const closureRemoveFold = structuredClone(closureChangeFold);
     closureRemoveFold.unwritableClosures = [];
     const closureRemoveRun = await store.beginRun(closureRepositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(closureRepositoryId, async () => store.materialize({
       repositoryId: closureRepositoryId,
       runId: closureRemoveRun,
       fold: closureRemoveFold,
-    })).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+    }))).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
 
     const closureChanges = await sql<{
       entity_kind: string;
@@ -3483,11 +3483,11 @@ describe("initial PostgreSQL materialization", () => {
 
     const store = new PostgresFoldStore(sql);
     const runId = await store.beginRun(repositoryId);
-    await expect(store.materialize({
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
       repositoryId,
       runId,
       fold: foldRepository(snapshot),
-    })).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
+    }))).resolves.toEqual({ adds: 1, changes: 0, removals: 0 });
 
     // The foreign pull request is never materialized, so the closure has no row
     // to point at and nothing may be credited from it.

@@ -91,6 +91,6 @@ export async function materializeRepositoryFixture(sql: Sql) {
   const store = new PostgresFoldStore(sql);
   const repositoryId = repository.id;
   const runId = await store.beginRun(repositoryId);
-  const deltas = await store.materialize({ repositoryId, runId, fold });
+  const deltas = await store.withRepositoryReconciliation(repositoryId, () => store.materialize({ repositoryId, runId, fold }));
   return { repositoryId, store, fold, runId, deltas };
 }
