@@ -24,9 +24,9 @@ describe("webhook issue views", () => {
     expect(parse("issues", { ...issue, ...changes })).toBeNull();
   });
 
-  it("classifies comments on pull requests as fold-only PR subjects", () => {
-    const delivery = parse("issue_comment", { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } });
-    expect(delivery?.subject).toEqual({ kind: "PULL_REQUEST", id: 201, number: 11 });
+  it.each(["issues", "issue_comment"])("preserves the issue identity of %s PR envelopes without applying a view", (event) => {
+    const delivery = parse(event, { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } });
+    expect(delivery?.subject).toEqual({ kind: "ISSUE", id: 201, number: 11 });
     expect(delivery).not.toHaveProperty("issue");
   });
 });
