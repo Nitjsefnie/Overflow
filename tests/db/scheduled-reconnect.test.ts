@@ -127,3 +127,153 @@ describe("shutdown during a pool-scheduled reconnect", () => {
     }
   });
 });
+
+/** First close during startup; later attempts either close too or wait at a handshake barrier. */
+async function startRetryPeer(observed: string[], holdRetry: boolean) {
+  const sockets = new Set<net.Socket>();
+  let accepted = 0;
+  let releaseHandshake!: (socket: net.Socket) => void;
+  const handshake = new Promise<net.Socket>((resolve) => { releaseHandshake = resolve; });
+  const server = net.createServer((socket) => {
+    const attempt = ++accepted;
+    observed.push(`attempt ${attempt} opened`);
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.on("close", () => sockets.delete(socket));
+    let startup = true;
+    let incoming = Buffer.alloc(0);
+    socket.on("data", (data: Buffer) => {
+      incoming = Buffer.concat([incoming, data]);
+      while (incoming.length >= (startup ? 4 : 5)) {
+        const length = incoming.readInt32BE(startup ? 0 : 1) + (startup ? 0 : 1);
+        if (incoming.length < length) return;
+        const packet = incoming.subarray(0, length);
+        incoming = incoming.subarray(length);
+        if (startup) {
+          startup = false;
+          if (attempt === 1 || !holdRetry) {
+            observed.push(`attempt ${attempt} closed during startup`);
+            socket.end();
+          } else {
+            observed.push("retry handshake received");
+            releaseHandshake(socket);
+          }
+        } else if (packet[0] === 81) {
+          observed.push(packet.subarray(5, -1).toString());
+          socket.write(Buffer.concat([completed, ready]));
+        } else if (packet[0] === 88) {
+          socket.end();
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    port: (server.address() as net.AddressInfo).port,
+    handshake,
+    get accepted() { return accepted; },
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+  };
+}
+
+describe("shutdown after an initial attempt has failed", () => {
+  it("cancels the failed attempt's scheduled retry without opening another socket", async () => {
+    const observed: string[] = [];
+    const peer = await startRetryPeer(observed, false);
+    const realSetTimeout = globalThis.setTimeout;
+    let watchSchedule = false;
+    let scheduled: ReturnType<typeof setTimeout> | undefined;
+    let resolveScheduled!: () => void;
+    const retryScheduled = new Promise<void>((resolve) => { resolveScheduled = resolve; });
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (!watchSchedule) return realSetTimeout(callback, delay, ...args);
+      watchSchedule = false;
+      observed.push("failed retry scheduled");
+      scheduled = realSetTimeout(() => {
+        observed.push("retry backoff elapsed");
+        callback(...args);
+      }, delay);
+      resolveScheduled();
+      return scheduled;
+    });
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    const sql = postgres({
+      host: "127.0.0.1", port: peer.port,
+      user: "probe", database: "probe", password: "probe",
+      max: 1, fetch_types: false, max_lifetime: null,
+      backoff: () => {
+        watchSchedule = true;
+        return 1;
+      },
+    });
+    try {
+      const opening = sql.unsafe("set application_name = 'cancelled'").simple().then(
+        () => "resolved",
+        (error: { code?: string }) => { observed.push("opening query rejected"); return error.code; },
+      );
+      // Resumes after closed() has retained the exact retry handle, before its callback fires.
+      await retryScheduled;
+      observed.push("shutdown requested");
+      await sql.end();
+      observed.push("shutdown settled");
+
+      // P1 (fresh-only eligibility) and P5 (stale fresh marker) instead make another attempt
+      // and reject with CONNECTION_CLOSED. Neither can satisfy this cancellation disposition.
+      await expect(opening).resolves.toBe("CONNECTION_DESTROYED");
+      expect(scheduled).toBeDefined();
+      expect(clearSpy).toHaveBeenCalledWith(scheduled);
+      expect(peer.accepted).toBe(1);
+      expect(observed).toEqual([
+        "attempt 1 opened", "attempt 1 closed during startup", "failed retry scheduled",
+        "shutdown requested", "opening query rejected", "shutdown settled",
+      ]);
+    } finally {
+      watchSchedule = false;
+      await sql.end();
+      timeoutSpy.mockRestore();
+      clearSpy.mockRestore();
+      await peer.close();
+    }
+  });
+
+  it("serves a query when shutdown starts behind a live retry handshake barrier", async () => {
+    const observed: string[] = [];
+    const peer = await startRetryPeer(observed, true);
+    const sql = postgres({
+      host: "127.0.0.1", port: peer.port,
+      user: "probe", database: "probe", password: "probe",
+      max: 1, fetch_types: false, max_lifetime: null, backoff: () => 0,
+    });
+    try {
+      const opening = sql.unsafe("set application_name = 'live224'").simple().then(
+        (result) => { observed.push("opening query resolved"); return result.command; },
+        (error: { code?: string }) => error.code,
+      );
+      const socket = await peer.handshake;
+      observed.push("shutdown requested");
+      const shutdown = sql.end().then(() => { observed.push("shutdown settled"); });
+      // sql.end() yields once before ending the connection. Let that microtask register the
+      // shutdown while the peer still holds the handshake, then allow it to finish normally.
+      await Promise.resolve();
+      observed.push("retry handshake released");
+      socket.write(Buffer.concat([authenticated, ready]));
+
+      // P4 (spent retry handle) and P6 (live initial qualifies as scheduled) terminate here
+      // with CONNECTION_DESTROYED instead of allowing the actual SQL command to be served.
+      await expect(opening).resolves.toBe("SET");
+      await shutdown;
+      expect(peer.accepted).toBe(2);
+      expect(observed).toEqual([
+        "attempt 1 opened", "attempt 1 closed during startup", "attempt 2 opened",
+        "retry handshake received", "shutdown requested", "retry handshake released",
+        "set application_name = 'live224'", "opening query resolved", "shutdown settled",
+      ]);
+    } finally {
+      await sql.end();
+      await peer.close();
+    }
+  });
+});
