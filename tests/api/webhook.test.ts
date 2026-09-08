@@ -64,7 +64,7 @@ describe("GitHub webhook route", () => {
   ])("rejects unsupported or malformed comment envelopes before queueing: %j", async (payload) => {
     const processed: unknown[] = [];
     const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => processed.push(delivery) });
-    const response = await route(request(JSON.stringify(payload), {
+    const response = await route(request(JSON.stringify({ issue: { id: 201, number: 11 }, ...payload }), {
       "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment",
     }));
     expect(response.status).toBe(400);
