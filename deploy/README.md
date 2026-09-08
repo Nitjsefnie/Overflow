@@ -533,7 +533,9 @@ the original `GITHUB_WEBHOOK_SECRET` in the loaded environment; the upgrade must
 not rotate it. Avoid concurrent manual hook-configuration edits. The command
 preserves callback configuration, active state and unrelated subscriptions,
 verifies each persisted hook at the repository's current numeric-ID-resolved
-location, then queues repair. Startup recovery does not replace this upgrade.
+location, then requests full upstream repair through the rederivation mechanism.
+Historical missed deliveries have no known dirty subject; an ordinary incremental
+queue pass cannot guarantee their repair. Startup recovery does not replace this upgrade.
 
 Startup recovery is on by default. Before every deploy, review whether the
 revision can affect fold-derived values. Changes to fold behavior **must not
