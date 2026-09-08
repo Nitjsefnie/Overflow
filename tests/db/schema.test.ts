@@ -217,6 +217,7 @@ describe("initial PostgreSQL materialization", () => {
       "023_rederivation_requests.sql",
       "024_reconciliation_run_rederivation.sql",
       "025_rederivation_generation.sql",
+      "026_incremental_reconciliation.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -4322,6 +4323,7 @@ function authoritativeIssue(input: { id: number; number: number; ownerLogin: str
     id: input.id,
     number: input.number,
     title: `Reconciled issue ${input.number}`,
+    updatedAt: "2026-09-01T12:05:00.000Z",
     body: `Reconciled issue ${input.number} body`,
     url: `https://github.com/example/materialized/issues/${input.number}`,
     state: "CLOSED",
@@ -4486,6 +4488,7 @@ async function reconciliationMaterializationState(repositoryId: string) {
 
 function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGateway {
   const issues: GitHubIssue[] = snapshot.issues.map((issue) => ({
+    updatedAt: issue.closedAt ?? issue.createdAt,
     id: issue.id,
     number: issue.number,
     title: issue.title,

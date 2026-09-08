@@ -387,6 +387,160 @@ describe("GitHubGraphqlClient diagnostic retention", () => {
   });
 });
 
+describe("GitHubGateway incremental issue reads", () => {
+  // Mutants: ISSUE_WATERMARK_GATES_DIRTY_FETCH, SINCE_ENABLES_TRUNCATED_TIMELINE.
+  it("hydrates an explicit dirty issue with all labels, references and authoritative timeline pages", async () => {
+    const pageInfo = { hasNextPage: false, endCursor: null };
+    const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      requests.push(request);
+      const { query, variables } = request;
+      if (query.includes("query RepositoryIssue(")) return Response.json({ data: { repository: { issue: {
+        ...issueNode(101, 1, "Dirty"), updatedAt: "2026-08-30T09:00:00Z",
+        labels: { nodes: [{ name: "first" }], pageInfo: { hasNextPage: true, endCursor: "labels-next" } },
+        timelineItems: { nodes: [], pageInfo },
+        closedByPullRequestsReferences: { nodes: [pullRequestNode(201, 11)],
+          pageInfo: { hasNextPage: true, endCursor: "prs-next" } },
+      } } } });
+      if (query.includes("query IssueLabels")) return Response.json({ data: { repository: { issue: {
+        labels: { nodes: [{ name: "second" }], pageInfo },
+      } } } });
+      if (query.includes("query ClosingPullRequests")) return Response.json({ data: { repository: { issue: {
+        closedByPullRequestsReferences: { nodes: [pullRequestNode(202, 12)], pageInfo },
+      } } } });
+      return variables.cursor === null
+        ? timelineResponse([{ __typename: "LabeledEvent", id: "label", actor: null,
+          label: { name: "first" }, createdAt: "2026-08-30T09:00:00Z" }],
+        { hasNextPage: true, endCursor: "timeline-next" })
+        : timelineResponse([{ __typename: "IssueComment", id: "rationale", databaseId: 301,
+          author: null, body: "Rationale", createdAt: "2026-08-30T09:00:00Z", lastEditedAt: null }]);
+    } });
+    const issue = await gateway.getIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 });
+    expect(issue).toMatchObject({ id: 101, labels: ["first", "second"],
+      history: [{ id: "label" }], comments: [{ id: "rationale" }],
+      closingPullRequests: [{ id: 201 }, { id: 202 }], updatedAt: "2026-08-30T09:00:00Z" });
+    expect(requests[0]?.query).toMatch(/issue\(number:\s*\$issueNumber\)/);
+    expect(requests[0]?.variables).toEqual({ owner: "octo", name: "overflow", issueNumber: 1 });
+    expect(requests).toHaveLength(5);
+  });
+
+  // Mutants: OLD_REFERENCES_ONLY, STOP_AFTER_FIRST_PAGE, FOREIGN_NUMBER_COLLISION.
+  it("reads every current reverse PR reference with stable issue and repository identities", async () => {
+    const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      requests.push(request);
+      return Response.json({ data: { repository: { pullRequest: {
+        databaseId: 201, closingIssuesReferences: request.variables.cursor === null
+          ? { nodes: [{ databaseId: 101, number: 1, repository: { databaseId: 6001 } }],
+            pageInfo: { hasNextPage: true, endCursor: "next" } }
+          : { nodes: [{ databaseId: 102, number: 1, repository: { databaseId: 6002 } }],
+            pageInfo: { hasNextPage: false, endCursor: null } },
+      } } } });
+    } });
+    await expect(gateway.getPullRequestClosingIssues({ owner: "octo", name: "overflow" }, { id: 201, number: 11 }))
+      .resolves.toEqual([{ id: 101, number: 1, repositoryGitHubId: 6001 }, { id: 102, number: 1, repositoryGitHubId: 6002 }]);
+    expect(requests.map(({ variables }) => variables)).toEqual([
+      { owner: "octo", name: "overflow", pullRequestNumber: 11, cursor: null },
+      { owner: "octo", name: "overflow", pullRequestNumber: 11, cursor: "next" },
+    ]);
+    for (const { query } of requests) {
+      expect(query).toMatch(/closingIssuesReferences\(first:\s*100,\s*after:\s*\$cursor\)/);
+      expect(query).toMatch(/repository\s*\{\s*databaseId\s*\}/);
+    }
+  });
+
+  // Mutant: FOREIGN_NUMBER_COLLISION.
+  it("rejects a dirty subject number that resolves to another stable identity", async () => {
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async () => Response.json({ data: {
+      repository: { issue: { databaseId: 999 }, pullRequest: { databaseId: 999 } },
+    } }) });
+    await expect(gateway.getIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 }))
+      .rejects.toThrow(/identity/i);
+    await expect(gateway.getPullRequestClosingIssues({ owner: "octo", name: "overflow" }, { id: 201, number: 11 }))
+      .rejects.toThrow(/identity/i);
+  });
+
+  // Mutants: DROP_SINCE_VARIABLE, TOP_LEVEL_SINCE, STOP_AFTER_FIRST_PAGE.
+  it("sends the inclusive cutoff and descending update order on every issue page", async () => {
+    const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.query.includes("query IssueTimeline")) return timelineResponse();
+      requests.push(request);
+      return Response.json({ data: { repository: { issues: request.variables.cursor === null
+        ? { nodes: [{ ...issueNode(101, 1, "At cutoff"), updatedAt: "2026-09-08T10:00:00Z" }],
+          pageInfo: { hasNextPage: true, endCursor: "next" } }
+        : { nodes: [{ ...issueNode(102, 2, "Same cutoff"), updatedAt: "2026-09-08T10:00:00Z" }],
+          pageInfo: { hasNextPage: false, endCursor: null } },
+      } } });
+    } });
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, { since: "2026-09-08T10:00:00Z" });
+    expect(issues.map(({ id, updatedAt }) => ({ id, updatedAt }))).toEqual([
+      { id: 101, updatedAt: "2026-09-08T10:00:00Z" }, { id: 102, updatedAt: "2026-09-08T10:00:00Z" },
+    ]);
+    expect(requests.map(({ variables }) => variables)).toEqual([
+      { owner: "octo", name: "overflow", cursor: null, since: "2026-09-08T10:00:00Z" },
+      { owner: "octo", name: "overflow", cursor: "next", since: "2026-09-08T10:00:00Z" },
+    ]);
+    for (const { query } of requests) {
+      expect(query).toMatch(/\$since:\s*DateTime/);
+      expect(query).toMatch(/issues\([^)]*filterBy:\s*\{\s*since:\s*\$since\s*\}/);
+      expect(query).toMatch(/orderBy:\s*\{\s*field:\s*UPDATED_AT,\s*direction:\s*DESC\s*\}/);
+      expect(query).toMatch(/\bupdatedAt\b/);
+    }
+  });
+
+  // Mutant: HYDRATE_DUPLICATE_ID (including choosing the older duplicate).
+  it("hydrates each stable issue once using the newest duplicate across pages", async () => {
+    const hydrated: number[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async (_input, init) => {
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query IssueTimeline")) {
+        hydrated.push(variables.issueNumber);
+        return timelineResponse();
+      }
+      return Response.json({ data: { repository: { issues: variables.cursor === null
+        ? { nodes: [{ ...issueNode(101, 1, "Newest"), updatedAt: "2026-09-08T10:02:00Z" },
+          { ...issueNode(102, 2, "Old"), updatedAt: "2026-09-08T10:00:00Z" }],
+          pageInfo: { hasNextPage: true, endCursor: "next" } }
+        : { nodes: [{ ...issueNode(101, 1, "Older duplicate"), updatedAt: "2026-09-08T10:01:00Z" },
+          { ...issueNode(102, 2, "Newer duplicate"), updatedAt: "2026-09-08T10:03:00Z" }],
+          pageInfo: { hasNextPage: false, endCursor: null } },
+      } } });
+    } });
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
+    expect(issues.map(({ id, title }) => ({ id, title }))).toEqual([
+      { id: 101, title: "Newest" }, { id: 102, title: "Newer duplicate" },
+    ]);
+    expect(hydrated).toEqual([1, 2]);
+  });
+
+  // Mutant: SINCE_ENABLES_TRUNCATED_TIMELINE.
+  it("authoritatively rereads a timeline with since even when its nested page claims completeness", async () => {
+    const pageInfo = { hasNextPage: false, endCursor: null };
+    const requests: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-token", fetch: async (_input, init) => {
+      const { query, variables } = JSON.parse(String(init?.body));
+      requests.push(/query (\w+)/.exec(query)![1]!);
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [{ ...issueNode(101, 1, "Unpriced", { nodes: [], pageInfo }),
+          updatedAt: "2026-09-08T10:00:00Z", timelineItems: { nodes: [], pageInfo } }], pageInfo,
+      } } } });
+      return variables.cursor === null
+        ? timelineResponse([{ __typename: "IssueComment", id: "first", databaseId: 1, author: null,
+          body: "Original history", createdAt: "2026-09-01T00:00:00Z", lastEditedAt: null }],
+        { hasNextPage: true, endCursor: "timeline-next" })
+        : timelineResponse([{ __typename: "IssueComment", id: "second", databaseId: 2, author: null,
+          body: "Edited rationale", createdAt: "2026-09-02T00:00:00Z", lastEditedAt: "2026-09-08T10:00:00Z" }]);
+    } });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, { since: "2026-09-08T10:00:00Z" });
+    expect(issue?.comments.map(({ body }) => body)).toEqual(["Original history", "Edited rationale"]);
+    expect(requests).toEqual(["RepositoryIssues", "IssueTimeline", "IssueTimeline"]);
+  });
+});
+
 describe("GitHubGateway GraphQL source adapter", () => {
   it("logs optional per-page cost only with DEBUG_GITHUB_COST enabled", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -775,6 +929,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         id: 101,
         number: 1,
         title: "First issue",
+        updatedAt: "2026-08-30T09:00:00.000Z",
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/1",
         state: "OPEN",
@@ -792,6 +947,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         id: 102,
         number: 2,
         title: "Second issue",
+        updatedAt: "2026-08-30T09:00:00.000Z",
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/2",
         state: "OPEN",
@@ -1974,6 +2130,7 @@ function issueNode(
     number,
     title,
     body: "Issue body",
+    updatedAt: "2026-08-30T09:00:00.000Z",
     url: `https://github.com/octo/overflow/issues/${number}`,
     state: "OPEN",
     createdAt: "2026-08-30T09:00:00.000Z",

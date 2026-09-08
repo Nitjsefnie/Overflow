@@ -7,6 +7,8 @@ import type {
   GitHubIssue,
   GitHubIssueComment,
   GitHubIssueHistoryEvent,
+  GitHubIssueReference,
+  GitHubSubject,
   GitHubPullRequest,
   GitHubPullRequestReview,
   GitHubPullRequestReviewDismissal,
@@ -31,14 +33,15 @@ export type GitHubGatewayOptions = {
   owner?: string;
 };
 
-/** Omit these options to read every timeline exactly. Supplying them opts into
- * targeted reads: other nested timelines can still silently omit history/comments.
+/** Label controls opt into targeted reads, whose other nested timelines can
+ * silently omit history/comments. A since-only scan reads every timeline exactly.
  */
 export type GitHubIssueListOptions = {
+  since?: string;
   /** Always reread the full timeline when one of these labels is standing. */
-  timelineCriticalLabels: ReadonlySet<string>;
+  timelineCriticalLabels?: ReadonlySet<string>;
   /** Reread when a standing label has no corresponding label event. */
-  timelineWatchedLabels: ReadonlySet<string>;
+  timelineWatchedLabels?: ReadonlySet<string>;
 };
 
 type GitHubRestRepository = {
@@ -117,26 +120,70 @@ export class GitHubGateway {
     options?: GitHubIssueListOptions,
   ): Promise<GitHubIssue[]> {
     const nodes = await collectCursorPages((cursor) =>
-      this.getIssuesPage(repository, cursor),
+      this.getIssuesPage(repository, cursor, options?.since),
     );
-    const issues: GitHubIssue[] = [];
+    const unique = new Map<number | null, GitHubGraphqlIssueNode>();
     for (const node of nodes) {
+      const previous = unique.get(node.databaseId);
+      if (previous === undefined || Date.parse(node.updatedAt) >= Date.parse(previous.updatedAt)) {
+        unique.set(node.databaseId, node);
+      }
+    }
+    const targeted = options?.timelineCriticalLabels !== undefined || options?.timelineWatchedLabels !== undefined;
+    const issues: GitHubIssue[] = [];
+    for (const node of unique.values()) {
       const [labels, timeline, closingPullRequests] = await Promise.all([
         this.getIssueLabels(repository, node.number, node.labels),
-        this.getIssueTimeline(repository, node.number, options === undefined ? undefined : node.timelineItems),
+        this.getIssueTimeline(repository, node.number, targeted ? node.timelineItems : undefined),
         this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
       ]);
       // Check both fully assembled connections. A nested timeline can claim it is
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
-      const suspect = options !== undefined && node.timelineItems !== undefined && labels.some((label) =>
-        options.timelineCriticalLabels.has(label)
-        || (options.timelineWatchedLabels.has(label) && !labeled.has(label)),
+      const suspect = targeted && node.timelineItems !== undefined && labels.some((label) =>
+        options?.timelineCriticalLabels?.has(label)
+        || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       );
       const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
       issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
     }
     return issues;
+  }
+
+  public async getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null> {
+    const data = await this.graphql.query<{
+      repository: { issue: GitHubGraphqlIssueNode | null } | null;
+    }>(issueQuery, { owner: repository.owner, name: repository.name, issueNumber: subject.number });
+    const node = data.repository?.issue;
+    if (node === null) return null;
+    if (node === undefined || node.databaseId !== subject.id) {
+      throw new Error("GitHub issue identity did not match the dirty subject.");
+    }
+    const [labels, timeline, closingPullRequests] = await Promise.all([
+      this.getIssueLabels(repository, node.number, node.labels),
+      this.getIssueTimeline(repository, node.number),
+      this.getIssueClosingPullRequests(repository, node.number, node.closedByPullRequestsReferences),
+    ]);
+    return toGitHubIssue(node, labels, timeline, closingPullRequests);
+  }
+
+  public async getPullRequestClosingIssues(
+    repository: GitHubRepositoryReference,
+    subject: GitHubSubject,
+  ): Promise<GitHubIssueReference[]> {
+    const nodes = await collectCursorPages(async (cursor) => {
+      const data = await this.graphql.query<{
+        repository: { pullRequest: { databaseId: number; closingIssuesReferences: GitHubGraphqlPage<{
+          databaseId: number; number: number; repository: { databaseId: number };
+        }> } | null } | null;
+      }>(closingIssuesQuery, { owner: repository.owner, name: repository.name, pullRequestNumber: subject.number, cursor });
+      const pullRequest = data.repository?.pullRequest;
+      if (pullRequest == null || pullRequest.databaseId !== subject.id) {
+        throw new Error("GitHub pull request identity did not match the dirty subject.");
+      }
+      return pullRequest.closingIssuesReferences;
+    });
+    return nodes.map((node) => ({ id: node.databaseId, number: node.number, repositoryGitHubId: node.repository.databaseId }));
   }
 
   public async getIssueClosingPullRequests(
@@ -343,11 +390,12 @@ export class GitHubGateway {
   private async getIssuesPage(
     repository: GitHubRepositoryReference,
     cursor: string | null,
+    since?: string,
   ): Promise<GitHubGraphqlPage<GitHubGraphqlIssueNode>> {
     const data = await this.graphql.query<{
       repository: { issues: GitHubGraphqlPage<GitHubGraphqlIssueNode> } | null;
       rateLimit?: { cost: number; limit: number; remaining: number; resetAt: string } | null;
-    }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor });
+    }>(issuesQuery, { owner: repository.owner, name: repository.name, cursor, since });
     if (process.env.DEBUG_GITHUB_COST && data.rateLimit != null) {
       console.info("GitHub RepositoryIssues cost", {
         repository: `${repository.owner}/${repository.name}`,
@@ -613,6 +661,7 @@ type GitHubGraphqlIssueNode = {
   url: string;
   state: "OPEN" | "CLOSED";
   createdAt: string;
+  updatedAt: string;
   closedAt: string | null;
   author: GitHubGraphqlAccount | null;
   labels: GitHubGraphqlLabelConnection;
@@ -677,12 +726,7 @@ type GitHubGraphqlReviewDismissedEventNode = {
   review: { databaseId: number | null } | null;
 };
 
-const issuesQuery = `
-  query RepositoryIssues($owner: String!, $name: String!, $cursor: String) {
-    rateLimit { cost limit remaining resetAt }
-    repository(owner: $owner, name: $name) {
-      issues(first: 100, after: $cursor) {
-        nodes {
+const issueFields = `
           databaseId
           number
           title
@@ -690,6 +734,7 @@ const issuesQuery = `
           url
           state
           createdAt
+          updatedAt
           closedAt
           author { login ... on User { databaseId } }
           labels(first: 20) {
@@ -731,8 +776,39 @@ const issuesQuery = `
             }
             pageInfo { hasNextPage endCursor }
           }
-        }
+`;
+
+const issuesQuery = `
+  query RepositoryIssues($owner: String!, $name: String!, $cursor: String, $since: DateTime) {
+    rateLimit { cost limit remaining resetAt }
+    repository(owner: $owner, name: $name) {
+      issues(first: 100, after: $cursor, filterBy: { since: $since }, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        nodes { ${issueFields} }
         pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+const issueQuery = `
+  query RepositoryIssue($owner: String!, $name: String!, $issueNumber: Int!) {
+    rateLimit { cost limit remaining resetAt }
+    repository(owner: $owner, name: $name) {
+      issue(number: $issueNumber) { ${issueFields} }
+    }
+  }
+`;
+
+const closingIssuesQuery = `
+  query PullRequestClosingIssues($owner: String!, $name: String!, $pullRequestNumber: Int!, $cursor: String) {
+    rateLimit { cost limit remaining resetAt }
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pullRequestNumber) {
+        databaseId
+        closingIssuesReferences(first: 100, after: $cursor) {
+          nodes { databaseId number repository { databaseId } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
     }
   }
@@ -867,6 +943,7 @@ function toGitHubIssue(
     url: node.url,
     state: node.state,
     createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
     closedAt: node.closedAt,
     authorLogin: node.author?.login ?? null,
     authorGitHubUserId: accountGitHubUserId(node.author),
