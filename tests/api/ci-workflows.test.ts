@@ -27,20 +27,22 @@ describe("GitHub Actions release gates", () => {
       group: "pr-gate-${{ github.event.pull_request.number }}",
       "cancel-in-progress": false,
     });
-    expect(Object.keys(workflow.jobs)).toEqual(["gate"]);
-    const gate = workflow.jobs.gate!;
-    expect(gate.if).toBe("github.event.pull_request.user.type != 'Bot'");
-    expect(gate["runs-on"]).toBe("ubuntu-latest");
-    expect(gate["timeout-minutes"]).toBe(5);
-    expect(gate.steps).toEqual([{
-      uses: "Nitjsefnie-Actions/pr-gate@0f43e054dd77c35f5490255022a9abc189489160",
-      with: {
-        "github-token": "${{ github.token }}",
-        repository: "${{ github.repository }}",
-        "pull-request-number": "${{ github.event.pull_request.number }}",
-        "pull-request-author": "${{ github.event.pull_request.user.login }}",
+    expect(workflow.jobs).toEqual({
+      gate: {
+        if: "github.event.pull_request.user.type != 'Bot'",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 5,
+        steps: [{
+          uses: "Nitjsefnie-Actions/pr-gate@0f43e054dd77c35f5490255022a9abc189489160",
+          with: {
+            "github-token": "${{ github.token }}",
+            repository: "${{ github.repository }}",
+            "pull-request-number": "${{ github.event.pull_request.number }}",
+            "pull-request-author": "${{ github.event.pull_request.user.login }}",
+          },
+        }],
       },
-    }]);
+    });
   });
 
   it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
