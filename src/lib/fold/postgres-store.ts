@@ -362,6 +362,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     databaseOid: string;
     lockKey: string;
     active: boolean;
+    publications: Set<Promise<unknown>>;
   }>();
 
   public constructor(
@@ -445,6 +446,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           const ownership = {
             repositoryId, pid: lock.pid, backendStart: lock.backend_start,
             databaseOid: lock.database_oid, lockKey: lock.lock_key, active: true,
+            publications: new Set<Promise<unknown>>(),
           };
           try {
             // Keep PostgreSQL's microseconds as text; Date would round away part
@@ -457,6 +459,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
             return await this.reconciliationOwnership.run(ownership, work);
           } finally {
             ownership.active = false;
+            // Revoke new admission, then retain coordination until every started
+            // publication has finished COMMIT or ROLLBACK, even if work detached it.
+            await Promise.allSettled(ownership.publications);
             let released = false;
             try {
               const [unlock] = await connection<{ released: boolean }[]>`
@@ -650,7 +655,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     if (!ownership?.active || ownership.repositoryId !== repositoryId) {
       throw new Error(repositoryCoordinationFailure);
     }
-    return this.sql.begin(async (transaction) => {
+    const publication = this.sql.begin(async (transaction) => {
       // Admission is ordered with every other publication before any snapshot
       // read. An admitted transaction may finish after session loss, but the
       // successor holds this same row next and therefore publishes last.
@@ -676,11 +681,16 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       if (repositories.length !== 1 || !ownership.active || admission?.owned !== true) {
         throw new Error(repositoryCoordinationFailure);
       }
-      const result = await publish(transaction);
-      // A detached continuation can outlive the callback while queued on SQL.
-      if (!ownership.active) throw new Error(repositoryCoordinationFailure);
-      return result;
+      return publish(transaction);
     }) as Promise<T>;
+    // The driver's begin promise includes COMMIT; its callback ends earlier.
+    // Register synchronously so callback exit cannot miss a queued transaction.
+    ownership.publications.add(publication);
+    void publication.then(
+      () => { ownership.publications.delete(publication); },
+      () => { ownership.publications.delete(publication); },
+    );
+    return publication;
   }
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
