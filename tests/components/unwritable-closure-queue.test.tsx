@@ -37,6 +37,7 @@ function closure(overrides: Partial<UnwritableClosureProjection> = {}): Unwritab
     settlementParties: { creditorLogin: "mira", debtorLogin: "quinn" },
     calibrationId: null,
     calibrationOwnerLogin: null,
+    viewerCanRequestCorrection: true,
     latestCorrection: null,
     ...overrides,
   };
@@ -74,7 +75,7 @@ describe("unwritable closure queue", () => {
     expect(entry.getByRole("link", { name: "#" + "17 Repair the tide gate" })).toHaveAttribute("href", "https://github.com/co-op/harbour/issues/17");
     expect(entry.getByRole("link", { name: "#" + "18 Repair the gate" })).toHaveAttribute("href", "https://github.com/co-op/harbour/pull/18");
     expect(entry.getByText("The settled label was applied after the evidence window.")).toHaveClass("override-reason");
-    expect(entry.getByRole("link", { name: "Open the settlement to request a correction" })).toHaveAttribute("href", "/settlements/settlement-1");
+    expect(screen.getByRole("listitem").querySelector('a[href="/settlements/settlement-1"]')).toHaveAttribute("href", "/settlements/settlement-1");
     const item = screen.getByRole("listitem");
     const status = item.querySelector("data");
     const time = item.querySelector("time");
@@ -89,7 +90,7 @@ describe("unwritable closure queue", () => {
   it("offers the settlement correction path when no correction has been requested", () => {
     render(<UnwritableClosureQueue closures={[closure()]} />);
 
-    expect(screen.getByRole("link", { name: "Open the settlement to request a correction" })).toHaveAttribute("href", "/settlements/settlement-1");
+    expect(screen.getByRole("listitem").querySelector('a[href="/settlements/settlement-1"]')).toHaveAttribute("href", "/settlements/settlement-1");
     const entry = screen.getByRole("listitem");
     expect(entry.querySelector("data")).toBeNull();
     expect(entry.querySelector("time")).toBeNull();
@@ -110,6 +111,22 @@ describe("unwritable closure queue", () => {
     expect(Array.from(explanation.querySelectorAll("code"), (code) => code.textContent)).toEqual(logins);
     const link = screen.getByRole("link", { name: "Open the settlement to request a correction" });
     expect(link.parentElement?.nextElementSibling).toBe(explanation);
+  });
+
+  it.each([
+    { creditorLogin: "mira", logins: ["mira", "quinn"] },
+    { creditorLogin: null, logins: ["quinn"] },
+  ])("withholds the settlement link from a non-party with creditor $creditorLogin", ({ creditorLogin, logins }) => {
+    render(<UnwritableClosureQueue closures={[closure({
+      viewerCanRequestCorrection: false,
+      settlementParties: { creditorLogin, debtorLogin: "quinn" },
+    })]} />);
+
+    const entry = screen.getByRole("listitem");
+    expect(entry.querySelector('a[href^="/settlements/"]')).toBeNull();
+    const guidance = entry.querySelector("p.mono-meta");
+    expect(guidance).toBeVisible();
+    expect(Array.from(guidance!.querySelectorAll("code"), (code) => code.textContent)).toEqual(logins);
   });
 
   it("keeps both kinds visible without a settlement and explains why no correction is offered", () => {
@@ -143,7 +160,7 @@ describe("self-worked closure in the queue", () => {
     render(<UnwritableClosureQueue closures={[selfWorked()]} />);
 
     const entry = within(screen.getByRole("listitem"));
-    expect(entry.getByRole("link", { name: "Open the calibration to request a correction" })).toHaveAttribute(
+    expect(screen.getByRole("listitem").querySelector('a[href="/calibration/calibration-1"]')).toHaveAttribute(
       "href",
       "/calibration/calibration-1",
     );
@@ -152,6 +169,16 @@ describe("self-worked closure in the queue", () => {
     expect(Array.from(explanation.querySelectorAll("code"), (code) => code.textContent)).toEqual(["grace"]);
     expect(entry.queryByText(/No settlement is materialized for this closure/)).toBeNull();
     expect(entry.queryByRole("link", { name: "Open the settlement to request a correction" })).toBeNull();
+  });
+
+  it("withholds the calibration link from a non-sponsor and names the sponsor", () => {
+    render(<UnwritableClosureQueue closures={[selfWorked({ viewerCanRequestCorrection: false })]} />);
+
+    const entry = screen.getByRole("listitem");
+    expect(entry.querySelector('a[href^="/calibration/"]')).toBeNull();
+    const guidance = entry.querySelector("p.mono-meta");
+    expect(guidance).toBeVisible();
+    expect(Array.from(guidance!.querySelectorAll("code"), (code) => code.textContent)).toEqual(["grace"]);
   });
 
   it("shows the latest correction against a self-worked closure", () => {
@@ -193,6 +220,7 @@ describe("moderation closure section", () => {
         debtor_login: "quinn",
         calibration_id: null,
         calibration_owner_login: null,
+        viewer_can_request_correction: true,
         correction_state: state,
         correction_requested_at: state === null ? null : "2026-09-05T12:00:00.000Z",
       }));
@@ -240,6 +268,7 @@ describe("moderation closure section", () => {
         debtor_login: "quinn",
         calibration_id: null,
         calibration_owner_login: null,
+        viewer_can_request_correction: true,
         correction_state: null,
         correction_requested_at: null,
       }];
@@ -289,7 +318,6 @@ describe("moderation closure section", () => {
     expect(within(queue).getByRole("alert")).toBeVisible();
     expect(within(queue).getByRole("alert")).not.toBeEmptyDOMElement();
     expect(within(queue).getByRole("alert").textContent?.trim()).toBeTruthy();
-    expect(screen.getByText(/A moderator who is not a party cannot open either page\./)).toBeVisible();
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
     expect(screen.getByText("No accounts are recalibrating.")).toBeVisible();

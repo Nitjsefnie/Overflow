@@ -3524,7 +3524,7 @@ describe("initial PostgreSQL materialization", () => {
     `).resolves.toEqual([{ count: 0 }]);
 
     // Reads through getSql(), the same pool this suite holds.
-    const projected = (await listUnwritableClosures()).queue.find(({ id }) => id === closure.id);
+    const projected = (await listUnwritableClosures(sponsorId)).queue.find(({ id }) => id === closure.id);
     expect(projected).toMatchObject({
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
       pullRequest: null,
@@ -3579,7 +3579,7 @@ describe("initial PostgreSQL materialization", () => {
       `;
     }
 
-    const closures = await listUnwritableClosures();
+    const closures = await listUnwritableClosures(moderatorId);
     const grantedClosure = { id: closureIds[0] };
     const declinedClosure = { id: closureIds[1] };
     const openClosure = { id: closureIds[2] };
