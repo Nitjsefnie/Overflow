@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
@@ -10,6 +11,8 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubGateway } from "@/lib/github/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { encryptToken } from "@/lib/security/token-cipher";
+import { POST } from "@/app/api/github/webhooks/route";
+import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 
 const key = Buffer.alloc(32, 23).toString("base64url");
 const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -46,6 +49,42 @@ afterAll(async () => {
 });
 
 describe("upgrading actual persisted registrations", () => {
+  it("persists the same dirty issue and WEBHOOK job for signed issue and comment deliveries", async () => {
+    const [registered] = await sql<{ id: string }[]>`
+      insert into registered_repositories
+        (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+      values (45, 'comments/current', ${sponsorIds[0]!}, 'PUBLIC', 84, ${sql.json(validDifficultyScheme())}) returning id
+    `;
+    const previousSecret = process.env.GITHUB_WEBHOOK_SECRET;
+    process.env.GITHUB_WEBHOOK_SECRET = "comment-secret";
+    try {
+      for (const [event, action] of [["issues", "edited"], ["issue_comment", "created"], ["issue_comment", "edited"], ["issue_comment", "deleted"]]) {
+        const body = JSON.stringify({ action, repository: { id: 45, full_name: "comments/current" },
+          issue: { id: 201, number: 11, state: "closed", labels: [] },
+          comment: { body: "unrelated text", user: { login: "other-author" } },
+        });
+        const signature = createHmac("sha256", "comment-secret").update(body).digest("hex");
+        const response = await POST(new Request("https://overflow.test/api/github/webhooks", {
+          method: "POST", body, headers: { "x-github-event": event!, "x-github-delivery": `${event}-${action}`,
+            "x-hub-signature-256": `sha256=${signature}` },
+        }));
+        expect(response.status, `${event}/${action}`).toBe(202);
+        expect(await sql`select kind, github_subject_id::int, subject_number from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`).toEqual([
+          { kind: "ISSUE", github_subject_id: 201, subject_number: 11 },
+        ]);
+        expect(await sql`select reason, state from repository_reconciliation_jobs where repository_id = ${registered!.id}`).toEqual([
+          { reason: "WEBHOOK", state: "PENDING" },
+        ]);
+      }
+    } finally {
+      await sql`delete from repository_reconciliation_jobs where repository_id = ${registered!.id}`;
+      await sql`delete from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`;
+      await sql`delete from registered_repositories where id = ${registered!.id}`;
+      if (previousSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+      else process.env.GITHUB_WEBHOOK_SECRET = previousSecret;
+    }
+  });
+
   it("enumerates only active registrations and reports missing sponsor tokens through the actual command", () => {
     const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
@@ -76,7 +115,7 @@ describe("upgrading actual persisted registrations", () => {
         listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
         findActiveRepositoryById: (id: string) => registrations.findActiveRepositoryById(id),
         getGitHubAccessToken: (id: string) => registrations.getGitHubAccessToken(id),
-        enqueueReconciliationJob: queue.enqueueReconciliationJob.bind(queue),
+        requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
       },
       webhookSecret: "original-secret",
       createGateway: (accessToken: string) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
@@ -108,12 +147,22 @@ describe("upgrading actual persisted registrations", () => {
       { method: "PATCH", path: "/repos/current/42/hooks/81", token: "Bearer oauth-token-0" },
       { method: "PATCH", path: "/repos/current/43/hooks/82", token: "Bearer oauth-token-1" },
     ]);
-    expect(await sql`select repository_id, reason, state from repository_reconciliation_jobs order by repository_id`).toEqual(
-      repositoryIds.slice(0, 2).sort().map((repository_id) => ({ repository_id, reason: "WEBHOOK", state: "PENDING" })),
+    expect(await sql`select repository_id, reason, state, rederivation_generation::int from repository_reconciliation_jobs order by repository_id`).toEqual(
+      repositoryIds.slice(0, 2).sort().map((repository_id) => ({ repository_id, reason: "REDERIVATION", state: "PENDING", rederivation_generation: 2 })),
     );
     expect(lines.map((line) => JSON.parse(line)).filter((line) => line.succeeded !== undefined)).toEqual([
       { succeeded: 2, failed: 0 }, { succeeded: 2, failed: 0 },
     ]);
     expect(lines.join("\n")).not.toMatch(/oauth-token|original-secret|encrypted/);
+    const refreshes: { repositoryId: string; rederive: boolean }[] = [];
+    for (let index = 0; index < 2; index++) {
+      expect(await runNextReconciliationJob({
+        store: queue,
+        reconcile: async (repositoryId, { rederive }) => { refreshes.push({ repositoryId, rederive }); },
+      })).toBe("RECONCILED");
+    }
+    expect(refreshes.sort((a, b) => a.repositoryId.localeCompare(b.repositoryId))).toEqual(
+      repositoryIds.slice(0, 2).sort().map((repositoryId) => ({ repositoryId, rederive: true })),
+    );
   });
 });

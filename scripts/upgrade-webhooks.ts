@@ -44,7 +44,7 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
       listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
       findActiveRepositoryById: (id) => registrations.findActiveRepositoryById(id),
       getGitHubAccessToken: (id) => registrations.getGitHubAccessToken(id),
-      enqueueReconciliationJob: (id, reason) => queue.enqueueReconciliationJob(id, reason),
+      requestRepositoryRederivation: (id, at) => queue.requestRepositoryRederivation(id, at),
     },
     createGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
     webhookSecret,

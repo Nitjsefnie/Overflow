@@ -10,7 +10,7 @@ export type WebhookUpgradeOutcome = {
 };
 
 export type WebhookUpgradeDependencies = {
-  store: Pick<PostgresFoldStore, "listActiveRepositoryIds" | "enqueueReconciliationJob">
+  store: Pick<PostgresFoldStore, "listActiveRepositoryIds" | "requestRepositoryRederivation">
     & Pick<PostgresRepositoryStore, "findActiveRepositoryById" | "getGitHubAccessToken">;
   createGateway(accessToken: string, sponsorId: string): Pick<GitHubGateway, "getRepositoryById" | "ensureWebhookEvents">;
   webhookSecret: string;
@@ -63,7 +63,9 @@ async function upgradeRegistration(
 
     outcome.failure = "QUEUE_FAILED";
     outcome.queue = "FAILED";
-    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    // Historical missed deliveries have no known subject to invalidate. Request
+    // a full refresh rather than a checkpoint-based incremental queue pass.
+    await store.requestRepositoryRederivation(repositoryId, new Date());
     outcome.queue = "QUEUED";
     outcome.failure = null;
   } catch {

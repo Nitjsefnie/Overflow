@@ -314,8 +314,9 @@ Reconciliation materializes issues, linked pull requests, settlement proof, self
 ### Upgrade existing webhook subscriptions
 
 New registrations subscribe to `issues`, `pull_request`, `pull_request_review`,
-and `issue_comment`. Comment creation, editing and deletion each queue a full
-repository reconciliation, regardless of the comment text, author or issue state.
+and `issue_comment`. Comment creation, editing and deletion each invalidate the
+payload's issue subject and queue repository reconciliation through the same path
+as issue events, regardless of the comment text, author or issue state.
 The fold's pricing, author/edit evidence rules and fifteen-minute grace are unchanged.
 
 Deploy and verify the comment-capable release before upgrading existing hooks.
@@ -338,9 +339,12 @@ events (including wildcard hooks) need no write.
 
 Each JSON outcome identifies the registration by its local ID, reports
 `subscription` separately from `queue`, and names a sanitized failure stage.
-`VERIFIED` means the subscription was confirmed; `QUEUED` means repair was
-durably scheduled, not that the fold has finished. A hook that was disabled stays
-disabled. Every verified run queues repair, including reruns after a queue failure.
+`VERIFIED` means the subscription was confirmed; `QUEUED` means a full upstream
+refresh was durably requested through the existing rederivation mechanism, not
+that the fold has finished. Historical missed comments have no known subject to
+invalidate, so this administrative repair bypasses incremental checkpoints.
+A hook that was disabled stays disabled. Every verified run requests full repair,
+including reruns after a queue failure.
 The summary counts succeeded and failed registrations. Exit 0 requires every
 registration to succeed; exit 1 indicates a failed step; exit 2 indicates invalid
 arguments. Missing tokens, missing/inaccessible hooks, lost admin rights, private

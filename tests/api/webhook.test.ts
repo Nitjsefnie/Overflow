@@ -13,6 +13,18 @@ const rawPayload = JSON.stringify({
 });
 
 describe("GitHub webhook route", () => {
+  it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201, number: "11" }])(
+    "rejects comment delivery without a valid issue subject, even if it contains a PR subject: %j", async (issue) => {
+      const deliveries: unknown[] = [];
+      const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => { deliveries.push(delivery); } });
+      const response = await route(request(JSON.stringify({ action: "created",
+        repository: { id: 42, full_name: "octo/example" }, issue, pull_request: { id: 201, number: 11 },
+      }), { "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment-subject" }));
+      expect(response.status).toBe(400);
+      expect(deliveries).toEqual([]);
+    },
+  );
+
   // Mutants: DROP_SUBJECT_ID, IGNORE_MERGED_PR_REVIEW.
   it.each([
     { event: "issues", action: "edited", key: "issue", kind: "ISSUE" },
