@@ -53,7 +53,7 @@ async function upgradeRegistration(
     if (
       repository === null || repository.id !== registration.githubRepositoryId
       || repository.visibility !== "PUBLIC" || !repository.canAdminister
-      || !isPathSegment(repository.owner) || !isPathSegment(repository.name)
+      || !isOwner(repository.owner) || !isRepositoryName(repository.name)
       || repository.fullName !== `${repository.owner}/${repository.name}`
     ) return outcome;
 
@@ -73,6 +73,10 @@ async function upgradeRegistration(
   return outcome;
 }
 
-function isPathSegment(value: string): boolean {
+function isOwner(value: string): boolean {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+}
+
+function isRepositoryName(value: string): boolean {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]+$/.test(value) && value !== "." && value !== "..";
 }
