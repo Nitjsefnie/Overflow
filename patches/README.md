@@ -204,16 +204,18 @@ repository's pool size where the same shape took roughly 19 milliseconds
 before. The two halves are one edit site, so the fix for one has to carry the
 other.
 
-Four hunks make the scheduled attempt cancellable: `reconnect()` hands its
-timer back, the connect-phase arm keeps the handle, `connect()` spends it, and
-`end()` clears it when nothing else is in flight — which turns *waiting to
-retry* into the same nothing-in-flight case `end()`'s fast path already
-terminates at once, with the same rejection for the startup query it strands.
-The handle is armed only by a close, never by a first connect, so a query the
-pool has just dispatched is untouched and still runs; recognising the state by
-the absence of a socket instead would reject that one too.
-`tests/db/connect-phase-death.test.ts` holds the cancel, the boundary, and a
-live handshake left to its own `connect_timeout` rather than terminated.
+`reconnect()` returns its timer, and both the connect-phase close arm and the
+pool's `connection.connect(query)` retain that handle. Socket-opening
+`connect()` clears it before opening the socket. With no reservation or other
+work in flight, `end()` cancels a scheduled retry of a failed attempt and takes
+its termination path, rejecting the startup query with `CONNECTION_DESTROYED`.
+A freshly dispatched query instead gets its first attempt immediately, as
+described below; the absence of a socket alone cannot distinguish those states.
+`tests/db/connect-phase-death.test.ts` and
+`tests/db/scheduled-reconnect.test.ts` cover cancellation, preservation of fresh
+dispatch, and shutdown during a live retry handshake. The former checks that a
+silent handshake reaches `connect_timeout`; the latter releases a handshake
+barrier and checks that the query is served before shutdown settles.
 
 #### Where this diverges from upstream
 
@@ -236,16 +238,23 @@ early return, and nothing in either edit moves that return or the bookkeeping
 under it. When a release does land, judge it against the tests named here rather
 than against the pull request.
 
+#### Fresh work dispatched by the pool
+
+The retained pool-dispatch handle lets shutdown skip that schedule too.
+`connection.connect(query)` sets `initialAttempt` before scheduling; socket-opening
+`connect()` clears both that marker and the spent timer handle. If `end()` finds
+a scheduled initial attempt, it clears the timer, starts the attempt immediately,
+and waits for the dispatched query instead of rejecting it. A retry after a
+failed attempt has already cleared the marker and remains cancellable; a live
+handshake has no pending timer and remains in flight. This is the distinction
+that fixes Overflow issue 224 without cancelling freshly dispatched work.
+Alongside `tests/db/connect-phase-death.test.ts`,
+`tests/db/scheduled-reconnect.test.ts` records fresh work being served without
+the backoff callback firing, failed-retry cancellation, and completion through
+a live handshake barrier.
+
 #### What it still does not cover
 
-- **The cancel reaches only a retry a *close* scheduled.** The pool's own
-  `connection.connect(query)` calls `reconnect()` and discards the handle it
-  returns, so a shutdown arriving inside *that* scheduled window still waits it
-  out — measured at 43 milliseconds on `main` against 17,099 milliseconds here,
-  because the spacing above lengthens a window that already existed. Widening
-  the cancel to cover it would reject a query the pool has just dispatched,
-  which every build serves today, so it is left alone deliberately. Overflow
-  issue 224.
 - **Two `reserve()` orderings leave `sql.end()` itself pending**: a `reserve()`
   issued in the same turn as `end()`, which wins the race to `end()`'s own
   `await 1`, and a reservation held across `end()` and released afterwards,
