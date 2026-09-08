@@ -127,7 +127,7 @@ block stop too, before a failed build can be switched into service.
 set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
 cd /srv/overflow
-pnpm install --frozen-lockfile
+npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
@@ -209,11 +209,14 @@ chown -R root:overflow /srv/overflow
 chmod -R u=rwX,g=rX,o= /srv/overflow
 ```
 
-These ownership and mode changes also affect pnpm package files hardlinked from
-a shared store, so every checkout sharing those inodes sees the changes.
-[Issue 214](https://github.com/Nitjsefnie/Overflow/issues/214) tracks this defect;
-it predates this release layout and remains unfixed here, including in section
-10's reset.
+The install commands here and in section 10 set
+`npm_config_package_import_method=copy` for that pnpm invocation, importing
+package files into private inodes instead of hardlinking the shared store.
+Ownership and mode resets therefore leave the store and unrelated checkouts'
+package files untouched. Existing deployments must first complete section 10's
+one-time dependency migration: an unchanged install does not replace old
+hardlinks. This addresses [issue 214](https://github.com/Nitjsefnie/Overflow/issues/214)
+without changing the permissions the service needs inside the deployment tree.
 
 `next start` writes inside `.next/cache` — the image optimizer's output and the
 `.previewinfo` and `.rscinfo` files — and that directory is the only one the
@@ -573,11 +576,15 @@ generation, switches or prunes share the same tree.
 On a host whose `.next` is still a real directory, use section 5's one-time
 migration block at the switch step.
 
+**Existing deployments: complete the ONE-TIME dependency migration below before
+running this standing procedure for the first time.** Fresh installations using
+section 5's copy import do not need that migration.
+
 ```bash
 set -e
 cd /srv/overflow
 git pull --ff-only origin main
-pnpm install --frozen-lockfile
+npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
@@ -609,6 +616,26 @@ printf 'Webhook upgrade log: %s\nWebhook upgrade exit status: %s\n' "$upgrade_lo
 test "$upgrade_status" -eq 0 || exit "$upgrade_status"
 ```
 
+**ONE-TIME dependency migration for existing deployments**
+
+Before the first deploy using copy imports, remove the old `node_modules` and
+reinstall it with the copy setting. pnpm otherwise reuses unchanged packages,
+leaving their existing hardlinks intact. Run this once in a maintenance window:
+removing dependencies can interrupt requests from the running service. After
+the install succeeds, run the standing procedure above to build, restore tree
+ownership and permissions, restart and verify the service. Do not include this
+removal in routine deploys.
+
+```bash
+set -e
+cd /srv/overflow
+rm -rf -- node_modules
+npm_config_package_import_method=copy pnpm install --frozen-lockfile
+```
+
+This breaks the deployment's links to the shared store; it does not repair
+ownership or modes already changed in the store or other checkouts.
+
 The generated config belongs to `$release` and excludes serving and retained
 release validators; Next adds the new release's types to that file. Omitting
 preparation makes the build fail with the command needed to prepare this release.
@@ -638,7 +665,8 @@ cache. `-prune` skips that directory and everything inside it in both passes;
 skips symlinks. The old process can keep writing its cache throughout preparation,
 even if preparation or switching stops before the restart. During the one-time
 migration the resolved path is the real `.next`, so the same exclusion preserves
-`.next/cache`. The shared-store inode limitation in section 5 still applies.
+`.next/cache`. The copy imports described in section 5 keep these resets from
+changing package files in the shared store or other checkouts.
 
 The new cache lives at `/srv/overflow/$release/cache`, so create and hand over
 that directory before the switch and restart. The unit still names
