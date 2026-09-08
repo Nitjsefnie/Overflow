@@ -6,32 +6,34 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Six defects. The first is a shutdown that never settles; the second is a
+Six groups of defects. The first is a shutdown that stalls after a backend
+loss, during reconnect backoff, or around a reservation; the second is a
 reconnect loop that retries with no delay at all; the third is a `reserve()`
 that never settles; the fourth answers a dead backend's error to the query that
 replaces it; the fifth hands queued work to a connection the pool has already
 taken back; the sixth lets a shutdown report itself finished while work the
-pool accepted is neither run nor refused. The first two share an edit site and
-the section below; the rest are unrelated and each has its own.
+pool accepted is neither run nor refused. The shutdown and reconnect repairs
+share the first section below; the remaining groups each have their own.
 
-Sixteen separate edits carry them, and `git` renders those sixteen as twelve
-hunks. Two hunks carry three edits each: in the package's `src/index.js`,
-`reserve()`'s refusal once the client is ending, `reserve()`'s rejection
-wrapper and `release()`'s guard sit close enough together to share one, and in
-`closed()` the connect-phase failure, the retry bookkeeping and the settle
-share another. The sections below call each edit a hunk, so their counts sum to
-sixteen rather than to twelve.
+`git` renders the patch as fourteen hunks: nine in `src/connection.js`, four
+in `src/index.js`, and one in `src/queue.js`. Some carry several repairs:
+`reserve()`'s refusal and rejection wrapper share a hunk with `release()`'s
+ownership guard and shutdown termination branch. The synchronous
+`endRequested` assignment shares a hunk with the backlog drain in `end()`;
+the flag's declaration has its own hunk. In `closed()`, the connect-phase
+failure, retry bookkeeping and shutdown settlement share another. The sections
+below discuss individual edits, which can share a diff hunk.
 
 ### A connection that loses its backend leaves `sql.end()` waiting
 
-Eight hunks, all in the `postgres` package's own `src/connection.js` — not this
-repository's `src/`; `git` renders them as six, because three of them share
-one. They settle the three orders in which a connection losing its backend
+The backend-loss and reconnect repairs occupy seven diff hunks in the
+`postgres` package's own `src/connection.js` — not this repository's `src/`.
+They settle the three orders in which a connection losing its backend
 leaves `sql.end()` waiting on a message that will never arrive, they space the
 reconnect attempts the third of those orders used to issue back to back, and
-they let a shutdown that arrives between two of those attempts cancel the next
-one rather than wait for it. `sql.end()` awaits every connection in the pool,
-so a single stranded connection stalls the whole shutdown, and with it
+they let a shutdown cancel a scheduled failed retry or immediately start a
+freshly dispatched query's first attempt. `sql.end()` awaits every connection
+in the pool, so a single stranded connection stalls the whole shutdown, and with it
 `closeSql()` and everything awaiting it — `scripts/reconcile.ts` awaits it in a
 `finally`, so the reconcile script simply never exits.
 
@@ -253,15 +255,26 @@ Alongside `tests/db/connect-phase-death.test.ts`,
 the backoff callback firing, failed-retry cancellation, and completion through
 a live handshake barrier.
 
-#### What it still does not cover
+#### Reservations taken or released around shutdown
 
-- **Two `reserve()` orderings leave `sql.end()` itself pending**: a `reserve()`
-  issued in the same turn as `end()`, which wins the race to `end()`'s own
-  `await 1`, and a reservation held across `end()` and released afterwards,
-  whose `release()` calls `onopen()` and so bypasses the
-  `ending ? terminate()` arm. Both reproduce identically on `main`: they are
-  stock, not something this patch introduced or failed to remove. Overflow
-  issue 226.
+Two reservation orderings are covered while the database stays reachable
+(Overflow issue 226):
+
+- `end()` sets `endRequested` synchronously before its `await 1`.
+  `reserve()` checks `ending || endRequested` and rejects with
+  `CONNECTION_ENDED`, including a reservation requested in the same turn after
+  `end()` begins. The separate flag preserves the existing microtask in which
+  queries explicitly executed before `end()` reach the pool; moving the
+  assignment of `ending` itself ahead of the yield would refuse those queries.
+- A still-owned reservation released after `ending` is set clears
+  `c.reserved` and takes `ending ? c.terminate() : onopen(c)`. Terminating the
+  connection settles the shutdown waiting on that reservation; returning it to
+  the pool would leave that shutdown pending. The ownership guard still makes
+  a release inert if the pool has already taken the reservation back.
+
+`tests/db/reserve-shutdown-race.test.ts` holds both orderings: same-turn
+admission is refused and shutdown completes, and a reservation released after
+shutdown begins closes its backend and lets shutdown complete.
 
 #### Caveat if you reuse this patch elsewhere
 
@@ -564,15 +577,19 @@ installs and removes, because an exception thrown from a timer reaches no
 a new one from the same connection, and requires that a third reservation still
 has nothing to be served with.
 
+#### Releasing a still-owned reservation
+
+A `release()` that passes the ownership guard clears `c.reserved` and uses
+`ending ? c.terminate() : onopen(c)`: it terminates the connection during
+shutdown and otherwise hands it back to the pool. This also applies after the
+caller's own queries have failed, provided the reservation is still held.
+
 #### What it does not cover
 
-A `release()` that arrives while the connection is still the caller's is
-unchanged, including one that arrives after the caller's own queries have
-failed: the reservation is still held, so the connection is still handed back.
-Nor does the guard settle anything the reservation was holding. A reservation
-has a queue of its own that `handler` fills while the connection is `full`, and
-`c.reserved` is the only thing that drains it, so ending a reservation with
-items still in it looks from the source like it leaves them unsettled — as true
+The ownership guard does not settle queued work the reservation was holding.
+A reservation has a queue of its own that `handler` fills while the connection
+is `full`, and `c.reserved` is the only thing that drains it, so ending a
+reservation with items still in it looks from the source like it leaves them unsettled — as true
 of an ordinary `release()` on a healthy connection as of a spent one here.
 Read off the package's source rather than run: nothing in this repository has
 reproduced it and no issue tracks it, so treat it differently from the claims
@@ -654,17 +671,19 @@ above closes.
 
 ### Housekeeping
 
-- **Only the ESM build is patched.** All twelve hunks land in `src/`. The package
+- **Only the ESM build is patched.** All fourteen hunks land in `src/`. The package
   also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
   query in the slot in `error()`, leave `closed()` without the settle and with
   the stale `errorResponse`, still take the connect-phase early return above
   both of those and above the retry bookkeeping, still discard the reconnect
-  timer so no shutdown can cancel it, still drop a reserve that reaches the
+  timer and lack `initialAttempt`, so shutdown cannot cancel a failed retry or
+  accelerate a fresh dispatch, still drop a reserve that reaches the
   startup handler with array-type fetching off, still shift the queue in
   `onclose`, still hand `reserve()`'s pseudo-query a bare `reject`, still let a
   spent `release()` hand a connection back to the pool, still leave `end()`'s
   backlog neither run nor refused, still let `reserve()` queue into an ending
-  pool, and carry no `peek` in their
+  pool, lack the synchronous `endRequested` admission flag, still return a
+  released reservation to a pool that is ending, and carry no `peek` in their
   `queue.js` — the same as on `main`, so this is a standing property of the
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
@@ -685,13 +704,15 @@ above closes.
   `tests/db/closesql-connection-death.test.ts`,
   `tests/db/closesql-shutdown-before-death.test.ts`,
   `tests/db/connect-phase-death.test.ts`,
+  `tests/db/scheduled-reconnect.test.ts`,
   `tests/db/shutdown-backlog-drain.test.ts`,
   `tests/db/pipelined-query-after-build-failure.test.ts`,
   `tests/db/reserve-contract.test.ts`,
+  `tests/db/reserve-shutdown-race.test.ts`,
   `tests/db/postgres-queue.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
   whether the release really carries every fix without the regression. All of
-  them: the first three name one interleaving each, and a release that settles
+  them: the shutdown suites cover different orderings, and a release that settles
   one and not the others passes a check that names only its own and reinstates
   the hang unnoticed. A release that carries only some of the fixes keeps the
   patch, minus the hunks it made redundant.
