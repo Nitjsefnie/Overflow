@@ -25,6 +25,12 @@ it("drains active PR collectors before releasing coordination and retains their 
       if (String(input).endsWith("/repositories/5001")) {
         return Response.json(verifiedRepositoryPayload(5001, "sponsor/repository"));
       }
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/issues/events") || path.endsWith("/issues/comments")) {
+        const operation = path.endsWith("/events") ? "IssueEvents" : "IssueComments";
+        calls.push(operation);
+        return manifestResponse(operation);
+      }
       const request = JSON.parse(String(init?.body));
       const operation = /query (\w+)/.exec(request.query)![1]!;
       calls.push(operation);
@@ -98,18 +104,18 @@ it("drains active PR collectors before releasing coordination and retains their 
     now = resetAt;
     for (const gate of gates) gate.resolve();
     const result = await outcome;
-    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", "IssueEvents", "IssueComments", ...Array(4).fill("PullRequestReviews")]);
     expect(result).toEqual({ value: expect.objectContaining({ skipped: true, budgetHeldUntil: resetAt }) });
     expect(released).toBe(true);
     expect(active).toBe(0);
     expect(settled).toBe(4);
-    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", ...Array(4).fill("PullRequestReviews")]);
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", "IssueEvents", "IssueComments", ...Array(4).fill("PullRequestReviews")]);
     // The same owned gateway remains available outside the held reconciliation.
     await github.listIssues({ owner: "sponsor", name: "repository" }, {
       timelineCriticalLabels: new Set(["delivered/6"]), timelineWatchedLabels: new Set(["M"]),
     });
-    expect(calls[6]).toBe("RepositoryIssues");
-    expect(calls).toHaveLength(8);
+    expect(calls[8]).toBe("RepositoryIssues");
+    expect(calls).toHaveLength(12);
     expect(materialize).not.toHaveBeenCalled();
   } finally {
     gates.forEach(({ resolve }) => resolve());
@@ -127,9 +133,11 @@ it("settles every started HTTP request before a failed fold rejects and releases
   const github = new GitHubGateway({
     accessToken: "fixture-token",
     fetch: async (input, init) => {
+      const path = new URL(String(input)).pathname;
       const body = String(input).endsWith("/graphql") ? JSON.parse(String(init?.body)) : null;
       const operation = body ? /query (\w+)/.exec(body.query)![1]!
-        : String(input).endsWith("/repositories/5001") ? "identity" : "diff";
+        : path.endsWith("/repositories/5001") ? "identity"
+        : path.endsWith("/issues/events") ? "IssueEvents" : path.endsWith("/issues/comments") ? "IssueComments" : "diff";
       const number = operation === "diff"
         ? Number(/\/pulls\/(\d+)$/.exec(String(input))![1])
         : body?.variables.pullRequestNumber ?? null;
@@ -144,6 +152,7 @@ it("settles every started HTTP request before a failed fold rejects and releases
             nodes: Array.from({ length: 9 }, (_, index) => issueNode(index + 1)), pageInfo,
           } } } });
         }
+        if (operation === "IssueEvents" || operation === "IssueComments") return manifestResponse(operation);
         if (operation === "IssueTimelineCounts") {
           return Response.json({ data: { repository: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
             `i${index + 1}`, { databaseId: 101 + index, timelineItems: { totalCount: 1 } },
@@ -224,9 +233,9 @@ it("settles every started HTTP request before a failed fold rejects and releases
 
 it("bounds actual HTTP requests across worker cohorts and both review paginators", async () => {
   const count = 9;
-  // One issue page + one count batch + nine PRs * five requests.
+  // One issue page + one count batch + two manifest pages + nine PRs * five requests.
   // Identity REST precedes the crawl and is excluded from this count.
-  const total = 47;
+  const total = 49;
   const gates = Array.from({ length: total }, signal);
   const starts = Array.from({ length: total }, signal);
   const calls: Array<{ operation: string; number: number | null; cursor: string | null }> = [];
@@ -241,10 +250,12 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
         return Response.json(verifiedRepositoryPayload(5001, "sponsor/repository"));
       }
       const request = String(input).endsWith("/graphql") ? JSON.parse(String(init?.body)) : null;
-      const operation = request === null ? "diff" : /query (\w+)/.exec(request.query)![1]!;
-      const number = request === null
+      const path = new URL(String(input)).pathname;
+      const operation = request !== null ? /query (\w+)/.exec(request.query)![1]!
+        : path.endsWith("/issues/events") ? "IssueEvents" : path.endsWith("/issues/comments") ? "IssueComments" : "diff";
+      const number = operation === "diff"
         ? Number(/\/pulls\/(\d+)$/.exec(String(input))![1])
-        : request.variables.pullRequestNumber ?? null;
+        : request?.variables.pullRequestNumber ?? null;
       const cursor = request?.variables.cursor ?? null;
       const index = calls.length;
       calls.push({ operation, number, cursor });
@@ -259,6 +270,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
           nodes: Array.from({ length: count }, (_, index) => issueNode(index + 1)), pageInfo,
         } } } });
       }
+      if (operation === "IssueEvents" || operation === "IssueComments") return manifestResponse(operation);
       if (operation === "diff") return new Response(`diff ${number}`);
       if (operation === "IssueTimelineCounts") {
         return Response.json({ data: { repository: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
@@ -385,4 +397,10 @@ function issueNode(number: number) {
       repository: { databaseId: 5001, nameWithOwner: "sponsor/repository" },
     }], pageInfo },
   };
+}
+
+function manifestResponse(operation: string) {
+  return Response.json(operation === "IssueComments" ? [] : Array.from({ length: 9 }, (_, index) => ({
+    node_id: `opening-${index + 1}`, event: "labeled", issue: { id: 101 + index, number: index + 1 },
+  })));
 }

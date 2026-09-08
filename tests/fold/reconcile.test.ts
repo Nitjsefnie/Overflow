@@ -1110,6 +1110,16 @@ function pagedReconciliationGateway(
       if (String(input).endsWith("/repositories/5001")) {
         return Response.json(verifiedRepositoryPayload(5001, "octo/example"));
       }
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/issues/events")) return Response.json([1, 2, 3].flatMap((number) =>
+        timelineNodes(number).filter((node) => node.__typename !== "IssueComment").map((node) => ({
+          node_id: node.id, event: node.__typename === "AssignedEvent" ? "assigned" : "labeled",
+          issue: { id: 100 + number, number },
+        }))));
+      if (path.endsWith("/issues/comments")) return Response.json([1, 2, 3].flatMap((number) =>
+        timelineNodes(number).filter((node) => node.__typename === "IssueComment").map((node) => ({
+          node_id: node.id, issue_url: `https://api.github.com/repos/octo/example/issues/${number}`,
+        }))));
       if (String(input).endsWith("/graphql")) {
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;

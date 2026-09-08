@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
+import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 export { GitHubApiError } from "@/lib/github/errors";
@@ -35,7 +36,7 @@ export type GitHubGatewayOptions = {
   owner?: string;
 };
 
-/** Label controls opt into bulk timelines checked against independent counts.
+/** Label controls opt into bulk timelines checked against independent counts and REST event/comment IDs.
  * A since-only scan reads every timeline exactly.
  */
 export type GitHubIssueListOptions = {
@@ -133,6 +134,7 @@ export class GitHubGateway {
     }
     const targeted = options?.timelineCriticalLabels !== undefined || options?.timelineWatchedLabels !== undefined;
     const counts = targeted ? await this.getIssueTimelineCounts(repository, [...unique.values()]) : null;
+    const manifest = targeted ? await this.getIssueTimelineManifest(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
       const [labels, timeline, closingPullRequests] = await Promise.all([
@@ -144,16 +146,18 @@ export class GitHubGateway {
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
       const expectedCount = counts?.get(node.number);
-      const matchesCount = (value: typeof timeline) => {
+      const matchesEvidence = (value: typeof timeline) => {
         const ids = [...value.history, ...value.comments].map(({ id }) => id);
-        return ids.length === expectedCount && new Set(ids).size === expectedCount;
+        const expectedIds = manifest?.get(node.number);
+        return ids.length === expectedCount && new Set(ids).size === expectedCount
+          && expectedIds?.size === expectedCount && ids.every((id) => expectedIds.has(id));
       };
-      const suspect = targeted && (!matchesCount(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
+      const suspect = targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       )));
       const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
-      if (targeted && !matchesCount(authoritativeTimeline)) {
+      if (targeted && !matchesEvidence(authoritativeTimeline)) {
         throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
       }
       issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
@@ -520,6 +524,59 @@ export class GitHubGateway {
       throw new Error("GitHub GraphQL response was invalid.");
     }
     return page;
+  }
+
+  private async getIssueTimelineManifest(
+    repository: GitHubRepositoryReference,
+    issues: readonly GitHubGraphqlIssueNode[],
+  ): Promise<Map<number, Set<string>>> {
+    const manifest = new Map(issues.map((issue) => [issue.number, new Set<string>()]));
+    if (issues.length === 0) return manifest;
+    const identities = new Map(issues.map((issue) => [issue.number, issue.databaseId]));
+    const watchedEvents = new Set(["labeled", "unlabeled", "assigned", "unassigned"]);
+    const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/issues`;
+    let requests = 0;
+    // These repository-wide REST collections enumerate IDs independently of the
+    // degraded GraphQL timeline resolver. Never treat an unfinished manifest as
+    // proof: large repositories fail closed at a bounded request budget.
+    for (const collection of ["events", "comments"] as const) {
+      for (let page = 1; ; page += 1) {
+        if (requests === 50) {
+          throw new Error("GitHub timeline completeness could not be verified within 50 repository manifest requests.");
+        }
+        checkGraphqlRequestBudget();
+        requests += 1;
+        const response = await this.request(`${path}/${collection}?per_page=100&page=${page}`);
+        const payload = await responseJson<unknown>(response);
+        if (collection === "events") {
+          const events = z.array(z.object({
+            node_id: z.string().min(1), event: z.string(),
+            issue: z.object({ id: z.number().int().positive().safe(), number: z.number().int().positive().safe() }),
+          })).parse(payload);
+          for (const event of events) {
+            if (!watchedEvents.has(event.event) || !manifest.has(event.issue.number)) continue;
+            if (identities.get(event.issue.number) !== event.issue.id) {
+              throw new Error("GitHub timeline manifest issue identity was invalid.");
+            }
+            manifest.get(event.issue.number)!.add(event.node_id);
+          }
+        } else {
+          const comments = z.array(z.object({ node_id: z.string().min(1), issue_url: z.url() })).parse(payload);
+          for (const comment of comments) {
+            const match = /\/repos\/([^/]+)\/([^/]+)\/issues\/([1-9]\d*)$/.exec(new URL(comment.issue_url).pathname);
+            if (match === null || match[1]!.toLowerCase() !== segment(repository.owner).toLowerCase()
+              || match[2]!.toLowerCase() !== segment(repository.name).toLowerCase()) {
+              throw new Error("GitHub timeline manifest issue URL was invalid.");
+            }
+            const number = Number(match[3]);
+            if (!Number.isSafeInteger(number)) throw new Error("GitHub timeline manifest issue number was invalid.");
+            manifest.get(number)?.add(comment.node_id);
+          }
+        }
+        if (!hasNextLink(response.headers.get("link"))) break;
+      }
+    }
+    return manifest;
   }
 
   private async getIssueTimelineCounts(

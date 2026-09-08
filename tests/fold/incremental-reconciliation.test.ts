@@ -124,10 +124,10 @@ describe("incremental reconciliation", () => {
       .toMatchObject({ stateReason: "NOT_PLANNED" });
   });
 
-  it("refreshes legacy evidence before an unchanged timeline can reach the fold", async () => {
+  it.each([1, 2])("refreshes legacy evidence format %s before an unchanged timeline can reach the fold", async (format) => {
     const f = await fixture();
     await f.run();
-    await sql`update repository_reconciliation_evidence set format_version = 1 where repository_id = ${f.id}`;
+    await sql`update repository_reconciliation_evidence set format_version = ${format} where repository_id = ${f.id}`;
     f.issues = [f.issues[0]!];
     f.clock = new Date("2026-09-08T10:05:00Z");
     await f.run();

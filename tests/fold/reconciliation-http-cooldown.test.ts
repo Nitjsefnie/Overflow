@@ -30,8 +30,15 @@ type Failure = {
   headers?: Record<string, string>;
   seconds: number | null;
   disconnect?: boolean;
+  unverified?: boolean;
 };
 const failures: Failure[] = [
+  { name: "REST event manifest secondary limit", operation: "IssueEvents", cursor: null,
+    status: 403, body: { message: "secondary rate limit" }, headers: { "retry-after": "120" }, seconds: 120 },
+  { name: "REST comment manifest secondary limit", operation: "IssueComments", cursor: null,
+    status: 429, body: { message: "secondary rate limit" }, seconds: 3600 },
+  { name: "REST manifest contradicts both GraphQL reads", operation: "IssueEvents", cursor: null,
+    status: 200, body: [], seconds: null, unverified: true },
   { name: "first-page HTTP 403 secondary limit", operation: "RepositoryIssues", cursor: null,
     status: 403, body: { message: "You have exceeded a secondary rate limit." },
     headers: { "x-ratelimit-remaining": "4219" }, seconds: 3600 },
@@ -106,6 +113,24 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
           response.end(JSON.stringify(verifiedRepositoryPayload(fixture.githubRepositoryId, fixture.ownerName)));
           return;
         }
+        const path = new URL(request.url!, "http://fixture").pathname;
+        if (path.endsWith("/issues/events") || path.endsWith("/issues/comments")) {
+          const comments = path.endsWith("/comments");
+          const operation = comments ? "IssueComments" : "IssueEvents";
+          calls.push({ operation, cursor: null });
+          if (changed && operation === failure.operation) {
+            response.writeHead(failure.status, { "Content-Type": "application/json", ...failure.headers });
+            response.end(JSON.stringify(failure.body));
+            return;
+          }
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify((changed ? [1, 2] : [1]).flatMap((number) =>
+            issueTimeline(fixture, number, changed).nodes.filter((node) => (node.__typename === "IssueComment") === comments)
+              .map((node) => comments
+                ? { node_id: node.id, issue_url: `https://api.github.com/repos/${fixture.ownerName}/issues/${number}` }
+                : { node_id: node.id, event: "labeled", issue: { id: issueNode(fixture, number, changed).databaseId, number } }))));
+          return;
+        }
         if (request.method === "GET") {
           calls.push({ operation: "diff", cursor: null });
           response.end(changed ? "changed diff" : "original diff");
@@ -155,7 +180,12 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
       const cooldown = await store.getReconciliationCooldown(fixture.repositoryId);
       console.info("RECONCILIATION_HTTP_COOLDOWN", JSON.stringify({ scenario: failure.name, cooldown }));
       expect(cooldown).toEqual(failure.seconds === null ? null : new Date(instant.getTime() + failure.seconds * 1000));
-      expect((error as Error).cause).toMatchObject({ rateLimited: failure.seconds !== null });
+      if (failure.unverified) {
+        expect((error as Error).cause).toBeInstanceOf(Error);
+        expect((error as Error).cause).not.toHaveProperty("rateLimited");
+      } else {
+        expect((error as Error).cause).toMatchObject({ rateLimited: failure.seconds !== null });
+      }
       expect(calls.slice(baselineCalls)).toContainEqual({ operation: failure.operation, cursor: failure.cursor });
       expect(await materializedHistory()).toEqual(history);
 
