@@ -110,6 +110,8 @@ describe("repository re-derivation", () => {
 
 function fixture(request: Date | null = null, attemptCount = 1) {
   const store = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async <T>(_id: string, work: () => Promise<T>) => work(),
     getRepository: vi.fn<ReconciliationStore["getRepository"]>(async () => ({
       id: "repo-1", githubRepositoryId: 4242, ownerName: "octo/repo", active: true,
@@ -136,6 +138,8 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     store, now: () => now, onBudgetChange: () => {},
     budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),
     github: {
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
       getRepositoryById: async () => ({ id: 4242, owner: "octo", name: "repo", fullName: "octo/repo",
         ownerType: "USER", visibility: "PUBLIC", url: "https://github.com/octo/repo", canAdminister: true }),
       listIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",

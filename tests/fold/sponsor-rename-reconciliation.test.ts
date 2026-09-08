@@ -412,6 +412,8 @@ function difficultyScheme() {
 
 function gateway(ownerName: string, issuesNow: () => readonly GitHubIssue[]): ReconciliationGateway {
   return {
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
     getRepositoryById: verifiedRepositoryAt(ownerName),
     listIssues: async () => issuesNow().map((issue) => ({ ...issue })),
     getPullRequestReviews: async () => [],

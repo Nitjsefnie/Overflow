@@ -47,6 +47,8 @@ function fixture(remaining?: number) {
   const onBudgetChange = vi.fn();
   const fold: ReconciliationDependencies = {
     store: {
+      getReconciliationEvidence: async () => null,
+      getDirtyReconciliationSubjects: async () => [],
       withRepositoryReconciliation: async (_id, work) => work(),
       getRepository: async () => ({ id: "repository-1", githubRepositoryId: 4242, ownerName: "octo/overflow",
         registeredAt: "2026-09-07T09:00:00Z", active: true, difficultyScheme: validDifficultyScheme(),
@@ -61,6 +63,7 @@ function fixture(remaining?: number) {
       failRun: async () => {}, recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
     },
     github: { getRepositoryById: reconcile, listIssues: async () => [],
+      getIssue: async () => null, getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [], getPullRequestDiff: async () => "" },
     onBudgetChange, now: () => now,
     budget: createReconciliationBudgetGate({ store: budgetStore, reserve: 500 }),

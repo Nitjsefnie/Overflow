@@ -465,6 +465,8 @@ function gateway(): ReconciliationGateway {
   ];
   return {
     getRepositoryById: verifiedRepositoryAt(repositoryOwnerName),
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
     listIssues: async () => issues.map((issue) => ({
       ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
     })),
@@ -563,6 +565,8 @@ function selfWorkGateway(): ReconciliationGateway {
   ]);
   return {
     getRepositoryById: verifiedRepositoryAt(selfWorkOwnerName),
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
     listIssues: async () => issues.map((issue) => ({
       ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
     })),
