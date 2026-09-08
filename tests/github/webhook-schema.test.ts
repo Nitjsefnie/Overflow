@@ -1,0 +1,39 @@
+import { describe, expect, it } from "vitest";
+import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+
+const issue = {
+  id: 201, number: 11, state: "closed", updated_at: "2026-09-08T10:00:00Z",
+  title: "Changed title", body: null, html_url: "https://github.com/octo/example/issues/11",
+};
+
+describe("webhook issue views", () => {
+  it.each(["issues", "issue_comment"])("retains validated raw fields for %s", (event) => {
+    expect(parse(event, issue)).toMatchObject({
+      subject: { kind: "ISSUE", id: 201, number: 11 },
+      issue: { state: "CLOSED", updatedAt: "2026-09-08T10:00:00Z", title: "Changed title",
+        body: "", url: "https://github.com/octo/example/issues/11" },
+    });
+  });
+
+  it.each([
+    { state: "merged" }, { state: undefined }, { updated_at: undefined },
+    { updated_at: "yesterday" }, { updated_at: "2026-02-30T10:00:00Z" },
+    { updated_at: "2026-09-08T10:00:00" }, { title: 4 }, { title: undefined },
+    { body: {} }, { body: undefined }, { html_url: "not a URL" }, { html_url: undefined },
+  ])("rejects malformed issue fields %j", (changes) => {
+    expect(parse("issues", { ...issue, ...changes })).toBeNull();
+  });
+
+  it("classifies comments on pull requests as fold-only PR subjects", () => {
+    const delivery = parse("issue_comment", { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } });
+    expect(delivery?.subject).toEqual({ kind: "PULL_REQUEST", id: 201, number: 11 });
+    expect(delivery).not.toHaveProperty("issue");
+  });
+});
+
+function parse(event: string, value: unknown) {
+  return parseGitHubWebhookDelivery(event, "delivery", {
+    action: event === "issues" ? "edited" : "created",
+    repository: { id: 42, full_name: "octo/example" }, issue: value,
+  });
+}

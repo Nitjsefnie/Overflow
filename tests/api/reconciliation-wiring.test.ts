@@ -23,6 +23,7 @@ vi.mock("@/auth", () => ({ auth: readSession }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
 vi.mock("@/lib/fold/postgres-store", () => ({
   PostgresFoldStore: class {
+    async applyIssueView() {}
     async claimDelivery() {
       return { status: "CLAIMED" as const, leaseToken: "lease-1" };
     }
@@ -80,7 +81,8 @@ describe("production reconciliation wiring", () => {
     const body = JSON.stringify({
       action,
       repository: { id: 42, full_name: "octo/example" },
-      issue: { id: 201, number: 11, state: "closed", labels: [] },
+      issue: { id: 201, number: 11, state: "closed", labels: [], updated_at: "2026-09-08T10:00:00Z",
+        title: "Issue", body: null, html_url: "https://github.com/octo/example/issues/11" },
       comment: { body: "unrelated text", user: { login: "unrelated-author" } },
     });
     const signature = createHmac("sha256", secret).update(body).digest("hex");
@@ -200,6 +202,7 @@ function createQueueingStore() {
       outstanding(): string[];
     } = {
     completed,
+    async applyIssueView() {},
     outstanding: () => pending.map((job) => job.repositoryId),
     async claimDelivery() {
       return { status: "CLAIMED" as const, leaseToken: "delivery-lease" };

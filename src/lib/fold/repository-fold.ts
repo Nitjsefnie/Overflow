@@ -49,6 +49,8 @@ export type RepositoryFoldIssue = {
   body: string;
   url: string;
   state: IssueState;
+  /** GitHub's update time for this view, including when reused from evidence. */
+  updatedAt: string;
   createdAt: string;
   /** GraphQL `Issue.closedAt`; null while the issue is open. */
   closedAt: string | null;
@@ -94,6 +96,7 @@ export type FoldIssue = {
   body: string;
   url: string;
   state: IssueState;
+  updatedAt: string;
   ownerGitHubLogin: string;
   openingSourceEventId: string;
   openingSourceActorLogin: string;
@@ -371,6 +374,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       body: issue.body,
       url: issue.url,
       state: issue.state,
+      updatedAt: issue.updatedAt,
       ownerGitHubLogin: opening.ownerGitHubLogin,
       openingLabel: opening.openingLabel,
       openingComparisonPoints: opening.openingComparisonPoints,

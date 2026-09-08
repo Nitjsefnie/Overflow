@@ -99,6 +99,7 @@ function processorDependencies(
 } {
   const enqueueReconciliation = overrides.enqueueReconciliation ?? vi.fn().mockResolvedValue(undefined);
   const store = {
+    applyIssueView: vi.fn().mockResolvedValue(undefined),
     claimDelivery: vi.fn().mockResolvedValue(overrides.claimDelivery ?? claimedLease("lease-1")),
     findRepositoryByGitHubId:
       overrides.findRepositoryByGitHubId ?? vi.fn().mockResolvedValue({ id: "repository", active: true }),

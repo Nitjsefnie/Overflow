@@ -1,8 +1,9 @@
-import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
 
 export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
+  applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void>;
   markProcessed(deliveryId: string, leaseToken: string): Promise<boolean>;
   markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
 };
@@ -19,9 +20,9 @@ export type WebhookDeliveryClaim =
   | { status: "DUPLICATE" };
 
 /**
- * Records the delivery and schedules the repository's fold, rather than folding.
+ * Mirrors known issues immediately and schedules the repository's derived fold.
  *
- * The request only persists delivery and queue state, so the delivery lease taken by
+ * The request only persists the raw issue view, delivery and queue state, so the lease taken by
  * `claimDelivery` covers it outright and nothing has to renew it. The fold
  * itself belongs to the reconciliation worker, which survives this process.
  */
@@ -37,6 +38,9 @@ export async function processWebhook(
   try {
     const repository = await dependencies.store.findRepositoryByGitHubId(delivery.repositoryGitHubId);
     if (repository !== null && repository.active) {
+      if (delivery.subject.kind === "ISSUE" && delivery.issue !== undefined) {
+        await dependencies.store.applyIssueView(repository.id, delivery.subject.id, delivery.issue);
+      }
       await dependencies.enqueueReconciliation(repository.id, delivery);
     }
     const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
