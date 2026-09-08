@@ -60,13 +60,13 @@ describe("registered repository identity verification", () => {
     const { repositoryId } = await registeredRepository();
     await staleTimestamps(repositoryId);
 
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: firstObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: firstObservation }));
     const first = await unavailability(repositoryId);
 
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: laterObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: laterObservation }));
     const confirmed = await unavailability(repositoryId);
 
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_PUBLIC", at: laterObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_PUBLIC", at: laterObservation }));
     const changed = await unavailability(repositoryId);
 
     expect(first).toMatchObject({ unavailable_reason: "NOT_FOUND", unavailable_since: firstObservation });
@@ -77,10 +77,10 @@ describe("registered repository identity verification", () => {
 
   it("writes nothing when a later tick repeats an unchanged unavailability", async () => {
     const { repositoryId } = await registeredRepository();
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: firstObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: firstObservation }));
     await staleTimestamps(repositoryId);
 
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: laterObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_FOUND", at: laterObservation }));
 
     const row = await unavailability(repositoryId);
     expect(row).toMatchObject({ unavailable_reason: "NOT_FOUND", unavailable_since: firstObservation });
@@ -89,14 +89,14 @@ describe("registered repository identity verification", () => {
 
   it("clears an unavailability and writes the verified path and visibility", async () => {
     const { repositoryId } = await registeredRepository();
-    await store.markRepositoryUnavailable({ repositoryId, reason: "NOT_PUBLIC", at: firstObservation });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.markRepositoryUnavailable({ repositoryId, reason: "NOT_PUBLIC", at: firstObservation }));
     await staleTimestamps(repositoryId);
 
-    await store.recordVerifiedRepositoryIdentity({
+    await store.withRepositoryReconciliation(repositoryId, async () => store.recordVerifiedRepositoryIdentity({
       repositoryId,
       ownerName: `identity/renamed-${externalId++}`,
       visibility: "PUBLIC",
-    });
+    }));
 
     const row = await unavailability(repositoryId);
     expect(row).toMatchObject({
@@ -110,10 +110,10 @@ describe("registered repository identity verification", () => {
 
   it("writes nothing when a second verification finds the stored identity already correct", async () => {
     const { repositoryId, ownerName } = await registeredRepository();
-    await store.recordVerifiedRepositoryIdentity({ repositoryId, ownerName, visibility: "PUBLIC" });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.recordVerifiedRepositoryIdentity({ repositoryId, ownerName, visibility: "PUBLIC" }));
     await staleTimestamps(repositoryId);
 
-    await store.recordVerifiedRepositoryIdentity({ repositoryId, ownerName, visibility: "PUBLIC" });
+    await store.withRepositoryReconciliation(repositoryId, async () => store.recordVerifiedRepositoryIdentity({ repositoryId, ownerName, visibility: "PUBLIC" }));
 
     const row = await unavailability(repositoryId);
     expect(row).toMatchObject({
@@ -128,7 +128,7 @@ describe("registered repository identity verification", () => {
   it("still records availability when the verified path is held by another registration", async () => {
     const holder = await registeredRepository();
     const renamed = await registeredRepository();
-    await store.markRepositoryUnavailable({ repositoryId: renamed.repositoryId, reason: "NOT_FOUND", at: firstObservation });
+    await store.withRepositoryReconciliation(renamed.repositoryId, async () => store.markRepositoryUnavailable({ repositoryId: renamed.repositoryId, reason: "NOT_FOUND", at: firstObservation }));
     // Start the stored visibility disagreeing with GitHub, so the write the unique
     // violation falls back to is observable in the column and not just in the reason.
     await sql`update registered_repositories set visibility = 'PRIVATE' where id = ${renamed.repositoryId}`;
@@ -136,11 +136,11 @@ describe("registered repository identity verification", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });
 
     try {
-      await expect(store.recordVerifiedRepositoryIdentity({
+      await expect(store.withRepositoryReconciliation(renamed.repositoryId, async () => store.recordVerifiedRepositoryIdentity({
         repositoryId: renamed.repositoryId,
         ownerName: holder.ownerName,
         visibility: "PUBLIC",
-      })).resolves.toBeUndefined();
+      }))).resolves.toBeUndefined();
     } finally {
       warn.mockRestore();
     }

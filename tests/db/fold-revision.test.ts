@@ -76,7 +76,7 @@ describe("fold revision stamps", () => {
     const [before] = await rowsFor(table, repositoryId);
     const runId = await store.beginRun(repositoryId);
 
-    expect(await store.materialize({ repositoryId, runId, fold })).toEqual({ adds: 0, changes: 0, removals: 0 });
+    expect(await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold }))).toEqual({ adds: 0, changes: 0, removals: 0 });
     expect(await changesFor(runId)).toEqual([]);
     expect(await rowsFor(table, repositoryId)).toEqual([{ ...before, fold_revision: FOLD_REVISION }]);
 
@@ -86,7 +86,7 @@ describe("fold revision stamps", () => {
       await sql`update ${sql(table)} set fold_revision = ${revision} where id = ${row.id}`;
       const [version] = await sql`select xmin::text from ${sql(table)} where id = ${row.id}`;
       const repeatRun = await store.beginRun(repositoryId);
-      expect(await store.materialize({ repositoryId, runId: repeatRun, fold }))
+      expect(await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: repeatRun, fold })))
         .toEqual({ adds: 0, changes: 0, removals: 0 });
       expect(await changesFor(repeatRun)).toEqual([]);
       expect(await sql`select xmin::text from ${sql(table)} where id = ${row.id}`).toEqual([version]);
@@ -112,7 +112,7 @@ describe("fold revision stamps", () => {
     `;
     const runId = await store.beginRun(repositoryId);
 
-    expect(await store.materialize({ repositoryId, runId, fold })).toEqual({ adds: 0, changes: 1, removals: 0 });
+    expect(await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold }))).toEqual({ adds: 0, changes: 1, removals: 0 });
     expect(await changesFor(runId)).toEqual([{
       entity_kind: entity, change_kind: "CHANGE",
       before_state: expect.objectContaining({ [stateKey]: stale }),

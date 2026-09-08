@@ -181,9 +181,9 @@ export type ReconciliationJobOutcome =
  * Excludes a worker's own competing publisher after its lock session is lost.
  *
  * All job runners sharing a store share this record; different stores do not.
- * This is not a write fence and does not fix issue 210, where fencing belongs.
- * A separate process bypasses it entirely, and scripts/reconcile.ts folds
- * directly without claiming a queue lease, so a manual run is outside it too.
+ * PostgresFoldStore separately fences repository publications on the captured
+ * advisory-lock session. A separate process bypasses this local exclusion,
+ * and scripts/reconcile.ts folds directly without claiming a queue lease.
  *
  * A genuinely hung fold keeps its entry and defers that repository as long as
  * it hangs: exclusion costs recovery for that one repository. Before this
