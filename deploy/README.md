@@ -76,10 +76,10 @@ ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/node /usr/local/bin/node
 
 The last command must print `v24.17.0`.
 
-pnpm is needed for installs, migrations and builds, all of which run as root.
-The service never runs pnpm, so the corepack shims go in `/usr/local/sbin`,
-which the unit's `PATH` of `/usr/local/bin:/usr/bin:/bin` does not reach and
-root's default `PATH` does.
+The package manager is needed for installs, migrations and builds, all of which
+run as root. The service never runs it, so the corepack shims go in
+`/usr/local/sbin`, which the unit's `PATH` of `/usr/local/bin:/usr/bin:/bin` does
+not reach and root's default `PATH` does.
 
 ```bash
 ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/corepack /usr/local/sbin/corepack
@@ -119,7 +119,7 @@ there. Populate the file before section 5 — its migration step reads
 ## 5. Build the deployment tree
 
 Clone, install, migrate and build as root, with the production settings loaded
-from the environment file so `pnpm db:migrate` reaches the right database.
+from the environment file so the `db:migrate` script reaches the right database.
 Run these blocks in Bash and stop on a failed command; `set -e` makes a pasted
 block stop too, before a failed build can be switched into service.
 
@@ -165,7 +165,7 @@ being removed.
 and rejects either path separator (`/` or `\`), absolute paths, `.` (zero depth),
 `..` and an existing symlink at the output path. Use a single directory name inside
 the tree, as above, with no `./` prefix or trailing slash. With the variable unset or blank,
-local `pnpm build` still uses `.next`. Do not export
+the local `build` script still uses `.next`. Do not export
 `NEXT_DIST_DIR` for the service or add it to `/etc/overflow/overflow.env`:
 `next start` uses `.next` at runtime, with the variable unset.
 
@@ -210,8 +210,8 @@ chmod -R u=rwX,g=rX,o= /srv/overflow
 ```
 
 The install commands here and in section 10 set
-`npm_config_package_import_method=copy` for that pnpm invocation, importing
-package files into private inodes instead of hardlinking the shared store.
+`npm_config_package_import_method=copy` for each invocation, importing package
+files into private inodes instead of hardlinking the shared store.
 Ownership and mode resets therefore leave the store and unrelated checkouts'
 package files untouched. Existing deployments must first complete section 10's
 one-time dependency migration: an unchanged install does not replace old
@@ -232,7 +232,7 @@ chmod -R u=rwX,g=rX,o= "$release/cache"
 pnpm release:switch /srv/overflow "$release"
 ```
 
-`pnpm release:switch <tree> <releaseDir>` runs
+The `release:switch` package script takes `<tree> <releaseDir>` and runs
 `node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
 is relative to the tree. The resolved directory must be a direct child of the
 canonical tree, whether the argument is relative, absolute or a symlink alias.
@@ -381,8 +381,8 @@ Restrictions only bite on the code paths that use them, so exercise the
 application through the browser before calling the switch done: sign in with
 GitHub, open the dashboard, and register a repository. That is what makes DNS
 resolution, an outbound HTTPS call to GitHub and a database write happen inside
-the sandboxed process; `pnpm reconcile` does not, because it runs as root
-outside the unit and so is subject to none of these restrictions. The unit sets
+the sandboxed process; the `reconcile` package script does not, because it runs
+as root outside the unit and so is subject to none of these restrictions. The unit sets
 `SystemCallErrorNumber=EPERM`, so a syscall the filter blocks returns an error
 to the process instead of killing it. That buys resilience, not visibility: a
 seccomp errno action logs nothing of its own, and it is the default kill action
@@ -619,8 +619,8 @@ test "$upgrade_status" -eq 0 || exit "$upgrade_status"
 **ONE-TIME dependency migration for existing deployments**
 
 Before the first deploy using copy imports, remove the old `node_modules` and
-reinstall it with the copy setting. pnpm otherwise reuses unchanged packages,
-leaving their existing hardlinks intact. Run this once in a maintenance window:
+reinstall it with the copy setting. The package manager otherwise reuses
+unchanged packages, leaving their existing hardlinks intact. Run this once in a maintenance window:
 removing dependencies can interrupt requests from the running service. After
 the install succeeds, run the standing procedure above to build, restore tree
 ownership and permissions, restart and verify the service. Do not include this
@@ -645,7 +645,8 @@ before the switch.
 Retain the upgrade log and printed exit status with the deployment record. A
 nonzero upgrade leaves the new release serving but the deployment incomplete;
 inspect each sanitized `failure` code, restore sponsor credentials or hook admin
-access as needed, and rerun `pnpm webhooks:upgrade` with the same environment.
+access as needed, and rerun the `webhooks:upgrade` package script with the same
+environment.
 `subscription: VERIFIED` and `queue: FAILED` is partial completion: the rerun
 verifies the hook again and retries repair queueing. Do not report the upgrade as
 successful from a restart or startup sweep. Queue acceptance does not establish
@@ -694,9 +695,9 @@ LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1 \
 pnpm release:prune /srv/overflow --keep 3
 ```
 
-`pnpm release:prune <tree> [--keep N]` runs
+The `release:prune` package script takes `<tree> [--keep N]` and runs
 `node scripts/release.ts prune <tree> [--keep N]`; pass the arguments directly,
-without an extra `--` separator, for both pnpm release commands. `--keep` must
+without an extra `--` separator, for both release package scripts. `--keep` must
 be a positive integer and defaults to `3`. Like the listing above, the script
 enumerates only real directories directly inside the tree whose names match the
 release grammar in section 5, ignoring files, symlinks and all other directory
@@ -712,8 +713,8 @@ build a still-running process has loaded, which is another reason to restart
 and verify first.
 
 Release-directory builds fix the build's writes under the serving output path;
-they do not isolate `git pull` or `pnpm install`, which still change the live
-checkout and `node_modules`. Testing on this host found that a same-lockfile
+they do not isolate `git pull` or dependency installation, which still change the
+live checkout and `node_modules`. Testing on this host found that a same-lockfile
 install and a live `git checkout` did not disturb a running server: all
 application entry points are loaded at startup. That does not cover every lazy
 internal dependency. With one compiled package removed, a cold `/_next/image`
