@@ -72,6 +72,15 @@ export type ReconciliationSweepSchedule = {
 
 export const RECONCILIATION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+// Instrumentation and routes are separately bundled by Next.js. Keep the actual
+// startup decision shared in this process, without persisting it across restarts.
+const startupRecoverySkippedKey = Symbol.for("overflow.reconciliation.startup-recovery-skipped");
+type StartupRecoveryGlobal = typeof globalThis & { [startupRecoverySkippedKey]?: boolean };
+
+export function wasStartupRecoverySkipped(): boolean {
+  return (globalThis as StartupRecoveryGlobal)[startupRecoverySkippedKey] === true;
+}
+
 /**
  * Whether this process should run the reconciliation background work at all —
  * both the queue worker and the sweep that feeds it.
@@ -191,7 +200,7 @@ function logRepositoryFailure(repositoryId: string, error: unknown): void {
 }
 
 /**
- * Runs a sweep now and then on a fixed interval.
+ * Runs a sweep now (unless explicitly suppressed) and then on a fixed interval.
  *
  * The immediate sweep is what queues a repository registered before ingestion
  * existed, and it also repairs any webhook delivery that was missed while the
@@ -237,7 +246,17 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
     })();
   };
 
-  sweep();
+  // Temporary deploy override until issue 196 makes startup recovery incremental.
+  // Exact comparison keeps unset, malformed and alternative spellings recovery-on.
+  const skipStartup = process.env.OVERFLOW_SKIP_STARTUP_RECONCILIATION === "1";
+  (globalThis as StartupRecoveryGlobal)[startupRecoverySkippedKey] = skipStartup;
+  if (skipStartup) {
+    console.warn(
+      "OVERFLOW_SKIP_STARTUP_RECONCILIATION=1: startup recovery sweep SKIPPED; missed deliveries remain unrecovered until a later reconciliation",
+    );
+  } else {
+    sweep();
+  }
   armSweepInterval(schedule, sweep, readSweepInterval(schedule));
 }
 
