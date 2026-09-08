@@ -8,6 +8,51 @@ describe("mapWithConcurrency", () => {
     expect(result).toStrictEqual([undefined]);
   });
 
+  it("starts no operations when reading the input length throws", async () => {
+    const failure = new Error("length failed");
+    const calls: number[] = [];
+    const inputs = new Proxy([0, 1], {
+      get(target, property, receiver) {
+        if (property === "length") throw failure;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    await expect(mapWithConcurrency(inputs, 2, async (input) => {
+      calls.push(input);
+      return input;
+    })).rejects.toBe(failure);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not read the input length after operations start", async () => {
+    const failure = new Error("length read during an operation");
+    const record: string[] = [];
+    const gates = [deferred<void>(), deferred<void>()];
+    const inputs = new Proxy([0, 1], {
+      get(target, property, receiver) {
+        if (property === "length" && record.length > 0) throw failure;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const outcome = mapWithConcurrency(inputs, 2, async (input) => {
+      record.push(`start ${input}`);
+      await gates[input].promise;
+      record.push(`settle ${input}`);
+      return input * 2;
+    }).then((values) => ({ values }), (error: unknown) => ({ error }));
+
+    try {
+      expect([...record]).toEqual(["start 0", "start 1"]);
+      for (const gate of gates) gate.resolve();
+      expect(await outcome).toEqual({ values: [0, 2] });
+      expect(record).toEqual(["start 0", "start 1", "settle 0", "settle 1"]);
+    } finally {
+      for (const gate of gates) gate.resolve();
+      await outcome;
+    }
+  });
+
   it("stops starting queued calls after a rejection", async () => {
     const ongoing = deferred<number>();
     const failing = deferred<number>();
