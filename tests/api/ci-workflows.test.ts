@@ -5,17 +5,49 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 type Workflow = {
-  on: Record<string, { branches?: string[]; paths?: string[] } | null>;
+  on: Record<string, { branches?: string[]; paths?: string[]; types?: string[] } | null>;
   permissions: Record<string, string>;
   concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: Record<string, {
+    if?: string;
+    "runs-on"?: string;
+    "timeout-minutes"?: number;
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
-    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }>;
+    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>;
   }>;
 };
 
 describe("GitHub Actions release gates", () => {
+  it("admits PRs using only base code with scoped writes and serialized corrective edits", async () => {
+    const workflow = await readWorkflow("pr-gate.yml");
+    expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened"] } });
+    expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write", issues: "read" });
+    expect(workflow.concurrency).toEqual({
+      group: "pr-gate-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": false,
+    });
+    expect(Object.keys(workflow.jobs)).toEqual(["gate"]);
+    const gate = workflow.jobs.gate!;
+    expect(gate.if).toBe("github.event.pull_request.user.type != 'Bot'");
+    expect(gate["runs-on"]).toBe("ubuntu-latest");
+    expect(gate["timeout-minutes"]).toBe(5);
+    expect(gate.steps).toHaveLength(2);
+    const [checkout, validate] = gate.steps;
+    expect(checkout?.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
+    // pull_request_target's default checkout resolves to the base repository/ref.
+    expect(checkout?.with).toEqual({ "persist-credentials": false });
+    expect(checkout?.run).toBeUndefined();
+    expect(validate?.uses).toBeUndefined();
+    expect(validate?.run).toBe("python3 scripts/ci/pr_gate.py");
+    expect(validate?.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      REPO: "${{ github.repository }}",
+      PR: "${{ github.event.pull_request.number }}",
+      ACTOR: "${{ github.event.pull_request.user.login }}",
+    });
+  });
+
   it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
     const workflow = await readWorkflow("ci.yml");
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
