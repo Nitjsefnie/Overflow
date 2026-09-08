@@ -59,6 +59,10 @@ describe("upgrading actual persisted registrations", () => {
     process.env.GITHUB_WEBHOOK_SECRET = "comment-secret";
     try {
       for (const [event, action] of [["issues", "edited"], ["issue_comment", "created"], ["issue_comment", "edited"], ["issue_comment", "deleted"]]) {
+        // Each delivery must create both effects itself; an earlier issue
+        // event must not conceal a comment whose queue operation was skipped.
+        await sql`delete from repository_reconciliation_jobs where repository_id = ${registered!.id}`;
+        await sql`delete from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`;
         const body = JSON.stringify({ action, repository: { id: 45, full_name: "comments/current" },
           issue: { id: 201, number: 11, state: "closed", labels: [] },
           comment: { body: "unrelated text", user: { login: "other-author" } },
