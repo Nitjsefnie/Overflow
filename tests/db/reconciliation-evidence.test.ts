@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { GitHubIssue } from "@/lib/github/types";
+import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -30,6 +31,52 @@ afterAll(async () => {
 });
 
 describe("durable reconciliation evidence", () => {
+  // Mutants: DROP_SUBJECT_ID, IGNORE_MERGED_PR_REVIEW, FOREIGN_NUMBER_COLLISION.
+  it("persists issue and merged-PR review invalidations independently per repository", async () => {
+    const one = await materializeRepositoryFixture(sql);
+    const two = await materializeRepositoryFixture(sql);
+    const issue = await delivery(one.repositoryId, "ISSUE");
+    const review = await delivery(one.repositoryId, "PULL_REQUEST");
+    await one.store.enqueueWebhookReconciliation(one.repositoryId, issue);
+    await one.store.enqueueWebhookReconciliation(one.repositoryId, review);
+    const captured = await one.store.getDirtyReconciliationSubjects(one.repositoryId);
+    await one.store.enqueueWebhookReconciliation(one.repositoryId, review);
+    await two.store.enqueueWebhookReconciliation(two.repositoryId, await delivery(two.repositoryId, "ISSUE"));
+    const latest = await one.store.getDirtyReconciliationSubjects(one.repositoryId);
+    expect(latest.map(({ kind, id, number }) => ({ kind, id, number }))).toEqual([
+      { kind: "ISSUE", id: 101, number: 1 }, { kind: "PULL_REQUEST", id: 201, number: 1 },
+    ]);
+    expect(latest[1]!.generation).toBeGreaterThan(captured[1]!.generation);
+    expect(await sql`select repository_id, reason from repository_reconciliation_jobs order by repository_id`)
+      .toEqual([one.repositoryId, two.repositoryId].sort().map((repository_id) => ({ repository_id, reason: "WEBHOOK" })));
+    await one.store.materialize({ repositoryId: one.repositoryId, runId: await one.store.beginRun(one.repositoryId),
+      fold: one.fold, synchronization: { ...synchronization(), dirtySubjects: captured } });
+    expect(await one.store.getDirtyReconciliationSubjects(one.repositoryId)).toEqual([latest[1]]);
+    expect(await two.store.getDirtyReconciliationSubjects(two.repositoryId)).toHaveLength(1);
+    await expect(one.store.enqueueWebhookReconciliation(one.repositoryId, await delivery(two.repositoryId, "ISSUE")))
+      .rejects.toThrow(/repository/i);
+  });
+
+  // Mutants: ENQUEUE_BEFORE_DIRTY_WRITE, CACHE_OUTSIDE_TRANSACTION.
+  it.each(["repository_reconciliation_dirty_subjects", "repository_reconciliation_jobs"])(
+    "commits neither invalidation nor enqueue when %s fails", async (table) => {
+      const { store, repositoryId } = await materializeRepositoryFixture(sql);
+      const event = await delivery(repositoryId, "ISSUE");
+      await sql`create function reject_webhook_test_write() returns trigger language plpgsql as $$
+        begin raise exception 'injected webhook write failure'; end $$`;
+      await sql`create trigger reject_webhook_test_write before insert on ${sql(table)}
+        for each row execute function reject_webhook_test_write()`;
+      try {
+        await expect(store.enqueueWebhookReconciliation(repositoryId, event)).rejects.toThrow(/injected webhook write failure/);
+      } finally {
+        await sql`drop trigger reject_webhook_test_write on ${sql(table)}`;
+        await sql`drop function reject_webhook_test_write()`;
+      }
+      expect(await store.getDirtyReconciliationSubjects(repositoryId)).toEqual([]);
+      expect(await sql`select id from repository_reconciliation_jobs where repository_id = ${repositoryId}`).toEqual([]);
+    },
+  );
+
   // Mutant: RESTART_LOSES_CACHE; derived rows must never stand in for upstream evidence.
   it("starts cold even when derived rows exist, and persists complete evidence across store restarts", async () => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
@@ -156,4 +203,11 @@ async function dirty(repositoryId: string, id: number): Promise<number> {
     on conflict (repository_id, kind, github_subject_id) do update
     set generation = nextval('repository_reconciliation_dirty_generation') returning generation`;
   return Number(row.generation);
+}
+
+async function delivery(repositoryId: string, kind: "ISSUE" | "PULL_REQUEST"): Promise<GitHubWebhookDelivery> {
+  const [repository] = await sql`select github_repository_id, owner_name from registered_repositories where id = ${repositoryId}`;
+  return { deliveryId: `delivery-${repositoryId}-${kind}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
+    action: kind === "ISSUE" ? "edited" : "dismissed", repositoryGitHubId: Number(repository.github_repository_id),
+    repositoryFullName: repository.owner_name, subject: { kind, id: kind === "ISSUE" ? 101 : 201, number: 1 } };
 }

@@ -946,6 +946,23 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     `;
   }
 
+  public async enqueueWebhookReconciliation(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<void> {
+    await this.sql.begin(async (transaction) => {
+      const [repository] = await transaction`select id from registered_repositories
+        where id = ${repositoryId} and github_repository_id = ${delivery.repositoryGitHubId}`;
+      if (repository === undefined) throw new Error("Webhook repository identity did not match.");
+      const subject = delivery.subject;
+      await transaction`insert into repository_reconciliation_dirty_subjects
+        (repository_id, kind, github_subject_id, subject_number)
+        values (${repositoryId}, ${subject.kind}, ${subject.id}, ${subject.number})
+        on conflict (repository_id, kind, github_subject_id) do update
+        set subject_number = excluded.subject_number, generation = excluded.generation`;
+      await transaction`insert into repository_reconciliation_jobs (repository_id, reason)
+        values (${repositoryId}, 'WEBHOOK') on conflict (repository_id) do update
+        set ${this.reconciliationJobConflictUpdate()}`;
+    });
+  }
+
   public async requestRepositoryRederivation(repositoryId: string, at: Date): Promise<void> {
     // The generation names each request even when its informational timestamp
     // is equal to or earlier than an existing request's.

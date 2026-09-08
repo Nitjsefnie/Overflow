@@ -9,7 +9,7 @@ export type WebhookDeliveryStore = {
 
 export type WebhookProcessorDependencies = {
   store: WebhookDeliveryStore;
-  enqueueReconciliation(repositoryId: string): Promise<unknown>;
+  enqueueReconciliation(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<unknown>;
 };
 
 export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" };
@@ -21,7 +21,7 @@ export type WebhookDeliveryClaim =
 /**
  * Records the delivery and schedules the repository's fold, rather than folding.
  *
- * The whole request is now two short queries, so the delivery lease taken by
+ * The request only persists delivery and queue state, so the delivery lease taken by
  * `claimDelivery` covers it outright and nothing has to renew it. The fold
  * itself belongs to the reconciliation worker, which survives this process.
  */
@@ -37,7 +37,7 @@ export async function processWebhook(
   try {
     const repository = await dependencies.store.findRepositoryByGitHubId(delivery.repositoryGitHubId);
     if (repository !== null && repository.active) {
-      await dependencies.enqueueReconciliation(repository.id);
+      await dependencies.enqueueReconciliation(repository.id, delivery);
     }
     const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
     return { status: markedProcessed ? "PROCESSED" : "DUPLICATE" };

@@ -3598,6 +3598,7 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresFoldStore(sql);
     const delivery = {
       deliveryId: "delivery-stale-reclaim",
+      subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
@@ -3626,6 +3627,7 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresFoldStore(sql);
     const delivery = {
       deliveryId: "delivery-owner-check",
+      subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
@@ -3654,6 +3656,7 @@ describe("initial PostgreSQL materialization", () => {
     const store = new PostgresFoldStore(sql);
     const delivery = {
       deliveryId: "delivery-retryable",
+      subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
