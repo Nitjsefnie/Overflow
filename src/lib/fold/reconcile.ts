@@ -2,6 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { isGitHubRateLimitError } from "@/lib/github/errors";
+import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
@@ -162,15 +163,21 @@ async function reconcileRepositoryWhileCoordinated(
       visibility: verified.visibility,
     });
     const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
-    const githubIssues = await dependencies.github.listIssues(reference, {
-      timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
-      timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
-    });
-    const pullRequestEvidence = await collectPullRequestEvidence(
-      dependencies.github,
-      reference,
-      repository,
-      githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
+    const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
+      () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
+      async () => {
+        const githubIssues = await dependencies.github.listIssues(reference, {
+          timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+          timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
+        });
+        const pullRequestEvidence = await collectPullRequestEvidence(
+          dependencies.github,
+          reference,
+          repository,
+          githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
+        );
+        return { githubIssues, pullRequestEvidence };
+      },
     );
     // The same boundary the evidence fetch draws: an author is looked up
     // because their pull request might be credited here, and a pull request in
@@ -210,6 +217,11 @@ async function reconcileRepositoryWhileCoordinated(
       removed: deltas.removals,
     };
   } catch (error) {
+    if (error instanceof GraphqlBudgetHeld) {
+      await dependencies.store.failRun(runId, "Reconciliation held for GraphQL budget.");
+      return { repositoryId, runId: null, skipped: true, budgetHeldUntil: error.resetAt,
+        adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
+    }
     // The stored message stays fixed: an upstream error can carry the sponsor's
     // GitHub token in a URL, and reconciliation_runs is read by the product.
     // The cause reaches the service log here and rides on the thrown error, so

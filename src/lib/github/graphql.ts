@@ -1,5 +1,6 @@
 import { classifyGitHubGraphqlRateLimit, classifyGitHubRateLimit, GitHubApiError, type GitHubRateLimitDetails } from "@/lib/github/errors";
 import { gitHubGraphqlBudget, readGraphqlBudgetPayload, type GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
+import { checkGraphqlRequestBudget, GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 
 const defaultGraphqlEndpoint = "https://api.github.com/graphql";
 const defaultTimeoutMs = 10_000;
@@ -162,6 +163,7 @@ export class GitHubGraphqlClient {
     }, this.timeoutMs);
 
     try {
+      checkGraphqlRequestBudget();
       const response = await this.fetchImplementation(this.endpoint, {
         method: "POST",
         headers: {
@@ -203,9 +205,11 @@ export class GitHubGraphqlClient {
         // Budget observation must never fail an otherwise successful query.
       }
 
+      // Latch a newly observed hold even on the final page, before it can fold.
+      checkGraphqlRequestBudget();
       return payload.data;
     } catch (error) {
-      if (error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) {
+      if (error instanceof GraphqlBudgetHeld || error instanceof GitHubApiError || error instanceof GitHubGraphqlRequestError) {
         throw error;
       }
 
