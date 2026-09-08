@@ -527,6 +527,32 @@ considered explicitly.
 
 ## 10. Deploying a new revision
 
+Startup recovery is on by default. Before every deploy, review whether the
+revision can affect fold-derived values. Changes to fold behavior **must not
+suppress the startup pass**; leave `OVERFLOW_SKIP_STARTUP_RECONCILIATION` unset
+in `/etc/overflow/overflow.env`. The same recovery-on default applies whenever
+the impact is uncertain.
+
+For a reviewed deploy that cannot affect fold-derived values (for example, a
+copy-only change), an operator may deliberately add
+`OVERFLOW_SKIP_STARTUP_RECONCILIATION=1` to `/etc/overflow/overflow.env` before
+the restart below. Only the exact value `1` suppresses the immediate startup
+sweep; unset, blank, malformed and all other values run it. A shell export in
+the deploy terminal does not configure the systemd service. This opt-out leaves
+the six-hour sweep, queued work, webhook-triggered reconciliation and manual
+reconciliation running normally, but missed deliveries may remain unrecovered
+until a later reconciliation.
+
+After restart, verify the warning naming `OVERFLOW_SKIP_STARTUP_RECONCILIATION`
+in the service journal. An authenticated moderator can also read
+`GET /api/moderation/rederivation`: `startupRecoverySkipped` records whether
+this process skipped its startup recovery pass, alongside the existing row
+staleness counts. It remains true after later sweeps; it is startup history,
+not a claim that every repository is still stale. Remove the override from
+the environment file after the chosen restart so the next restart defaults to
+recovery-on. Remove this temporary override with issue 196, when startup
+reconciliation becomes incremental.
+
 Install, migrate and build run as root inside the tree. Only the service runs as
 `overflow`, and the ownership reset afterwards is what keeps it that way: a
 build writes new files as root, and the new cache has to be handed back while

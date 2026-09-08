@@ -8,6 +8,7 @@ import {
 } from "@/app/api/moderation/route";
 import type { UserRole } from "@/lib/db/types";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { wasStartupRecoverySkipped } from "@/lib/fold/sweep";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
   RepositoryRederivationService,
@@ -55,7 +56,7 @@ export function createRederivationGetHandler(dependencies: RederivationRouteDepe
       const rederivation = await (await dependencies.createService()).listRederivationStatus(
         session.user,
       );
-      return Response.json({ rederivation });
+      return Response.json({ rederivation, startupRecoverySkipped: wasStartupRecoverySkipped() });
     } catch (error) {
       return moderationErrorResponse(error);
     }
