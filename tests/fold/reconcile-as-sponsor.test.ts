@@ -197,7 +197,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     }
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
   });
-  it("records the default sponsor gateway's successful GraphQL request under its account id", async () => {
+  it("records the default sponsor gateway's low response under its account id and holds the fold", async () => {
     const informed = vi.spyOn(console, "info").mockImplementation(() => {});
     const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -205,21 +205,29 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     Reflect.set(globalThis, budgetKey, createGitHubGraphqlBudgetStore());
     const harness = createHarness({ active: true, accessToken: "sponsor-token" });
     harness.store.findUsersByGitHubUserIds = async () => [];
-    harness.store.materialize = async () => ({ adds: 0, changes: 0, removals: 0 });
+    harness.store.materialize = vi.fn(async () => ({ adds: 0, changes: 0, removals: 0 }));
     const request = vi.fn<typeof fetch>(async (input) => String(input).endsWith("/graphql")
       ? Response.json({ data: { rateLimit: { remaining: 42, resetAt: "2026-09-07T11:00:00Z" },
         repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } })
       : Response.json({ id: 4242, name: "repository", full_name: "example/repository", private: false,
         html_url: "https://github.com/example/repository", owner: { login: "example", type: "User" }, permissions: { admin: true } }));
     vi.stubGlobal("fetch", request);
-    await expect(reconcileRepositoryAsSponsor(harness.store, "repo-1")).resolves.toMatchObject({ skipped: false });
+    await expect(reconcileRepositoryAsSponsor(harness.store, "repo-1")).resolves.toMatchObject({
+      skipped: true, budgetHeldUntil: new Date("2026-09-07T11:00:00Z"),
+    });
+    expect(harness.store.materialize).not.toHaveBeenCalled();
+    expect(harness.calls).toContain("failRun");
+    expect(harness.calls).not.toContain("completeRun");
     expect(request).toHaveBeenCalledTimes(2);
     expect(gitHubGraphqlBudget().owners()).toEqual(["sponsor-1"]);
     expect(gitHubGraphqlBudget().read("sponsor-1")?.remaining).toBe(42);
     expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
       owner: "sponsor-1", state: "UNKNOWN", remaining: undefined, reserve: 500, resetAt: undefined,
     });
-    expect(warned).not.toHaveBeenCalled();
+    expect(warned).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      owner: "sponsor-1", state: "BELOW_RESERVE", remaining: 42, reserve: 500,
+      resetAt: new Date("2026-09-07T11:00:00Z"),
+    });
   });
 
   it("continues to healthy B after deferring A and admits A at its own reset", async () => {
