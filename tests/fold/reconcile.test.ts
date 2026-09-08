@@ -15,6 +15,18 @@ import { assertClosingPullRequestQuery } from "../support/closing-pull-request-q
 import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 describe("reconcileRepository", () => {
+  it("enables bounded timeline verification from the repository catalogs", async () => {
+    const dependencies = reconciliationDependencies();
+    await reconcileRepository(dependencies, "repository");
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith(
+      { owner: "octo", name: "example" },
+      {
+        timelineCriticalLabels: new Set(Array.from({ length: 10 }, (_, index) => `delivered/${index + 1}`)),
+        timelineWatchedLabels: new Set(["M"]),
+      },
+    );
+  });
+
   it.each([120, 0, null])("records only rate-limit cooldowns with retryAfterSeconds=%s from the injected clock", async (retryAfterSeconds) => {
     const now = () => new Date("2030-01-02T03:04:05.678Z");
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -120,6 +132,7 @@ describe("reconcileRepository", () => {
     expect(requests).toEqual([
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: null } },
       { operation: "RepositoryIssues", variables: { owner: "octo", name: "example", cursor: "issues-next" } },
+      { operation: "IssueTimelineCounts", variables: { owner: "octo", name: "example", number3: 3, number1: 1, number2: 2 } },
       // Every issue page is collected before any issue is read, so the per-issue
       // timeline reads follow both pages, in the order the nodes arrived.
       ...[3, 1, 2].map((issueNumber) => (
@@ -610,7 +623,7 @@ describe("reconcileRepository", () => {
         changes: 0,
         removals: 0,
       });
-      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, undefined);
+      expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({ timelineWatchedLabels: new Set(["M"]) }));
       expect(materialize).toHaveBeenCalledOnce();
     },
   );
@@ -630,7 +643,7 @@ describe("reconcileRepository", () => {
     await reconcileRepository(dependencies, "repository");
 
     const reference = { owner: "new-owner", name: "repo" };
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference, undefined);
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith(reference, expect.objectContaining({ timelineWatchedLabels: new Set(["M"]) }));
     expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getRepositoryById).toHaveBeenCalledWith(5001);
@@ -694,7 +707,7 @@ describe("reconcileRepository", () => {
       visibility: "PUBLIC",
     });
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
-    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, undefined);
+    expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({ timelineWatchedLabels: new Set(["M"]) }));
     expect(dependencies.store.materialize).toHaveBeenCalledOnce();
   });
 
@@ -1127,6 +1140,11 @@ function pagedReconciliationGateway(
             nodes,
             pageInfo: variables.cursor === null ? { hasNextPage: true, endCursor: "issues-next" } : pageInfo,
           } } } });
+        }
+        if (operation === "IssueTimelineCounts") {
+          return Response.json({ data: { repository: Object.fromEntries([1, 2, 3].map((number) => [
+            `i${number}`, { databaseId: 100 + number, timelineItems: { totalCount: timelineNodes(number).length } },
+          ])) } });
         }
         if (operation === "IssueTimeline") {
           return Response.json({ data: { repository: { issue: { timelineItems: {

@@ -224,8 +224,10 @@ async function reconcileRepositoryWhileCoordinated(
       const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
         () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
         async () => {
-          const changed = new Map((await dependencies.github.listIssues(reference, full ? undefined : {
-            since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString(),
+          const changed = new Map((await dependencies.github.listIssues(reference, {
+            ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
+            timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+            timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
           })).map((issue) => [issue.id, issue]));
           const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
           if (!full) {

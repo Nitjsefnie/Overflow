@@ -35,8 +35,8 @@ export type GitHubGatewayOptions = {
   owner?: string;
 };
 
-/** Label controls opt into targeted reads, whose other nested timelines can
- * silently omit history/comments. A since-only scan reads every timeline exactly.
+/** Label controls opt into bulk timelines checked against independent counts.
+ * A since-only scan reads every timeline exactly.
  */
 export type GitHubIssueListOptions = {
   since?: string;
@@ -132,6 +132,7 @@ export class GitHubGateway {
       }
     }
     const targeted = options?.timelineCriticalLabels !== undefined || options?.timelineWatchedLabels !== undefined;
+    const counts = targeted ? await this.getIssueTimelineCounts(repository, [...unique.values()]) : null;
     const issues: GitHubIssue[] = [];
     for (const node of unique.values()) {
       const [labels, timeline, closingPullRequests] = await Promise.all([
@@ -142,11 +143,19 @@ export class GitHubGateway {
       // Check both fully assembled connections. A nested timeline can claim it is
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
-      const suspect = targeted && node.timelineItems !== undefined && labels.some((label) =>
+      const expectedCount = counts?.get(node.number);
+      const matchesCount = (value: typeof timeline) => {
+        const ids = [...value.history, ...value.comments].map(({ id }) => id);
+        return ids.length === expectedCount && new Set(ids).size === expectedCount;
+      };
+      const suspect = targeted && (!matchesCount(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
-      );
+      )));
       const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
+      if (targeted && !matchesCount(authoritativeTimeline)) {
+        throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
+      }
       issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
     }
     return issues;
@@ -513,6 +522,41 @@ export class GitHubGateway {
     return page;
   }
 
+  private async getIssueTimelineCounts(
+    repository: GitHubRepositoryReference,
+    issues: readonly GitHubGraphqlIssueNode[],
+  ): Promise<Map<number, number>> {
+    const counts = new Map<number, number>();
+    // Count-only queries with 100 distinct issues also degrade. Keep these reads
+    // independent of the bulk connection and bounded to 20 issue lookups.
+    for (let offset = 0; offset < issues.length; offset += 20) {
+      const batch = issues.slice(offset, offset + 20);
+      const variables: Record<string, string | number> = { owner: repository.owner, name: repository.name };
+      const fields = batch.map((issue) => {
+        variables[`number${issue.number}`] = issue.number;
+        return `i${issue.number}: issue(number: $number${issue.number}) {
+          databaseId
+          timelineItems(first: 0, itemTypes: ${issueTimelineItemTypes}) { totalCount }
+        }`;
+      });
+      const data = await this.graphql.query<{
+        repository: Record<string, { databaseId: number; timelineItems: { totalCount: number } } | null> | null;
+      }>(`query IssueTimelineCounts($owner: String!, $name: String!, ${batch.map((issue) => `$number${issue.number}: Int!`).join(", ")}) {
+        rateLimit { cost limit remaining resetAt }
+        repository(owner: $owner, name: $name) { ${fields.join("\n")} }
+      }`, variables);
+      for (const issue of batch) {
+        const node = data.repository?.[`i${issue.number}`];
+        const count = node?.timelineItems?.totalCount;
+        if (node?.databaseId !== issue.databaseId || !Number.isSafeInteger(count) || count === undefined || count < 0) {
+          throw new Error(`GitHub issue ${issue.number} timeline completeness count was invalid.`);
+        }
+        counts.set(issue.number, count);
+      }
+    }
+    return counts;
+  }
+
   private async getIssueTimeline(
     repository: GitHubRepositoryReference,
     issueNumber: number,
@@ -775,6 +819,8 @@ type GitHubGraphqlReviewDismissedEventNode = {
   review: { databaseId: number | null } | null;
 };
 
+const issueTimelineItemTypes = "[LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]";
+
 const issueFields = `
           databaseId
           number
@@ -814,7 +860,7 @@ const issueFields = `
           }
           timelineItems(
             first: 50
-            itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
+            itemTypes: ${issueTimelineItemTypes}
           ) {
             nodes {
               __typename
@@ -914,7 +960,7 @@ const issueTimelineQuery = `
         timelineItems(
           first: 100
           after: $cursor
-          itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT]
+          itemTypes: ${issueTimelineItemTypes}
         ) {
           nodes {
             __typename

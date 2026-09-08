@@ -1914,6 +1914,77 @@ describe("GitHubGateway issue timeline query shape", () => {
     author: { login: "sponsor", databaseId: 4242 }, body: "settled: 6 because of the delivered work",
   };
 
+  it.each(["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "IssueComment"])(
+    "repairs a missing %s with no standing catalog label using an independent count",
+    async (kind) => {
+      const truth = [
+        openingEvent(1),
+        settledEvent,
+        { ...settledEvent, id: "removed-label", __typename: "UnlabeledEvent" },
+        { ...settledEvent, id: "assignment", __typename: "AssignedEvent", assignee: { login: "worker" } },
+        { ...settledEvent, id: "unassignment", __typename: "UnassignedEvent", assignee: { login: "worker" } },
+        rationale,
+      ];
+      const nested = truth.filter((node) => node.__typename !== kind);
+      const operations: string[] = [];
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async (_input, init) => {
+          const { query } = JSON.parse(String(init?.body));
+          const operation = /query (\w+)/.exec(query)![1]!;
+          operations.push(operation);
+          if (operation === "RepositoryIssues") {
+            return Response.json({ data: { repository: { issues: { nodes: [{
+              ...issueNode(101, 1, "Removed catalog", { nodes: [], pageInfo }),
+              timelineItems: { nodes: nested, totalCount: nested.length, pageInfo },
+            }], pageInfo } } } });
+          }
+          if (operation === "IssueTimelineCounts") {
+            return Response.json({ data: { repository: { i1: { databaseId: 101, timelineItems: { totalCount: 6 } } } } });
+          }
+          return timelineResponse(truth);
+        },
+      });
+      const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+      expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1", "settled-event", "removed-label", "assignment", "unassignment"]);
+      expect(issue?.comments.map(({ id }) => id)).toEqual(["rationale-node"]);
+      expect(operations).toEqual(["RepositoryIssues", "IssueTimelineCounts", "IssueTimeline"]);
+    },
+  );
+
+  it.each(["missing count", "wrong identity", "short exact read", "duplicate masks loss"])(
+    "refuses unverified timeline evidence: %s",
+    async (failure) => {
+      const gateway = new GitHubGateway({
+        accessToken: "test-access-token",
+        fetch: async (_input, init) => {
+          const { query } = JSON.parse(String(init?.body));
+          if (query.includes("query RepositoryIssues")) {
+            return Response.json({ data: { repository: { issues: { nodes: [{
+              ...issueNode(101, 1, "Unverifiable", { nodes: [], pageInfo }),
+              timelineItems: { nodes: failure === "duplicate masks loss" ? [rationale, rationale] : [], pageInfo },
+            }], pageInfo } } } });
+          }
+          if (query.includes("query IssueTimelineCounts")) {
+            return Response.json({ data: { repository: { i1: {
+              databaseId: failure === "wrong identity" ? 102 : 101,
+              timelineItems: failure === "missing count" ? {} : { totalCount: 2 },
+            } } } });
+          }
+          return timelineResponse([rationale]);
+        },
+      });
+      await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
+    },
+  );
+
+  function countsResponse(variables: Record<string, unknown>, count: (number: number) => number) {
+    const numbers = Object.entries(variables).filter(([key]) => key.startsWith("number")).map(([, value]) => Number(value));
+    return Response.json({ data: { repository: Object.fromEntries(numbers.map((number) => [
+      `i${number}`, { databaseId: 100 + number, timelineItems: { totalCount: count(number) } },
+    ])) } });
+  }
+
   it("rereads critical timelines from their first page even when the label event is already nested", async () => {
     const nestedOnlyEvent = {
       ...settledEvent, id: "nested-only-label-event", label: { name: "nested-only-sentinel" },
@@ -1930,6 +2001,7 @@ describe("GitHubGateway issue timeline query shape", () => {
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, cursor: variables.cursor });
         queries.push(query);
+        if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 3);
         if (operation === "RepositoryIssues") {
           return Response.json({ data: { repository: { issues: {
             nodes: [{
@@ -1952,14 +2024,15 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1", "settled-event"]);
     expect(requests).toEqual([
       { operation: "RepositoryIssues", cursor: null },
+      { operation: "IssueTimelineCounts", cursor: undefined },
       { operation: "IssueTimeline", cursor: null },
       { operation: "IssueTimeline", cursor: "exact-next" },
     ]);
     expect(queries[0]).toMatch(/timelineItems\(\s*first: 50\b/);
-    expect(queries[1]).toMatch(/\$cursor: String[^!]/);
+    expect(queries[2]).toMatch(/\$cursor: String[^!]/);
   });
 
-  it("uses exactly the targeted operations across a hundred issues", async () => {
+  it.each([100, 101])("bounds verification and targeted operations across %s issues", async (count) => {
     const requests: Array<{ operation: string; issueNumber: unknown; cursor: unknown }> = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -1967,9 +2040,14 @@ describe("GitHubGateway issue timeline query shape", () => {
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, issueNumber: variables.issueNumber, cursor: variables.cursor });
+        if (operation === "IssueTimelineCounts") {
+          expect(Object.keys(variables).filter((key) => key.startsWith("number")).length).toBeLessThanOrEqual(20);
+          expect(query).toMatch(/timelineItems\(first: 0, itemTypes: \[LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_COMMENT\]\) \{ totalCount \}/);
+          return countsResponse(variables, (number) => number === 2 || number === 3 ? 3 : number === 4 ? 1 : 0);
+        }
         if (operation === "RepositoryIssues") {
           return Response.json({ data: { repository: { issues: {
-            nodes: Array.from({ length: 100 }, (_, index) => {
+            nodes: Array.from({ length: count }, (_, index) => {
               const number = index + 1;
               const label = number === 2 ? "settled: 6" : number === 3 || number === 4 ? "size/M" : "unrelated";
               return {
@@ -1984,13 +2062,14 @@ describe("GitHubGateway issue timeline query shape", () => {
     });
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
-    expect(issues).toHaveLength(100);
+    expect(issues).toHaveLength(count);
     expect(issues[0]?.history).toEqual([]);
     expect(issues[1]?.comments).toHaveLength(1);
     expect(issues[2]?.history[0]).toMatchObject({ label: "size/M" });
     expect(issues[3]?.history).toHaveLength(1);
     expect(requests).toEqual([
       { operation: "RepositoryIssues", issueNumber: undefined, cursor: null },
+      ...Array.from({ length: Math.ceil(count / 20) }, () => ({ operation: "IssueTimelineCounts", issueNumber: undefined, cursor: undefined })),
       { operation: "IssueTimeline", issueNumber: 2, cursor: null },
       { operation: "IssueTimeline", issueNumber: 3, cursor: null },
     ]);
@@ -2005,6 +2084,7 @@ describe("GitHubGateway issue timeline query shape", () => {
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
         requests.push({ operation, cursor: variables.cursor });
+        if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 3);
         if (operation === "RepositoryIssues") {
           return Response.json({ data: { repository: { issues: { nodes: [{
             ...issueNode(101, 1, "Paginated labels", {
@@ -2025,6 +2105,7 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(issue?.comments).toHaveLength(1);
     expect(requests).toEqual([
       { operation: "RepositoryIssues", cursor: null },
+      { operation: "IssueTimelineCounts", cursor: undefined },
       { operation: "IssueLabels", cursor: "labels-next" },
       { operation: "IssueTimeline", cursor: null },
     ]);
@@ -2036,6 +2117,7 @@ describe("GitHubGateway issue timeline query shape", () => {
       accessToken: "test-access-token",
       fetch: async (_input, init) => {
         const { query, variables } = JSON.parse(String(init?.body));
+        if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
         if (query.includes("query RepositoryIssues")) {
           return Response.json({ data: { repository: { issues: { nodes: [{
             ...issueNode(101, 1, "Long timeline"),
@@ -2064,6 +2146,7 @@ describe("GitHubGateway issue timeline query shape", () => {
       fetch: async (_input, init) => {
         const { query, variables } = JSON.parse(String(init?.body));
         const operation = /query (\w+)/.exec(query)![1]!;
+        if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 2);
         if (operation === "RepositoryIssues") {
           const nested = (number: number) => query.includes("timelineItems(")
             ? { timelineItems: {
