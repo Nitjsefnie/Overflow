@@ -55,7 +55,7 @@ export async function POST(request: Request): Promise<Response> {
       const store = new PostgresFoldStore();
       return processWebhook({
         store,
-        enqueueReconciliation: (repositoryId) => store.enqueueReconciliationJob(repositoryId, "WEBHOOK"),
+        enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
       }, delivery);
     },
   })(request);

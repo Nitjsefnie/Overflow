@@ -8,7 +8,8 @@ describe("processWebhook", () => {
     const result = await processWebhook(dependencies, delivery());
 
     expect(result).toEqual({ status: "PROCESSED" });
-    expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("repository");
+    // Mutant: DROP_SUBJECT_ID at the processor/enqueue boundary.
+    expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("repository", delivery());
     expect(dependencies.store.markProcessed).toHaveBeenCalledWith("delivery-1", "lease-1");
   });
 
@@ -77,6 +78,7 @@ function delivery() {
     action: "closed",
     repositoryGitHubId: 42,
     repositoryFullName: "octo/example",
+    subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
   };
 }
 

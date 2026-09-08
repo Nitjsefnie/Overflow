@@ -9,9 +9,40 @@ const secret = "webhook-secret";
 const rawPayload = JSON.stringify({
   action: "closed",
   repository: { id: 42, full_name: "octo/example" },
+  pull_request: { id: 201, number: 11 },
 });
 
 describe("GitHub webhook route", () => {
+  // Mutants: DROP_SUBJECT_ID, IGNORE_MERGED_PR_REVIEW.
+  it.each([
+    { event: "issues", action: "edited", key: "issue", kind: "ISSUE" },
+    { event: "pull_request", action: "closed", key: "pull_request", kind: "PULL_REQUEST" },
+    { event: "pull_request_review", action: "dismissed", key: "pull_request", kind: "PULL_REQUEST" },
+  ])("preserves stable subject identity for $event/$action", async ({ event, action, key, kind }) => {
+    const deliveries: unknown[] = [];
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => { deliveries.push(delivery); } });
+    const response = await route(request(JSON.stringify({ action,
+      repository: { id: 42, full_name: "octo/example" }, [key]: { id: 201, number: 11, merged: true },
+    }), { "x-github-event": event, "x-github-delivery": "subject" }));
+    expect(response.status).toBe(202);
+    expect(deliveries).toEqual([{ deliveryId: "subject", event, action, repositoryGitHubId: 42,
+      repositoryFullName: "octo/example", subject: { kind, id: 201, number: 11 } }]);
+  });
+
+  // Mutant: DROP_SUBJECT_ID (accepting invalid or absent subjects loses durable invalidation).
+  it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201.5, number: 11 },
+    { id: Number.MAX_SAFE_INTEGER + 1, number: 11 }, { id: 201, number: "11" }])(
+    "rejects an invalid subject %j before processing", async (subject) => {
+      const deliveries: unknown[] = [];
+      const route = createGitHubWebhookPostHandler({ secret, processWebhook: async (delivery) => { deliveries.push(delivery); } });
+      const response = await route(request(JSON.stringify({ action: "closed",
+        repository: { id: 42, full_name: "octo/example" }, pull_request: subject,
+      }), { "x-github-event": "pull_request", "x-github-delivery": "invalid-subject" }));
+      expect(response.status).toBe(400);
+      expect(deliveries).toEqual([]);
+    },
+  );
+
   it("keeps setup configuration aligned with the production App Router pathname", async () => {
     const routeFile = resolve("src/app/api/github/webhooks/route.ts");
     const routePathname = `/${relative(resolve("src/app"), routeFile).replace(/\/route\.ts$/, "")}`;
@@ -45,6 +76,7 @@ describe("GitHub webhook route", () => {
       event: "pull_request",
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
+      subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
     });
   });
 
