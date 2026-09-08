@@ -28,7 +28,7 @@ function fixture() {
       listActiveRepositoryIds: async () => registrations.map((entry) => entry.id),
       findActiveRepositoryById: async (id) => registrations.find((entry) => entry.id === id) ?? null,
       getGitHubAccessToken: async (sponsorId) => { credentials.push(sponsorId); return `token-${sponsorId}`; },
-      enqueueReconciliationJob: async (repositoryId, reason) => { queued.push({ repositoryId, reason }); },
+      requestRepositoryRederivation: async (repositoryId) => { queued.push({ repositoryId, reason: "REDERIVATION" }); },
     },
     webhookSecret: "existing-secret",
     createGateway: (accessToken) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
@@ -53,7 +53,7 @@ describe("existing registration webhook upgrade", () => {
     expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
       "GET /repositories/42", `GET /repos/new-owner/${name}/hooks/81`, `PATCH /repos/new-owner/${name}/hooks/81`,
     ]);
-    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "WEBHOOK" }]);
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
   });
 
   it.each([".", "..", "has/slash", "has\\backslash", "%2e%2e", "", "has space"])("refuses unsafe current repository name %j before touching a hook", async (name) => {
@@ -83,7 +83,7 @@ describe("existing registration webhook upgrade", () => {
     ]);
     expect(f.requests.map((request) => request.headers.get("authorization"))).toEqual(Array(5).fill("Bearer token-sponsor-1"));
     expect(f.queued).toEqual([
-      { repositoryId: "registration-1", reason: "WEBHOOK" }, { repositoryId: "registration-1", reason: "WEBHOOK" },
+      { repositoryId: "registration-1", reason: "REDERIVATION" }, { repositoryId: "registration-1", reason: "REDERIVATION" },
     ]);
     expect(f.outcomes).toEqual(Array(2).fill({ repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null }));
   });
@@ -140,17 +140,17 @@ describe("existing registration webhook upgrade", () => {
   });
 
   it("keeps subscription and queue outcomes separate so reruns repair failed queueing", async () => {
-    const f = fixture(); const enqueue = f.dependencies.store.enqueueReconciliationJob;
-    f.dependencies.store.enqueueReconciliationJob = async () => { throw new Error("private database password"); };
+    const f = fixture(); const enqueue = f.dependencies.store.requestRepositoryRederivation;
+    f.dependencies.store.requestRepositoryRederivation = async () => { throw new Error("private database password"); };
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
-    f.dependencies.store.enqueueReconciliationJob = enqueue;
+    f.dependencies.store.requestRepositoryRederivation = enqueue;
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0 });
     expect(f.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
     expect(f.outcomes).toEqual([
       { repositoryId: "registration-1", subscription: "VERIFIED", queue: "FAILED", failure: "QUEUE_FAILED" },
       { repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null },
     ]);
-    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "WEBHOOK" }]);
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
   });
 
   it("does not queue repair when the hook update or verification fails", async () => {

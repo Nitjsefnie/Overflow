@@ -69,25 +69,30 @@ beforeEach(() => {
 });
 
 describe("production reconciliation wiring", () => {
-  it.each(["created", "edited", "deleted"])("enqueues one full repository WEBHOOK job for signed issue_comment %s", async (action) => {
+  it.each([
+    { event: "issues", action: "edited" },
+    { event: "issue_comment", action: "created" },
+    { event: "issue_comment", action: "edited" },
+    { event: "issue_comment", action: "deleted" },
+  ])("queues signed $event/$action through the same issue-subject invalidation path", async ({ event, action }) => {
     const { POST } = await import("@/app/api/github/webhooks/route");
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", secret);
     const body = JSON.stringify({
       action,
       repository: { id: 42, full_name: "octo/example" },
-      issue: { state: "closed", labels: [] },
+      issue: { id: 201, number: 11, state: "closed", labels: [] },
       comment: { body: "unrelated text", user: { login: "unrelated-author" } },
     });
     const signature = createHmac("sha256", secret).update(body).digest("hex");
     const response = await POST(new Request("https://overflow.test/api/github/webhooks", {
       method: "POST", body,
       headers: {
-        "x-github-event": "issue_comment", "x-github-delivery": `comment-${action}`,
+        "x-github-event": event, "x-github-delivery": `${event}-${action}`,
         "x-hub-signature-256": `sha256=${signature}`,
       },
     }));
     expect(response.status).toBe(202);
-    expect(enqueued).toEqual([{ repositoryId: "repository-from-webhook", reason: "WEBHOOK" }]);
+    expect(enqueued).toEqual([{ repositoryId: "repository-from-webhook", reason: "WEBHOOK", subject: { kind: "ISSUE", id: 201, number: 11 } }]);
   });
 
   it("records the reason each route's own dependencies enqueue with", async () => {

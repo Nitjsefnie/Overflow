@@ -50,7 +50,8 @@ export function parseGitHubWebhookDelivery(
   if (!parsed.success || !supportedActions[eventName].has(parsed.data.action)) {
     return null;
   }
-  const subject = subjectSchema.safeParse(eventName === "issues" ? parsed.data.issue : parsed.data.pull_request);
+  const isIssueEvent = eventName === "issues" || eventName === "issue_comment";
+  const subject = subjectSchema.safeParse(isIssueEvent ? parsed.data.issue : parsed.data.pull_request);
   if (!subject.success) return null;
 
   return {
@@ -59,7 +60,7 @@ export function parseGitHubWebhookDelivery(
     action: parsed.data.action,
     repositoryGitHubId: parsed.data.repository.id,
     repositoryFullName: parsed.data.repository.full_name,
-    subject: { kind: eventName === "issues" ? "ISSUE" : "PULL_REQUEST", ...subject.data },
+    subject: { kind: isIssueEvent ? "ISSUE" : "PULL_REQUEST", ...subject.data },
   };
 }
 

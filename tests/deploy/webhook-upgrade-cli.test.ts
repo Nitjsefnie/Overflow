@@ -9,7 +9,7 @@ function fixture() {
       listActiveRepositoryIds: async () => ["repository-1", "repository-2"],
       findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
       getGitHubAccessToken: async () => null,
-      enqueueReconciliationJob: async () => { throw new Error("must not enqueue before verification"); },
+      requestRepositoryRederivation: async () => { throw new Error("must not enqueue before verification"); },
     },
     createGateway: () => { throw new Error("must not access GitHub without credentials"); },
     webhookSecret: "existing-secret",
