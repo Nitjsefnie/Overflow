@@ -446,6 +446,7 @@ describe("GitHubGraphqlClient budget recording", () => {
         nodes: [{
           databaseId: 101, number: 1, title: "Issue", body: "", url: "https://github.com/octo/overflow/issues/1",
           state: "OPEN", createdAt: observed.toISOString(), closedAt: null, author: null,
+          updatedAt: observed.toISOString(),
           labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "next-labels" } },
           assignees: { nodes: [] }, closedByPullRequestsReferences: page,
         }],

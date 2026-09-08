@@ -22,6 +22,8 @@ export type GitHubIssue = {
   url: string;
   state: IssueState;
   createdAt: string;
+  /** Upstream update time, independent of local materialization timestamps. */
+  updatedAt: string;
   /** GraphQL `Issue.closedAt`; null while the issue is open. */
   closedAt: string | null;
   authorLogin: string | null;
@@ -33,6 +35,10 @@ export type GitHubIssue = {
   comments: GitHubIssueComment[];
   closingPullRequests: GitHubPullRequest[];
 };
+
+export type GitHubSubject = { id: number; number: number };
+
+export type GitHubIssueReference = GitHubSubject & { repositoryGitHubId: number };
 
 export type GitHubIssueHistoryEvent =
   | {

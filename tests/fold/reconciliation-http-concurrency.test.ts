@@ -244,6 +244,7 @@ function issueTimeline(number: number) {
 function issueNode(number: number) {
   return {
     databaseId: 100 + number, number, title: `Issue ${number}`, body: "", state: "CLOSED",
+    updatedAt: "2026-09-01T12:05:00.000Z",
     url: `https://github.com/sponsor/repository/issues/${number}`, createdAt: "2026-09-01T07:00:00.000Z",
     author: { login: "sponsor" }, labels: { nodes: [{ name: "M" }], pageInfo }, assignees: { nodes: [] },
     timelineItems: issueTimeline(number),

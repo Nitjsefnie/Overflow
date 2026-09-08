@@ -418,6 +418,7 @@ function openIssue(input: {
     id: input.id,
     number: input.number,
     title: `An issue whose materialization can be removed ${input.number}`,
+    updatedAt: "2026-09-01T12:05:00.000Z",
     body: "Issue evidence",
     url: `https://github.com/${input.ownerName}/issues/${input.number}`,
     state: "OPEN",

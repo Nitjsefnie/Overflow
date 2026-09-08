@@ -142,6 +142,7 @@ function openedIssue(
     id: input.githubIssueId,
     number: 1,
     title: input.title,
+    updatedAt: "2026-09-01T12:05:00.000Z",
     body: "Issue body",
     url: "https://github.com/example/renamed/issues/1",
     state: "OPEN",
