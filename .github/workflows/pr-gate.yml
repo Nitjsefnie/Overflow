@@ -1,9 +1,9 @@
 name: pr gate
 
 # pull_request_target: a fork's pull_request token is read-only, so its
-# comment and close would silently do nothing. The job checks out the base
-# ref only and runs no pull-request code; the body reaches the script
-# through the API, never through an expression.
+# comment and close would silently do nothing. The pinned action runs its
+# own reviewed code and reads consumer policy from the PR's base SHA through
+# GitHub's API; no consumer checkout or PR-head execution is needed.
 on:
   pull_request_target:  # zizmor: ignore[dangerous-triggers]
     types: [opened, edited, reopened]
@@ -26,14 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Nitjsefnie-Actions/pr-gate@50ace1bb77b0599079a3ba0590a7f81794402a19
         with:
-          persist-credentials: false
-      - name: Validate pull request body
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          ACTOR: ${{ github.event.pull_request.user.login }}
-        run: python3 scripts/ci/pr_gate.py
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          pull-request-author: ${{ github.event.pull_request.user.login }}
