@@ -437,6 +437,7 @@ function openIssue(input: {
     body: "Issue evidence",
     url: `https://github.com/${input.ownerName}/issues/${input.number}`,
     state: "OPEN",
+    stateReason: null,
     createdAt: ISSUE_CREATED_AT,
     closedAt: null,
     authorLogin: input.author.login,

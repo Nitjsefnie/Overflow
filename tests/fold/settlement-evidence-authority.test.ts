@@ -988,6 +988,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
+        stateReason: "COMPLETED",
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: "2026-09-01T12:05:00.000Z",
         updatedAt: "2026-09-01T12:05:00.000Z",

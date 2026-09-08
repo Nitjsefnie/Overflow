@@ -397,7 +397,7 @@ describe("GitHubGateway incremental issue reads", () => {
       requests.push(request);
       const { query, variables } = request;
       if (query.includes("query RepositoryIssue(")) return Response.json({ data: { repository: { issue: {
-        ...issueNode(101, 1, "Dirty"), updatedAt: "2026-08-30T09:00:00Z",
+        ...issueNode(101, 1, "Dirty"), state: "CLOSED", stateReason: "NOT_PLANNED", updatedAt: "2026-08-30T09:00:00Z",
         labels: { nodes: [{ name: "first" }], pageInfo: { hasNextPage: true, endCursor: "labels-next" } },
         timelineItems: { nodes: [], pageInfo },
         closedByPullRequestsReferences: { nodes: [pullRequestNode(201, 11)],
@@ -417,10 +417,11 @@ describe("GitHubGateway incremental issue reads", () => {
           author: null, body: "Rationale", createdAt: "2026-08-30T09:00:00Z", lastEditedAt: null }]);
     } });
     const issue = await gateway.getIssue({ owner: "octo", name: "overflow" }, { id: 101, number: 1 });
-    expect(issue).toMatchObject({ id: 101, labels: ["first", "second"],
+    expect(issue).toMatchObject({ id: 101, stateReason: "NOT_PLANNED", labels: ["first", "second"],
       history: [{ id: "label" }], comments: [{ id: "rationale" }],
       closingPullRequests: [{ id: 201 }, { id: 202 }], updatedAt: "2026-08-30T09:00:00Z" });
     expect(requests[0]?.query).toMatch(/issue\(number:\s*\$issueNumber\)/);
+    expect(requests[0]?.query).toMatch(/\bstateReason\b/);
     expect(requests[0]?.variables).toEqual({ owner: "octo", name: "overflow", issueNumber: 1 });
     expect(requests).toHaveLength(5);
   });
@@ -933,6 +934,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/1",
         state: "OPEN",
+        stateReason: null,
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: null,
         authorLogin: "owner",
@@ -951,6 +953,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         body: "Issue body",
         url: "https://github.com/octo/overflow/issues/2",
         state: "OPEN",
+        stateReason: null,
         createdAt: "2026-08-30T09:00:00.000Z",
         closedAt: null,
         authorLogin: "owner",
@@ -965,7 +968,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(cursors).toEqual([null, "cursor-2"]);
   });
 
-  it("reads the GraphQL instant an issue was closed at, and null while it is open", async () => {
+  it("reads the GraphQL closure reason and instant, and null while an issue is open", async () => {
     let query = "";
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -980,7 +983,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
             repository: {
               issues: {
                 nodes: [
-                  { ...issueNode(101, 1, "Closed"), state: "CLOSED", closedAt: "2026-09-04T12:00:00.000Z" },
+                  { ...issueNode(101, 1, "Closed"), state: "CLOSED", stateReason: "NOT_PLANNED", closedAt: "2026-09-04T12:00:00.000Z" },
                   issueNode(102, 2, "Open"),
                 ],
                 pageInfo: { hasNextPage: false, endCursor: null },
@@ -993,11 +996,12 @@ describe("GitHubGateway GraphQL source adapter", () => {
 
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" });
 
-    expect(issues.map(({ id, state, closedAt }) => ({ id, state, closedAt }))).toEqual([
-      { id: 101, state: "CLOSED", closedAt: "2026-09-04T12:00:00.000Z" },
-      { id: 102, state: "OPEN", closedAt: null },
+    expect(issues.map(({ id, state, stateReason, closedAt }) => ({ id, state, stateReason, closedAt }))).toEqual([
+      { id: 101, state: "CLOSED", stateReason: "NOT_PLANNED", closedAt: "2026-09-04T12:00:00.000Z" },
+      { id: 102, state: "OPEN", stateReason: null, closedAt: null },
     ]);
     expect(query).toMatch(/\bclosedAt\b/);
+    expect(query).toMatch(/\bstateReason\b/);
   });
 
   it("maps only one unambiguous GraphQL assignee as an issue claim lock", async () => {
@@ -2133,6 +2137,7 @@ function issueNode(
     updatedAt: "2026-08-30T09:00:00.000Z",
     url: `https://github.com/octo/overflow/issues/${number}`,
     state: "OPEN",
+    stateReason: null,
     createdAt: "2026-08-30T09:00:00.000Z",
     closedAt: null,
     author: { login: "owner" },

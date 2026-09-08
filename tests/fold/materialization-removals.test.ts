@@ -424,6 +424,7 @@ function openIssue(input: {
     body: "Issue evidence",
     url: `https://github.com/${input.ownerName}/issues/${input.number}`,
     state: "OPEN",
+    stateReason: null,
     createdAt: "2026-09-01T08:00:00.000Z",
     closedAt: null,
     authorLogin: input.ownerLogin,

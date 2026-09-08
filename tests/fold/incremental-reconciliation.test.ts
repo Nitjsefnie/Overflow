@@ -96,6 +96,34 @@ describe("incremental reconciliation", () => {
     expect(costs).toEqual([111, 1, 6]);
   });
 
+  it("refreshes legacy evidence and removes a stale not-planned closure on the next pass", async () => {
+    const f = await fixture();
+    const issue = f.issues[1]!;
+    issue.closingPullRequests = [];
+    await f.run();
+    const closures = () => sql`
+      select unwritable_closures.kind::text from unwritable_closures
+      join issues on issues.id = unwritable_closures.issue_id
+      where issues.repository_id = ${f.id} and issues.github_issue_id = ${issue.id}
+    `;
+    expect(await closures()).toEqual([{ kind: "NO_CLOSING_PULL_REQUEST" }]);
+    // Version 1 retained issues without a closure reason. Keep the upstream
+    // timestamp unchanged so only cache invalidation can recover the reason.
+    await sql`update repository_reconciliation_evidence
+      set format_version = 1,
+          issues = (select jsonb_agg(issue - 'stateReason') from jsonb_array_elements(issues) as issue)
+      where repository_id = ${f.id}`;
+    issue.stateReason = "NOT_PLANNED";
+    f.clock = new Date("2026-09-08T10:02:00Z");
+
+    await f.run();
+
+    expect(await closures()).toEqual([]);
+    expect(f.scans.at(-1)).toBeUndefined();
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues.find(({ id }) => id === issue.id))
+      .toMatchObject({ stateReason: "NOT_PLANNED" });
+  });
+
   // Mutants: DROP_MIDPASS_INVALIDATION, ISSUE_WATERMARK_GATES_DIRTY_FETCH.
   it("retains a mid-pass invalidation and repairs its issue through the sponsor gateway on the next quiet pass", async () => {
     const f = await fixture();
@@ -253,7 +281,7 @@ describe("incremental reconciliation", () => {
     await f.run();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(3);
     if (reason === "six hours") f.clock = new Date("2026-09-08T16:00:00Z");
-    if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 2 where repository_id = ${f.id}`;
+    if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 1 where repository_id = ${f.id}`;
     await f.run({ rederive: reason === "rederive" });
     expect(f.scans.at(-1)).toBeUndefined();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
@@ -327,7 +355,7 @@ async function fixture() {
       authorLogin: "contributor", authorGitHubUserId: contributorGitHubId,
       repositoryGitHubId: githubRepositoryId, repositoryNameWithOwner: `octo/repo-${githubRepositoryId}` };
     return { id, number, title: `Issue ${number}`, body: "body", url: "https://github.com/octo/repo/issues/1",
-      state: number === 3 ? "OPEN" : "CLOSED", createdAt: "2026-09-01T07:00:00Z",
+      state: number === 3 ? "OPEN" : "CLOSED", stateReason: number === 3 ? null : "COMPLETED", createdAt: "2026-09-01T07:00:00Z",
       updatedAt: number === 1 ? "2026-09-08T09:59:30Z" : "2026-09-01T12:00:00Z",
       closedAt: number === 3 ? null : "2026-09-01T12:00:00Z", authorLogin: sponsor.github_login,
       authorGitHubUserId: sponsorGitHubId, labels: [label], claimAssigneeGitHubLogin: null,

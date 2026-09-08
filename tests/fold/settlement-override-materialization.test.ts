@@ -492,6 +492,7 @@ function unsettledIssue(input: {
     body: "Issue evidence",
     url: `https://github.com/${input.repository}/issues/${input.number}`,
     state: "CLOSED",
+    stateReason: "COMPLETED",
     createdAt: "2026-09-01T08:00:00.000Z",
     closedAt: "2026-09-01T12:05:00.000Z",
     authorLogin: input.ownerLogin,

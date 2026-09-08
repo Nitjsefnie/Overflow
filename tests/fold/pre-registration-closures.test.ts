@@ -445,6 +445,7 @@ function rejectedEvidenceFixture(): RepositoryFoldSnapshot {
         body: "Issue body",
         url: "https://github.com/octo/example/issues/1",
         state: "CLOSED",
+        stateReason: "COMPLETED",
         createdAt: "2026-08-20T09:00:00.000Z",
         closedAt: shift(registeredAt, -12 * HOUR + 3 * MINUTE),
         updatedAt: shift(registeredAt, -12 * HOUR + 3 * MINUTE),

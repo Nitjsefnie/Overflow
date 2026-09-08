@@ -708,6 +708,7 @@ type GitHubGraphqlIssueNode = {
   body: string;
   url: string;
   state: "OPEN" | "CLOSED";
+  stateReason: GitHubIssue["stateReason"];
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
@@ -781,6 +782,7 @@ const issueFields = `
           body
           url
           state
+          stateReason
           createdAt
           updatedAt
           closedAt
@@ -1018,6 +1020,7 @@ function toGitHubIssue(
     body: node.body,
     url: node.url,
     state: node.state,
+    stateReason: node.stateReason,
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,
     closedAt: node.closedAt,
