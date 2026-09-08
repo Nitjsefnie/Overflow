@@ -6,6 +6,11 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let databaseUrl: string;
 
+type ReservationOutcome =
+  | { status: "pending" }
+  | { status: "reserved"; reserved: postgres.ReservedSql }
+  | { status: "rejected"; error: unknown };
+
 describe("outstanding reservations when the client ends", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -28,31 +33,30 @@ describe("outstanding reservations when the client ends", () => {
     // the reservation is still in flight when the shutdown begins. That is the window `closeSql()`
     // races in production, reached here with no timing left to chance because a pool with no open
     // connection cannot serve a reservation before it has finished connecting.
-    const reserving = sql.reserve().then(
-      (reserved) => ({ status: "reserved" as const, reserved }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
+    let outcome: ReservationOutcome = { status: "pending" };
+    void sql.reserve().then(
+      (reserved) => { outcome = { status: "reserved", reserved }; },
+      (error: unknown) => { outcome = { status: "rejected", error }; },
     );
 
     // No timeout, exactly as `closeSql()` calls it: nothing but the connections themselves can
     // settle this, so a client that serves the reservation and says nothing about the shutdown
     // strands it — the defect the patch's first hunk already exists to fix, by another door.
     const ending = sql.end();
+    // Both observers are attached directly to the public promises before yielding. Save the
+    // outcome in the shutdown callback: a race constructed after awaiting shutdown can miss
+    // a rejection delivered in a later microtask of that same turn.
+    const atShutdown = ending.then(() => outcome);
 
     // The shutdown itself has to complete. Unbounded, and the only wait in this test that can trip
     // the suite timeout.
     await expect(ending).resolves.toBeUndefined();
 
-    // What the reservation had done by the time the shutdown completed — asserted as an ordering
-    // between two events rather than as an elapsed time, so there is no clock here and nothing for
-    // a slow machine to fail. Racing an already-settled `ending` is what turns "never settles" into
-    // a sentence: a reservation still pending loses the race and is named below, where waiting on
-    // it directly would leave the next reader a bare 120-second suite timeout to interpret.
-    const shutdownFinishedFirst = { status: "pending" as const };
-    const settled = await Promise.race([reserving, ending.then(() => shutdownFinishedFirst)]);
+    const settled = await atShutdown;
     if (settled.status === "pending") {
       throw new Error(
-        "the client finished shutting down with the reservation still pending: end() resolved and " +
-          "nothing settled reserve(), so its caller is left waiting on a pool that no longer exists",
+        "the client finished shutting down before the reservation settled: " +
+          "reserve() was still pending at the public end() callback",
       );
     }
     if (settled.status === "reserved") {
@@ -77,25 +81,27 @@ describe("outstanding reservations when the client ends", () => {
 
       // The only connection is held, so both reservations synchronously enter the queue.
       // A second waiter catches a disposal that settles only the head and later serves the next.
-      const queued = [sql.reserve(), sql.reserve()].map((reservation) => reservation.then(
-        (reserved) => ({ status: "reserved" as const, reserved }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      ));
+      const outcomes: ReservationOutcome[] = [{ status: "pending" }, { status: "pending" }];
+      outcomes.forEach((_, index) => {
+        void sql.reserve().then(
+          (reserved) => { outcomes[index] = { status: "reserved", reserved }; },
+          (error: unknown) => { outcomes[index] = { status: "rejected", error }; },
+        );
+      });
       const ending = sql.end();
+      // Capture before awaiting even the administrator's I/O. Copy the entries so later
+      // settlement cannot change the states seen by this first public shutdown observer.
+      const atShutdown = ending.then(() => outcomes.slice());
 
       await expect(admin`select pg_terminate_backend(${row.pid}) as terminated`).resolves.toEqual([
         { terminated: true },
       ]);
       await expect(ending).resolves.toBeUndefined();
 
-      // The shutdown is the observation boundary, not a timer: neither a pending waiter nor
-      // a waiter served from the closing client is acceptable. Rejection by this boundary also
-      // prevents a later reconnect from handing either caller a live connection after end().
-      const shutdownFinishedFirst = { status: "pending" as const };
-      const settled = await Promise.all(queued.map((reservation) => Promise.race([
-        reservation,
-        ending.then(() => shutdownFinishedFirst),
-      ])));
+      // These callers lose their held backend during shutdown and must be rejected by that
+      // boundary. This does not constrain a holder releasing during shutdown: a waiter may
+      // legitimately be served before end() completes in that different scenario.
+      const settled = await atShutdown;
 
       for (const result of settled) {
         if (result.status === "reserved") result.reserved.release();
@@ -113,6 +119,32 @@ describe("outstanding reservations when the client ends", () => {
     } finally {
       await sql.end();
       await admin.end();
+    }
+  });
+
+  it("rejects a reservation requested after a warmed pool has finished shutting down", async () => {
+    const sql = postgres(databaseUrl, { max: 1 });
+
+    try {
+      // Open and use the pool before closing it, so admitting a later reservation would
+      // resurrect a connection from a client that has already reported itself closed.
+      await expect(sql`select 1 as value`).resolves.toEqual([{ value: 1 }]);
+      await expect(sql.end()).resolves.toBeUndefined();
+
+      // This is a new caller after shutdown, distinct from a waiter whose turn arrives
+      // while shutdown is still in flight. Await it unbounded: silence is a failure too.
+      const settled = await sql.reserve().then(
+        (reserved) => ({ status: "reserved" as const, reserved }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      if (settled.status === "reserved") {
+        settled.reserved.release();
+        throw new Error("a reservation requested after end() resolved was served a connection");
+      }
+      expect(settled.error).toBeInstanceOf(Error);
+      expect(String(settled.error)).toMatch(/: \S/);
+    } finally {
+      await sql.end();
     }
   });
 });
