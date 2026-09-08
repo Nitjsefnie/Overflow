@@ -418,6 +418,52 @@ describe("repository publication fencing", () => {
       await coordination.end();
     }
   });
+
+  // A coordination session that died mid-hold leaves its connection to the pool, and the pool
+  // hands that connection to the next reservation. The dead coordinator's reclaim must then run
+  // on nothing at all: its lock died with its session, and `pg_advisory_unlock_all()` on the
+  // surviving session would release whatever that session now holds for somebody else.
+  it("does not let a dead coordination session's reclaim release a successor's lock", async () => {
+    const { repositoryId } = await fixture();
+    const { repositoryId: successorId } = await fixture();
+    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const store = new PostgresFoldStore(sql, key, coordination);
+    const olderEntered = signal();
+    const olderRelease = signal();
+    const successorEntered = signal();
+    const successorRelease = signal();
+    let older: Promise<unknown> | undefined;
+    let newer: Promise<unknown> | undefined;
+    try {
+      older = store.withRepositoryReconciliation(repositoryId, async () => {
+        olderEntered.resolve();
+        await olderRelease.promise;
+      });
+      await olderEntered.promise;
+      await loseSession(repositoryId);
+      newer = store.withRepositoryReconciliation(successorId, async () => {
+        successorEntered.resolve();
+        await successorRelease.promise;
+        await store.recordVerifiedRepositoryIdentity({
+          repositoryId: successorId, ownerName: `successor ${successorId}`, visibility: "PUBLIC",
+        });
+      });
+      await successorEntered.promise;
+      olderRelease.resolve();
+      // The dead coordinator's scope exits here, while the successor holds its own repository's
+      // lock on the very session the pool re-handed out. Its unlock must recognise the session
+      // change and leave the successor's lock alone.
+      await expect(older).rejects.toThrow();
+      successorRelease.resolve();
+      await newer;
+      expect((await repositoryState(successorId)).owner_name).toBe(`successor ${successorId}`);
+    } finally {
+      olderRelease.resolve();
+      successorRelease.resolve();
+      await Promise.allSettled([older, newer]);
+      await coordination.end({ timeout: 0 });
+    }
+  });
 });
 
 function signal() {
