@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
   expectNoDependencyCall,
@@ -13,6 +13,7 @@ import {
   type RederivationRouteService,
 } from "@/app/api/moderation/rederivation/route";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import { startReconciliationSweep } from "@/lib/fold/sweep";
 import { ModerationServiceError } from "@/lib/moderation/service";
 import {
   RepositoryRederivationService,
@@ -26,6 +27,12 @@ const otherRepositoryId = "00000000-0000-4000-8000-000000000011";
 const requestedAt = new Date("2026-09-07T09:00:00.000Z");
 
 useTrustedOrigin();
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  startReconciliationSweep({ runSweep: async () => {}, schedule: () => {} });
+});
 
 const { json: jsonRequest, foreignJson: foreignJsonRequest, trustedText: trustedTextRequest } =
   guardedRequests("/api/moderation/rederivation");
@@ -84,7 +91,7 @@ describe("fold re-derivation status API", () => {
     )();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ rederivation: overview });
+    await expect(response.json()).resolves.toEqual({ rederivation: overview, startupRecoverySkipped: false });
     expect(listRederivationStatus).toHaveBeenCalledWith({
       id: moderatorSession.user.id,
       role: "MODERATOR",
@@ -192,6 +199,33 @@ describe("fold re-derivation status API", () => {
 // The real service is wired in here so that the route's answers are the ones a
 // moderator would actually see, rather than whatever a stub chose to return.
 describe("fold re-derivation service reached through its route", () => {
+  it.each([
+    ["1", true],
+    [undefined, false],
+    ["true", false],
+  ] as const)("reports the startup decision for %s across module loads and later sweeps", async (value, skipped) => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", value);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Instrumentation and routes are separately bundled in Next.js. Reload the
+    // startup module while retaining the route's original imported instance.
+    vi.resetModules();
+    const startup = await import("@/lib/fold/sweep");
+    let tick!: () => void;
+    startup.startReconciliationSweep({
+      runSweep: async () => {},
+      schedule: (callback) => { tick = callback; },
+    });
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", skipped ? undefined : "1");
+    const get = createRederivationGetHandler(realServiceDependencies(storeHarness()));
+    const response = await get();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ startupRecoverySkipped: skipped });
+    await Promise.resolve();
+    tick();
+    const afterSweep = await get();
+    expect(await afterSweep.json()).toMatchObject({ startupRecoverySkipped: skipped });
+  });
+
   it("answers NOT_FOUND for a repository the deployment does not serve", async () => {
     const store = storeHarness();
     const response = await createRederivationPostHandler(
@@ -225,6 +259,7 @@ describe("fold re-derivation service reached through its route", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      startupRecoverySkipped: false,
       rederivation: {
         foldRevision: FOLD_REVISION,
         repositories: [

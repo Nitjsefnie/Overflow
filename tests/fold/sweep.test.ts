@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RECONCILIATION_SWEEP_INTERVAL_MS,
   shouldStartReconciliationBackground,
@@ -20,7 +20,52 @@ const UNARMED_MESSAGE =
 const DEFAULTED_INTERVAL_MESSAGE =
   "Reconciliation sweep interval could not be read; the recurring tick is armed at the default interval instead";
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
 describe("scheduled reconciliation sweep", () => {
+  it("skips only the startup pass when explicitly opted out, retaining the six-hour recovery sweep", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    const warnings: unknown[][] = [];
+    vi.spyOn(console, "warn").mockImplementation((...args) => { warnings.push(args); });
+    const timer = createTimer();
+    const enqueued: string[] = [];
+    startReconciliationSweep({
+      runSweep: () => sweepReconciliations({
+        listActiveRepositoryIds: async () => ["repo-a", "repo-b"],
+        enqueue: async (id) => { enqueued.push(id); },
+      }),
+      schedule: timer.schedule,
+    });
+    await timer.settle();
+
+    expect(enqueued).toEqual([]);
+    expect(warnings.flat().join(" ")).toContain("OVERFLOW_SKIP_STARTUP_RECONCILIATION");
+    expect(timer.intervalMs).toBe(6 * 60 * 60 * 1000);
+    await timer.tick();
+    expect(enqueued).toEqual(["repo-a", "repo-b"]);
+    await timer.tick();
+    expect(enqueued).toEqual(["repo-a", "repo-b", "repo-a", "repo-b"]);
+  });
+
+  it.each([undefined, "", "0", "true", "false", "TRUE", " 1", "1 ", "01", "garbage", "{broken"])(
+    "runs startup recovery for a non-opt-out value %s", async (value) => {
+      vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", value);
+      const timer = createTimer();
+      let sweeps = 0;
+      startReconciliationSweep({
+        runSweep: async () => { sweeps += 1; },
+        schedule: timer.schedule,
+      });
+      await timer.settle();
+      expect(sweeps).toBe(1);
+      await timer.tick();
+      expect(sweeps).toBe(2);
+    },
+  );
+
   it("enqueues every active repository", async () => {
     const enqueued: string[] = [];
 
