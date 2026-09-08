@@ -4,6 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
 import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
@@ -143,7 +144,8 @@ describe("incremental reconciliation", () => {
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
   });
 
-  // Mutants: DROP_UNCHANGED_PR_DIFF, IGNORE_MERGED_PR_REVIEW.
+  // Mutants: DROP_UNCHANGED_PR_DIFF, IGNORE_MERGED_PR_REVIEW,
+  // SHARED_PR_EVIDENCE_FIRST_ISSUE_ONLY (the deduplicated PR row alone cannot detect this).
   it("applies shared PR evidence refreshed through one changed issue to every retained reference", async () => {
     const f = await fixture();
     f.issues[1]!.closingPullRequests = f.issues[0]!.closingPullRequests;
@@ -151,11 +153,33 @@ describe("incremental reconciliation", () => {
     f.diff = "replacement diff";
     f.reviews = [{ id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null }];
     f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    // Observe the real fold boundary without replacing its implementation or materialization.
+    const fold = vi.spyOn(repositoryFold, "foldRepository");
+    try {
+      await f.run();
+      expect(fold).toHaveBeenCalledOnce();
+      const issueInputs = fold.mock.calls[0]![0].issues.filter(({ number }) => number === 1 || number === 2);
+      expect(issueInputs.map(({ number, closingPullRequests }) => ({
+        number,
+        closingPullRequests: closingPullRequests.map(({ number, reviews, rawDiff }) => ({ number, reviews, rawDiff })),
+      }))).toEqual([
+        { number: 1, closingPullRequests: [{ number: 11, rawDiff: "replacement diff", reviews: [{
+          id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null,
+        }] }] },
+        { number: 2, closingPullRequests: [{ number: 11, rawDiff: "replacement diff", reviews: [{
+          id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null,
+        }] }] },
+      ]);
+    } finally {
+      fold.mockRestore();
+    }
     expect(f.diffReads).toEqual([11, 11]);
     const [pr] = await sql`select pr.proof_sha256, (select count(*)::int from review_rounds r where r.pull_request_id = pr.id) as reviews
       from pull_requests pr where pr.repository_id = ${f.id}`;
-    expect(pr.reviews).toBe(1);
+    expect(pr).toEqual({
+      proof_sha256: "bb4a70592c7e8e3fcb5637474e8dde68f44f0affc057373c8113bdb820d551b3",
+      reviews: 1,
+    });
     expect((await f.store.getReconciliationEvidence(f.id))?.pullRequests).toMatchObject([{ rawDiff: "replacement diff", reviews: [{ id: 501 }] }]);
   });
 
