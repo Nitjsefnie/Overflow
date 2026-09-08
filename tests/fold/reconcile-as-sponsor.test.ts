@@ -35,25 +35,21 @@ describe("reconciling a repository as its sponsor", () => {
     expect(harness.calls).toContain("getGitHubAccessToken");
   });
 
-  it("passes the repository catalogs through the sponsor gateway", async () => {
+  it("requests authoritative issue hydration through the sponsor gateway on a cold pass", async () => {
     const harness = createHarness({ active: true, accessToken: "sponsor-token" });
     const listIssues = vi.fn().mockResolvedValue([]);
     harness.store.findUsersByGitHubUserIds = async () => [];
     harness.store.materialize = async () => ({ adds: 0, changes: 0, removals: 0 });
     await reconcileRepositoryAsSponsor(harness.store, "repo-1", () => ({
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
       getRepositoryById: async () => ({
         id: 4242, owner: "example", ownerType: "USER", name: "repository", fullName: "example/repository",
         visibility: "PUBLIC", url: "https://github.com/example/repository", canAdminister: true,
       }),
       listIssues, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
     }));
-    expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, {
-      timelineCriticalLabels: new Set([
-        "delivered/1", "delivered/2", "delivered/3", "delivered/4", "delivered/5",
-        "delivered/6", "delivered/7", "delivered/8", "delivered/9", "delivered/10",
-      ]),
-      timelineWatchedLabels: new Set(["S", "M", "L"]),
-    });
+    expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, undefined);
   });
 
   it("refuses an active repository whose sponsor has no token", async () => {
@@ -101,6 +97,8 @@ function createHarness(options: {
       : options.repository;
 
   const store = {
+    getReconciliationEvidence: async () => null,
+    getDirtyReconciliationSubjects: async () => [],
     withRepositoryReconciliation: async <T>(_repositoryId: string, work: () => Promise<T>) => work(),
     getRepository: async () => {
       calls.push("getRepository");
@@ -138,6 +136,8 @@ function createHarness(options: {
     gatewaysBuilt.push(accessToken);
     return {
       getRepositoryById: async () => null,
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
       listIssues: async () => [],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",

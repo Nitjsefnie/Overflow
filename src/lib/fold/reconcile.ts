@@ -5,10 +5,17 @@ import { isGitHubRateLimitError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
-import type { ReconciliationSynchronization } from "@/lib/fold/reconciliation-evidence";
+import {
+  RECONCILIATION_EVIDENCE_FORMAT,
+  type DirtyReconciliationSubject,
+  type ReconciliationEvidence,
+  type ReconciliationSynchronization,
+} from "@/lib/fold/reconciliation-evidence";
 import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
+  GitHubIssueReference,
+  GitHubSubject,
   GitHubPullRequest,
   GitHubPullRequestReview,
   GitHubRepository,
@@ -18,6 +25,8 @@ import type {
 // Cap this reconciliation at four HTTP requests: each PR worker paginates
 // reviews, then dismissals, then fetches its diff, one request at a time.
 const reconciliationConcurrency = 4;
+const reconciliationOverlapMs = 60_000;
+const reconciliationFullRepairMs = 6 * 60 * 60_000;
 
 // A large repository can exhaust an hourly GitHub budget; without retry guidance,
 // allow a full hour for it to recover before spending points on another full fold.
@@ -33,6 +42,8 @@ export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY
 export type ReconciliationGateway = {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
+  getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null>;
+  getPullRequestClosingIssues(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssueReference[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
     pullRequestNumber: number,
@@ -49,6 +60,8 @@ export type ReconciliationDeltas = {
 export type ReconciliationStore = {
   withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
+  getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null>;
+  getDirtyReconciliationSubjects(repositoryId: string): Promise<DirtyReconciliationSubject[]>;
   getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
   setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
@@ -119,10 +132,6 @@ async function reconcileRepositoryWhileCoordinated(
       adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
   }
 
-  // Every GitHub fetch is unconditionally full today: each pass re-reads every
-  // issue, so this flag cannot change what is fetched. Issue 196 introduces an
-  // incremental fetch keyed on a per-repository watermark; this flag will tell
-  // that fetch to ignore the watermark. For now it records the run's intent.
   const rederive = options?.rederive === true
     || await dependencies.store.hasDerivedRowsBelowFoldRevision(repositoryId, FOLD_REVISION);
   const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
@@ -137,6 +146,16 @@ async function reconcileRepositoryWhileCoordinated(
     if (accessToken === null) {
       throw new Error("GitHub access token was not available.");
     }
+
+    // Advance to scan start only after successful materialization. Completion
+    // time could skip changes made while these upstream reads were in flight.
+    const scanStartedAt = now();
+    const [cached, dirtySubjects] = await Promise.all([
+      dependencies.store.getReconciliationEvidence(repositoryId),
+      dependencies.store.getDirtyReconciliationSubjects(repositoryId),
+    ]);
+    const full = cached === null || cached.formatVersion !== RECONCILIATION_EVIDENCE_FORMAT || rederive
+      || scanStartedAt.getTime() - cached.lastFullPassAt.getTime() >= reconciliationFullRepairMs;
 
     // The stored path is a display name GitHub reassigns to whoever takes it after a
     // rename or transfer, so every read below is aimed by the numeric identity instead.
@@ -167,16 +186,53 @@ async function reconcileRepositoryWhileCoordinated(
     const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
       () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
       async () => {
-        const githubIssues = await dependencies.github.listIssues(reference, {
-          timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
-          timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
-        });
-        const pullRequestEvidence = await collectPullRequestEvidence(
+        const changed = new Map((await dependencies.github.listIssues(reference, full ? undefined : {
+          since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString(),
+        })).map((issue) => [issue.id, issue]));
+        const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
+        if (!full) {
+          const affected = new Map<number, GitHubSubject>();
+          for (const subject of dirtySubjects) {
+            if (subject.kind === "ISSUE") {
+              affected.set(subject.id, subject);
+            } else {
+              // Both sides matter when a PR edits away an old closing reference.
+              for (const issue of [...retained.values(), ...changed.values()]) {
+                if (issue.closingPullRequests.some((pr) => pr.id === subject.id && belongsToRegisteredRepository(repository, pr))) {
+                  affected.set(issue.id, issue);
+                }
+              }
+              const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
+              for (const issue of references) {
+                if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
+              }
+            }
+          }
+          for (const subject of affected.values()) {
+            if (changed.has(subject.id)) continue;
+            const issue = await dependencies.github.getIssue(reference, subject);
+            if (issue !== null) changed.set(issue.id, issue);
+          }
+        }
+        for (const issue of changed.values()) retained.set(issue.id, issue);
+        const githubIssues = [...retained.values()];
+        const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
+          .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
+        const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests);
+        const dirtyPullRequests = new Set(dirtySubjects.filter(({ kind }) => kind === "PULL_REQUEST").map(({ id }) => id));
+        const refreshedEvidence = await collectPullRequestEvidence(
           dependencies.github,
           reference,
           repository,
-          githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests),
+          full ? referencedPullRequests : [
+            ...[...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests),
+            ...referencedPullRequests.filter(({ id }) => dirtyPullRequests.has(id) || !pullRequestEvidence.has(id)),
+          ],
         );
+        for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
+        const retainedPrIds = new Set(referencedPullRequests.filter((pr) => pr.state === "MERGED" && pr.mergedAt !== null
+          && belongsToRegisteredRepository(repository, pr)).map(({ id }) => id));
+        for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
         return { githubIssues, pullRequestEvidence };
       },
     );
@@ -205,8 +261,10 @@ async function reconcileRepositoryWhileCoordinated(
       })),
     };
     const fold = foldRepository(snapshot);
-    const deltas = await dependencies.store.materialize({ repositoryId, runId, fold });
-    await dependencies.store.setReconciliationCooldown(repositoryId, null);
+    const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, synchronization: {
+      expectedVersion: cached?.version ?? null, scanStartedAt, full, issues: githubIssues,
+      pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
+    } });
 
     return {
       repositoryId,

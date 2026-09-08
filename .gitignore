@@ -210,6 +210,7 @@ tests/domain/*
 !tests/fold/
 tests/fold/*
 !tests/fold/*.ts
+!tests/fold/incremental-reconciliation.test.ts
 !tests/github/
 tests/github/*
 !tests/github/*.ts
