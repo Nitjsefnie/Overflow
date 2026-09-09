@@ -155,6 +155,7 @@ describe("calibration comparison", () => {
     );
 
     expect(screen.getByText("Complete paired work to establish calibration.")).toBeVisible();
+    expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
   });
 });
 

@@ -400,6 +400,36 @@ describe("open audit form", () => {
     expect(screen.getByRole("button", { name: "Open audit" })).toBeEnabled();
   });
 
+  it("refuses a preview whose difference between means is not a number", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => cohortResponse({
+        targetAccountId: miraId,
+        repositoryId: null,
+        sampleStartedAt: startedAtInstant,
+        sampleEndedAt: endedAtInstant,
+        comparison: {
+          selfWork: { count: 3, meanDelta: 1, medianDelta: 1 },
+          outsider: { count: 12, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: "3",
+        },
+        meetsMinimumSampleSize: false,
+      })),
+    );
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The cohort preview could not be read. Check the sample window and try again.",
+      );
+    });
+    expect(screen.queryByRole("region", { name: "Cohort preview" })).toBeNull();
+  });
+
   it("disables opening a second audit for a target that already has one and says why", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
