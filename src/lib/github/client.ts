@@ -147,19 +147,26 @@ export class GitHubGateway {
       // complete while omitting events or comments, even when totalCount agrees.
       const labeled = new Set(timeline.history.flatMap((event) => event.kind === "LABELED" ? [event.label] : []));
       const expectedCount = counts?.get(node.number);
-      const matchesEvidence = (value: typeof timeline) => {
-        const ids = [...value.history, ...value.comments].map(({ id }) => id);
-        const expectedIds = manifest?.get(node.number);
-        return ids.length === expectedCount && new Set(ids).size === expectedCount
-          && expectedIds?.size === expectedCount && ids.every((id) => expectedIds.has(id));
-      };
+      const expectedIds = manifest?.get(node.number);
+      const matchesEvidence = (value: typeof timeline) => timelineMatchesEvidence(value, expectedCount, expectedIds);
       const suspect = targeted && (!matchesEvidence(timeline) || (node.timelineItems !== undefined && labels.some((label) =>
         options?.timelineCriticalLabels?.has(label)
         || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
       )));
       const authoritativeTimeline = suspect ? await this.getIssueTimeline(repository, node.number) : timeline;
       if (targeted && !matchesEvidence(authoritativeTimeline)) {
-        throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
+        // The original evidence may describe a timeline rewritten while the scan
+        // read it: such a rewrite reads as incompleteness against witnesses
+        // captured earlier. Genuine truncation persists across reads, so re-take
+        // both independent witnesses for this one issue and compare them against
+        // THIS reread; only a persistent disagreement refuses publication.
+        const [freshCounts, freshManifest] = await Promise.all([
+          this.getIssueTimelineCounts(repository, [node]),
+          this.getPerIssueTimelineManifest(repository, [node]),
+        ]);
+        if (!timelineMatchesEvidence(authoritativeTimeline, freshCounts.get(node.number), freshManifest.get(node.number))) {
+          throw new Error(`GitHub issue ${node.number} timeline completeness could not be verified.`);
+        }
       }
       issues.push(toGitHubIssue(node, labels, authoritativeTimeline, closingPullRequests));
     }
@@ -551,41 +558,112 @@ export class GitHubGateway {
     // These repository-wide REST collections enumerate IDs independently of the
     // degraded GraphQL timeline resolver. Never treat an unfinished manifest as
     // proof: large repositories fail closed at a bounded request budget.
+    const readPage = async (collection: "events" | "comments", page: number): Promise<GitHubRestResponse> => {
+      if (requests === 50) {
+        throw new Error("GitHub timeline completeness could not be verified within 50 repository manifest requests.");
+      }
+      checkGraphqlRequestBudget();
+      requests += 1;
+      const response = await this.request(`${path}/${collection}?per_page=100&page=${page}`);
+      const payload = await responseJson<unknown>(response);
+      if (collection === "events") {
+        for (const event of manifestEventRows.parse(payload)) {
+          if (!watchedEvents.has(event.event) || !manifest.has(event.issue.number)) continue;
+          if (identities.get(event.issue.number) !== event.issue.id) {
+            throw new Error("GitHub timeline manifest issue identity was invalid.");
+          }
+          manifest.get(event.issue.number)!.add(event.node_id);
+        }
+      } else {
+        for (const comment of manifestCommentRows.parse(payload)) {
+          const match = /\/repos\/([^/]+)\/([^/]+)\/issues\/([1-9]\d*)$/.exec(new URL(comment.issue_url).pathname);
+          if (match === null || match[1]!.toLowerCase() !== segment(repository.owner).toLowerCase()
+            || match[2]!.toLowerCase() !== segment(repository.name).toLowerCase()) {
+            throw new Error("GitHub timeline manifest issue URL was invalid.");
+          }
+          const number = Number(match[3]);
+          if (!Number.isSafeInteger(number)) throw new Error("GitHub timeline manifest issue number was invalid.");
+          manifest.get(number)?.add(comment.node_id);
+        }
+      }
+      return response;
+    };
+    // Estimate both collections from their first pages BEFORE walking them: a
+    // repository that outgrew the 50-request budget would otherwise exhaust it
+    // deterministically, failing every retry forever. rel="last" carries the
+    // page count; no rel="next" at all means a single page; rel="next" without
+    // rel="last" is UNKNOWN size and refuses the repo-wide walk in favor of the
+    // per-issue fallback below.
+    const estimates = new Map<"events" | "comments", { more: boolean; pages: number | null }>();
     for (const collection of ["events", "comments"] as const) {
-      for (let page = 1; ; page += 1) {
-        if (requests === 50) {
-          throw new Error("GitHub timeline completeness could not be verified within 50 repository manifest requests.");
+      const link = (await readPage(collection, 1)).headers.get("link");
+      estimates.set(collection, hasNextLink(link) ? { more: true, pages: lastLinkPage(link) } : { more: false, pages: 1 });
+    }
+    const eventsPages = estimates.get("events")!.pages;
+    const commentsPages = estimates.get("comments")!.pages;
+    if (eventsPages !== null && commentsPages !== null && eventsPages + commentsPages <= 50) {
+      for (const collection of ["events", "comments"] as const) {
+        let more = estimates.get(collection)!.more;
+        for (let page = 1; more; ) {
+          page += 1;
+          more = hasNextLink((await readPage(collection, page)).headers.get("link"));
         }
-        checkGraphqlRequestBudget();
-        requests += 1;
-        const response = await this.request(`${path}/${collection}?per_page=100&page=${page}`);
-        const payload = await responseJson<unknown>(response);
-        if (collection === "events") {
-          const events = z.array(z.object({
-            node_id: z.string().min(1), event: z.string(),
-            issue: z.object({ id: z.number().int().positive().safe(), number: z.number().int().positive().safe() }),
-          })).parse(payload);
-          for (const event of events) {
-            if (!watchedEvents.has(event.event) || !manifest.has(event.issue.number)) continue;
-            if (identities.get(event.issue.number) !== event.issue.id) {
-              throw new Error("GitHub timeline manifest issue identity was invalid.");
-            }
-            manifest.get(event.issue.number)!.add(event.node_id);
+      }
+      return manifest;
+    }
+    // The estimate refused the repo-wide walk, or pages shifted beyond it
+    // mid-walk. The repository has outgrown the budget; that is a cost problem,
+    // not a verdict about the timeline, so enumerate each scanned issue's own
+    // REST collections instead. Exhaustion below is a cost guard — the queue's
+    // retry backoff remains the recovery path, and no cooldown is set for it.
+    return this.getPerIssueTimelineManifest(repository, issues);
+  }
+
+  /**
+   * Rebuilds every manifest entry from per-issue REST collections, mirroring
+   * the repo-wide walk's validation: identical zod schemas, and the same
+   * identity error when a row names a different issue or a foreign id. The
+   * issue number comes from the request path, so no issue_url parsing happens.
+   * This enumerator is also the fresh witness on the suspect path, so it must
+   * depend on nothing captured before the reread it verifies.
+   */
+  private async getPerIssueTimelineManifest(
+    repository: GitHubRepositoryReference,
+    issues: readonly GitHubGraphqlIssueNode[],
+  ): Promise<Map<number, Set<string>>> {
+    const manifest = new Map(issues.map((issue) => [issue.number, new Set<string>()]));
+    if (issues.length === 0) return manifest;
+    const identities = new Map(issues.map((issue) => [issue.number, issue.databaseId]));
+    const watchedEvents = new Set(["labeled", "unlabeled", "assigned", "unassigned"]);
+    const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/issues`;
+    const budget = issues.length * 4 + 4;
+    let requests = 0;
+    for (const issue of issues) {
+      for (const collection of ["events", "comments"] as const) {
+        for (let page = 1; ; page += 1) {
+          if (requests === budget) {
+            throw new Error("GitHub timeline completeness could not be verified within the per-issue manifest request budget.");
           }
-        } else {
-          const comments = z.array(z.object({ node_id: z.string().min(1), issue_url: z.url() })).parse(payload);
-          for (const comment of comments) {
-            const match = /\/repos\/([^/]+)\/([^/]+)\/issues\/([1-9]\d*)$/.exec(new URL(comment.issue_url).pathname);
-            if (match === null || match[1]!.toLowerCase() !== segment(repository.owner).toLowerCase()
-              || match[2]!.toLowerCase() !== segment(repository.name).toLowerCase()) {
-              throw new Error("GitHub timeline manifest issue URL was invalid.");
+          checkGraphqlRequestBudget();
+          requests += 1;
+          const response = await this.request(`${path}/${issue.number}/${collection}?per_page=100&page=${page}`);
+          const payload = await responseJson<unknown>(response);
+          if (collection === "events") {
+            for (const event of manifestEventRows.parse(payload)) {
+              if (event.issue.number !== issue.number || identities.get(issue.number) !== event.issue.id) {
+                throw new Error("GitHub timeline manifest issue identity was invalid.");
+              }
+              if (watchedEvents.has(event.event)) {
+                manifest.get(issue.number)!.add(event.node_id);
+              }
             }
-            const number = Number(match[3]);
-            if (!Number.isSafeInteger(number)) throw new Error("GitHub timeline manifest issue number was invalid.");
-            manifest.get(number)?.add(comment.node_id);
+          } else {
+            for (const comment of manifestCommentRows.parse(payload)) {
+              manifest.get(issue.number)!.add(comment.node_id);
+            }
           }
+          if (!hasNextLink(response.headers.get("link"))) break;
         }
-        if (!hasNextLink(response.headers.get("link"))) break;
       }
     }
     return manifest;
@@ -1363,3 +1441,42 @@ async function responseJson<T>(response: GitHubRestResponse): Promise<T> {
 function hasNextLink(linkHeader: string | null): boolean {
   return linkHeader?.split(",").some((link) => /rel="?next"?/.test(link)) ?? false;
 }
+
+/**
+ * The rel="last" page number, or null when it is absent or unusable — an
+ * UNKNOWN collection size that is never treated as small. Absent rel="next"
+ * never reaches this: that case already means a single page.
+ */
+function lastLinkPage(linkHeader: string | null): number | null {
+  const last = linkHeader?.split(",").find((link) => /rel="?last"?/.test(link));
+  if (last === undefined) return null;
+  const target = /<([^>]+)>/.exec(last)?.[1];
+  if (target === undefined) return null;
+  const page = Number(new URL(target, "https://api.github.com").searchParams.get("page"));
+  return Number.isSafeInteger(page) && page >= 1 ? page : null;
+}
+
+/**
+ * The one completeness rule for every witness pair: the timeline's ids must be
+ * exactly as many as the independent count, unique, and exactly the REST
+ * manifest's ids. The scan-time evidence and the fresh pair taken for a
+ * suspect reread run this same comparison, so a mid-read rewrite and a truly
+ * truncated read are separated by whether disagreement persists across
+ * re-taken evidence — never by a different rule.
+ */
+function timelineMatchesEvidence(
+  timeline: { history: Array<{ id: string }>; comments: Array<{ id: string }> },
+  expectedCount: number | undefined,
+  expectedIds: Set<string> | undefined,
+): boolean {
+  const ids = [...timeline.history, ...timeline.comments].map(({ id }) => id);
+  return ids.length === expectedCount && new Set(ids).size === expectedCount
+    && expectedIds?.size === expectedCount && ids.every((id) => expectedIds.has(id));
+}
+
+/** Identical row schemas for the repo-wide walk and the per-issue fallback. */
+const manifestEventRows = z.array(z.object({
+  node_id: z.string().min(1), event: z.string(),
+  issue: z.object({ id: z.number().int().positive().safe(), number: z.number().int().positive().safe() }),
+}));
+const manifestCommentRows = z.array(z.object({ node_id: z.string().min(1), issue_url: z.url() }));

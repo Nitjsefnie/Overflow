@@ -2057,7 +2057,7 @@ describe("GitHubGateway issue timeline query shape", () => {
           { node_id: "irrelevant", event: "closed", issue: { id: 101, number: 1 } },
           { node_id: "another-issue", event: "labeled", issue: { id: 102, number: 2 } },
         ] : [{ node_id: "another-comment", issue_url: "https://api.github.com/repos/octo/overflow/issues/2" }], {
-          headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` },
+          headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next", <${url.origin}${url.pathname}?page=2>; rel="last"` },
         });
         return manifestResponse(input, { 1: [openingEvent(1), rationale] })!;
       }
@@ -2073,7 +2073,7 @@ describe("GitHubGateway issue timeline query shape", () => {
     } });
     const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
     expect(issue?.comments.map(({ id }) => id)).toEqual([rationale.id]);
-    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", "events:1", "events:2", "comments:1", "comments:2",
+    expect(calls).toEqual(["RepositoryIssues", "IssueTimelineCounts", "events:1", "comments:1", "events:2", "comments:2",
       ...(substituted ? ["IssueTimeline"] : [])]);
   });
 
@@ -2087,13 +2087,18 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(requests).toEqual(["https://api.github.com/graphql"]);
   });
 
-  it("bounds repository manifest pagination and rejects an unfinished manifest", async () => {
+  it("falls back per issue when collection size is unknown and bounds that fallback per issue", async () => {
     const pages: number[] = [];
     const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
       const url = new URL(String(input));
-      if (url.pathname.endsWith("/issues/events")) {
+      if (url.pathname.endsWith("/issues/1/events")) {
         const page = Number(url.searchParams.get("page"));
         pages.push(page);
+        return Response.json([], { headers: { link: `<https://api.github.com/repos/octo/overflow/issues/1/events?page=${page + 1}>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/1/comments")) return Response.json([]);
+      if (url.pathname.endsWith("/issues/events")) {
+        const page = Number(url.searchParams.get("page"));
         return Response.json([], { headers: { link: `<https://api.github.com/repos/octo/overflow/issues/events?page=${page + 1}>; rel="next"` } });
       }
       if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
@@ -2103,8 +2108,191 @@ describe("GitHubGateway issue timeline query shape", () => {
       } } } });
       return countsResponse({ number1: 1 }, () => 0);
     } });
-    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow();
-    expect(pages).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub timeline completeness could not be verified within the per-issue manifest request budget.",
+    );
+    expect(pages).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("completes the manifest per issue when the repository-wide collections exceed the page budget", async () => {
+    const repoWidePages: string[] = [];
+    const perIssuePaths: string[] = [];
+    const truth: Record<number, Array<{ __typename: string; id: string }>> = {
+      1: [openingEvent(1), rationale],
+      2: [openingEvent(2), { ...rationale, id: "rationale-2" }],
+    };
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const perIssue = perIssueManifestResponse(input, truth);
+      if (perIssue !== null) {
+        perIssuePaths.push(new URL(String(input)).pathname);
+        return perIssue;
+      }
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
+        const collection = url.pathname.endsWith("/issues/events") ? "events" : "comments";
+        repoWidePages.push(`${collection}:${url.searchParams.get("page")}`);
+        const last = collection === "events" ? 120 : 2;
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=${last}>; rel="last"` } });
+      }
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Large repository", { nodes: [], pageInfo }),
+          issueNode(102, 2, "Second scanned", { nodes: [], pageInfo })], pageInfo,
+      } } } });
+      if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
+      return timelineResponse([openingEvent(variables.issueNumber),
+        variables.issueNumber === 1 ? rationale : { ...rationale, id: "rationale-2" }]);
+    } });
+    const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(issues).toHaveLength(2);
+    expect(issues[1]?.comments.map(({ id }) => id)).toEqual(["rationale-2"]);
+    expect(repoWidePages).toEqual(["events:1", "comments:1"]);
+    expect(perIssuePaths).toEqual([
+      "/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments",
+      "/repos/octo/overflow/issues/2/events", "/repos/octo/overflow/issues/2/comments",
+    ]);
+  });
+
+  it("falls back per issue when the repository-wide collection size is unknown", async () => {
+    const repoWidePages: string[] = [];
+    const perIssuePaths: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const perIssue = perIssueManifestResponse(input, { 1: [openingEvent(1), rationale] });
+      if (perIssue !== null) {
+        perIssuePaths.push(new URL(String(input)).pathname);
+        return perIssue;
+      }
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events")) {
+        repoWidePages.push(`events:${url.searchParams.get("page")}`);
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/comments")) {
+        repoWidePages.push(`comments:${url.searchParams.get("page")}`);
+        return Response.json([]);
+      }
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Unknown size", { nodes: [], pageInfo })], pageInfo } } } });
+      if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
+      return timelineResponse([openingEvent(1), rationale]);
+    } });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(issue?.comments.map(({ id }) => id)).toEqual([rationale.id]);
+    expect(repoWidePages).toEqual(["events:1", "comments:1"]);
+    expect(perIssuePaths).toEqual(["/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments"]);
+  });
+
+  it("fails closed within the per-issue budget when per-issue collections keep paging", async () => {
+    const perIssuePages: string[] = [];
+    const scanned = Array.from({ length: 3 }, (_, index) =>
+      issueNode(101 + index, index + 1, `Paging ${index + 1}`, { nodes: [], pageInfo }));
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (/\/repos\/octo\/overflow\/issues\/[1-9]\d*\/(events|comments)$/.test(url.pathname)) {
+        perIssuePages.push(url.pathname);
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=99>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/events")) {
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
+      const { query, variables } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: scanned, pageInfo } } } });
+      if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 0);
+      throw new Error(`Unexpected GraphQL operation: ${query}`);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub timeline completeness could not be verified within the per-issue manifest request budget.",
+    );
+    expect(perIssuePages.length).toBeGreaterThan(4);
+    expect(perIssuePages.length).toBeLessThanOrEqual(3 * 4 + 4);
+  });
+
+  it("re-verifies a suspect reread against a fresh evidence pair taken after that reread", async () => {
+    const calls: string[] = [];
+    let countReads = 0;
+    const staleTruth = [openingEvent(1), rationale];
+    const newTruth = [openingEvent(1), settledEvent, rationale];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      const perIssue = /\/repos\/octo\/overflow\/issues\/([1-9]\d*)\/(events|comments)$/.exec(url.pathname);
+      if (perIssue !== null) {
+        calls.push(`rest:${url.pathname}`);
+        return perIssueManifestResponse(input, { 1: newTruth })!;
+      }
+      if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
+        calls.push(`rest:${url.pathname}`);
+        return manifestResponse(input, { 1: staleTruth })!;
+      }
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)![1]!;
+      calls.push(`graphql:${operation}`);
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [{
+          ...issueNode(101, 1, "Rewritten mid-scan", { nodes: [{ name: "settled: 6" }], pageInfo }),
+          timelineItems: { nodes: staleTruth, totalCount: 2, pageInfo },
+        }], pageInfo } } } });
+      if (operation === "IssueTimelineCounts") {
+        countReads += 1;
+        return countsResponse(variables, () => countReads === 1 ? 2 : 3);
+      }
+      return variables.cursor === null ? timelineResponse(newTruth) : timelineResponse(staleTruth);
+    } });
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(issue?.history.map(({ id }) => id)).toEqual(["opening-event-1", "settled-event"]);
+    expect(issue?.comments.map(({ id }) => id)).toEqual(["rationale-node"]);
+    const reread = calls.indexOf("graphql:IssueTimeline");
+    expect(reread).toBeGreaterThan(-1);
+    expect(calls.indexOf("graphql:IssueTimelineCounts", reread + 1)).toBeGreaterThan(reread);
+    expect(calls.indexOf("rest:/repos/octo/overflow/issues/1/events")).toBeGreaterThan(reread);
+    expect(calls.indexOf("rest:/repos/octo/overflow/issues/1/comments")).toBeGreaterThan(reread);
+  });
+
+  it("still refuses a reread that the fresh evidence pair also contradicts", async () => {
+    const fullTruth = [openingEvent(1), settledEvent, rationale];
+    const short = [openingEvent(1), settledEvent];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const perIssue = perIssueManifestResponse(input, { 1: fullTruth });
+      if (perIssue !== null) return perIssue;
+      const manifest = manifestResponse(input, { 1: fullTruth });
+      if (manifest !== null) return manifest;
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)![1]!;
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [{
+          ...issueNode(101, 1, "Truncated reread", { nodes: [], pageInfo }),
+          timelineItems: { nodes: short, totalCount: 2, pageInfo },
+        }], pageInfo } } } });
+      if (operation === "IssueTimelineCounts") return countsResponse(variables, () => 3);
+      return timelineResponse(short);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub issue 1 timeline completeness could not be verified.",
+    );
+  });
+
+  it.each([
+    { name: "wrong issue number", row: { node_id: "stray", event: "labeled", issue: { id: 101, number: 9 } } },
+    { name: "wrong issue identity", row: { node_id: "spoofed", event: "labeled", issue: { id: 999, number: 1 } } },
+  ])("rejects a per-issue manifest row naming another issue: $name", async ({ row }) => {
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/1/events")) return Response.json([row]);
+      if (url.pathname.endsWith("/issues/1/comments")) return Response.json([]);
+      if (url.pathname.endsWith("/issues/events")) {
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
+      const { query } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Identity mismatch", { nodes: [], pageInfo })], pageInfo } } } });
+      return countsResponse({ number1: 1 }, () => 0);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub timeline manifest issue identity was invalid.",
+    );
   });
 
   it.each(["LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "IssueComment"])(
@@ -2211,6 +2399,24 @@ describe("GitHubGateway issue timeline query shape", () => {
         : [];
     }));
     return Response.json(nodes);
+  }
+
+  /** Per-issue REST answers; `/repos/octo/overflow/issues/1/events` does not match the repo-wide suffix checks. */
+  function perIssueManifestResponse(input: RequestInfo | URL, timelines: Record<number, Array<{ __typename: string; id: string }>>) {
+    const url = new URL(String(input));
+    const match = /\/repos\/octo\/overflow\/issues\/([1-9]\d*)\/(events|comments)$/.exec(url.pathname);
+    if (match === null) return null;
+    const number = Number(match[1]);
+    const eventNames: Record<string, string> = { LabeledEvent: "labeled", UnlabeledEvent: "unlabeled", AssignedEvent: "assigned", UnassignedEvent: "unassigned" };
+    const nodes = timelines[number] ?? [];
+    if (match[2] === "comments") {
+      return Response.json(nodes.filter((node) => node.__typename === "IssueComment").map((node) => ({
+        node_id: node.id, issue_url: `https://api.github.com/repos/octo/overflow/issues/${number}`,
+      })));
+    }
+    return Response.json(nodes.filter((node) => eventNames[node.__typename] !== undefined).map((node) => ({
+      node_id: node.id, event: eventNames[node.__typename], issue: { id: 100 + number, number },
+    })));
   }
 
   function countsResponse(variables: Record<string, unknown>, count: (number: number) => number) {
