@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { GitHubApiError } from "@/lib/github/errors";
+import type { GitHubRepository } from "@/lib/github/types";
 import type {
   RepositoryRegistrationDependencies,
   RepositoryRegistrationInput,
@@ -25,9 +26,24 @@ const conflictStatus = "409";
 // src/app/api/repositories/route.ts answers an error coded GITHUB_CREDENTIALS with this status.
 const githubCredentialsStatus = "401";
 
-// The gateway calls a GitHub 401 can interrupt, and the step text each surfaced message names —
-// the value the published row carries as <step>.
-const githubCredentialSteps = [
+// src/app/api/repositories/route.ts answers an error coded GITHUB_ACCESS with this status.
+const githubAccessStatus = "403";
+
+// src/app/api/repositories/route.ts answers an error coded GITHUB_RATE_LIMITED with this status.
+const githubRateLimitedStatus = "429";
+
+// src/app/api/repositories/route.ts answers an error coded FORBIDDEN with this status.
+const forbiddenStatus = "403";
+
+// src/app/api/repositories/route.ts answers an error coded INVALID_INPUT with this status.
+const invalidInputStatus = "400";
+
+// src/app/api/repositories/route.ts answers an error coded UPSTREAM_FAILURE with this status.
+const upstreamFailureStatus = "502";
+
+// The gateway calls a GitHub failure can interrupt before the store is touched, and the step text
+// each surfaced message names — the value the published row carries as <step>.
+const gatewaySteps = [
   { step: "getRepository", named: "retrieve the submitted GitHub repository" },
   { step: "listRepositoryLabels", named: "read the repository difficulty labels" },
   { step: "createWebhook", named: "create the repository webhook" },
@@ -75,7 +91,7 @@ const registrationConflicts: RegistrationFailure[] = [
 // A GitHub 401 rejects the stored authorization itself and can interrupt any of the gateway calls
 // registration makes before the store is touched. The catalog publishes one row for all of them,
 // its message carrying <step> where each emission names the step it died on.
-const githubCredentialRejections: RegistrationFailure[] = githubCredentialSteps.map(({ step, named }) => ({
+const githubCredentialRejections: RegistrationFailure[] = gatewaySteps.map(({ step, named }) => ({
   what: `a GitHub credential rejection while trying to ${named}`,
   status: githubCredentialsStatus,
   raise: (dependencies) => {
@@ -93,7 +109,296 @@ const githubCredentialRejections: RegistrationFailure[] = githubCredentialSteps.
   },
 }));
 
-const registrationFailures = [...registrationConflicts, ...githubCredentialRejections];
+// Builds a predicate holding when the cell begins with the first segment, carries every later
+// segment after it in order, and ends with the last one. The text between segments is what the
+// cell's angle-bracket placeholders stand for, so only the fixed skeleton is comparable.
+function matchesSegmentsInOrder(segments: string[]): (cell: string) => boolean {
+  const [first] = segments;
+  const last = segments[segments.length - 1];
+  return (cell) => {
+    if (!cell.startsWith(first)) {
+      return false;
+    }
+    let position = first.length;
+    for (const segment of segments.slice(1)) {
+      const found = cell.indexOf(segment, position);
+      if (found === -1) {
+        return false;
+      }
+      position = found + segment.length;
+    }
+    return cell.endsWith(last);
+  };
+}
+
+// The 403 and 404 access messages trail an authorization note whose wording varies with the
+// repository's owner type (and, at the first gateway step, with the repository not having been
+// looked up at all), so the published cell stands for it with the <cause> placeholder. The
+// matcher pins the fixed text around the variable note instead of the note itself: every fixed
+// segment is first verified against the surfaced message, then required of the cell in order.
+function accessRefusalMatcher(surfaced: string, stepText: string, afterStep: string, tail: string): (cell: string) => boolean {
+  const segments = surfaced.split(stepText);
+  expect(segments, `The surfaced message names the step ${stepText} other than once: ${surfaced}`).toHaveLength(2);
+  const [before] = segments as [string, string];
+  expect(surfaced, `The surfaced message lost its post-step text: ${surfaced}`).toContain(afterStep);
+  expect(surfaced.endsWith(tail), `The surfaced message does not end in the review remedy: ${surfaced}`).toBe(true);
+  return matchesSegmentsInOrder([before, afterStep, tail]);
+}
+
+const githubAccessReviewTail = " Review Overflow's authorization at https://github.com/settings/applications, then retry registration.";
+
+// The rate-limit message substitutes the step and the HTTP status, and appends a retry-after
+// sentence only when GitHub supplied a delay. The published row carries <step> and <status>, so
+// compare the fixed skeleton: drop the delay sentence, then hold the text on either side of the
+// step against the cell, resolving the status placeholder before comparing the tail.
+function rateLimitMatcher(surfaced: string, stepText: string, status: number): (cell: string) => boolean {
+  const withoutDelay = surfaced.replace(/ Retry after \d+ seconds?\./, "");
+  const segments = withoutDelay.split(stepText);
+  expect(segments, `The surfaced message names the step ${stepText} other than once: ${surfaced}`).toHaveLength(2);
+  const [before, after] = segments as [string, string];
+  expect(
+    after.startsWith(` (HTTP ${status}).`),
+    `The surfaced message does not state the raised status after the step: ${surfaced}`,
+  ).toBe(true);
+  return (cell) => cell.startsWith(before) && cell.replace("<status>", String(status)).endsWith(after);
+}
+
+// A GitHub 403 carrying no rate-limit evidence refuses a gateway step ambiguously — it cannot
+// separate a missing authorization from a secondary limit — so the message leads with the
+// transient remedy and trails the authorization note the <cause> placeholder stands for.
+const githubAccessRefusals: RegistrationFailure[] = gatewaySteps.map(({ step, named }) => ({
+  what: `a GitHub 403 refusal while trying to ${named}`,
+  status: githubAccessStatus,
+  raise: (dependencies) => {
+    dependencies.github[step] = async () => {
+      throw new GitHubApiError(403);
+    };
+  },
+  publishes: (surfaced) => accessRefusalMatcher(
+    surfaced,
+    named,
+    " (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized "
+      + "and when it is temporarily limiting requests, and this response carries nothing that "
+      + "separates the two causes. Wait a minute and retry registration before changing anything.",
+    githubAccessReviewTail,
+  ),
+}));
+
+// A GitHub 404 hides the resource rather than refusing it, and says so: the message observes what
+// the 404 can mean before the same trailing authorization note. At the first gateway step the
+// repository was never looked up, so the observation loses its "since it was looked up" clause —
+// the published cell stands for that clause with its own placeholder.
+const githubAccessHidings: RegistrationFailure[] = gatewaySteps.map(({ step, named }) => ({
+  what: `a GitHub 404 hiding while trying to ${named}`,
+  status: githubAccessStatus,
+  raise: (dependencies) => {
+    dependencies.github[step] = async () => {
+      throw new GitHubApiError(404);
+    };
+  },
+  publishes: (surfaced) => accessRefusalMatcher(
+    surfaced,
+    named,
+    ". GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate "
+      + "missing authorization. The repository may also have been renamed, moved or deleted",
+    githubAccessReviewTail,
+  ),
+}));
+
+// GitHub rate-limits with a 429 and with a 403 carrying rate-limit evidence, and appends a
+// retry-after sentence only when GitHub supplied a delay. One published row answers both
+// statuses, its <status> placeholder standing for whichever arrived; one case carries a delay so
+// the row covers the appended sentence too.
+const githubRateLimits: RegistrationFailure[] = [
+  ...gatewaySteps.map(({ step, named }, index) => ({
+    what: `a GitHub rate limit while trying to ${named}`,
+    status: githubRateLimitedStatus,
+    raise: (dependencies: RepositoryRegistrationDependencies) => {
+      dependencies.github[step] = async () => {
+        throw new GitHubApiError(429, false, index === gatewaySteps.length - 1 ? 60 : null);
+      };
+    },
+    publishes: (surfaced: string) => rateLimitMatcher(surfaced, named, 429),
+  })),
+  {
+    what: "a GitHub rate limit on the submitted-repository lookup signalled by a 403 carrying rate-limit evidence",
+    status: githubRateLimitedStatus,
+    raise: (dependencies: RepositoryRegistrationDependencies) => {
+      dependencies.github.getRepository = async () => {
+        throw new GitHubApiError(403, true, 30);
+      };
+    },
+    publishes: (surfaced: string) => rateLimitMatcher(surfaced, "retrieve the submitted GitHub repository", 403),
+  },
+];
+
+// Any other GitHubApiError is an upstream failure, and the fallback message names the step that
+// died: the repository lookup keeps its own sentence, the two setup steps share the other shape.
+const githubOutages: RegistrationFailure[] = gatewaySteps.map(({ step, named }) => ({
+  what: `a GitHub outage while trying to ${named}`,
+  status: upstreamFailureStatus,
+  raise: (dependencies: RepositoryRegistrationDependencies) => {
+    dependencies.github[step] = async () => {
+      throw new GitHubApiError(500);
+    };
+  },
+  publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+}));
+
+// Failures the registration itself raises about the submission, the account, or the store — no
+// gateway call involved, so each pins its published row by exact message.
+const registrationRefusals: RegistrationFailure[] = [
+  {
+    what: "a submission that names no GitHub repository",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, repositoryUrl: "not-a-github-reference" }),
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+  {
+    what: "an account barred from registering",
+    status: forbiddenStatus,
+    raise: (dependencies) => {
+      dependencies.actor.enforcementState = "BANNED";
+    },
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+  {
+    what: "a private repository",
+    status: forbiddenStatus,
+    raise: (dependencies) => {
+      dependencies.github.getRepository = async () => ({ ...githubRepositoryFixture(), visibility: "PRIVATE" });
+    },
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+  {
+    what: "a repository the actor cannot administer",
+    status: forbiddenStatus,
+    raise: (dependencies) => {
+      dependencies.github.getRepository = async () => ({ ...githubRepositoryFixture(), canAdminister: false });
+    },
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+  {
+    what: "a store that cannot save the registration",
+    status: upstreamFailureStatus,
+    raise: (dependencies) => {
+      dependencies.store.createRepository = async () => {
+        throw new Error("the store is unreachable");
+      };
+    },
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+];
+
+const registrationFailures = [
+  ...registrationConflicts,
+  ...githubCredentialRejections,
+  ...githubAccessRefusals,
+  ...githubAccessHidings,
+  ...githubRateLimits,
+  ...githubOutages,
+  ...registrationRefusals,
+];
+
+// Exact-message rows the corpus deliberately does not raise, each explained by the
+// route-level answer that produces it in src/app/api/repositories/route.ts. A row absent from
+// the catalog corpus and from this list is what the reverse-direction check exists to catch.
+const routeLevelAnswers: Record<string, string> = {
+  "Invalid repository registration request.": "the route's body-schema check answers before registerRepository runs",
+  "The supplied API token was not accepted.": "the route's bearer-credential lookup answers before registerRepository runs",
+  "Sign in is required.": "the route's session/bearer gate answers before registerRepository runs",
+  "The request origin is not allowed.": "the route's origin check answers before registerRepository runs",
+  "The request must use the application/json content type.": "the route's content-type gate answers before the token is read",
+  "The server is not configured to accept this request.": "the route's APP_URL check answers before registerRepository runs",
+  "Unable to initialize repository registration.": "the route's catch-all answers when registration itself fails unexpectedly",
+};
+
+// One submission per catalog-validation message, each crafted so validating it fails on exactly
+// that message; the shapes follow tests/repositories/register.test.ts. These are raised through
+// the same registerRepository as the corpus above but judged by set equality against the bullet
+// list the table defers to, so they stay out of the row-matching corpus.
+const catalogValidationRefusals: RegistrationFailure[] = [
+  {
+    what: "an empty display name",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, openingName: " " }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a submission with no opening label",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, openingLabels: [] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an opening label with no text",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, openingLabels: [{ label: " ", comparisonPoints: 5, reservePoints: 5 }] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a duplicated opening label",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({
+      ...input,
+      openingLabels: [
+        { label: "size/M", comparisonPoints: 5, reservePoints: 5 },
+        { label: "size/M", comparisonPoints: 5, reservePoints: 5 },
+      ],
+    }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an opening mapping outside one through ten",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, openingLabels: [{ label: "size/M", comparisonPoints: 0, reservePoints: 5 }] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an actual label with no text",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, actualLabels: [{ label: " ", points: 1 }, ...actualLabelsFrom(2)] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an actual label duplicating an opening label",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, actualLabels: [{ label: "size/M", points: 1 }, ...actualLabelsFrom(2)] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an actual mapping outside one through ten",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, actualLabels: [{ label: "delivered/1", points: 0 }, ...actualLabelsFrom(2)] }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a duplicated actual mapping",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({
+      ...input,
+      actualLabels: [{ label: "delivered/1", points: 1 }, { label: "delivered/2", points: 1 }, ...actualLabelsFrom(3)],
+    }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "an actual catalog that does not cover every point",
+    status: invalidInputStatus,
+    raise() {},
+    submit: (input) => ({ ...input, actualLabels: actualLabelsFrom(1, 9) }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+];
 
 // README.md documents the status, code and exact message of every registration failure, and a
 // reader matches on all three. Nothing else notices when a message is reworded and the catalog is
@@ -119,6 +424,61 @@ describe("the registration error catalog README.md publishes", () => {
       `Two registration conflicts surface the same published message: ${claimed.join(" / ")}`,
     ).toBe(registrationConflicts.length);
   });
+
+  // The other direction, which is what catches a row no code path emits: every exact-message row
+  // the catalog publishes must be answered by a failure the corpus raises, or be listed in
+  // routeLevelAnswers as answered by src/app/api/repositories/route.ts before or around
+  // registerRepository. A row that is neither claimed nor listed fails this check, so a future
+  // row cannot slip in without either a raised failure or a stated reason.
+  it("publishes no exact-message row that no raised failure answers and no allowlist entry explains", async () => {
+    const raised = await Promise.all(registrationFailures.map(async (failure) => ({
+      failure,
+      surfaced: await surfacedFailure(failure),
+    })));
+
+    const unclaimed = registrationCatalogRows().filter((row) => {
+      const claimants = raised.filter(({ failure, surfaced }) =>
+        row.status === failure.status
+        && row.code === surfaced.code
+        && failure.publishes(surfaced.message)(row.message));
+
+      if (routeLevelAnswers[row.message] !== undefined) {
+        expect(
+          claimants,
+          `The row "${row.message}" is allowlisted as route-level (${routeLevelAnswers[row.message]}), but a raised failure answers it`,
+        ).toHaveLength(0);
+        return false;
+      }
+      return claimants.length === 0;
+    });
+
+    expect(
+      unclaimed.map((row) => `${row.status} ${row.code} ${row.message}`),
+      "The catalog publishes exact-message rows that no raised failure answers and no route-level allowlist entry explains",
+    ).toEqual([]);
+  });
+
+  // Catalog validation's refusals are enumerated by the bullet list below the table, whose rows
+  // the table itself defers to, so the set equality here is what pins them: every message a
+  // crafted submission raises must be published, and every published message must be raiseable.
+  it("publishes exactly the catalog-validation messages crafted submissions raise", async () => {
+    const emitted: string[] = [];
+    for (const refusal of catalogValidationRefusals) {
+      const surfaced = await surfacedFailure(refusal);
+      expect(
+        surfaced.code,
+        `Raising ${refusal.what} produced a different code than the catalog-validation row's`,
+      ).toBe("INVALID_INPUT");
+      emitted.push(surfaced.message);
+    }
+
+    const published = publishedValidationMessages();
+    expect(new Set(published).size, "The published catalog-validation list repeats a message").toBe(published.length);
+    expect(
+      emitted.slice().sort(),
+      "The published catalog-validation list and the messages validation raises differ",
+    ).toEqual(published.slice().sort());
+  });
 });
 
 type RegistrationFailure = {
@@ -127,6 +487,8 @@ type RegistrationFailure = {
   readonly status: string;
   // Swaps in the dependency whose failure produces this registration outcome.
   readonly raise: (dependencies: RepositoryRegistrationDependencies) => void;
+  // Reshapes the submission when the failure is about the submitted input itself.
+  readonly submit?: (input: RepositoryRegistrationInput) => RepositoryRegistrationInput;
   readonly publishes: (surfacedMessage: string) => (publishedCell: string) => boolean;
 };
 
@@ -210,16 +572,7 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
     actor: { id: "sponsor-id", role: "MODERATOR" },
     github: {
       async getRepository() {
-        return {
-          id: 42,
-          owner: "octo",
-          ownerType: "USER",
-          name: "overflow",
-          fullName: claimedOwnerName,
-          visibility: "PUBLIC",
-          url: `https://github.com/${claimedOwnerName}`,
-          canAdminister: true,
-        };
+        return githubRepositoryFixture();
       },
       async listRepositoryLabels() {
         return new Set([
@@ -254,7 +607,7 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
   failure.raise(dependencies);
 
   try {
-    await registerRepository(dependencies, registrationInput());
+    await registerRepository(dependencies, failure.submit?.(registrationInput()) ?? registrationInput());
   } catch (error) {
     if (error instanceof RepositoryRegistrationError) {
       return { code: error.code, message: error.message };
@@ -262,6 +615,58 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
     throw error;
   }
   throw new Error("Registration resolved instead of surfacing a registration failure.");
+}
+
+// The GitHub repository a successful lookup surfaces, in the shape the access checks read:
+// public, user-owned, administered by the actor. An access case replaces this lookup to vary
+// exactly the field its refusal is about.
+function githubRepositoryFixture(): GitHubRepository {
+  return {
+    id: 42,
+    owner: "octo",
+    ownerType: "USER",
+    name: "overflow",
+    fullName: claimedOwnerName,
+    visibility: "PUBLIC",
+    url: `https://github.com/${claimedOwnerName}`,
+    canAdminister: true,
+  };
+}
+
+// Actual labels carrying each point from `from` through `to` (ten unless told otherwise), the
+// shape the crafted catalog-validation submissions reshape from.
+function actualLabelsFrom(from: number, to: number = 10): RepositoryRegistrationInput["actualLabels"] {
+  return Array.from({ length: to - from + 1 }, (_, index) => ({
+    label: `delivered/${from + index}`,
+    points: from + index,
+  }));
+}
+
+// The bullet list below the registration catalog enumerating the exact INVALID_INPUT messages
+// catalog validation returns, read back as the API emits them.
+function publishedValidationMessages(): string[] {
+  const lines = readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8").split("\n");
+  const intro = lines.findIndex((line) => line.startsWith("Catalog validation returns one of these exact"));
+  if (intro === -1) {
+    throw new Error("README.md no longer enumerates the catalog-validation INVALID_INPUT messages.");
+  }
+
+  const messages: string[] = [];
+  for (const line of lines.slice(intro + 1)) {
+    const bullet = line.match(/^- `(.+)`$/);
+    if (bullet === null) {
+      if (messages.length > 0 || line.trim().length > 0) {
+        break;
+      }
+      continue;
+    }
+    messages.push(bullet[1]);
+  }
+
+  if (messages.length === 0) {
+    throw new Error("README.md enumerates no catalog-validation INVALID_INPUT messages.");
+  }
+  return messages;
 }
 
 function registrationInput(): RepositoryRegistrationInput {
