@@ -6,6 +6,8 @@ import type {
   RegisteredRepository,
   RepositoryRegistrationDependencies,
   RepositoryRegistrationInput,
+  RepositoryRegistrationState,
+  RepositoryUnregisterOutcome,
 } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
@@ -15,6 +17,7 @@ import {
   changeRepositoryCatalog,
   parseGitHubRepository,
   registerRepository,
+  unregisterRepository,
 } from "@/lib/repositories/register";
 
 const claimWorkflow: ClaimPathEvidence = {
@@ -213,6 +216,32 @@ describe("explicit repository registration", () => {
     });
     expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
     expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it("consults the by-id registration state for the existing-registration check and conflicts on an active row", async () => {
+    const harness = createHarness({ existing: registeredRepository() });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(harness.stateLookupIds).toEqual([42]);
+  });
+
+  it("reactivates a sponsor-unregistered registration through webhook creation and persistence", async () => {
+    const harness = createHarness({ existing: registeredRepository(), existingUnregistered: true });
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      githubRepositoryId: 42,
+      githubWebhookId: 501,
+      id: "registered-repository-id",
+    });
+    expect(harness.githubCalls).toEqual([
+      "getRepository:octo/overflow",
+      "listRepositoryLabels:octo/overflow",
+      "createWebhook:octo/overflow",
+      "listWorkflowFiles:octo/overflow",
+    ]);
+    expect(harness.createdRepositories).toHaveLength(1);
   });
 
   it("reports a duplicate GitHub repository id discovered at insert as already registered", async () => {
@@ -654,6 +683,136 @@ describe("explicit repository registration", () => {
   );
 });
 
+describe("unregistering a registered repository", () => {
+  it("deletes the webhook on GitHub before writing the local unregister", async () => {
+    const harness = createHarness({ existing: registeredRepository() });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      repository: {
+        id: "registered-repository-id",
+        githubRepositoryId: 42,
+        ownerName: "octo/overflow",
+        sponsorId: "moderator-id",
+        visibility: "PUBLIC",
+        githubWebhookId: 501,
+      },
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "octo/overflow", sponsorId: "moderator-id" }]);
+    // The flow runs no GitHub pre-checks: the deletion is the only GitHub request (E2).
+    expect(harness.githubCalls).toEqual([]);
+  });
+
+  it("reads a GitHub 404 on the deletion as an already-absent hook and still unregisters locally", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      deleteWebhookFailure: new GitHubApiError(404),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      repository: { id: "registered-repository-id" },
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+  });
+
+  it.each([
+    { name: "credential rejection", failure: new GitHubApiError(401), code: "GITHUB_CREDENTIALS" },
+    { name: "access refusal", failure: new GitHubApiError(403), code: "GITHUB_ACCESS" },
+    { name: "rate limit", failure: new GitHubApiError(429), code: "GITHUB_RATE_LIMITED" },
+    { name: "upstream status", failure: new GitHubApiError(500), code: "UPSTREAM_FAILURE" },
+    { name: "plain error", failure: new Error("network secret"), code: "UPSTREAM_FAILURE" },
+  ] as const)("maps a deletion $name to $code and leaves the local store untouched", async ({ failure, code }) => {
+    const harness = createHarness({ existing: registeredRepository(), deleteWebhookFailure: failure });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code,
+    });
+    expect(harness.unregisterInputs).toEqual([]);
+    expect(harness.callOrder).toEqual(["deleteWebhook:501"]);
+  });
+
+  it("rejects an unparseable submission as invalid input without contacting anyone", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "not a repository" })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("answers NOT_FOUND for an owner name no registration holds", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(harness.stateLookupsByOwnerName).toEqual(["octo/overflow"]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses someone other than the repository's sponsor before contacting GitHub", async () => {
+    const harness = createHarness({ existing: { ...registeredRepository(), sponsorId: "someone-else-id" } });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Only the repository's sponsor can unregister it.",
+    });
+    expect(harness.callOrder).toEqual([]);
+    expect(harness.githubCalls).toEqual([]);
+  });
+
+  it("surfaces NOT_FOUND when the registration vanishes between the lookup and the write", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      storeUnregisterOutcome: { kind: "NOT_REGISTERED" },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+  });
+
+  it("surfaces FORBIDDEN when the store refuses the sponsor at the write", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      storeUnregisterOutcome: { kind: "FORBIDDEN" },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("reports an idempotent repeat as already unregistered with the row carried", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      storeUnregisterOutcome: { kind: "ALREADY_UNREGISTERED", repository: registeredRepository() },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      repository: { id: "registered-repository-id" },
+      webhookDeleted: true,
+      alreadyUnregistered: true,
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+  });
+
+  it("does not gate unregistration on participation eligibility", async () => {
+    const harness = createHarness({ existing: registeredRepository(), actorEnforcementState: "BANNED" });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+  });
+});
+
 type HarnessOptions = {
   actorRole?: "MEMBER" | "MODERATOR";
   actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
@@ -663,6 +822,12 @@ type HarnessOptions = {
   ownerType?: "USER" | "ORGANIZATION";
   visibility?: "PUBLIC" | "PRIVATE";
   existing?: RegisteredRepository | null;
+  /** The held row reads as sponsor-unregistered: the register path reactivates, not conflicts. */
+  existingUnregistered?: boolean;
+  /** The outcome the fake unregister write answers with (default: unregisters the held row). */
+  storeUnregisterOutcome?: RepositoryUnregisterOutcome;
+  /** The rejection the fake webhook deletion raises (after recording the call). */
+  deleteWebhookFailure?: unknown;
   /** The label names the fake GitHub answers `listRepositoryLabels` with. */
   repositoryLabels?: readonly string[];
   webhookFailure?: boolean;
@@ -682,9 +847,21 @@ function createHarness(options: HarnessOptions = {}) {
   const githubCalls: string[] = [];
   const deletedWebhookIds: number[] = [];
   const duplicateLookupIds: number[] = [];
+  const stateLookupIds: number[] = [];
+  const stateLookupsByOwnerName: string[] = [];
+  const unregisterInputs: Array<{ ownerName: string; sponsorId: string }> = [];
+  const callOrder: string[] = [];
   const scheduledRepositoryIds: string[] = [];
   const workflowReadRepositoryCounts: number[] = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
+
+  const existingState = (): RepositoryRegistrationState | null =>
+    options.existing === null || options.existing === undefined
+      ? null
+      : {
+          repository: options.existing,
+          unregisteredAt: options.existingUnregistered === true ? "2020-01-01T00:00:00.000Z" : null,
+        };
 
   const actor = {
     id: "moderator-id",
@@ -721,6 +898,10 @@ function createHarness(options: HarnessOptions = {}) {
         return { id: 501 };
       },
       async deleteWebhook(_repository, webhookId) {
+        callOrder.push(`deleteWebhook:${webhookId}`);
+        if (options.deleteWebhookFailure !== undefined) {
+          throw options.deleteWebhookFailure;
+        }
         deletedWebhookIds.push(webhookId);
       },
       async listWorkflowFiles(repository) {
@@ -737,17 +918,18 @@ function createHarness(options: HarnessOptions = {}) {
         duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
       },
-      async findRepositoryRegistrationStateByOwnerName() {
-        return null;
+      async findRepositoryRegistrationStateByOwnerName(ownerName: string) {
+        stateLookupsByOwnerName.push(ownerName);
+        return existingState();
       },
       async findRepositoryRegistrationState(githubRepositoryId) {
-        duplicateLookupIds.push(githubRepositoryId);
-        return options.existing === null || options.existing === undefined
-          ? null
-          : { repository: options.existing, unregisteredAt: null };
+        stateLookupIds.push(githubRepositoryId);
+        return existingState();
       },
-      async unregisterRepository() {
-        throw new Error("the flow reached the unregister write without an injected outcome");
+      async unregisterRepository(input) {
+        callOrder.push(`unregisterRepository:${input.ownerName}`);
+        unregisterInputs.push(input);
+        return options.storeUnregisterOutcome ?? { kind: "UNREGISTERED", repository: registeredRepository() };
       },
       async appendDifficultySchemeVersion() {
         return null;
@@ -798,6 +980,10 @@ function createHarness(options: HarnessOptions = {}) {
     githubCalls,
     deletedWebhookIds,
     duplicateLookupIds,
+    stateLookupIds,
+    stateLookupsByOwnerName,
+    unregisterInputs,
+    callOrder,
     createdRepositories,
     scheduledRepositoryIds,
     workflowReadRepositoryCounts,

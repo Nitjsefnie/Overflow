@@ -119,9 +119,17 @@ export type RepositoryRegistrationResult = RegisteredRepository & {
   claimPath: ClaimPathVerdict;
 };
 
+export type RepositoryUnregisterApiResult = {
+  repository: RegisteredRepository;
+  /** True when THIS call deleted the hook on GitHub; false when already absent (HTTP 404). */
+  webhookDeleted: boolean;
+  /** True when the local row was already sponsor-unregistered (idempotent repeat). */
+  alreadyUnregistered: boolean;
+};
+
 export class RepositoryRegistrationError extends Error {
   public constructor(
-    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
+    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "UPSTREAM_FAILURE",
     message: string,
   ) {
     super(message);
@@ -209,8 +217,11 @@ export async function registerRepository(
     );
   }
 
+  // An unregistered row is not a conflict: the resubmission reactivates it (the
+  // store's conditional on-conflict update), so only a row still holding the
+  // registration stands in the way.
   const existing = await findExistingRepository(dependencies.store, repository.id);
-  if (existing !== null) {
+  if (existing !== null && existing.unregisteredAt === null) {
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
@@ -306,6 +317,117 @@ export async function registerRepository(
   }
 
   return { ...created, initialImportScheduled, claimPath };
+}
+
+/**
+ * Unregisters a repository on its sponsor's behalf (issue 48).
+ *
+ * The flow is GitHub-first: the webhook Overflow created at registration is
+ * deleted before the local row is touched, so a GitHub refusal leaves the
+ * registration exactly as it stood. A GitHub 404 reads as the hook — or its
+ * repository — already gone, the desired end state, so the flow continues
+ * with `webhookDeleted: false`. Any other GitHub failure maps through the
+ * same error catalog registration uses, with the local store untouched, and
+ * a retry converges: the dashboard control persists because the row remains.
+ *
+ * Unregistration runs no participation gate and no public/admin pre-checks:
+ * it removes ledger activity rather than creating it (gating would trap a
+ * moderated sponsor's repositories), and GitHub enforces administration at
+ * the deleteWebhook call itself, so a repository that went private or was
+ * deleted on GitHub can still be unregistered.
+ */
+export async function unregisterRepository(
+  dependencies: RepositoryRegistrationDependencies,
+  input: { repositoryUrl: string },
+): Promise<RepositoryUnregisterApiResult> {
+  let submittedRepository: GitHubRepositoryReference;
+  try {
+    submittedRepository = parseGitHubRepository(input.repositoryUrl);
+  } catch {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit one GitHub repository as owner/name or a canonical GitHub URL.",
+    );
+  }
+
+  const ownerName = `${submittedRepository.owner}/${submittedRepository.name}`;
+  const state = await findUnregisterTarget(dependencies.store, ownerName);
+  if (state === null) {
+    throw new RepositoryRegistrationError(
+      "NOT_FOUND",
+      `No registration holds the GitHub path ${ownerName}, so there is nothing to unregister.`,
+    );
+  }
+
+  // The sponsor check precedes every GitHub request: an outsider asking for
+  // an unregistration must not move anything on GitHub, and the stored
+  // sponsor is already in hand from the lookup above. The store re-checks
+  // inside its transaction; this check keeps the common refusal free of
+  // side effects.
+  if (state.repository.sponsorId !== dependencies.actor.id) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only the repository's sponsor can unregister it.",
+    );
+  }
+
+  let webhookDeleted = true;
+  try {
+    await dependencies.github.deleteWebhook(submittedRepository, state.repository.githubWebhookId);
+  } catch (error) {
+    // A 404 says the hook, or its repository, is already gone: the desired
+    // end state holds, so the flow continues rather than failing. Any other
+    // failure leaves the local row untouched and maps through the catalog.
+    if (error instanceof GitHubApiError && error.status === 404) {
+      webhookDeleted = false;
+    } else {
+      throw githubSetupError(error, null, "delete the repository webhook");
+    }
+  }
+
+  const outcome = await unregisterThroughStore(dependencies.store, { ownerName, sponsorId: dependencies.actor.id });
+  if (outcome.kind === "NOT_REGISTERED") {
+    // The row vanished between the lookup and the write. The registration is
+    // gone either way, so NOT_FOUND is the honest answer.
+    throw new RepositoryRegistrationError(
+      "NOT_FOUND",
+      `No registration holds the GitHub path ${ownerName}, so there is nothing to unregister.`,
+    );
+  }
+  if (outcome.kind === "FORBIDDEN") {
+    throw new RepositoryRegistrationError("FORBIDDEN", "Only the repository's sponsor can unregister it.");
+  }
+
+  return {
+    repository: outcome.repository,
+    webhookDeleted,
+    alreadyUnregistered: outcome.kind === "ALREADY_UNREGISTERED",
+  };
+}
+
+async function findUnregisterTarget(
+  store: RepositoryRegistrationStore,
+  ownerName: string,
+): Promise<RepositoryRegistrationState | null> {
+  try {
+    return await store.findRepositoryRegistrationStateByOwnerName(ownerName);
+  } catch {
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to unregister the repository.");
+  }
+}
+
+async function unregisterThroughStore(
+  store: RepositoryRegistrationStore,
+  input: { ownerName: string; sponsorId: string },
+): Promise<RepositoryUnregisterOutcome> {
+  try {
+    return await store.unregisterRepository(input);
+  } catch (error) {
+    if (error instanceof RepositoryRegistrationError) {
+      throw error;
+    }
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to unregister the repository.");
+  }
 }
 
 /**
@@ -475,7 +597,7 @@ async function verifySchemeLabelsExist(
 function githubSetupError(
   error: unknown,
   repository: GitHubRepository | null,
-  step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook",
+  step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
 ): RepositoryRegistrationError {
   // Issue 93: a 401 says GitHub rejected the authorization Overflow itself holds — the token
   // expired or was revoked, unlike a 403/404, which is about the repository or the
@@ -616,9 +738,9 @@ async function getSubmittedRepository(
 async function findExistingRepository(
   store: RepositoryRegistrationStore,
   githubRepositoryId: number,
-): Promise<RegisteredRepository | null> {
+): Promise<RepositoryRegistrationState | null> {
   try {
-    return await store.findRepositoryByGitHubId(githubRepositoryId);
+    return await store.findRepositoryRegistrationState(githubRepositoryId);
   } catch {
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
