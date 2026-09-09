@@ -179,4 +179,25 @@ describe("moderation audit controls", () => {
     });
     expect(refresh).not.toHaveBeenCalled();
   });
+
+  it("does not refresh the recalibration list when the reactivation is refused", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: "CONFLICT", message: "This account is not recalibrating." } }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationPlanControl targetAccountId="account-7" targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Recalibration plan for mira"), {
+      target: { value: "Review ten completed contributions before new sponsorship." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate account" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("This account is not recalibrating.");
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
 });
