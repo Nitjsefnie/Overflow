@@ -162,6 +162,28 @@ describe("same-instant rationale evidence determinism", () => {
   );
 
   it.each(BOTH_ARRIVALS)(
+    "rejects a tie whose instants are equal but spelled differently ($name)",
+    ({ arrival }) => {
+      const snapshot = tieSnapshot(arrival, { "comment-a": null, "comment-b": null });
+      // The two spellings denote one instant. The tie-group predicate must
+      // compare instants, not raw strings, or this tie silently settles on
+      // the arrival-first comment instead of being refused.
+      snapshot.issues[0]!.comments[0]!.createdAt = "2026-09-01T11:30:00Z";
+
+      const result = foldRepository(snapshot);
+
+      expect(result.unwritableClosures).toEqual([{
+        githubIssueId: 101,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201,
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
+      }]);
+      expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, settledRationaleCommentId: null });
+      expect(result.policyViolations).toEqual([]);
+    },
+  );
+
+  it.each(BOTH_ARRIVALS)(
     "rejects same-instant rationales carrying one duplicated database id in either arrival order ($name)",
     ({ arrival }) => {
       const result = foldRepository(tieSnapshot(arrival, { "comment-a": 402, "comment-b": 402 }));
@@ -179,8 +201,10 @@ describe("same-instant rationale evidence determinism", () => {
         githubPullRequestId: 201,
         reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
       }]);
-      // The named id must be derived in sorted order, so the sentence is
-      // byte-identical across arrival orders.
+      // The sentence's id is data-determined at the call site: the tie group
+      // inherits the comparator's ascending order, so the first duplicated id
+      // is the smallest for every fold input. The in-function sort is
+      // defense-in-depth for future callers only.
       expect(JSON.stringify(fromReversed.unwritableClosures)).toBe(JSON.stringify(result.unwritableClosures));
       expect(result.policyViolations).toEqual([]);
     },

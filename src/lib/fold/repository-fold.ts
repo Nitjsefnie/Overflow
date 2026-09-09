@@ -936,8 +936,8 @@ function resolveSettledDifficulty(
   // The sequence order the sort applied to same-instant candidates is only as
   // good as the ids behind it: a group sharing the selected instant is
   // decidable only where its sequence evidence covers every member but one at
-  // most — at most one id without sequence evidence (not a finite number:
-  // null, an absent key, or junk) and no duplicated finite id. Otherwise no
+  // most — at most one id without sequence evidence (not a safe integer:
+  // null, an absent key, or junk) and no duplicated safe id. Otherwise no
   // evidence-backed rule can say which comment was written first, and the
   // selection is refused rather than made silently arbitrary. The rejection
   // deliberately reuses windowReach, mirroring the sibling no-rationale
@@ -1285,9 +1285,9 @@ function compareHistoryItems(
  * strings encoding no creation order, unlike the numeric databaseId, so
  * reordering by them would only launder arrival order again.
  *
- * An id that is not a finite number — null, undefined from an unvalidated
+ * An id that is not a safe integer — null, undefined from an unvalidated
  * passthrough, or any other junk — is NO sequence evidence and sorts after
- * every finite id; it cannot claim to be the earliest. The order between two
+ * every safe id; it cannot claim to be the earliest. The order between two
  * such ids is deliberately unspecified (the sort is stable, so it is arrival
  * order): callers must not rely on it, and a selected tie carrying two or
  * more of them is rejected as undecidable.
@@ -1314,14 +1314,19 @@ function compareRationaleSequence(
   return leftRank - rightRank;
 }
 
-/** The numeric sequence position of a comment id, or null when it carries none. */
+/**
+ * The numeric sequence position of a comment id, or null when it carries
+ * none. Safe-integer rather than merely finite: ids at or beyond 2^53 would
+ * collapse under subtraction and silently restore arrival order, so they
+ * count as no evidence.
+ */
 function rationaleSequenceRank(databaseId: GitHubIssueComment["databaseId"]): number | null {
-  return typeof databaseId === "number" && Number.isFinite(databaseId) ? databaseId : null;
+  return typeof databaseId === "number" && Number.isSafeInteger(databaseId) ? databaseId : null;
 }
 
 /**
  * The smallest databaseId two or more comments share, or undefined when no
- * finite id repeats. Ids that carry no sequence evidence cannot be duplicated
+ * safe id repeats. Ids that carry no sequence evidence cannot be duplicated
  * evidence; the scanned ids are derived in sorted order so the caller's
  * sentence does not depend on the group's order.
  */
