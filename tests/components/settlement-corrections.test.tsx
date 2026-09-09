@@ -82,6 +82,29 @@ describe("settlement corrections section", () => {
     expect(screen.getByRole("button", { name: "Report this settlement as incorrect" })).toBeVisible();
   });
 
+  it("reads a granted correction at one settled point as singular", () => {
+    render(
+      <SettlementCorrections
+        target={settlementTarget}
+        requests={[request({ state: "GRANTED", settledPoints: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("Granted at 1 settled point")).toBeVisible();
+    expect(screen.queryByText("Granted at 1 settled points")).toBeNull();
+  });
+
+  it("keeps an unreadable granted figure reading unknown points", () => {
+    render(
+      <SettlementCorrections
+        target={settlementTarget}
+        requests={[request({ state: "GRANTED", settledPoints: null })]}
+      />,
+    );
+
+    expect(screen.getByText("Granted at unknown settled points")).toBeVisible();
+  });
+
   it("shows a declined correction with the moderator's reason", () => {
     render(
       <SettlementCorrections
@@ -134,5 +157,17 @@ describe("self-work calibration corrections section", () => {
 
     expect(screen.getByText("Granted at 6 actual points")).toBeVisible();
     expect(screen.queryByText(/Granted at 6 settled points/)).toBeNull();
+  });
+
+  it("reads a granted calibration correction at one actual point as singular", () => {
+    render(
+      <SettlementCorrections
+        target={calibrationTarget}
+        requests={[request({ state: "GRANTED", settledPoints: 1 })]}
+      />,
+    );
+
+    expect(screen.getByText("Granted at 1 actual point")).toBeVisible();
+    expect(screen.queryByText("Granted at 1 actual points")).toBeNull();
   });
 });
