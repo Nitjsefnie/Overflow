@@ -158,6 +158,19 @@ describe("responsive header contract", () => {
     expect(ruleWith(parsed, ".site-nav").declarations["justify-content"]).toBe("flex-start");
   });
 
+  it("renders a signed-out header's empty navigation as nothing inside the stacked block", () => {
+    const [block] = headerStackedBlocks();
+    const parsed = rules(block!.body);
+
+    // An empty ul alone is not enough: the nav element itself is the grid
+    // item explicitly placed in row 2, so hiding only the ul leaves the row
+    // track and its 1rem row-gap rendered under the wordmark. The nav-level
+    // rule is what removes the row; both spellings are pinned.
+    expect(ruleWith(parsed, ".site-nav:empty").declarations["display"]).toBe("none");
+    expect(ruleWith(parsed, ".site-header nav:has(.site-nav:empty)").declarations["display"])
+      .toBe("none");
+  });
+
   it("leaves no copy of the stacked pattern in the older 780px block", () => {
     const block780 = blocks.find((block) => block.condition === "(max-width: 780px)");
 
