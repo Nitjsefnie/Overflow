@@ -219,6 +219,7 @@ public/*
 scripts/*
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
+!scripts/measure-header-geometry.mjs
 
 !tests/
 tests/*
