@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import MarkdownIt from "markdown-it";
 import { expect, it } from "vitest";
 
 const canonicalInstall = "npm_config_package_import_method=copy pnpm install --frozen-lockfile";
@@ -170,127 +171,43 @@ function validateBlock(info: string, body: string): number {
   return installs;
 }
 
+// A real CommonMark tokenizer discovers code regions, so indented code, fenced
+// code and code nested in lists or blockquotes are recognized exactly as a
+// CommonMark renderer sees them, and installs can no longer hide behind
+// structures the hand-rolled line parser did not model (issue 252). Everything
+// else — paragraphs, headings, lists, blockquotes, inline code, raw HTML — is
+// prose and never reaches the shell grammar.
+const md = new MarkdownIt("commonmark");
+
 function codeRegions(markdown: string): { info: string; lines: string[] }[] {
   const regions: { info: string; lines: string[] }[] = [];
-  const lists: { depth: number; width: number }[] = [];
-  const thematicBreak = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
-  let block: { marker?: string; info: string; depth: number; lines: string[] } | undefined;
-  let paragraphDepth: number | undefined;
-  let commentDepth: number | undefined;
-  const sources = markdown.split(/\r?\n/);
-  for (let index = 0; index < sources.length; index++) {
-    const source = sources[index];
-    // Expand only Markdown's leading indentation/container prefix, never tabs
-    // within a shell argument. Tab stops use columns before container removal.
-    let column = 0;
-    let line = source.replace(/^[ \t]*(?:>[ \t]*|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)*/, (prefix) =>
-      [...prefix].map((character) => {
-        const expanded = character === "\t" ? " ".repeat(4 - column % 4) : character;
-        column += expanded.length;
-        return expanded;
-      }).join(""));
-    if (commentDepth !== undefined) {
-      // Comment contents cannot establish Markdown containers or code blocks.
-      // Preserve the quote container in which the HTML block began.
-      for (let depth = 0; depth < commentDepth; depth++) {
-        const quote = /^ {0,3}> ?/.exec(line);
-        if (!quote) throw new Error(`Unsupported HTML comment container: ${source}`);
-        line = line.slice(quote[0].length);
+  for (const token of md.parse(markdown, {})) {
+    if (token.type === "fence" || token.type === "code_block") {
+      const [start, end] = token.map ?? [0, 0];
+      const content = token.content.replace(/\n$/, "");
+      const contentLines = content === "" ? 0 : content.split("\n").length;
+      // markdown-it ends an unclosed fence silently at the end of its
+      // container or document. A closed fence's source range is exactly the
+      // opening line, every content line and the closing line, so the range
+      // spans contentLines + 2 lines; an unclosed fence has no closing line
+      // and spans contentLines + 1. The counts never coincide, and empty
+      // content is zero lines, not one empty line.
+      if (token.type === "fence" && contentLines !== end - start - 2) {
+        throw new Error(`Unsupported unclosed code fence: ${token.info.trim()}`);
       }
-      if (line.includes("-->")) commentDepth = undefined;
-      continue;
-    }
-    let depth = 0;
-    let list = false;
-    let listLevel = 0;
-    // Only an opening region may establish containers. Inside code, any extra
-    // > or list marker belongs to the shell and must reach the closed grammar.
-    while (!block || depth < block.depth) {
-      const parent = !block && lists[listLevel];
-      if (parent && parent.depth === depth) {
-        if (line.startsWith(" ".repeat(parent.width))) {
-          line = line.slice(parent.width);
-          listLevel++;
-          list = true;
-          continue;
-        }
-        if (line.trim()) lists.splice(listLevel);
+      regions.push({
+        info: token.type === "fence" ? token.info.trim() : "shell (indented code)",
+        lines: content === "" ? [] : content.split("\n"),
+      });
+    } else if (token.type === "html_block") {
+      // An HTML comment that never closes within its HTML block runs until
+      // the end of the container and can swallow a following code fence
+      // without the tokenizer noticing (issue 252, payload three).
+      if (token.content.includes("<!--") && !token.content.includes("-->")) {
+        throw new Error("Unsupported unclosed HTML comment");
       }
-      if (!block && thematicBreak.test(line)) break;
-      const quote = /^ {0,3}> ?/.exec(line);
-      const item = !block && /^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])( +)/.exec(line);
-      if (quote) {
-        line = line.slice(quote[0].length);
-        depth++;
-      } else if (item) {
-        // With more than four spaces after a list marker, only the first is
-        // container padding; the rest can introduce an indented code block.
-        const width = item[0].length - item[1].length + (item[1].length > 4 ? 1 : item[1].length);
-        lists.splice(listLevel, lists.length, { depth, width });
-        listLevel++;
-        line = line.slice(width);
-        list = true;
-        paragraphDepth = undefined;
-      } else break;
-    }
-    if (!block && line.trim()) lists.splice(listLevel);
-    const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (block?.marker) {
-      if (depth !== block.depth) throw new Error(`Unsupported fence container: ${source}`);
-      if (boundary && boundary[1][0] === block.marker[0]
-        && boundary[1].length >= block.marker.length && !boundary[2].trim()) {
-        block = undefined;
-      } else block.lines.push(line);
-      continue;
-    }
-    const indent = /^ {4}/.exec(line);
-    if (block) {
-      if (depth === block.depth && (indent || !line.trim())) {
-        block.lines.push(indent ? line.slice(indent[0].length) : "");
-        continue;
-      }
-      block = undefined;
-      // Reconsider this line outside the old block so a new container can
-      // establish its own code region instead of being mistaken for prose.
-      index--;
-      continue;
-    }
-    if (/^ {0,3}<!--/.test(line)) {
-      if (!line.includes("-->")) commentDepth = depth;
-      paragraphDepth = undefined;
-      continue;
-    }
-    const reference = /^ {0,3}\[((?:\\.|[^\[\]\\])+)\]:[ \t]*(.*)$/.exec(line);
-    if (paragraphDepth !== depth && reference) {
-      // Accept a complete, single-line definition. Other reference layouts
-      // need a named rejection rather than silently becoming a paragraph.
-      if (!reference[1].trim() || !/^(?:<[^<>]*>|[^\s<>]+)(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))?[ \t]*$/.test(reference[2])) {
-        throw new Error(`Unsupported link reference definition: ${source}`);
-      }
-      paragraphDepth = undefined;
-      continue;
-    }
-    if (boundary) {
-      if (list) throw new Error(`Unsupported fence container: ${source}`);
-      if (mentionsPnpm(boundary[2])) throw new Error(`Unsupported fence info: ${source}`);
-      block = { marker: boundary[1], info: boundary[2].trim(), depth, lines: [] };
-    } else if (indent && paragraphDepth !== depth) {
-      if (list) throw new Error(`Unsupported indented code container: ${source}`);
-      block = { info: "shell (indented code)", depth, lines: [line.slice(indent[0].length)] };
-    } else {
-      // Indented code cannot interrupt a paragraph. Blank lines and Markdown
-      // headings end one; ordinary prose and inline code never enter a region.
-      paragraphDepth = !line.trim() || thematicBreak.test(line)
-        || /^ {0,3}(?:#{1,6}(?:\s|$)|(?:=+|-+)[ \t]*$)/.test(line)
-        ? undefined : depth;
-    }
-    if (block) {
-      regions.push(block);
-      paragraphDepth = undefined;
     }
   }
-  if (commentDepth !== undefined) throw new Error("Unsupported unclosed HTML comment");
-  if (block?.marker) throw new Error(`Unsupported unclosed code fence: ${block.info}`);
   return regions;
 }
 
@@ -391,10 +308,30 @@ it("keeps inline comments and reference-like paragraph text in prose", () => {
 
 it.each([
   ["<!-- unclosed comment", "Unsupported unclosed HTML comment"],
-  ["> <!--\n```bash\npnpm install --frozen-lockfile\n```", "Unsupported HTML comment container"],
-  ["[ref]:\n/url\n    pnpm install --frozen-lockfile", "Unsupported link reference definition"],
+  // CommonMark: the blockquote's unclosed HTML block swallows the fence line,
+  // so the comment rule names it instead of a container error.
+  ["> <!--\n```bash\npnpm install --frozen-lockfile\n```", "Unsupported unclosed HTML comment"],
+  // CommonMark: markdown-it consumes `[ref]:\n/url` as a definition, so the
+  // indented install is a genuine code region and the unprefixed shape is
+  // rejected by the shell grammar.
+  ["[ref]:\n/url\n    pnpm install --frozen-lockfile", "Unsupported pnpm shape"],
 ])("names unsupported Markdown boundary syntax: %s", (markdown, error) => {
   expect(() => validateDocument(markdown)).toThrow(error);
+});
+
+// Issue 252's payloads: an install hidden behind a Markdown structure the
+// guard used to misparse. Each is appended, as its own block, to a document
+// that would otherwise hold exactly the three canonical installs — and to the
+// real README's text, which the guard reads without modifying it.
+it.each([
+  ["a processing-instruction boundary", "<?probe?>\n    pnpm install --frozen-lockfile\n", "Unsupported pnpm shape"],
+  ["a multiline reference-definition title", '[ref]: /url\n  "title"\n    pnpm install --frozen-lockfile\n', "Unsupported pnpm shape"],
+  ["an unclosed HTML comment opened in a list container", "- <!--\n```bash\npnpm install --frozen-lockfile\n```\n", "Unsupported unclosed HTML comment"],
+])("rejects an install hidden behind $0", async (_name, payload, error) => {
+  const synthetic = [0, 1, 2].map(() => `\`\`\`bash\n${canonicalInstall}\n\`\`\``).join("\n\n") + "\n";
+  expect(() => validateDocument(synthetic + payload)).toThrow(error);
+  const readme = await readFile("deploy/README.md", "utf8");
+  expect(() => validateDocument(`${readme}\n${payload}`)).toThrow(error);
 });
 
 it.each(["bash", "sh", 'bash title="Install"', "shell"])("accepts canonical installs in %s fences", (info) => {
@@ -518,13 +455,16 @@ it.each(["***", "* * *", "___"])("recognizes indented code after a thematic brea
 it("uses list content indentation when distinguishing prose from code", () => {
   expect(validateDocument("- The documented pnpm commands\n\n    copy package files into private inodes."))
     .toBe(0);
+  // CommonMark: the 6-space indented line is a real code region inside the
+  // list item, so the closed grammar rejects the constructed command itself.
   expect(() => validateDocument("- The documented commands\n\n      $'p\\x6epm' install --frozen-lockfile"))
-    .toThrow("Unsupported indented code container");
+    .toThrow("Non-literal command word");
 });
 
 it("recognizes indented code on a list item's first line", () => {
+  // CommonMark: a real indented code region, judged by the closed grammar.
   expect(() => validateDocument("-     $'p\\x6epm' install --frozen-lockfile"))
-    .toThrow("Unsupported indented code container");
+    .toThrow("Non-literal command word");
 });
 
 it("counts tabs at Markdown column stops inside containers", () => {
@@ -532,9 +472,11 @@ it("counts tabs at Markdown column stops inside containers", () => {
   expect(validateDocument("> \tThe documented pnpm commands copy package files into private inodes.")).toBe(0);
 });
 
-it.each(["- ", "1. ", "> - ", "- > ", "> 1. > - "])("names unsupported code containers with prefix %j", (prefix) => {
+it.each(["- ", "1. ", "> - ", "- > ", "> 1. > - "])("rejects a container-nested fence whose closer sits at column 0: %j", (prefix) => {
+  // CommonMark: the col-0 closer never closes a container-nested fence, so
+  // the fence is unclosed and the guard names that instead of a container.
   expect(() => validateDocument(`${prefix}\`\`\`sh\n$'p\\x6epm' install --frozen-lockfile\n\`\`\``))
-    .toThrow("Unsupported fence container");
+    .toThrow("Unsupported unclosed code fence");
 });
 
 it.each(["text", "python", ""])("rejects constructed commands in unsupported %s fences", (info) => {
@@ -542,16 +484,21 @@ it.each(["text", "python", ""])("rejects constructed commands in unsupported %s 
     .toThrow("Unsupported code fence");
 });
 
-it("rejects unsupported fence containers", () => {
-  expect(() => validateDocument("- ```bash\n  pnpm install --frozen-lockfile\n  ```")).toThrow("Unsupported fence container");
+it("rejects an unprefixed install in a list-nested fence", () => {
+  // CommonMark: a properly closed list-nested fence is a real code region,
+  // so the unprefixed install is rejected by the closed grammar itself.
+  expect(() => validateDocument("- ```bash\n  pnpm install --frozen-lockfile\n  ```")).toThrow("Unsupported pnpm shape");
 });
 
 it("does not strip shell redirections as blockquote containers", () => {
   expect(() => validateDocument(`> \`\`\`bash\n> > ${canonicalInstall}\n> \`\`\``)).toThrow("Unsupported pnpm shape");
 });
 
-it("rejects a changed blockquote container", () => {
-  expect(() => validateDocument(`> \`\`\`bash\n${canonicalInstall}\n> \`\`\``)).toThrow("Unsupported fence container");
+it("rejects a fence whose closing line leaves its blockquote container", () => {
+  // CommonMark: fences have no lazy continuation, so the dropped `>` closes
+  // the blockquote around an unclosed fence; the guard names the unclosed
+  // fence instead of a container mismatch.
+  expect(() => validateDocument(`> \`\`\`bash\n${canonicalInstall}\n> \`\`\``)).toThrow("Unsupported unclosed code fence");
 });
 
 it("rejects a command substitution hidden in a familiar command's arguments", () => {
