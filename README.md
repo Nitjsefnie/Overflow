@@ -152,6 +152,7 @@ status and code, then use the message to distinguish causes:
 | --- | --- | --- | --- |
 | 400 | `INVALID_REQUEST` | `Invalid repository registration request.` | Invalid JSON, missing or extra fields, or wrong field types. Correct the body. |
 | 400 | `INVALID_INPUT` | `Submit one GitHub repository as owner/name or a canonical GitHub URL.` | Correct the repository reference. |
+| 400 | `INVALID_INPUT` | `The repository is missing the difficulty labels <labels>. Create them on GitHub, then register again.` | The repository's existing labels do not include every label the submitted catalog names; `<labels>` is the backticked list of the missing ones. Create those labels on GitHub, then register again. |
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
 | 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
