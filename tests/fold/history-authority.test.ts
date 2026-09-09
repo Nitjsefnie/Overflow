@@ -60,7 +60,7 @@ describe("repository fold history authority", () => {
     // tests/fold/repository-fold.test.ts.
     ["well before the final PR commit", "2026-09-01T09:44:00.000Z", "Owner rationale for delivered/6"],
     ["without a nonblank rationale", "2026-09-01T11:30:00.000Z", "   "],
-    ["without naming the configured label", "2026-09-01T11:30:00.000Z", "Reviewed the landed change."],
+    ["with no comment at all", "2026-09-01T11:30:00.000Z", ""],
     ["well after merge", "2026-09-01T12:16:00.000Z", "Owner rationale for delivered/6"],
   ])("does not settle when owner proof is %s", (_case, commentTime, commentBody) => {
     const snapshot = historySnapshot();
@@ -68,6 +68,8 @@ describe("repository fold history authority", () => {
     if (_case === "well before the final PR commit") {
       const event = issue.history.find((item: { id: string }) => item.id === "actual-1") as { createdAt: string };
       event.createdAt = commentTime;
+    } else if (_case === "with no comment at all") {
+      issue.comments = [];
     } else {
       issue.comments[0] = { ...issue.comments[0], createdAt: commentTime, body: commentBody };
     }
@@ -75,6 +77,22 @@ describe("repository fold history authority", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
+  });
+
+  // A sponsor comment inside the window is the rationale (issue 297); whether
+  // it restates the label text never decided anything about agreement.
+  it("settles from a nonblank owner rationale that never names the label", () => {
+    const snapshot = historySnapshot();
+    const issue = historyIssue(snapshot);
+    issue.comments[0] = {
+      ...issue.comments[0],
+      createdAt: "2026-09-01T11:30:00.000Z",
+      body: "Reviewed the landed change.",
+    };
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", settledPoints: 6, credits: 6 });
   });
 
   it("rebuilds the original owner opening from immutable history and flags later opening mutations", () => {

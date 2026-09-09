@@ -935,6 +935,12 @@ function resolveSettledDifficulty(
     };
   }
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
+  // The comment's role is to show the sponsor was deliberate, not to restate
+  // the label the sponsor had just applied (issue 297): the label already
+  // carries the value, and a body that merely contains the label text proves
+  // nothing about agreement — it rejected honest prose ("Settled at 7 points")
+  // while accepting contradictory prose. What qualifies is a nonblank comment
+  // by the sponsor inside the window, and nothing about its wording.
   const candidates = issue.comments
     .filter(validIssueComment)
     .sort((left, right) => compareHistoryItems(left, right) || compareRationaleSequence(left, right))
@@ -943,7 +949,6 @@ function resolveSettledDifficulty(
       return (
         isRepositorySponsor({ login: comment.authorLogin, githubUserId: comment.authorGitHubUserId }, sponsor) &&
         comment.body.trim().length > 0 &&
-        comment.body.toLocaleLowerCase().includes(label.toLocaleLowerCase()) &&
         commentTime >= sourceTime - EVIDENCE_ORDERING_GRACE_MS &&
         commentTime <= windowCloseTime
       );
@@ -964,8 +969,8 @@ function resolveSettledDifficulty(
       reach: windowReach,
       violation: candidates.length > 0 ? "SETTLED_RATIONALE_EDITED" : undefined,
       reason: candidates.length > 0
-        ? `Every qualifying rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
-        : `No rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+        ? `Every nonblank rationale comment by ${repositorySponsorPhrase(raterLogin)} inside the window was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
+        : `No nonblank rationale comment by ${repositorySponsorPhrase(raterLogin)} was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
   // The sequence order the sort applied to same-instant candidates is only as

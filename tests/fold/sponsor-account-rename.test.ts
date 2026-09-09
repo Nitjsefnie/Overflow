@@ -143,8 +143,8 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubPullRequestId: 201,
       // Same discriminator: a comment carrying the stored login is not a
       // comment by the sponsor, and the sentence has to say which it means.
-      reason: "No rationale comment by the repository sponsor's account (login `sponsor-old`) naming "
-        + "`delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z "
+      reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor-old`) was "
+        + "posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z "
         + "and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.settlements).toEqual([
@@ -237,7 +237,7 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by the repository sponsor's account naming `delivered/6` was posted "
+      reason: "No nonblank rationale comment by the repository sponsor's account was posted "
         + "between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after "
         + "the merge at 2026-09-01T12:00:00.000Z.",
     }]);
