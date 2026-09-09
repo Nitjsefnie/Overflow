@@ -20,7 +20,8 @@ export type CalibrationSummary = {
 export type CalibrationComparison = {
   selfWork: CalibrationSummary;
   outsider: CalibrationSummary;
-  differenceBetweenMeans: number;
+  /** Null when either cohort is empty: a mean does not exist there, so there is no difference to report. */
+  differenceBetweenMeans: number | null;
 };
 
 export class CalibrationStatisticsError extends Error {
@@ -63,7 +64,8 @@ export function compareCalibration(
   return {
     selfWork,
     outsider,
-    differenceBetweenMeans: selfWork.meanDelta - outsider.meanDelta,
+    differenceBetweenMeans:
+      selfWork.count > 0 && outsider.count > 0 ? selfWork.meanDelta - outsider.meanDelta : null,
   };
 }
 

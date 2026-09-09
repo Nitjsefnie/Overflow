@@ -41,6 +41,36 @@ describe("calibration statistics", () => {
     });
   });
 
+  it("returns no difference between means when only the outsider sample is empty", () => {
+    const comparison = compareCalibration(
+      [calibrationPair({ githubIssueId: 831, githubPullRequestId: 931, offeredDifficulty: 2, settledDifficulty: 5 })],
+      [],
+    );
+
+    expect(comparison.selfWork.count).toBe(1);
+    expect(comparison.outsider).toEqual({ count: 0, meanDelta: 0, medianDelta: 0 });
+    expect(comparison.differenceBetweenMeans).toBeNull();
+  });
+
+  it("returns no difference between means when only the self-work sample is empty", () => {
+    const comparison = compareCalibration(
+      [],
+      [calibrationPair({ githubIssueId: 841, githubPullRequestId: 941, offeredDifficulty: 8, settledDifficulty: 3 })],
+    );
+
+    expect(comparison.selfWork).toEqual({ count: 0, meanDelta: 0, medianDelta: 0 });
+    expect(comparison.outsider.count).toBe(1);
+    expect(comparison.differenceBetweenMeans).toBeNull();
+  });
+
+  it("returns no difference between means when both samples are empty", () => {
+    const comparison = compareCalibration([], []);
+
+    expect(comparison.selfWork.count).toBe(0);
+    expect(comparison.outsider.count).toBe(0);
+    expect(comparison.differenceBetweenMeans).toBeNull();
+  });
+
   it.each([
     [0, 5],
     [11, 5],

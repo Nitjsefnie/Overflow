@@ -28,7 +28,11 @@ export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
           <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
         </section>
       </div>
-      <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
+      {comparison.differenceBetweenMeans === null ? (
+        <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
+      ) : (
+        <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
+      )}
     </section>
   );
 }

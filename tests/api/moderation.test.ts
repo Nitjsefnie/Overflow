@@ -1044,7 +1044,7 @@ function auditFixture(overrides: Partial<AccountAudit> = {}): AccountAudit {
       comparison: {
         selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
         outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
-        differenceBetweenMeans: 0,
+        differenceBetweenMeans: null,
       },
     },
     ...overrides,

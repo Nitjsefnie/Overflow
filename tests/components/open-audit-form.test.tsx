@@ -223,6 +223,34 @@ describe("open audit form", () => {
     expect(screen.getByText(`This cohort is below the ${MINIMUM_CALIBRATION_SAMPLE_SIZE}-pair minimum, so opening the audit will be refused.`)).toBeInTheDocument();
   });
 
+  it("previews a cohort with an empty outsider sample and no difference figure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(cohortResponse({
+      targetAccountId: miraId,
+      repositoryId: null,
+      sampleStartedAt: startedAtInstant,
+      sampleEndedAt: endedAtInstant,
+      comparison: {
+        selfWork: { count: 12, meanDelta: 2, medianDelta: 2 },
+        outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+        differenceBetweenMeans: null,
+      },
+      meetsMinimumSampleSize: false,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Cohort preview" })).toBeInTheDocument();
+    });
+    expect(screen.getByText("Self-work sample · 12 pairs · mean delta +2")).toBeInTheDocument();
+    expect(screen.getByText("Outsider settlement sample · 0 pairs · mean delta 0")).toBeInTheDocument();
+    expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
+  });
+
   it("scopes the preview to the chosen repository and states a met sample floor", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
