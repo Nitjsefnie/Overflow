@@ -190,11 +190,15 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  *
  * This row is the only record a moderator gets — the fold emits it,
  * `recordPolicyViolations` writes it to `reconciliation_changes`, and nothing
- * else is kept — so an accusation has to answer "which label, and who applied
- * it" without one. An absence has neither to report, so the two are a union on
- * `code` rather than one shape with two nullable columns: a consumer that
- * switches on the code gets the fields typed where they exist and is not made
- * to handle an absence that cannot happen.
+ * else is kept — so each variant has to carry what a moderator needs from it.
+ * The unauthorized one is an accusation, so it answers "which label, and who
+ * applied it". The unattributable one has no account to accuse: an
+ * opening-catalog application WAS made, but no account was ever compared
+ * against the sponsor, and what the sentence reports is that the repository's
+ * own sponsor record is what needs fixing. An absence has nothing to report.
+ * The three are a union on `code` rather than one shape with nullable columns:
+ * a consumer that switches on the code gets the fields typed where they exist
+ * and is not made to handle a case that cannot happen.
  *
  * The label and one actor login are STRUCTURED facts for tooling to group and
  * filter on, and `reason` is the PROSE a moderator reads. The sponsor's stored
@@ -205,6 +209,11 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  */
 type OpeningRefusal =
   | { code: "OPENING_LABEL_MISSING" }
+  | {
+      code: "OPENING_LABEL_UNATTRIBUTABLE";
+      /** The same refusal in the words a moderator reads. */
+      reason: string;
+    }
   | {
       code: "OPENING_LABEL_UNAUTHORIZED";
       /** The opening-catalog label the refused application applied. */
@@ -591,7 +600,10 @@ function resolveOpening(
  * account could actually be compared: GitHub named a numeric actor id, or the
  * sponsor's stored login is there to read. Where GitHub named no id and the
  * sponsor record's login is blank, nothing was compared and nobody can be
- * accused, so the refusal stays the absence one. `resolveSettledDifficulty`
+ * accused — but the label was still applied, so the refusal is
+ * `OPENING_LABEL_UNATTRIBUTABLE` rather than the absence one: its sentence
+ * names the repository's own sponsor record as the thing to fix, the way the
+ * settled window's missing-login reason does. `resolveSettledDifficulty`
  * declines to emit `SETTLED_LABEL_UNAUTHORIZED` on the same guard — but only on
  * that guard: it first reduces the history to the labels still STANDING at the
  * merge, while an opening is decided by the applications themselves, so a label
@@ -600,7 +612,7 @@ function resolveOpening(
  * Candidates arrive already bounded by the opening window, so a label applied
  * before the issue existed or after the opening deadline never reaches here as
  * a candidate: that is a timing refusal, and it reads as missing rather than
- * being absorbed into an authority one.
+ * being absorbed into an authority or an attribution one.
  */
 function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): OpeningRefusal {
   const sponsorLogin = normalizedNonblankLogin(sponsor.githubLogin);
@@ -614,11 +626,21 @@ function openingRefusal(candidates: OpeningLabelEvent[], sponsor: FoldUser): Ope
     .filter((candidate) => candidate.actorGitHubUserId !== null || sponsorLogin !== null)
     .sort((left, right) => compareHistoryItems(left, right) || left.id.localeCompare(right.id))[0];
   if (attributable === undefined) {
-    // TODO (issue 189): With a blank sponsor login and only idless candidates,
-    // stay mute: OPENING_LABEL_UNAUTHORIZED would accuse an account never
-    // compared against the sponsor. The settled window's explicit missing-login
-    // reason cannot cover this gap because it is downstream of this refusal.
-    return { code: "OPENING_LABEL_MISSING" };
+    // Empty candidates is the absence: no opening-catalog application landed
+    // inside the window, so there is nothing to attribute — that is what
+    // OPENING_LABEL_MISSING is for. Candidates present but none attributable is
+    // different: the label WAS applied, every application is by an account
+    // GitHub named no id for, and the sponsor's record stores no login, so no
+    // account was ever compared and none can be accused. Recording that as the
+    // absence would read as nothing ever priced, when the record needing repair
+    // is the repository's own sponsor record.
+    if (candidates.length === 0) {
+      return { code: "OPENING_LABEL_MISSING" };
+    }
+    return {
+      code: "OPENING_LABEL_UNATTRIBUTABLE",
+      reason: "The repository sponsor has no login, so no opening label can be attributed to the sponsor.",
+    };
   }
   return {
     code: "OPENING_LABEL_UNAUTHORIZED",

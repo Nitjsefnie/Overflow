@@ -4,9 +4,10 @@ import { foldRepository, type FoldResult, type RepositoryFoldSnapshot } from "@/
 /**
  * The opening refusal a moderator reads is the only record of why an issue left
  * the fold, so it has to say WHICH refusal it was: no opening-catalog label was
- * applied in the window, or an application could not be attributed to the
- * repository sponsor. The second records an authority refusal and the first
- * does not, and the settled side already draws that line with
+ * applied in the window, an application was made but no account could be
+ * compared against the sponsor at all, or an application could not be
+ * attributed to the sponsor. The third records an authority refusal and the
+ * first two do not, and the settled side already draws that line with
  * `SETTLED_LABEL_UNAUTHORIZED`.
  */
 
@@ -246,9 +247,34 @@ describe("opening label authority", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("reports a missing opening when nothing can be compared and no account can be accused", () => {
+  it("records an unattributable opening when the label was applied but no account could be compared", () => {
+    // The opening-catalog label WAS applied inside the window, so this is not
+    // the absence `OPENING_LABEL_MISSING` records: every application is by an
+    // account GitHub named no id for, and the sponsor's own record stores no
+    // login to compare against. The sentence is the moderator-facing record —
+    // it names the repository's own sponsor record as the thing to fix.
     const snapshot = openingFixture({ opening: { login: "contributor", githubUserId: null } });
-    snapshot.repository.sponsor.githubLogin = "   ";
+    snapshot.repository.sponsor.githubLogin = "\t";
+
+    const result = foldRepository(snapshot);
+
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNATTRIBUTABLE",
+      githubIssueId: 101,
+      reason: "The repository sponsor has no login, so no opening label can be attributed to the sponsor.",
+    }]);
+    expect(result.issues).toEqual([]);
+    expect(result.unwritableClosures).toEqual([]);
+  });
+
+  it("still records a missing opening when no opening-catalog label was applied and the sponsor has no login", () => {
+    // The other direction of the distinguishability: with no application in the
+    // window there is nothing to attribute, sponsor login or not, so the
+    // absence refusal stands even against the same blank sponsor record.
+    const snapshot = openingFixture({ opening: { login: "contributor", githubUserId: null } });
+    snapshot.repository.sponsor.githubLogin = "\t";
+    snapshot.issues[0]!.labels = [];
+    snapshot.issues[0]!.history = [];
 
     const result = foldRepository(snapshot);
 
