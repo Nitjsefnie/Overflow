@@ -448,6 +448,55 @@ describe("self-work calibration proof page", () => {
     expect(screen.getByRole("button", { name: "Report this calibration as incorrect" })).toBeVisible();
   });
 
+  // A perception-based catalog stores its labels as "<name>: <value>", so a
+  // value cell beneath a name-carrying term printed the name twice — once in
+  // the term, once at the head of the value. The value is read beside its own
+  // term, never off the whole card, where the term itself would satisfy the
+  // "not contains" assertion.
+  it("drops a data-carried catalog name from both proof cells' values", async () => {
+    respondWith({
+      calibration: [{
+        ...calibrationRow,
+        opening_name: "perceived difficulty",
+        actual_name: "difficulty experienced",
+        opening_label: "perceived difficulty: 3",
+        actual_label: "difficulty experienced: 4",
+      }],
+    });
+
+    render(await CalibrationProofPage(calibrationParams));
+
+    const opening = proofValue("perceived difficulty");
+    expect(opening).toBe("3 · 7");
+    expect(opening).not.toContain("perceived difficulty");
+
+    const actual = proofValue("difficulty experienced");
+    expect(actual).toBe("4 · 4");
+    expect(actual).not.toContain("difficulty experienced");
+  });
+
+  // The fallback terms are the page's words, not catalog data: a label that
+  // merely repeats one of them carries the catalog's own text and must survive
+  // whole rather than be stripped by the term the page invented.
+  it("leaves a label whole when only the fallback term would name its prefix", async () => {
+    respondWith({
+      calibration: [{
+        ...calibrationRow,
+        opening_name: undefined,
+        actual_name: undefined,
+        opening_label: "Opening comparison: 3",
+        actual_label: "Actual difficulty: 4",
+        opening_comparison_points: 3,
+        actual_points: 4,
+      }],
+    });
+
+    render(await CalibrationProofPage(calibrationParams));
+
+    expect(proofValue("Opening comparison")).toBe("Opening comparison: 3 · 3");
+    expect(proofValue("Actual difficulty")).toBe("Actual difficulty: 4 · 4");
+  });
+
   it("names the missing actual figure as the thing a correction repairs", async () => {
     respondWith({
       calibration: [{ ...calibrationRow, actual_label: null, actual_points: null, proof_sha256: null }],

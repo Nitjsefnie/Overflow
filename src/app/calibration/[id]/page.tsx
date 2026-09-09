@@ -4,6 +4,7 @@ import { SettlementCorrections } from "@/components/settlement-corrections";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
+import { stripNamePrefix } from "@/lib/strip-name-prefix";
 
 type CalibrationProofPageProps = {
   params: Promise<{ id: string }>;
@@ -62,14 +63,14 @@ export default async function CalibrationProofPage({ params }: CalibrationProofP
             </div>
             <div>
               <dt>{calibration.openingName ?? "Opening comparison"}</dt>
-              <dd>{calibration.openingLabel ?? "Unknown label"} · {calibration.openingComparisonPoints}</dd>
+              <dd>{stripNamePrefix(calibration.openingLabel ?? "Unknown label", calibration.openingName)} · {calibration.openingComparisonPoints}</dd>
             </div>
             <div>
               <dt>{calibration.actualName ?? "Actual difficulty"}</dt>
               <dd>
                 {calibration.actualPoints === null
                   ? "Never recorded"
-                  : `${calibration.actualLabel ?? UNLABELLED_POINTS} · ${calibration.actualPoints}`}
+                  : `${stripNamePrefix(calibration.actualLabel ?? UNLABELLED_POINTS, calibration.actualName)} · ${calibration.actualPoints}`}
               </dd>
             </div>
             <div>
