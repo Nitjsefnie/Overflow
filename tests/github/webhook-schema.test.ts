@@ -63,13 +63,22 @@ describe("webhook delivery classification", () => {
   });
 
   it.each([
-    { label: "a PR field that is not an object", issue: { ...issue, pull_request: "not-an-object" } },
+    { label: "a PR field that is not an object", action: "edited", issue: { ...issue, pull_request: "not-an-object" } },
     { label: "a malformed action", issue: { ...issue }, action: "  " },
-    { label: "a missing action", issue: { ...issue }, action: undefined },
-    { label: "an unsupported event", event: "fork" },
-    { label: "a malformed subject", issue: { ...issue, id: 0 } },
-  ])("classifies $label as invalid", ({ event = "issues", issue: issueValue, action = "edited" }) => {
-    expect(parseDetailed(event, { action, repository: { id: 42, full_name: "octo/example" }, issue: issueValue })).toEqual({ status: "invalid" });
+    { label: "a missing action", issue: { ...issue } },
+    { label: "an unsupported event", event: "fork", action: "edited", issue: { ...issue } },
+    { label: "a malformed subject", action: "edited", issue: { ...issue, id: 0 } },
+    { label: "a malformed issue view on a PR-free envelope", action: "edited", issue: { ...issue, updated_at: "yesterday" } },
+  ])("classifies $label as invalid", ({ event = "issues", issue: issueValue, action }) => {
+    // Built directly (not via parseDetailed) so each row's action and issue
+    // reach the parser unwrapped — a doubly-wrapped issue would fail the
+    // subject branch and make every row green for the wrong reason. Rows
+    // without an action omit the key outright: a destructuring default would
+    // resurrect it as "edited" and the row would assert nothing.
+    expect(parseGitHubWebhookDeliveryDetailed(event, "delivery", {
+      ...(action === undefined ? {} : { action }),
+      repository: { id: 42, full_name: "octo/example" }, issue: issueValue,
+    })).toEqual({ status: "invalid" });
   });
 
   it("preserves the wrapper contract: ok yields the delivery, ignored and invalid yield null", () => {
