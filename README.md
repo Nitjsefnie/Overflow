@@ -282,6 +282,48 @@ code, then use the message to distinguish causes:
 | 502 | `UPSTREAM_FAILURE` | `Unable to load the calibration comparison.` | (`GET /api/calibration`) The read behind the endpoint failed; retry when the service recovers. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to load the dashboard.` | (`GET /api/dashboard`) The read behind the endpoint failed; retry when the service recovers. |
 
+## Calling Overflow from an agent harness
+
+The API above is also exposed as MCP tools over a single endpoint,
+`POST /api/mcp`, so an agent harness can read the ledger and drive the
+moderation and correction flows without hand-rolling HTTP calls against the
+page endpoints.
+
+Authentication uses the same Overflow-issued `ovf_` tokens, sent as
+`Authorization: Bearer <token>`. Browser sessions work for the reads, but
+token auth is the intended credential: a cookie-authenticated write through
+MCP is refused, because the synthesized internal calls carry no `Origin`
+header for the same-origin guard to check.
+
+The transport is stateless streamable HTTP — one JSON-RPC request per
+`POST`, and no session state between calls. `initialize` answers with
+protocol version `2025-06-18`; a notification (a JSON-RPC request with no
+`id`) is answered with an empty HTTP `202`.
+
+### The tools
+
+| Tool | Purpose |
+| --- | --- |
+| `issues_board` | List the eligible issues on the claim board, optionally filtered by repository, opening label or claim state. |
+| `settlements_list` | List the calling account's priced settlements. |
+| `settlement_get` | Fetch one settlement's proof by its id. |
+| `calibration_compare` | Fetch the calibration comparison for the calling account. |
+| `dashboard_summary` | Fetch the calling account's dashboard summary. |
+| `moderation_queue` | List the account audits currently open in the moderation queue. |
+| `audit_open` | Open an account audit over a calibration sample. |
+| `audit_decide` | Dismiss or substantiate an open account audit. |
+| `correction_open` | Request a correction to a priced settlement or calibration outcome. |
+| `correction_decide` | Grant or decline a settlement correction request. |
+
+Tool errors are not transport errors: the wrapped endpoint's
+`{ "error": { "code": "...", "message": "..." } }` envelope comes back as the
+result's text content with `isError: true`, so read the text to tell a
+validation refusal from an upstream outage.
+
+On `issues_board`, a filter argument that is not a string is dropped from the
+query rather than rejected, so an omitted argument and a malformed one read
+the same board.
+
 ## What the ledger records
 
 - GitHub OAuth signs a member in at `/api/auth/callback/github`.
