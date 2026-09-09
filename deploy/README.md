@@ -562,6 +562,43 @@ considered explicitly.
 
 ## 10. Deploying a new revision
 
+The procedure runs as one committed script. As root, from the tree root, run
+`bash scripts/deploy-revision.sh`; the script performs the whole sequence under
+the same guards the manual fallback below documents: the `flock` fence on
+`/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
+with the serialization refusal when the lock is not acquired, the `.next`
+anchor taken before `git pull` and passed to `release:switch --expect-current`,
+the pull itself, the copy-import install, the environment load, `db:migrate`, a
+grammar-named release directory created with a collision-aborting `mkdir`,
+generated-config preparation, the build, the ownership reset excluding the
+serving cache, the new cache handover to the service account, the conditional
+switch, the restart, the `is-active` and HTTP 200 verification, the webhook
+upgrade written to a retained JSONL log with a nonzero upgrade exiting the
+script nonzero, the retention listing, and the prune via `release:prune --keep 3`.
+The migration-safety analysis and every other guard below govern the script's
+run exactly as they govern the manual block; read this whole section before
+running either.
+
+The script's prune is guarded in a way the manual path is not, and this is new
+behaviour, not a restatement of the confirm-first rule below: before pruning,
+the script consults its own retention listing and refuses to prune unless the
+recorded previous release is inside the newest-3 retention set. When the
+previous release is older, the script prints its name, prints the exact manual
+`release:prune` command with `--keep` raised above 3, and runs nothing — the
+deploy still exits 0, because the deploy itself succeeded and only the prune
+was withheld. The manual path keeps a human as the guard through the
+confirm-first rule below; the script's guard is additional automation, and the
+manual rule is what still applies when pruning by hand.
+
+The script takes no arguments and reads exactly six environment overrides,
+which exist for the test harness; production sets none of them and runs on the
+defaults: `OVERFLOW_DEPLOY_TREE` (default `/srv/overflow`),
+`OVERFLOW_DEPLOY_ENV_FILE` (default `/etc/overflow/overflow.env`),
+`OVERFLOW_DEPLOY_LOCK` (default `/run/overflow-deploy.lock`),
+`OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
+`OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/`) and
+`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`).
+
 Every revision deploy finishes by upgrading existing webhook subscriptions after
 the new parser-capable release is serving and its readiness check succeeds. Keep
 the original `GITHUB_WEBHOOK_SECRET` in the loaded environment; the upgrade must
@@ -656,6 +693,12 @@ all, and where the mark exists (a `CHECK` or `FOREIGN KEY` constraint) it
 defers only the scan of existing rows while still enforcing new-row writes
 immediately, so it does not make a constraint safe to apply before the
 corrected writer is serving.
+
+**The fenced blocks below are the manual fallback, for the case where the
+script itself is what broke.** They carry out the same sequence by hand, in the
+same order, under the same fence, with the same `--expect-current` anchor and
+the same release grammar; extract and run them only after diagnosing why the
+script could not, and keep every guard in this section in force.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using

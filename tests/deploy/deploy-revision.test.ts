@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
+const readme = fileURLToPath(new URL("../../deploy/README.md", import.meta.url));
 
 /**
  * The refusal the procedure's serialization notes mandate, byte for byte, with
@@ -495,5 +496,35 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toContain("LC_ALL=C sort");
     expect(source).toContain("-printf '%f\\n'");
     expect(source).toContain(".next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}");
+  });
+});
+
+describe("deploy/README.md section 10 pins the committed script as the procedure", () => {
+  async function section10(): Promise<string> {
+    const markdown = await readFile(readme, "utf8");
+    const section = markdown.split("## 10. Deploying a new revision")[1];
+    expect(section, "the section 10 heading").toBeDefined();
+    return section!;
+  }
+
+  it("names scripts/deploy-revision.sh as the procedure to run", async () => {
+    expect(await section10()).toContain("bash scripts/deploy-revision.sh");
+  });
+
+  it("keeps the standing block's fence and --expect-current lines in the manual fallback", async () => {
+    const section = await section10();
+    const blocks = [...section.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
+    const standing = blocks.find((block) => block.includes("git pull --ff-only origin main"));
+    expect(standing, "the manual standing block").toBeDefined();
+    expect(standing, "the fd 9 fence line").toContain("exec 9>/run/overflow-deploy.lock");
+    expect(standing).toContain('pnpm release:switch /srv/overflow "$release" --expect-current "$expected_serving"');
+  });
+
+  it("keeps the retention listing's -regextype posix-extended line", async () => {
+    const section = await section10();
+    const blocks = [...section.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
+    const listing = blocks.find((block) => block.includes("-printf '%f\\n'"));
+    expect(listing, "the retention listing block").toBeDefined();
+    expect(listing).toContain("-regextype posix-extended");
   });
 });
