@@ -94,7 +94,15 @@ describe("closures whose evidence window shut before the repository was register
 
     const result = foldRepository(snapshot);
 
-    expect(result.policyViolations).toEqual([{ code: "OPENING_LABEL_MISSING", githubIssueId: 101 }]);
+    // The fixture's opening label was applied by an actor GitHub named no id
+    // for, and the sponsor record here has no login either, so the opening
+    // refusal records the applied-but-unattributable case rather than an
+    // absence — the issue still leaves the fold either way.
+    expect(result.policyViolations).toEqual([{
+      code: "OPENING_LABEL_UNATTRIBUTABLE",
+      githubIssueId: 101,
+      reason: "The repository sponsor has no login, so no opening label can be attributed to the sponsor.",
+    }]);
     expect(result.unwritableClosures).toEqual([]);
     expect(result.issues).toEqual([]);
   });
