@@ -385,7 +385,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     // sponsor appending a later catalog never re-prices an earlier settled
     // figure (issue 180). The selector never reads the clock: the instant is
     // GitHub's merge time, stable across every re-derivation of the same
-    // evidence. Openings resolve by the current catalog above, unchanged.
+    // evidence. The opening above is likewise pinned to its issue's creation.
     const settledResolution = pullRequest === null
       ? null
       : resolveSettledDifficulty(
