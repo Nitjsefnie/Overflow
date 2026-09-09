@@ -45,6 +45,23 @@ export type ModerationRouteDependencies = {
   createService: () => Promise<ModerationRouteService>;
 };
 
+/**
+ * The service surface the recalibration credit-adjustment routes call (issue
+ * 330). These methods run only on a service constructed with the credit store
+ * (the optional second constructor argument) — a requirement a Pick cannot
+ * express — so the routes that call them take this narrower dependency type
+ * and build both constructor arguments in their own dependency objects,
+ * instead of sharing the close route's.
+ */
+export type ModerationCreditRouteService = Pick<
+  AccountModerationService,
+  "previewRecalibration" | "applyRecalibrationCreditAdjustment" | "reverseModerationCreditAdjustment"
+>;
+
+export type ModerationCreditRouteDependencies = Omit<ModerationRouteDependencies, "createService"> & {
+  createService: () => Promise<ModerationCreditRouteService>;
+};
+
 export function createModerationPostHandler(dependencies: ModerationRouteDependencies) {
   return async function postModeration(request: Request): Promise<Response> {
     const refusal = guardByCredential(request);
