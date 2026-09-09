@@ -85,4 +85,50 @@ describe("application shell sign-out", () => {
     expect(within(items[settlementsIndex + 1] as HTMLElement).getByRole("link", { name: "Members" }))
       .toBe(members);
   });
+
+  /**
+   * The header wrap breakpoint (issue 40) is measured against exactly this
+   * navigation — both variants, in this order — so the list is pinned: a
+   * wider link set would change where the nav stops fitting one row above the
+   * stacked header, and the breakpoint must be re-measured, not reused.
+   */
+  const expectedNavigation = (
+    isModerator: boolean,
+  ): ReadonlyArray<readonly [string, string | null]> => [
+    ["Ledger", "/dashboard"],
+    ["Issues", "/issues"],
+    ["Settlements", "/settlements"],
+    ["Members", "/members"],
+    ["Register a repository", "/repositories/new"],
+    ["Calibration", "/calibration"],
+    ["Rules", "/rules"],
+    ...(isModerator ? [["Moderation", "/moderation"] as const] : []),
+  ];
+
+  it.each([
+    ["a member session", false],
+    ["a moderator session", true],
+  ])("renders exactly the measured navigation, in order, for %s", (_session, isModerator) => {
+    render(
+      <AppShell memberName="Lin" isModerator={isModerator}>
+        <p>content</p>
+      </AppShell>,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "Member navigation" });
+    const links = within(navigation).getAllByRole("link");
+
+    expect(links.map((link) => [link.textContent, link.getAttribute("href")]))
+      .toEqual(expectedNavigation(isModerator));
+  });
+
+  it("shows Moderation only in the moderator variant", () => {
+    render(
+      <AppShell memberName="Lin" isModerator={false}>
+        <p>content</p>
+      </AppShell>,
+    );
+
+    expect(screen.queryByRole("link", { name: "Moderation" })).not.toBeInTheDocument();
+  });
 });
