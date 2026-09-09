@@ -9,7 +9,7 @@ import {
   type SqlClient,
   type TransactionClient,
 } from "@/lib/db/types";
-import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
+import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import {
   assessReconciliationFairness,
@@ -603,7 +603,31 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       where repositories.id = ${repositoryId}
       limit 1
     `;
-    return row === undefined ? null : toReconciliationRepository(row);
+    if (row === undefined) {
+      return null;
+    }
+    const difficultySchemeVersions = await this.listDifficultySchemeVersions(row.github_repository_id);
+    return toReconciliationRepository(row, difficultySchemeVersions);
+  }
+
+  private async listDifficultySchemeVersions(
+    githubRepositoryId: number | string,
+  ): Promise<DifficultySchemeVersion[]> {
+    const rows = await this.sql<{
+      version_number: number | string;
+      scheme: DifficultyScheme;
+      effective_from: string | Date;
+    }[]>`
+      select version_number, scheme, effective_from
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${githubRepositoryId}
+      order by effective_from, version_number
+    `;
+    return rows.map((row) => ({
+      versionNumber: toSafeInteger(row.version_number),
+      scheme: row.scheme,
+      effectiveFrom: timestampToIso(row.effective_from),
+    }));
   }
 
   public async recordVerifiedRepositoryIdentity(input: {
@@ -2332,7 +2356,10 @@ function combineDeltas(...deltas: readonly ReconciliationDeltas[]): Reconciliati
   );
 }
 
-function toReconciliationRepository(row: RepositoryRow): ReconciliationRepository {
+function toReconciliationRepository(
+  row: RepositoryRow,
+  difficultySchemeVersions: DifficultySchemeVersion[],
+): ReconciliationRepository {
   return {
     id: row.id,
     githubRepositoryId: toSafeInteger(row.github_repository_id),
@@ -2340,6 +2367,7 @@ function toReconciliationRepository(row: RepositoryRow): ReconciliationRepositor
     active: row.active,
     registeredAt: timestampToIso(row.created_at),
     difficultyScheme: row.difficulty_scheme,
+    difficultySchemeVersions,
     sponsor: {
       id: row.sponsor_id,
       githubUserId: toSafeInteger(row.sponsor_github_user_id),

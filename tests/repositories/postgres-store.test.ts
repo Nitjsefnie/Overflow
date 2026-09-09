@@ -10,6 +10,8 @@ import type { NewRegisteredRepository } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
   RepositoryRegistrationEnforcementError,
+  RepositorySchemeChangeForbiddenError,
+  RepositorySchemeChangeOrderError,
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -20,6 +22,7 @@ let store: PostgresRepositoryStore;
 let externalId = 8_600_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 19).toString("base64url");
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("registering a repository against the real registered_repositories constraints", () => {
   beforeAll(async () => {
@@ -206,6 +209,180 @@ describe("registering a repository against the real registered_repositories cons
     await expect(store.createRepository(submission)).rejects.toThrow(RepositoryRegistrationEnforcementError);
     await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
   });
+
+  it("seeds the registered catalog as the repository's first version row", async () => {
+    const submission = newRepository({ sponsorId: await sponsor() });
+
+    await expect(store.createRepository(submission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+
+    const rows = await sql<VersionRow[]>`
+      select version_number, scheme, effective_from
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+      order by version_number
+    `;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.scheme).toEqual(difficultyScheme());
+    expect(Number(rows[0]!.effective_from)).toBeGreaterThan(0);
+  });
+});
+
+describe("changing a registered repository's difficulty catalog", () => {
+  let container: StartedTestContainer | undefined;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "registration_catalog",
+      user: "registration_catalog",
+      password: "registration_catalog",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = getSql();
+    await runMigrations();
+    store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
+  });
+
+  afterAll(async () => {
+    await closeSql();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
+  });
+
+  it("appends a version and moves the current catalog when the sponsor changes it", async () => {
+    const submission = await registeredViaStore();
+    const effectiveFrom = new Date(Date.now() + DAY_MS);
+
+    const result = await store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: changedScheme(),
+      effectiveFrom,
+    });
+
+    expect(result).toMatchObject({ changed: true, versionNumber: 2 });
+    const [current] = await sql<{ scheme: unknown }[]>`
+      select difficulty_scheme as scheme from registered_repositories
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(current?.scheme).toEqual(changedScheme());
+    const versions = await sql<VersionRow[]>`
+      select version_number, scheme, effective_from
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+      order by version_number
+    `;
+    expect(versions.map((version) => version.scheme)).toEqual([difficultyScheme(), changedScheme()]);
+    expect(Number(versions[1]!.effective_from)).toBe(effectiveFrom.getTime());
+  });
+
+  it("reports an identical catalog as unchanged and appends no version", async () => {
+    const submission = await registeredViaStore();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: difficultyScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).resolves.toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
+
+    const count = await sql<{ count: number | string }[]>`
+      select count(*) as count from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(Number(count[0]!.count)).toBe(1);
+  });
+
+  it("refuses a catalog change from anyone but the repository's sponsor", async () => {
+    const submission = await registeredViaStore();
+    const outsider = await sponsor();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: outsider,
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toThrow(RepositorySchemeChangeForbiddenError);
+
+    const versions = await sql<{ count: number | string }[]>`
+      select count(*) as count from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(Number(versions[0]!.count)).toBe(1);
+  });
+
+  it("answers null when no registration holds the submitted GitHub identity", async () => {
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: externalId++,
+      sponsorId: await sponsor(),
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).resolves.toBeNull();
+  });
+
+  it("leaves a scheme the validity check refuses to the database constraint", async () => {
+    const submission = await registeredViaStore();
+    const incomplete = difficultyScheme();
+    incomplete.actualLabels = incomplete.actualLabels.slice(0, 9);
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: incomplete,
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toMatchObject({ code: "23514" });
+
+    const versions = await sql<{ count: number | string }[]>`
+      select count(*) as count from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(Number(versions[0]!.count)).toBe(1);
+  });
+
+  it("refuses a version whose effective instant predates the latest version's", async () => {
+    const submission = await registeredViaStore();
+
+    await store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + 2 * DAY_MS),
+    });
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: difficultyScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toThrow(RepositorySchemeChangeOrderError);
+
+    const versions = await sql<VersionRow[]>`
+      select version_number, effective_from
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+      order by version_number
+    `;
+    expect(versions).toHaveLength(2);
+    expect(Number(versions[1]!.effective_from)).toBeGreaterThan(Date.now());
+  });
+
+  // The catalog-change tests register through the store rather than the direct
+  // insert above: a registration that never passed through createRepository
+  // carries no catalog version history for the append to continue.
+  async function registeredViaStore(): Promise<NewRegisteredRepository> {
+    const submission = newRepository({ sponsorId: await sponsor() });
+    await expect(store.createRepository(submission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+    return submission;
+  }
 });
 
 describe("raising a database error the registration store must not convert", () => {
@@ -274,6 +451,27 @@ function difficultyScheme(): DifficultyScheme {
     })),
   };
 }
+
+// One opening label added and one point mapping traded: a catalog change a
+// dashboard can see and a re-priced label the fold must not apply backwards.
+function changedScheme(): DifficultyScheme {
+  const scheme = difficultyScheme();
+  return {
+    ...scheme,
+    openingLabels: [...scheme.openingLabels, { label: "size/XL", comparisonPoints: 9, reservePoints: 9 }],
+    actualLabels: scheme.actualLabels.map((label) => {
+      if (label.label === "delivered/6") return { ...label, points: 7 };
+      if (label.label === "delivered/7") return { ...label, points: 6 };
+      return label;
+    }),
+  };
+}
+
+type VersionRow = {
+  version_number: number | string;
+  scheme: unknown;
+  effective_from: Date | string;
+};
 
 function newRepository(
   overrides: Partial<NewRegisteredRepository> & Pick<NewRegisteredRepository, "sponsorId">,
