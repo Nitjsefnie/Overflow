@@ -24,10 +24,11 @@ describe("webhook issue views", () => {
     expect(parse("issues", { ...issue, ...changes })).toBeNull();
   });
 
-  it.each(["issues", "issue_comment"])("preserves the issue identity of %s PR envelopes without applying a view", (event) => {
-    const delivery = parse(event, { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } });
-    expect(delivery?.subject).toEqual({ kind: "ISSUE", id: 201, number: 11 });
-    expect(delivery).not.toHaveProperty("issue");
+  it.each(["issues", "issue_comment"])("drops %s PR envelopes without enqueueing a subject", (event) => {
+    // A PR envelope's issue-surface id is not the PR database id, so there is
+    // no subject this parser may enqueue for it; the PR's own lifecycle events
+    // carry the true id.
+    expect(parse(event, { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } })).toBeNull();
   });
 });
 

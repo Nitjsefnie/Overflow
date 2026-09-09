@@ -101,13 +101,26 @@ describe("webhook issue materialization", () => {
         const [repository] = await sql`select github_repository_id from registered_repositories where id = ${other.repositoryId}`;
         options.repositoryGitHubId = Number(repository.github_repository_id);
       }
-      if (boundary === "PR comment") { options.event = "issue_comment"; options.pullRequest = true; }
       const issues = await sql`select * from issues order by id`;
       const prs = await sql`select * from pull_requests order by id`;
-      await deliver(fixture, options);
+      if (boundary === "PR comment") {
+        // A PR-carrying envelope parses to no delivery at all: nothing is
+        // claimed, viewed or enqueued, so the rows and queue below stay
+        // untouched.
+        const [repository] = await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
+        expect(parseGitHubWebhookDelivery("issue_comment", randomUUID(), {
+          action: "created",
+          repository: { id: Number(repository.github_repository_id), full_name: "octo/example" },
+          issue: { id: fixture.fold.issues[0].githubIssueId, number: 1, state: "open",
+            updated_at: "2026-09-08T10:00:00Z", title: "Webhook title", body: "Webhook body",
+            html_url: "https://github.com/octo/example/issues/1", pull_request: {} },
+        })).toBeNull();
+      } else {
+        await deliver(fixture, options);
+      }
       expect(await sql`select * from issues order by id`).toEqual(issues);
       expect(await sql`select * from pull_requests order by id`).toEqual(prs);
-      const queued = !["unknown repository", "inactive repository", "wrong repository"].includes(boundary);
+      const queued = !["unknown repository", "inactive repository", "wrong repository", "PR comment"].includes(boundary);
       expect(await sql`select count(*)::int as count from repository_reconciliation_jobs where repository_id = ${fixture.repositoryId}`)
         .toEqual([{ count: queued ? 1 : 0 }]);
     },
@@ -123,7 +136,7 @@ async function row(fixture: Fixture) {
 
 async function deliver(fixture: Fixture, options: {
   event?: string; state?: string; updatedAt?: string; deliveryId?: string;
-  issueId?: number; repositoryGitHubId?: number; pullRequest?: boolean;
+  issueId?: number; repositoryGitHubId?: number;
   failEnqueue?: boolean;
 } = {}) {
   const [repository] = await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
@@ -133,8 +146,7 @@ async function deliver(fixture: Fixture, options: {
     repository: { id: options.repositoryGitHubId ?? Number(repository.github_repository_id), full_name: "octo/example" },
     issue: { id: options.issueId ?? fixture.fold.issues[0].githubIssueId, number: 1,
       state: options.state ?? "open", updated_at: options.updatedAt ?? "2026-09-08T10:00:00Z",
-      title: "Webhook title", body: "Webhook body", html_url: "https://github.com/octo/example/issues/1",
-      ...(options.pullRequest ? { pull_request: {} } : {}) },
+      title: "Webhook title", body: "Webhook body", html_url: "https://github.com/octo/example/issues/1" },
   });
   if (delivery === null) throw new Error("Invalid test delivery");
   return processWebhook({ store: fixture.store,

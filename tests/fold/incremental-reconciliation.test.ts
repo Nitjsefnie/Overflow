@@ -4,6 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
@@ -345,6 +346,29 @@ describe("incremental reconciliation", () => {
       from reconciliation_runs where repository_id = ${f.id} and status = 'FAILED'`)
       .toEqual([{ graphql_cost: null, graphql_cost_sponsor_id: null, graphql_observed_responses: null, graphql_unmeasured_responses: null }]);
     expect(await sql`select * from repository_reconciliation_usage where repository_id = ${f.id}`).toEqual(usageBefore);
+  });
+
+  // Mutants: ENQUEUE_PR_ENVELOPE_AS_ISSUE.
+  it("enqueues a genuine issue delivery but nothing for a PR-carrying issue envelope", async () => {
+    const f = await fixture();
+    // A full PR-carrying issues-event payload parses to no delivery at all, so
+    // nothing reaches the reconciliation queue. The envelope's id is the issue
+    // surface's, which would poison the evidence delete-key as an ISSUE row;
+    // the true PULL_REQUEST row arrives from PR lifecycle events instead.
+    const prEnvelope = parseGitHubWebhookDelivery("issues", `pr-envelope-${f.id}`, {
+      action: "edited",
+      repository: { id: f.githubRepositoryId, full_name: `octo/repo-${f.githubRepositoryId}` },
+      issue: { id: 5_393_690_180, number: 263, state: "open", updated_at: "2026-09-08T10:00:00Z",
+        title: "PR title", body: null, html_url: "https://github.com/octo/repo/pull/263",
+        pull_request: { url: `https://api.github.com/repos/octo/repo-${f.githubRepositoryId}/pulls/263` } },
+    });
+    if (prEnvelope !== null) await f.store.enqueueWebhookReconciliation(f.id, prEnvelope);
+    expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
+    // The fixture's genuine-issue delivery still enqueues.
+    await f.dirty("ISSUE", f.issues[0]!);
+    expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([
+      { kind: "ISSUE", id: f.issues[0]!.id, number: f.issues[0]!.number, generation: expect.any(Number) },
+    ]);
   });
 });
 

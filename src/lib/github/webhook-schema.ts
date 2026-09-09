@@ -77,14 +77,16 @@ export function parseGitHubWebhookDelivery(
   if (isIssueEvent) {
     const envelope = issueEnvelopeSchema.safeParse(parsed.data.issue);
     if (!envelope.success) return null;
-    // PR comments carry issue IDs, not PR database IDs. Preserve their issue
-    // subject for enqueueing, but do not apply a raw issue view.
-    if (envelope.data.pull_request === undefined) {
-      const view = issueViewSchema.safeParse(parsed.data.issue);
-      if (!view.success) return null;
-      issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
-        title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
-    }
+    // A PR-carrying envelope's id is the issue surface's, not the PR database
+    // id, and repository.issue(number:) cannot resolve a PR back. Enqueueing
+    // it would poison reconciliation's evidence delete-key with an unresolvable
+    // ISSUE row; the PR's true PULL_REQUEST row arrives from its lifecycle
+    // events instead.
+    if (envelope.data.pull_request !== undefined) return null;
+    const view = issueViewSchema.safeParse(parsed.data.issue);
+    if (!view.success) return null;
+    issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
+      title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
   }
 
   return {
