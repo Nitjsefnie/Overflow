@@ -355,10 +355,18 @@ export async function changeRepositoryCatalog(
       scheme: difficultyScheme,
       effectiveFrom: new Date(),
     });
+    // Unreachable through the flow above — the registration was just found —
+    // but a null here must not spread into a result that claims a change.
+    if (change === null) {
+      throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is not registered, so there is no catalog to change.");
+    }
     return { ...change, repository: registered };
   } catch (error) {
     if (error instanceof RepositorySchemeChangeForbiddenError) {
       throw new RepositoryRegistrationError("FORBIDDEN", error.message);
+    }
+    if (error instanceof RepositoryRegistrationError) {
+      throw error;
     }
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the difficulty catalog change.");
   }

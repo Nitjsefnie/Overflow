@@ -22,6 +22,13 @@ type RepositoryFormState = Omit<RepositoryFormValues, "openingLabels"> & {
 
 type RepositoryFormProps = {
   initialValues?: RepositoryFormValues;
+  /**
+   * `registration` registers a new repository (POST); `catalog-change` submits
+   * a replacement catalog for one already-registered repository (PATCH, issue
+   * 180). The fields are the same because the payload is the same: the sponsor
+   * edits the catalog they know, and settled work keeps its price either way.
+   */
+  variant?: "registration" | "catalog-change";
 };
 
 const defaultValues: RepositoryFormValues = {
@@ -39,11 +46,36 @@ const defaultValues: RepositoryFormValues = {
   })),
 };
 
-export function RepositoryForm({ initialValues = defaultValues }: RepositoryFormProps) {
+const copy = {
+  registration: {
+    formLabel: "Register one repository",
+    eyebrow: "Explicit registration",
+    heading: "Register one repository",
+    intro: "You need GitHub administrator permission for this one repository. Its catalogs stay yours to name.",
+    submit: "Register repository",
+    submitting: "Registering…",
+    failure: "Repository registration could not be completed. Check the setup and try again.",
+    unreachable: "Repository registration could not reach Overflow. Check your connection and try again.",
+  },
+  "catalog-change": {
+    formLabel: "Change a repository's difficulty catalog",
+    eyebrow: "Catalog change",
+    heading: "Change a repository's difficulty catalog",
+    intro: "Submit the replacement catalog for one registered repository, with GitHub administrator permission. Work already settled keeps its price; the change governs closures from now on.",
+    submit: "Save catalog",
+    submitting: "Saving…",
+    failure: "The catalog change could not be completed. Check the setup and try again.",
+    unreachable: "The catalog change could not reach Overflow. Check your connection and try again.",
+  },
+} as const;
+
+export function RepositoryForm({ initialValues = defaultValues, variant = "registration" }: RepositoryFormProps) {
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
   const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isCatalogChange = variant === "catalog-change";
+  const text = isCatalogChange ? copy["catalog-change"] : copy.registration;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -60,7 +92,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
     setIsSubmitting(true);
     try {
       const response = await fetch("/api/repositories", {
-        method: "POST",
+        method: isCatalogChange ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify(toRegistrationInput(values)),
@@ -69,12 +101,16 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
       if (!response.ok) {
         setFeedback({
           kind: "error",
-          message: body?.error?.message ?? "Repository registration could not be completed. Check the setup and try again.",
+          message: body?.error?.message ?? text.failure,
         });
         return;
       }
 
       const ownerName = body?.repository?.ownerName ?? values.repositoryUrl.trim();
+      if (isCatalogChange) {
+        setFeedback({ kind: "success", message: catalogChangeMessage(ownerName, body?.changed, body?.versionNumber) });
+        return;
+      }
       setFeedback({
         kind: body?.claimPath === "NO_EVIDENCE_FOUND" || body?.claimPath === "NOT_CHECKED" ? "warning" : "success",
         message: registrationMessage(ownerName, body?.initialImportScheduled, body?.claimPath),
@@ -82,7 +118,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
     } catch {
       setFeedback({
         kind: "error",
-        message: "Repository registration could not reach Overflow. Check your connection and try again.",
+        message: text.unreachable,
       });
     } finally {
       setIsSubmitting(false);
@@ -90,11 +126,11 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
   }
 
   return (
-    <form className="repository-form surface shadow-offset" aria-label="Register one repository" onSubmit={submit} noValidate>
+    <form className="repository-form surface shadow-offset" aria-label={text.formLabel} onSubmit={submit} noValidate>
       <div className="form-intro">
-        <p className="eyebrow">Explicit registration</p>
-        <h1>Register one repository</h1>
-        <p>You need GitHub administrator permission for this one repository. Its catalogs stay yours to name.</p>
+        <p className="eyebrow">{text.eyebrow}</p>
+        <h1>{text.heading}</h1>
+        <p>{text.intro}</p>
       </div>
 
       <label className="field">
@@ -206,7 +242,7 @@ export function RepositoryForm({ initialValues = defaultValues }: RepositoryForm
       {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
       {feedback?.kind === "warning" ? <p className="feedback warning" role="status">{feedback.message}</p> : null}
       <button className="action-button" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Registering…" : "Register repository"}
+        {isSubmitting ? text.submitting : text.submit}
       </button>
     </form>
   );
@@ -216,6 +252,8 @@ type RegistrationResponse = {
   repository?: { ownerName?: string };
   initialImportScheduled?: boolean;
   claimPath?: ClaimPathVerdict;
+  changed?: boolean;
+  versionNumber?: number | null;
   error?: { message?: string };
 };
 
@@ -225,6 +263,21 @@ type RegistrationResponse = {
 // and only the periodic repair sweep will pick the repository up. Either way the
 // registration stands, so the sponsor is told which happened rather than being left
 // to wonder why an empty issue list is empty.
+/**
+ * The one success sentence for a catalog change. A change that stored a new
+ * version says which one; a submission that repeated the current catalog says
+ * so, because an unchanged catalog the sponsor did not ask about reads like a
+ * change that silently failed. Both promise the same invariant: nothing
+ * already settled is re-priced by the change.
+ */
+function catalogChangeMessage(ownerName: string, changed: boolean | undefined, versionNumber: number | null | undefined): string {
+  if (changed === false) {
+    return `That catalog already governs ${ownerName}; nothing needed to change.`;
+  }
+  const version = typeof versionNumber === "number" ? ` Catalog version ${versionNumber} now governs` : "The new catalog now governs";
+  return `${ownerName}'s difficulty catalog was changed.${version} work whose evidence window closes after the change; work already settled keeps its price.`;
+}
+
 function registrationMessage(
   ownerName: string,
   initialImportScheduled: boolean | undefined,

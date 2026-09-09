@@ -10,6 +10,7 @@ export default async function NewRepositoryPage() {
   return (
     <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
       <RepositoryForm />
+      <RepositoryForm variant="catalog-change" />
       <ApiTokenPanel summary={tokenSummary ? { createdAt: tokenSummary.createdAt.toISOString() } : null} />
     </AppShell>
   );

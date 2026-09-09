@@ -251,3 +251,78 @@ describe("repository registration form", () => {
     );
   });
 });
+
+describe("repository catalog change form", () => {
+  function changeForm() {
+    return <RepositoryForm variant="catalog-change" initialValues={initialValues} />;
+  }
+
+  it("submits the catalog as a PATCH with the registration payload shape and announces the change", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      changed: true,
+      versionNumber: 2,
+      effectiveFrom: "2026-09-09T12:00:00.000Z",
+    }, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(changeForm());
+
+    fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "success");
+    expect(feedback.textContent).toContain("co-op/harbour");
+    expect(feedback.textContent).toContain("version 2");
+    expect(feedback.textContent).toContain("already settled");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, request] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe("/api/repositories");
+    expect(request.method).toBe("PATCH");
+    expect(request.credentials).toBe("same-origin");
+    const body = JSON.parse(String(request.body));
+    expect(body.repositoryUrl).toBe("co-op/harbour");
+    expect(body.openingName).toBe("Promise band");
+    expect(body.actualLabels).toHaveLength(10);
+  });
+
+  it("says nothing needed to change when the submitted catalog already is the current one", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      repository: { ownerName: "co-op/harbour" },
+      changed: false,
+      versionNumber: null,
+      effectiveFrom: null,
+    }, { status: 200 })));
+    render(changeForm());
+
+    fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "success");
+    expect(feedback.textContent).toContain("already governs");
+  });
+
+  it.each([400, 403, 409, 502])("shows an HTTP %s API response's error message verbatim", async (status) => {
+    const message = "This GitHub repository is not registered, so there is no catalog to change.";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      error: { code: "CONFLICT", message },
+    }, { status })));
+    render(changeForm());
+
+    fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+  });
+
+  it("rejects a noncanonical repository reference before contacting the API", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(changeForm());
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "not a repository" } });
+    fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
+
+    const feedback = screen.getByRole("alert");
+    expect(feedback.textContent).toContain("Enter one owner/name or one GitHub repository URL.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
