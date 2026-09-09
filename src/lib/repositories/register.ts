@@ -444,21 +444,27 @@ function githubSetupError(
   step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook",
 ): RepositoryRegistrationError {
   if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
-    const observation = error.status === 403
-      ? `GitHub refused to ${step} (HTTP 403).`
-      : `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
     let cause = repository?.ownerType === "ORGANIZATION"
       ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`
       : "This may be caused by missing authorization for the Overflow OAuth application.";
     if (repository === null) {
       cause += " For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy.";
     }
-    const temporaryLimitingAdvice = error.status === 403
-      ? " GitHub also answers 403 when it is temporarily limiting requests, so if those settings look right, wait a minute and retry before changing anything."
-      : "";
+    const authorizationRemedies = ` ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`;
+    if (error.status === 404) {
+      const observation = `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
+      return new RepositoryRegistrationError("GITHUB_ACCESS", `${observation}${authorizationRemedies}`);
+    }
+    // Issue 97: a 403 that carries no rate-limit evidence cannot separate a missing
+    // authorization from a secondary rate limit — GitHub answers 403 both ways. State the
+    // ambiguity and lead with the transient remedy; the settings remedies follow.
     return new RepositoryRegistrationError(
       "GITHUB_ACCESS",
-      `${observation} ${cause} Review Overflow's authorization at https://github.com/settings/applications, then retry registration.${temporaryLimitingAdvice}`,
+      `GitHub refused to ${step} (HTTP 403). `
+        + "GitHub answers 403 both when the Overflow OAuth application is not yet authorized "
+        + "and when it is temporarily limiting requests, and this response carries nothing that "
+        + "separates the two causes. Wait a minute and retry registration before changing anything."
+        + authorizationRemedies,
     );
   }
 
