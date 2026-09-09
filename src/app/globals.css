@@ -739,19 +739,6 @@ button:disabled {
 }
 
 @media (max-width: 780px) {
-  .site-header {
-    grid-template-columns: 1fr auto;
-  }
-
-  .site-header nav {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
-  .site-nav {
-    justify-content: flex-start;
-  }
-
   .dashboard-grid,
   .issue-card,
   .landing-principles {
@@ -843,6 +830,33 @@ button:disabled {
   .action-button:hover,
   .action-button:focus-visible {
     transform: none;
+  }
+}
+
+/*
+ * The header stacks at and below its measured wrap breakpoint: the wordmark
+ * and the session controls share the first row and the navigation takes its
+ * own full-width, left-aligned second row. 1240px is measured, not chosen —
+ * scripts/measure-header-geometry.mjs sweeps the real header in headless
+ * Chromium and finds the moderator navigation (the widest one Overflow ships)
+ * wrapping inside the middle column up to 1180px and fitting on a single row
+ * from 1210px. Below that width the three-column header cannot hold the
+ * navigation on one row, and a second link row centres silently against the
+ * wordmark. If the navigation gains or loses links, re-measure before moving
+ * this breakpoint.
+ */
+@media (max-width: 1240px) {
+  .site-header {
+    grid-template-columns: 1fr auto;
+  }
+
+  .site-header nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .site-nav {
+    justify-content: flex-start;
   }
 }
 
