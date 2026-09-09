@@ -6,6 +6,7 @@ import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { plural } from "@/lib/plural";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
+import { UnregisterRepositoryControl } from "@/components/unregister-repository-control";
 
 type DashboardContentProps = {
   memberName: string;
@@ -142,6 +143,12 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
                         <dd>{reconciliation}</dd>
                       </div>
                     )}
+                    <div>
+                      <dt>Unregister</dt>
+                      <dd>
+                        <UnregisterRepositoryControl ownerName={repository.ownerName} />
+                      </dd>
+                    </div>
                   </dl>
                 </li>
               );

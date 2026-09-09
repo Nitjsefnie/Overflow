@@ -1,12 +1,18 @@
 /** @vitest-environment jsdom */
 
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
 import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
+
+// The registered-repositories rows carry a client unregister control whose
+// router is provided by the app shell in production; these tests render the
+// server component directly, so the router is stubbed here.
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ redirect: vi.fn(), useRouter: () => ({ refresh }) }));
 
 describe("member dashboard", () => {
   it("shows independently calculated ledger totals and reserved headroom", () => {
@@ -690,6 +696,42 @@ describe("member dashboard", () => {
     expect(cellValue("enforcement-notices-heading", "2026-09-02", "Transition")).toBe(
       "Active → Banned",
     );
+  });
+
+  it("offers an unregister control on every registered repository's row, inactive ones included", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            registered("repo-1", "co-op/harbour"),
+            { ...registered("repo-2", "co-op/lighthouse"), active: false },
+            registered("repo-3", "co-op/breakwater"),
+          ],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    // Every row carries the control (the DELETE is idempotent, so an inactive
+    // row's control is a no-op rather than a trap), as a dt/dd cell in the
+    // row's existing grid.
+    const repos = "registered-repositories-heading";
+    for (const ownerName of ["co-op/harbour", "co-op/lighthouse", "co-op/breakwater"]) {
+      expect(cellValue(repos, ownerName, "Unregister")).toBe("Unregister");
+      expect(
+        within(listItem(repos, ownerName)).getByRole("button", { name: `Unregister ${ownerName}` }),
+      ).toBeVisible();
+    }
   });
 
   it("shows repository visibility as display text, never the stored form", () => {
