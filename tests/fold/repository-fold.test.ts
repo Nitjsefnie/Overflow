@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import {
   foldRepository,
   type RepositoryFoldSnapshot,
@@ -575,6 +576,7 @@ function outsiderFixture(): RepositoryFoldSnapshot {
       registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
       difficultyScheme: difficultyScheme(),
+      difficultySchemeVersions: [],
     },
     users: [
       { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
@@ -1218,4 +1220,99 @@ function assignAt(snapshot: RepositoryFoldSnapshot, createdAt: string): void {
     assigneeLogin: "contributor",
     createdAt,
   });
+}
+
+describe("versioned difficulty catalogs", () => {
+  // The window on the fixture's closure closes at merge + the fifteen-minute
+  // evidence grace: 2026-09-01T12:15:00.000Z.
+  function versionedSnapshot(versions: DifficultySchemeVersion[]): RepositoryFoldSnapshot {
+    const snapshot = outsiderFixture();
+    const v2 = repricedScheme(difficultyScheme());
+    return {
+      ...snapshot,
+      repository: {
+        ...snapshot.repository,
+        difficultyScheme: v2,
+        difficultySchemeVersions: versions,
+      },
+    };
+  }
+
+  function versionsWithSecondEffectiveAt(effectiveFrom: string): DifficultySchemeVersion[] {
+    return [
+      { versionNumber: 1, scheme: difficultyScheme(), effectiveFrom: "2026-01-01T00:00:00.000Z" },
+      { versionNumber: 2, scheme: repricedScheme(difficultyScheme()), effectiveFrom },
+    ];
+  }
+
+  it("keeps pricing a closure by the catalog governing its evidence window, not the current catalog", () => {
+    const snapshot = versionedSnapshot(versionsWithSecondEffectiveAt("2026-09-01T13:00:00.000Z"));
+
+    const result = foldRepository(snapshot);
+
+    // The window closed at 12:15, before v2 began governing, so the appended
+    // repricing of delivered/6 (6 -> 7) must not touch this settled figure.
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 6, credits: 6 }),
+    ]);
+  });
+
+  it("prices a closure whose evidence window closed at or after the change by the appended catalog", () => {
+    const snapshot = versionedSnapshot(versionsWithSecondEffectiveAt("2026-09-01T12:15:00.000Z"));
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
+    ]);
+  });
+
+  it("resolves the opening by the current catalog even for a closure an earlier version prices", () => {
+    const snapshot = versionedSnapshot(versionsWithSecondEffectiveAt("2026-08-15T00:00:00.000Z"));
+    const issue = snapshot.issues[0]!;
+    issue.history = [
+      {
+        kind: "LABELED",
+        id: "opening-1",
+        actorLogin: "sponsor",
+        actorGitHubUserId: null,
+        label: "XL",
+        createdAt: "2026-08-30T10:00:00.000Z",
+      },
+      ...issue.history,
+    ];
+    issue.labels = ["XL", "delivered/6"];
+
+    const result = foldRepository(snapshot);
+
+    // XL exists only in the appended catalog, so the current one resolves the
+    // opening — while the closure itself is priced by that same appended
+    // catalog, because its window closed after the change.
+    expect(result.issues[0]).toMatchObject({ openingLabel: "XL", openingComparisonPoints: 10 });
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
+    ]);
+  });
+
+  it("lets the current catalog govern every closure while no version history is loaded", () => {
+    const snapshot = versionedSnapshot([]);
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements).toEqual([
+      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
+    ]);
+  });
+});
+
+function repricedScheme(scheme: DifficultyScheme): DifficultyScheme {
+  return {
+    ...scheme,
+    openingLabels: [...scheme.openingLabels, { label: "XL", comparisonPoints: 10, reservePoints: 10 }],
+    actualLabels: scheme.actualLabels.map((label) => {
+      if (label.label === "delivered/6") return { ...label, points: 7 };
+      if (label.label === "delivered/7") return { ...label, points: 6 };
+      return label;
+    }),
+  };
 }

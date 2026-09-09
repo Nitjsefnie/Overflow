@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { isParticipationEligible, type EnforcementState, type IssueState, type PullRequestState } from "@/lib/db/types";
-import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
+import { difficultySchemeInForceAt, type DifficultyScheme, type DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -37,7 +37,14 @@ export type RepositoryFoldSnapshot = {
     /** registered_repositories.created_at as ISO-8601 — the moment Overflow began watching. */
     registeredAt: string;
     sponsor: FoldUser;
+    /** The catalog in force now — what the dashboard reads and openings resolve by. */
     difficultyScheme: DifficultyScheme;
+    /**
+     * The repository's catalog history, earliest first. Empty means the current
+     * catalog governs every instant, which is the one-catalog behavior every
+     * repository had before catalogs became versioned (issue 180).
+     */
+    difficultySchemeVersions: DifficultySchemeVersion[];
   };
   users: FoldUser[];
   issues: RepositoryFoldIssue[];
@@ -362,9 +369,22 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       ? selectClosingPullRequest(issue.closingPullRequests, snapshot.repository)
       : noClosingPullRequest;
     const pullRequest = selection.kind === "SELECTED" ? selection.pullRequest : null;
+    // A closure is priced by the catalog in force when its evidence window
+    // closed — merge + the same grace every rejection sentence quotes — so a
+    // sponsor appending a later catalog never re-prices an earlier settled
+    // figure (issue 180). The selector never reads the clock: the instant is
+    // GitHub's merge time, stable across every re-derivation of the same
+    // evidence. Openings resolve by the current catalog above, unchanged.
+    const settledScheme = pullRequest === null
+      ? null
+      : difficultySchemeInForceAt(
+          snapshot.repository.difficultySchemeVersions,
+          Date.parse(pullRequest.mergedAt) + EVIDENCE_ORDERING_GRACE_MS,
+          snapshot.repository.difficultyScheme,
+        );
     const settledResolution = pullRequest === null
       ? null
-      : resolveSettledDifficulty(issue, pullRequest, snapshot.repository.difficultyScheme, sponsor);
+      : resolveSettledDifficulty(issue, pullRequest, settledScheme, sponsor);
     // Said once for both gated recording sites. A closure's evidence window
     // shuts fifteen minutes after the merge that closed the issue — the same
     // fifteen minutes every rejection reason quotes back to a moderator — or,
