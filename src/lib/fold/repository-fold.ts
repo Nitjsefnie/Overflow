@@ -642,7 +642,7 @@ function resolveOpening(
  * names the repository's own sponsor record as the thing to fix, the way the
  * settled window's missing-login reason does. `resolveSettledDifficulty`
  * declines to emit `SETTLED_LABEL_UNAUTHORIZED` on the same guard — but only on
- * that guard: it first reduces the history to the labels still STANDING at the
+ * that guard: it first replays the history to the labels still STANDING at the
  * merge, while an opening is decided by the applications themselves, so a label
  * applied here and removed again is still refused by name.
  *
