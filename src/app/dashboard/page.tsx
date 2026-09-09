@@ -92,7 +92,11 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
                   </div>
                   <div>
                     <dt>Catalog</dt>
-                    <dd>{claim.openingName}: {claim.openingLabel}</dd>
+                    <dd>
+                      {claim.openingLabel.startsWith(`${claim.openingName}: `)
+                        ? claim.openingLabel
+                        : `${claim.openingName}: ${claim.openingLabel}`}
+                    </dd>
                   </div>
                   <div>
                     <dt>Reserve</dt>
