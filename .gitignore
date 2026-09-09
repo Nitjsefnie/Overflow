@@ -74,6 +74,12 @@ src/app/api/repositories/*
 !src/app/api/repositories/labels/
 src/app/api/repositories/labels/*
 !src/app/api/repositories/labels/*.ts
+!src/app/api/settlements/
+src/app/api/settlements/*
+!src/app/api/settlements/*.ts
+!src/app/api/settlements/[[]id[]]/
+src/app/api/settlements/[[]id[]]/*
+!src/app/api/settlements/[[]id[]]/*.ts
 !src/app/api/tokens/
 src/app/api/tokens/*
 !src/app/api/tokens/*.ts
