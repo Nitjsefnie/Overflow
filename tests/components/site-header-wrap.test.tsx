@@ -1,0 +1,173 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+
+/**
+ * The responsive header contract (issue 40).
+ *
+ * The header is a three-column grid on desktop and stacks at and below a
+ * single measured breakpoint: the wordmark and the session controls share the
+ * first row and the navigation spans the full width on the second row,
+ * left-aligned. The breakpoint is not a free choice — the widest navigation
+ * Overflow ships (the moderator variant, "Moderation" included) must fit on
+ * one row above it — so it is pinned to the value measured by
+ * `scripts/measure-header-geometry.mjs`, and changing it means re-measuring.
+ *
+ * Like tests/deploy/unit-file.test.ts this guard reads the shipped artifact
+ * and holds it to a closed contract: one header breakpoint, its rules spelled
+ * in full, the desktop grid intact as the base rule, and no second, stale
+ * copy of the stacked pattern left behind.
+ */
+
+const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+
+type MediaBlock = { condition: string; body: string };
+
+type Rule = { selector: string; declarations: Record<string, string> };
+
+/** Strip comments so braces inside them cannot confuse the brace scanner. */
+function stripComments(source: string): string {
+  return source.replaceAll(/\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\//g, "");
+}
+
+/**
+ * The file's `@media` blocks with balanced-brace bodies. Selectors and
+ * declarations are read only structurally; anything the scanner cannot
+ * represent fails the parse rather than being skipped.
+ */
+function mediaBlocks(source: string): MediaBlock[] {
+  const text = stripComments(source);
+  const blocks: MediaBlock[] = [];
+  let index = 0;
+
+  while ((index = text.indexOf("@media", index)) !== -1) {
+    const open = text.indexOf("{", index);
+    const condition = text.slice(index + "@media".length, open).trim();
+    let depth = 1;
+    let cursor = open + 1;
+
+    while (depth > 0 && cursor < text.length) {
+      if (text[cursor] === "{") depth++;
+      if (text[cursor] === "}") depth--;
+      cursor++;
+    }
+
+    blocks.push({ condition, body: text.slice(open + 1, cursor - 1) });
+    index = cursor;
+  }
+
+  return blocks;
+}
+
+/** The top-level rules of a block body, with declarations parsed per rule. */
+function rules(body: string): Rule[] {
+  const parsed: Rule[] = [];
+  let index = 0;
+
+  while (index < body.length) {
+    const open = body.indexOf("{", index);
+    if (open === -1) break;
+    const selector = body.slice(index, open).trim();
+    let depth = 1;
+    let cursor = open + 1;
+
+    while (depth > 0 && cursor < body.length) {
+      if (body[cursor] === "{") depth++;
+      if (body[cursor] === "}") depth--;
+      cursor++;
+    }
+
+    const block = body.slice(open + 1, cursor - 1);
+    const declarations = Object.fromEntries(
+      [...block.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
+        ([, property, value]) => [property!, value!.trim()],
+      ),
+    );
+    parsed.push({ selector, declarations });
+    index = cursor;
+  }
+
+  return parsed;
+}
+
+function ruleWith(parsed: Rule[], selector: string): Rule {
+  const found = parsed.find((rule) => rule.selector === selector);
+  expect(found, `expected a "${selector}" rule`).toBeDefined();
+  return found!;
+}
+
+/** The header breakpoint exactly as the measurement harness pinned it. */
+const HEADER_BREAKPOINT = 1240;
+
+let blocks: MediaBlock[] = [];
+
+beforeAll(() => {
+  blocks = mediaBlocks(stylesheet);
+});
+
+/**
+ * The blocks that carry the stacked pattern itself — a grid-template-columns
+ * decision for the header or a nav placement rule — as opposed to width-local
+ * tweaks (the 520px block narrows the header gap) that merely touch the
+ * header.
+ */
+function headerStackedBlocks(): MediaBlock[] {
+  return blocks.filter((block) => {
+    const parsed = rules(block.body);
+    return parsed.some((rule) =>
+        rule.selector === ".site-header" && "grid-template-columns" in rule.declarations) ||
+      parsed.some((rule) => rule.selector === ".site-header nav");
+  });
+}
+
+function baseHeaderRule(): Rule {
+  return ruleWith(rules(stripComments(stylesheet)), ".site-header");
+}
+
+describe("responsive header contract", () => {
+  it("keeps the desktop three-column grid as the base rule", () => {
+    const declarations = baseHeaderRule().declarations;
+
+    expect(declarations["display"]).toBe("grid");
+    expect(declarations["grid-template-columns"]).toBe("auto minmax(0, 1fr) auto");
+    expect(declarations["align-items"]).toBe("center");
+  });
+
+  it("stacks the header under exactly one media query, the measured breakpoint", () => {
+    const headerBlocks = headerStackedBlocks();
+
+    expect(
+      headerBlocks,
+      "the header's stacked pattern must live in exactly one media query; " +
+        "if the navigation changed width, re-measure with " +
+        "scripts/measure-header-geometry.mjs and move the breakpoint once",
+    ).toHaveLength(1);
+    expect(headerBlocks[0]!.condition).toBe(`(max-width: ${HEADER_BREAKPOINT}px)`);
+  });
+
+  it("carries the stacked pattern in full inside the measured breakpoint", () => {
+    const [block] = headerStackedBlocks();
+    const parsed = rules(block!.body);
+
+    expect(ruleWith(parsed, ".site-header").declarations["grid-template-columns"]).toBe("1fr auto");
+
+    const navPlacement = ruleWith(parsed, ".site-header nav").declarations;
+    expect(navPlacement["grid-column"]).toBe("1 / -1");
+    expect(navPlacement["grid-row"]).toBe("2");
+
+    expect(ruleWith(parsed, ".site-nav").declarations["justify-content"]).toBe("flex-start");
+  });
+
+  it("leaves no copy of the stacked pattern in the older 780px block", () => {
+    const block780 = blocks.find((block) => block.condition === "(max-width: 780px)");
+
+    expect(
+      block780,
+      "the 780px block itself must stay (the rest of the narrow layout depends on it)",
+    ).toBeDefined();
+    expect(
+      rules(block780!.body).filter((rule) => rule.selector.startsWith(".site-header") ||
+        rule.selector === ".site-nav"),
+    ).toEqual([]);
+  });
+});
