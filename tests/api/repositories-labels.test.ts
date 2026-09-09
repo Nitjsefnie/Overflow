@@ -131,6 +131,28 @@ describe("GET /api/repositories/labels", () => {
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
   });
 
+  it.each([
+    ["1", "Retry after 1 second."],
+    ["2", "Retry after 2 seconds."],
+  ])("passes a GitHub rate limit retry-after of %s seconds through with the plural matching it", async (retryAfter, delay) => {
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
+      new Response("private-body access-token-should-not-leak", {
+        status: 403,
+        headers: { "retry-after": retryAfter, "x-private": "private-header" },
+      })));
+
+    const response = await labelsRoute.GET(labelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.error.code).toBe("GITHUB_RATE_LIMITED");
+    expect(body.error.message).toContain("GitHub rate-limited the request to read the repository labels (HTTP 403).");
+    expect(body.error.message).toContain(delay);
+    expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+  });
+
   it("answers a 502 for another GitHub API failure through the real gateway", async () => {
     readSession.mockResolvedValue(memberSession());
     stubStoredToken();
