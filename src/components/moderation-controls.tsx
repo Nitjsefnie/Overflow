@@ -387,6 +387,13 @@ export function RecalibrationCreditAdjustmentControl({
   }
 
   const actionable = preview.actionability.actionable;
+  const figure = preview.figure;
+  const zeroFigure = figure !== null && figure.totalAmount === 0;
+  const applyTitle = !actionable
+    ? `Not actionable — ${actionabilityText(preview.actionability.reason)}`
+    : zeroFigure
+      ? "The proposed adjustment total is 0 points — nothing to apply"
+      : undefined;
   const appliedAdjustments = preview.adjustments.filter((adjustment) => adjustment.reversalOf === null);
   const reversedIds = new Set(
     preview.adjustments.flatMap((adjustment) => (adjustment.reversalOf === null ? [] : [adjustment.reversalOf])),
@@ -425,8 +432,8 @@ export function RecalibrationCreditAdjustmentControl({
       <button
         className="action-button"
         type="button"
-        disabled={!actionable || applyPending}
-        title={actionable ? undefined : `Not actionable — ${actionabilityText(preview.actionability.reason)}`}
+        disabled={!actionable || applyPending || figure === null || figure.totalAmount === 0}
+        title={applyTitle}
         onClick={() => void applyAdjustment()}
       >
         Apply credit adjustment
