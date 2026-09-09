@@ -224,6 +224,7 @@ describe("initial PostgreSQL materialization", () => {
       "030_repository_difficulty_scheme_versions.sql",
       "031_tighten_issue_evidence_completeness.sql",
       "032_immutable_claim_assignee_identity.sql",
+      "033_self_work_calibrations_issue_unique.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -1256,6 +1257,61 @@ describe("initial PostgreSQL materialization", () => {
       { issue_id: pullRequest.issueId, proof_sha256: proofFingerprint },
       { issue_id: secondIssueId, proof_sha256: proofFingerprint },
     ].sort((left, right) => left.issue_id.localeCompare(right.issue_id)));
+  });
+
+  it("rejects a second self-work calibration for an issue already holding one", async () => {
+    const issue = await insertIssue(sql);
+    const insertMergedSelfWorkPullRequest = (githubPullRequestId: number) => sql`
+      insert into pull_requests (
+        github_pull_request_id,
+        repository_id,
+        issue_id,
+        pull_request_number,
+        url,
+        title,
+        body,
+        author_id,
+        state,
+        merged_at
+      )
+      values (
+        ${githubPullRequestId},
+        ${issue.repositoryId},
+        ${issue.id},
+        ${nextExternalId()},
+        ${`https://github.com/example/repository/pull/${githubPullRequestId}`},
+        ${"A merged self-work contribution"},
+        ${"Pull request evidence"},
+        ${issue.sponsorId},
+        ${"MERGED"},
+        now()
+      )
+      returning id
+    `;
+    const [firstPullRequest] = await insertMergedSelfWorkPullRequest(nextExternalId());
+    const [secondPullRequest] = await insertMergedSelfWorkPullRequest(nextExternalId());
+    for (const pullRequest of [firstPullRequest, secondPullRequest]) {
+      await sql`
+        insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+        values (${pullRequest.id}, ${issue.id}, ${issue.repositoryId})
+      `;
+    }
+
+    await sql`
+      insert into self_work_calibrations (
+        pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+      )
+      values (${firstPullRequest.id}, ${issue.id}, ${issue.sponsorId}, 5, 6)
+    `;
+    await expect(sql`
+      insert into self_work_calibrations (
+        pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+      )
+      values (${secondPullRequest.id}, ${issue.id}, ${issue.sponsorId}, 7, 4)
+    `).rejects.toThrow(/self_work_calibrations_issue_unique/);
+    await expect(sql`
+      select pull_request_id from self_work_calibrations where issue_id = ${issue.id}
+    `).resolves.toEqual([{ pull_request_id: firstPullRequest.id }]);
   });
 
   it("rejects a cross-repository PR/issue association before any settlement can reference it", async () => {
