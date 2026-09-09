@@ -2,7 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitHubApiError, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -147,8 +147,9 @@ async function reconcileRepositoryWhileCoordinated(
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
+    isSubjectNotFound: (error: unknown) => boolean = isGitHubSubjectNotFoundError,
   ): Promise<boolean> => {
-    if (!isGitHubSubjectNotFoundError(failure)) return false;
+    if (!isSubjectNotFound(failure)) return false;
     if (dirty !== undefined) {
       await dependencies.store.discardDirtyReconciliationSubject({
         repositoryId,
@@ -393,6 +394,15 @@ async function reconcileRepositoryWhileCoordinated(
   }
 }
 
+// The reviews read is GraphQL, so a pull request deleted upstream answers
+// the flattened NOT_FOUND message the subject classifier matches; the diff
+// read is REST and answers GitHub's fixed 404 error, which that classifier
+// never sees. The evidence arm treats either shape as the same definitive
+// NOT_FOUND for that pull request — 404 and nothing else.
+function isPullRequestEvidenceGone(error: unknown): boolean {
+  return isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404);
+}
+
 // A pull request's evidence read draws the same subject-alone arm the
 // per-subject reads draw: a NOT_FOUND for a pull request is definitive for
 // the subject, not a property of the run — the sweep revives FAILED jobs and
@@ -414,6 +424,7 @@ async function collectPullRequestEvidence(
     kind: DirtyReconciliationSubject["kind"],
     subject: GitHubSubject,
     dirty: DirtyReconciliationSubject | undefined,
+    isSubjectNotFound?: (error: unknown) => boolean,
   ) => Promise<boolean>,
   dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
@@ -449,6 +460,7 @@ async function collectPullRequestEvidence(
           "PULL_REQUEST",
           pullRequest,
           dirtyPullRequestSubjects.get(pullRequest.id),
+          isPullRequestEvidenceGone,
         ))) {
           throw error;
         }

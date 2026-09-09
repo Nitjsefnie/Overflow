@@ -704,9 +704,14 @@ describe("reconcileRepository", () => {
   it.each(["reviews", "diff"] as const)(
     "completes the run when a merged closing pull request's %s is gone upstream, discarding and omitting only that subject",
     async (failingFetch) => {
-      const notFound = new Error(
-        "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '11'.",
-      );
+      // Production-true shapes: the reviews read is GraphQL and answers a
+      // deleted pull request with the flattened NOT_FOUND message; the diff
+      // read is REST and answers GitHub's fixed 404 error.
+      const notFound = failingFetch === "diff"
+        ? new GitHubApiError(404)
+        : new Error(
+          "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '11'.",
+        );
       const dependencies = reconciliationDependencies({
         github: {
           listIssues: vi.fn().mockResolvedValue([{
