@@ -77,6 +77,13 @@ function rules(body: string): Rule[] {
       cursor++;
     }
 
+    // An @-rule (a media block the caller parses separately) is not a style
+    // rule; skip it whole so its nested declarations never leak in.
+    if (selector.startsWith("@")) {
+      index = cursor;
+      continue;
+    }
+
     const block = body.slice(open + 1, cursor - 1);
     const declarations = Object.fromEntries(
       [...block.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
@@ -95,6 +102,80 @@ function ruleWith(parsed: Rule[], selector: string): Rule {
   expect(found, `expected a "${selector}" rule`).toBeDefined();
   return found!;
 }
+
+/**
+ * The header surface: selectors that decide how the header renders. A rule
+ * touching it may only live where the contract says, so the inventory below
+ * fails on an occurrence anywhere else — media'd or bare — even though every
+ * named shape above still matches.
+ */
+const HEADER_SURFACE_PREFIXES = [".site-header", ".site-nav", ".wordmark", ".member-stamp"];
+
+function touchesHeaderSurface(selector: string): boolean {
+  return selector
+    .split(",")
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .some((part) =>
+      part === "nav" ||
+      HEADER_SURFACE_PREFIXES.some((prefix) =>
+        part === prefix || part.startsWith(`${prefix} `) ||
+        part.startsWith(`${prefix}:`) || part.startsWith(`${prefix}.`)));
+}
+
+/** Base rules sort before media'd ones; media blocks sort by max-width. */
+function whereRank(where: string): number {
+  const parsed = where.match(/max-width:\s*(\d+(?:\.\d+)?)px/);
+  return parsed ? Number(parsed[1]) : -1;
+}
+
+function headerSurfaceInventory(source: string): Array<{ where: string; selector: string }> {
+  const inventory: Array<{ where: string; selector: string }> = [];
+  const add = (where: string, selector: string) => {
+    if (touchesHeaderSurface(selector)) {
+      inventory.push({ where, selector: selector.replace(/\s+/g, " ").trim() });
+    }
+  };
+
+  for (const rule of rules(stripComments(source))) {
+    add("base", rule.selector);
+  }
+  for (const block of mediaBlocks(source)) {
+    for (const rule of rules(block.body)) {
+      add(block.condition, rule.selector);
+    }
+  }
+
+  return inventory.sort((a, b) =>
+    whereRank(a.where) - whereRank(b.where) ||
+    (a.selector < b.selector ? -1 : a.selector > b.selector ? 1 : 0));
+}
+
+/**
+ * The complete sanctioned set, location by location: the desktop base rules,
+ * the two width-local tweaks in the 520px block, and the stacked pattern plus
+ * its empty-nav guard in the measured 1240px block. Anything else touching
+ * the header surface — anywhere, media'd or bare — fails the inventory.
+ */
+const expectedHeaderSurfaceRules: ReadonlyArray<{ where: string; selector: string }> = [
+  { where: "base", selector: ".member-stamp" },
+  { where: "base", selector: ".member-stamp span" },
+  {
+    where: "base",
+    selector: ".member-stamp, .mono-meta, .eyebrow, .points-stamp, .proof-fingerprint, .site-footer",
+  },
+  { where: "base", selector: ".site-header" },
+  { where: "base", selector: ".site-nav" },
+  { where: "base", selector: ".site-nav a" },
+  { where: "base", selector: ".site-nav a:hover" },
+  { where: "base", selector: ".wordmark" },
+  { where: "(max-width: 520px)", selector: ".member-stamp" },
+  { where: "(max-width: 520px)", selector: ".site-header" },
+  { where: "(max-width: 1240px)", selector: ".site-header" },
+  { where: "(max-width: 1240px)", selector: ".site-header nav" },
+  { where: "(max-width: 1240px)", selector: ".site-header nav:has(.site-nav:empty)" },
+  { where: "(max-width: 1240px)", selector: ".site-nav" },
+  { where: "(max-width: 1240px)", selector: ".site-nav:empty" },
+];
 
 /** The header breakpoint exactly as the measurement harness pinned it. */
 const HEADER_BREAKPOINT = 1240;
@@ -182,5 +263,16 @@ describe("responsive header contract", () => {
       rules(block780!.body).filter((rule) => rule.selector.startsWith(".site-header") ||
         rule.selector === ".site-nav"),
     ).toEqual([]);
+  });
+
+  /**
+   * The named-shape assertions only know the rules the contract names, so a
+   * header rule appended anywhere else leaves them green. This closes the
+   * universe: every rule in the file whose selector touches the header
+   * surface is enumerated — from the base block and from every media block —
+   * and must equal the sanctioned set exactly.
+   */
+  it("accounts for every rule touching the header surface, wherever it lives", () => {
+    expect(headerSurfaceInventory(stylesheet)).toEqual(expectedHeaderSurfaceRules);
   });
 });
