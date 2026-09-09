@@ -281,6 +281,8 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
       return errorResponse(409, error.code, error.message);
     case "UPSTREAM_FAILURE":
       return errorResponse(502, error.code, error.message);
+    case "NOT_FOUND":
+      return errorResponse(404, error.code, error.message);
   }
 }
 
