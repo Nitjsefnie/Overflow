@@ -17,7 +17,7 @@
  * unguarded, so a `200` with an empty list throws
  * `TypeError: Cannot read properties of undefined (reading 'email')` and the sign-in dies mid-handshake. Runtime-reproduced against both
  * this installed build and the published package; reported upstream at
- * https://github.com/nextauthjs/next-auth/issues/13494. Removing this
+ * https://github.com/nextauthjs/next-auth/issues/13495. Removing this
  * override re-opens the stock fallback for email-less accounts, so the
  * replacement is pinned by tests (tests/auth/,
  * tests/security/github-oauth-scope.test.ts) rather than by this comment.
