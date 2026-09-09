@@ -305,6 +305,15 @@ h2 {
   margin: 0;
   border-top: 1px solid var(--line);
   border-left: 1px solid var(--line);
+  /*
+   * The cells close the right and bottom edges only where cells exist, so a
+   * half-filled last row leaves the corner open. The inset outline traces the
+   * container's full border box — the outermost 1px strip on every side — and
+   * closes it for any entry count; where a cell or container border already
+   * paints the same strip in the same color, it overlaps invisibly.
+   */
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
 }
 
 .ledger-totals > div,
