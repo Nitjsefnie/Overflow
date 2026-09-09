@@ -196,6 +196,9 @@ tests/async/*
 !tests/api/
 tests/api/*
 !tests/api/*.ts
+!tests/auth/
+tests/auth/*
+!tests/auth/*.ts
 !tests/calibration/
 tests/calibration/*
 !tests/calibration/*.ts
