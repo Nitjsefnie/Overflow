@@ -130,8 +130,12 @@ existing `openAccountAudit` floor) keeps one number on the board.
    recalibration close control lives in `src/components/moderation-controls.tsx`
    (`RecalibrationPlanControl`); the figure and the apply/reverse controls go
    there and in `src/app/moderation/page.tsx`. **Contention: this work must
-   not edit `src/lib/calibration/statistics.ts` or
-   `src/components/calibration-panel.tsx`** — another pane owns them. The
+   not edit `src/lib/calibration/statistics.ts`,
+   `src/components/calibration-panel.tsx`, or
+   `src/components/open-audit-form.tsx`** — other panes own them (the third
+   via issue 331, PM notice 2026-09-09). The shared formatter
+   `src/lib/format-signed.ts` takes `number`, never `number | null`: absent
+   figures stay behind a null guard rather than widening that signature. The
    feature consumes `compareCalibration`'s output only; both files stay
    byte-identical. Apply defaults to OFF in the UI: the first moderator action
    that writes credit is a deliberate opt-in, not a checkbox that happens to
