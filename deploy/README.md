@@ -123,6 +123,12 @@ from the environment file so the `db:migrate` script reaches the right database.
 Run these blocks in Bash and stop on a failed command; `set -e` makes a pasted
 block stop too, before a failed build can be switched into service.
 
+A first installation has no serving release: nothing serves while this section
+runs, and the release built here first serves after its switch, when section 6
+starts the service. The migrate-then-build window that section 10's migration
+check guards does not exist on this path — there is no previous release to
+serve against the new schema — so the check is not part of this flow.
+
 ```bash
 set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
@@ -271,6 +277,13 @@ everywhere else. No service environment change or unit edit is needed.
 An existing host has a real `/srv/overflow/.next` directory. A symlink cannot
 be renamed over a real directory; `scripts/release.ts switch` refuses it with a
 one-time migration message rather than deleting the serving build silently.
+
+Unlike a first installation, this host has a serving release throughout:
+section 10's block migrates and builds while the current release keeps
+serving, and the release built here starts serving only at this subsection's
+switch. Section 10's migration check therefore applies on this path too —
+carry it out before running section 10's block, and stop to split the change
+across deploys instead of running the block if a migration fails it.
 
 **Use the same Bash shell for section 10's preparation and this migration block.**
 Follow section 10 through config preparation, the build, ownership reset,
@@ -609,6 +622,30 @@ switch reports the mismatch, re-run the whole procedure from `git pull`
 onwards. A missing or dangling `.next` at anchor time is a host that needs
 repair or the one-time migration, not a routine deploy; the conditional switch
 refuses that state rather than building on it.
+
+**Migrations apply before the build, and the release they accompany starts
+serving only at the switch.** Between those points the previous release serves
+every request against the new schema, for the whole build duration. A migration
+is safe to apply in that position exactly when the previous release's write
+path cannot violate it: purely additive statements (a new table, a nullable
+column, a plain index) are safe, and so is an enforcing statement the previous
+release already satisfies on every write path — `settlements` has carried
+`settlements_issue_unique` since migration 003 alongside the writer that
+maintains it.
+
+Before running the block, read every migration the run will apply for the
+first time — anything `schema_migrations` does not yet record — and apply that
+test to each. If one fails, stop: do not run the block. Land the writer
+correction in this release and the enforcing statement in the next deploy, or
+shape the constraint so the previous release cannot violate it (for example, a
+partial constraint excluding the shape the old writer can produce). Shipping
+the constraint and its writer correction in the same release does not close
+the window — that is precisely what PR 312 and migration
+`033_self_work_calibrations_issue_unique.sql` did, and the build duration
+reopened the gap the branch had closed. `ADD CONSTRAINT ... NOT VALID` does
+not rescue a failing constraint: it defers only the scan of existing rows and
+enforces new-row writes immediately, so it does not make a constraint safe to
+apply before the corrected writer is serving.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
