@@ -881,6 +881,24 @@ describe("member dashboard", () => {
     expect(ledgerTotalValues()).toEqual(["5", "5", "0", "0"]);
   });
 
+  it("renders a negative balance whose magnitude rounds to zero as a bare 0", () => {
+    render(
+      <BalanceCard
+        dashboard={{
+          settledBalance: -0.004,
+          earnedTotal: 1,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 1,
+        }}
+      />,
+    );
+
+    // The magnitude formats to "0" at two fractional digits, so prefixing the
+    // minus sign reads "−0" — the shared formatter pins that case to a bare 0.
+    expect(document.querySelector(".balance-number")?.textContent).toBe("0");
+  });
+
   it("renders each ledger total's value alone under its term", () => {
     render(
       <BalanceCard
