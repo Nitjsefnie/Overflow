@@ -1059,9 +1059,10 @@ describe("dashboard projections", () => {
 
 describe("ambiguous claim assignee sentinel", () => {
   // The reserved sentinel login marks an issue GitHub reports with two or more
-  // assignees. These pins hold the conservative contract: the queries never
-  // special-case the sentinel, so a non-null value is claimed everywhere a
-  // nullity test decides, and ambiguous exposure stays reserved.
+  // assignees. These pins hold the conservative contract where they can fail:
+  // no sentinel reference in the captured SQL text or in the captured bound
+  // values — the fake sql interpolates parameters out of the text — and the
+  // nullity contract itself behaviorally pinned against real Postgres below.
   it("keeps a sentinel-assigned issue off the open available-work board and projects it as claimed", async () => {
     const { sql, captures } = sqlHarness([
       [
@@ -1093,10 +1094,12 @@ describe("ambiguous claim assignee sentinel", () => {
     ]);
     // The OPEN board's exclusion runs on the column's nullity, and the sentinel
     // is a non-null value, so it never passes this filter. Special-casing the
-    // sentinel here would wave an ambiguous claim back onto the board.
+    // sentinel here would wave an ambiguous claim back onto the board — in the
+    // SQL text or as a bound value, which the text alone cannot see.
     const openBoardSql = captures[0]?.text.toLowerCase() ?? "";
     expect(openBoardSql).toContain("claim_assignee_github_login is null");
     expect(openBoardSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+    expect(captures[0]?.values).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
   });
 
   it("reserves the sponsor's exposure for an ambiguous claim as an outsider reservation", async () => {
@@ -1112,13 +1115,16 @@ describe("ambiguous claim assignee sentinel", () => {
 
     // The reservation totals every non-null assignee that is not the sponsor,
     // and the sentinel login is never the sponsor's, so it reserves. A
-    // carve-out for the sentinel would release exposure the claim already took.
+    // carve-out for the sentinel would release exposure the claim already
+    // took — in the SQL text or as a bound value, which the text alone
+    // cannot see.
     const reservedSql = captures[0]?.text.toLowerCase() ?? "";
     expect(reservedSql).toContain("issues.claim_assignee_github_login is not null");
     expect(reservedSql).toContain(
       "lower(issues.claim_assignee_github_login) <> lower(sponsors.github_login)",
     );
     expect(reservedSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+    expect(captures[0]?.values).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
   });
 
   it("reserves exposure for an ambiguous claim inside the eligible-work headroom projection", async () => {
@@ -1145,13 +1151,128 @@ describe("ambiguous claim assignee sentinel", () => {
     await listEligibleIssues("member-1", {}, { sql });
 
     // The headroom subquery mirrors the dashboard reservation over the sponsor's
-    // repositories; the same no-carve-out pin applies there.
+    // repositories; the same no-carve-out pin applies there, in the SQL text
+    // and in the captured bound values.
     const headroomSql = captures[0]?.text.toLowerCase() ?? "";
     expect(headroomSql).toContain("reserved.claim_assignee_github_login is not null");
     expect(headroomSql).toContain(
       "lower(reserved.claim_assignee_github_login) <> lower(sponsors.github_login)",
     );
     expect(headroomSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+    expect(captures[0]?.values).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+  });
+});
+
+describe("ambiguous claim sentinel against PostgreSQL", () => {
+  let database: StartedPostgres | undefined;
+  let sql: Sql;
+
+  beforeAll(async () => {
+    database = await startPostgresContainer({ database: "sentinel", user: "test", password: "test" });
+    sql = postgres(database.databaseUrl, { max: 1 });
+    // Minimal relations let the production queries run with independently chosen parties.
+    await sql.unsafe(`
+      create table users (id text primary key, github_login text, enforcement_state text);
+      create table registered_repositories (
+        id text primary key,
+        owner_name text,
+        sponsor_id text,
+        active boolean,
+        visibility text,
+        unavailable_reason text,
+        difficulty_scheme jsonb
+      );
+      create table issues (
+        id text primary key,
+        repository_id text,
+        issue_number integer,
+        title text,
+        url text,
+        state text,
+        opening_label text,
+        opening_comparison_points integer,
+        opening_reserve_points integer,
+        claim_assignee_github_login text,
+        created_at timestamptz
+      );
+      create table balances (account_id text, balance integer);
+      create table ledger_entries (account_id text, amount integer);
+      create table settlements (
+        id text primary key,
+        issue_id text,
+        pull_request_id text,
+        creditor_id text,
+        debtor_id text,
+        status text,
+        proof_sha256 text,
+        opening_comparison_points integer,
+        settled_points integer,
+        review_rounds integer,
+        credits integer,
+        created_at timestamptz
+      );
+      create table pull_requests (
+        id text primary key,
+        pull_request_number integer,
+        title text,
+        url text,
+        merge_commit_oid text,
+        merged_at timestamptz,
+        proof_sha256 text
+      );
+      create table repository_reconciliation_jobs (repository_id text, state text, last_failure_at timestamptz);
+      create table moderation_events (
+        id text primary key,
+        target_user_id text,
+        actor_id text,
+        prior_state text,
+        new_state text,
+        reason text,
+        recalibration_plan jsonb,
+        created_at timestamptz
+      );
+      insert into users values ('sponsor', 'grace', 'ACTIVE'), ('member', 'ada', 'ACTIVE');
+      insert into registered_repositories (id, owner_name, sponsor_id, active, visibility, difficulty_scheme) values
+        ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band"}');
+      insert into issues values
+        ('open', 'repo', 1, 'Open work', 'https://github.com/co-op/harbour/issues/1', 'OPEN', 'delta', 3, 5, null, '2026-09-01T00:00:00Z'),
+        ('claimed', 'repo', 2, 'Outsider work', 'https://github.com/co-op/harbour/issues/2', 'OPEN', 'delta', 3, 6, 'outsider', '2026-09-01T00:00:00Z'),
+        ('ambiguous', 'repo', 3, 'Ambiguous work', 'https://github.com/co-op/harbour/issues/3', 'OPEN', 'delta', 3, 9, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', '2026-09-01T00:00:00Z'),
+        ('closed-ambiguous', 'repo', 4, 'Closed ambiguous work', 'https://github.com/co-op/harbour/issues/4', 'CLOSED', 'delta', 3, 99, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', '2026-09-01T00:00:00Z');
+      insert into balances values ('sponsor', 100);
+    `);
+  });
+
+  afterAll(async () => {
+    await sql?.end();
+    await database?.container.stop();
+  });
+
+  it("keeps a sentinel-assigned issue off the open board, claims it, and reserves it against the sponsor", async () => {
+    const openBoard = await listEligibleIssues("member", {}, { sql: sql as unknown as DashboardSql });
+    expect(openBoard.map((row) => row.id)).toEqual(["open"]);
+    // The sentinel counts as outsider exposure inside the sponsor headroom: the
+    // sponsor's 100 balance minus the claimed (6) and ambiguous (9) reserves.
+    expect(openBoard.map((row) => row.availableHeadroom)).toEqual([85]);
+
+    const claimedBoard = await listEligibleIssues(
+      "member",
+      { claimState: "CLAIMED" },
+      { sql: sql as unknown as DashboardSql },
+    );
+    expect(claimedBoard.map((row) => row.id)).toEqual(["ambiguous", "claimed"]);
+    expect(claimedBoard.map((row) => row.claimState)).toEqual(["CLAIMED", "CLAIMED"]);
+    expect(claimedBoard.map((row) => row.assigneeGitHubLogin)).toEqual([
+      AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+      "outsider",
+    ]);
+
+    const dashboard = await getDashboard("sponsor", { sql: sql as unknown as DashboardSql });
+    // claimed (6) + ambiguous (9) reserve; the closed ambiguous issue releases.
+    expect(dashboard.reservedPoints).toBe(15);
+    expect(dashboard.availableHeadroom).toBe(85);
+    const ambiguousClaim = dashboard.openClaims.find((claim) => claim.id === "ambiguous");
+    expect(ambiguousClaim?.assigneeGitHubLogin).toBe(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
   });
 });
 
