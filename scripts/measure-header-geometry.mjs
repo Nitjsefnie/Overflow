@@ -65,6 +65,8 @@ const MODERATOR_LINKS = [...MEMBER_LINKS, ["Moderation", "/moderation"]];
 const VARIANTS = [
   { id: "member", links: MEMBER_LINKS },
   { id: "moderator", links: MODERATOR_LINKS },
+  /** The signed-out shell (PublicAppShell): empty nav, no session controls. */
+  { id: "public", links: [] },
 ];
 
 function escapeHtml(text) {
@@ -72,14 +74,31 @@ function escapeHtml(text) {
 }
 
 /**
- * The real header markup (AppShell in src/components/app-shell.tsx), with the
- * moderator-only Moderation link parameterized. The wordmark keeps its
- * aria-label and the mark its aria-hidden so the DOM shape matches the app.
+ * The real header markup, transcribed: AppShell in src/components/app-shell.tsx
+ * with the moderator-only Moderation link parameterized, and PublicAppShell
+ * for the public variant — wordmark linking the public entry, an intentionally
+ * empty nav (no whitespace inside the ul, exactly as JSX emits it, so :empty
+ * matches), and no session controls.
  */
 function harnessPage(variant, cssUrl) {
   const listItems = variant.links.map(([label, href]) =>
     `          <li><a href="${href}">${escapeHtml(label)}</a></li>`
   ).join("\n");
+  const sessionControls = variant.id === "public"
+    ? ""
+    : `    <div class="session-controls">
+      <p class="member-stamp">Signed in as <span>${escapeHtml(MEMBER_NAME)}</span></p>
+      <form><button class="quiet-button" type="submit">Sign out</button></form>
+    </div>
+`;
+  const wordmarkHref = variant.id === "public" ? "/" : "/dashboard";
+  const wordmarkLabel = variant.id === "public" ? "Overflow home" : "Overflow dashboard";
+  const navLabel = variant.id === "public" ? "Site navigation" : "Member navigation";
+  const navList = variant.id === "public"
+    ? `      <ul class="site-nav"></ul>`
+    : `      <ul class="site-nav">
+${listItems}
+      </ul>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -90,17 +109,11 @@ function harnessPage(variant, cssUrl) {
 <body>
 <div class="app-shell">
   <header class="site-header">
-    <a class="wordmark" href="/dashboard" aria-label="Overflow dashboard"><span class="mark" aria-hidden="true"></span><span>Overflow</span></a>
-    <nav aria-label="Member navigation">
-      <ul class="site-nav">
-${listItems}
-      </ul>
+    <a class="wordmark" href="${wordmarkHref}" aria-label="${wordmarkLabel}"><span class="mark" aria-hidden="true"></span><span>Overflow</span></a>
+    <nav aria-label="${navLabel}">
+${navList}
     </nav>
-    <div class="session-controls">
-      <p class="member-stamp">Signed in as <span>${escapeHtml(MEMBER_NAME)}</span></p>
-      <form><button class="quiet-button" type="submit">Sign out</button></form>
-    </div>
-  </header>
+${sessionControls}  </header>
 </div>
 </body>
 </html>
@@ -199,11 +212,19 @@ const MEASURE = `(() => {
   rowTops.sort((a, b) => a - b);
   const centre = (rect) => rect.top + rect.height / 2 - hr.top;
   const round1 = (value) => Math.round(value * 10) / 10;
+  const paddingY = (() => {
+    const style = getComputedStyle(header);
+    return parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) +
+      parseFloat(style.borderBottomWidth);
+  })();
   return {
     viewport: window.innerWidth,
     stylesheetLoaded: document.styleSheets.length > 0 && getComputedStyle(header).display === "grid",
     headerHeight: round1(hr.height),
     wordmarkCentre: round1(centre(wr)),
+    wordmarkHeight: round1(wr.height),
+    navRectHeight: round1(nr.height),
+    navRectCount: nav.getClientRects().length,
     stampCentre: sr ? round1(centre(sr)) : null,
     sessionControlsCentre: cr ? round1(centre(cr)) : null,
     firstNavRowCentre: linkRects.length ? round1(centre(linkRects[0])) : null,
@@ -212,6 +233,7 @@ const MEASURE = `(() => {
     navLeft: round1(nr.left),
     navWidth: round1(nr.width),
     headerLeft: round1(hr.left),
+    headerPaddingY: round1(paddingY),
     headerWidth: round1(hr.width),
   };
 })()`;
@@ -230,7 +252,19 @@ const MEASURE = `(() => {
  * wordmark and session-controls on a shared centre, and the nav on one row or
  * wrapped only inside its own full-width left-aligned row.
  */
-function judge(row) {
+function judge(row, variant) {
+  if (variant === "public") {
+    const expected = row.wordmarkHeight + row.headerPaddingY;
+    const heightOk = Math.abs(row.headerHeight - expected) <= 1;
+    return {
+      navFullWidth: false,
+      aligned: true,
+      navOk: true,
+      elementCentresDistinct: 1,
+      defect: !heightOk || row.navRowCount !== 0,
+      pass: heightOk && row.navRowCount === 0,
+    };
+  }
   const centres = [row.wordmarkCentre, row.stampCentre, row.firstNavRowCentre]
     .filter((value) => value !== null);
   const distinct = [];
@@ -320,7 +354,7 @@ async function main() {
         if (!row.stylesheetLoaded) {
           throw new Error(`${variant.id}@${width}: the real stylesheet did not load — refusing to measure`);
         }
-        results.push({ variant: variant.id, ...row, ...judge(row) });
+        results.push({ variant: variant.id, ...row, ...judge(row, variant.id) });
       }
     }
   } finally {
@@ -340,11 +374,12 @@ async function main() {
     console.log("  width  headerHt  navRows  wordmarkC  stampC  navRow1C  navFull  verdict");
     for (const row of results.filter((r) => r.variant === variant.id)) {
       const navFull = row.navFullWidth ? "yes" : "no";
+      const dash = (value) => value === null ? "-" : String(value);
       const label = row.pass ? "pass" : row.defect ? "DEFECT" : "mixed";
       console.log(
         `  ${String(row.viewport).padStart(5)}  ${String(row.headerHeight).padStart(8)}  ` +
           `${String(row.navRowCount).padStart(7)}  ${String(row.wordmarkCentre).padStart(9)}  ` +
-          `${String(row.stampCentre).padStart(6)}  ${String(row.firstNavRowCentre).padStart(8)}  ` +
+          `${dash(row.stampCentre).padStart(6)}  ${dash(row.firstNavRowCentre).padStart(8)}  ` +
           `${navFull.padStart(6)}  ${label}`,
       );
     }
