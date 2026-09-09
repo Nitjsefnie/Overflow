@@ -253,6 +253,11 @@ itself is still answered; in the calibration response, `selfWork` is `null`
 under the same terms and the comparison is still answered. The pages render the
 same degradation, so neither null is an API-only shape.
 
+Both list reads are capped at the most recent 200 rows — the settlement
+history on `/api/settlements` and the `selfWork` list on `/api/calibration` —
+mirroring what the pages render, so a capped list is not distinguishable from
+complete history.
+
 ### Read responses
 
 Success is HTTP `200`. Errors use the registration error envelope,
