@@ -936,13 +936,18 @@ function resolveSettledDifficulty(
   // The sequence order the sort applied to same-instant candidates is only as
   // good as the ids behind it: a group sharing the selected instant is
   // decidable only where its sequence evidence covers every member but one at
-  // most — at most one missing databaseId and no duplicated one. Otherwise no
+  // most — at most one id without sequence evidence (not a finite number:
+  // null, an absent key, or junk) and no duplicated finite id. Otherwise no
   // evidence-backed rule can say which comment was written first, and the
-  // selection is refused rather than made silently arbitrary.
+  // selection is refused rather than made silently arbitrary. The rejection
+  // deliberately reuses windowReach, mirroring the sibling no-rationale
+  // rejection, including that pre-registration windows drop it silently.
   const tieGroup = qualifyingRationales.filter(
     (comment) => Date.parse(comment.createdAt) === Date.parse(rationale.createdAt),
   );
-  const missingDatabaseIdCount = tieGroup.filter((comment) => comment.databaseId === null).length;
+  const missingDatabaseIdCount = tieGroup.filter(
+    (comment) => rationaleSequenceRank(comment.databaseId) === null,
+  ).length;
   const duplicatedDatabaseId = findDuplicatedDatabaseId(tieGroup);
   if (missingDatabaseIdCount > 1 || duplicatedDatabaseId !== undefined) {
     return {
@@ -1268,9 +1273,11 @@ function compareHistoryItems(
  * Breaks the same-instant ties `compareHistoryItems` leaves among RATIONALE
  * CANDIDATES ONLY, by GitHub's per-comment creation sequence: the numeric
  * `IssueComment.databaseId` is assigned in creation order, so among comments
- * sharing one instant the smallest id is the first-written. This is the rule
- * family issue 260 settles on — an explicit deterministic rule whose basis is
- * evidence, or an undecidable refusal rather than a silently arbitrary pick
+ * sharing one instant the smallest id is the first-written. For content
+ * imported through GitHub's migration APIs, databaseId order is import order
+ * — arbitrary there, but stable, and accepted. This is the rule family issue
+ * 260 settles on — an explicit deterministic rule whose basis is evidence, or
+ * an undecidable refusal rather than a silently arbitrary pick
  * (`resolveSettledDifficulty` checks the selected instant's group after
  * selection and rejects a tie its ids cannot order).
  *
@@ -1278,11 +1285,12 @@ function compareHistoryItems(
  * strings encoding no creation order, unlike the numeric databaseId, so
  * reordering by them would only launder arrival order again.
  *
- * A null databaseId is NO sequence evidence and sorts after every non-null
- * id — it cannot claim to be the earliest. The order between two nulls is
- * deliberately unspecified (the sort is stable, so it is arrival order):
- * callers must not rely on it, and a selected tie carrying two or more nulls
- * is rejected as undecidable.
+ * An id that is not a finite number — null, undefined from an unvalidated
+ * passthrough, or any other junk — is NO sequence evidence and sorts after
+ * every finite id; it cannot claim to be the earliest. The order between two
+ * such ids is deliberately unspecified (the sort is stable, so it is arrival
+ * order): callers must not rely on it, and a selected tie carrying two or
+ * more of them is rejected as undecidable.
  *
  * `compareHistoryItems` itself is unchanged and stays the primary key, so
  * distinct-instant selection and every other consumer of it are untouched.
@@ -1298,25 +1306,39 @@ function compareRationaleSequence(
   left: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
   right: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
 ): number {
-  if (left.databaseId === null || right.databaseId === null) {
-    return (left.databaseId === null ? 1 : 0) - (right.databaseId === null ? 1 : 0);
+  const leftRank = rationaleSequenceRank(left.databaseId);
+  const rightRank = rationaleSequenceRank(right.databaseId);
+  if (leftRank === null || rightRank === null) {
+    return (leftRank === null ? 1 : 0) - (rightRank === null ? 1 : 0);
   }
-  return left.databaseId - right.databaseId;
+  return leftRank - rightRank;
 }
 
-/** The databaseId two or more comments share, or undefined when all distinct. */
+/** The numeric sequence position of a comment id, or null when it carries none. */
+function rationaleSequenceRank(databaseId: GitHubIssueComment["databaseId"]): number | null {
+  return typeof databaseId === "number" && Number.isFinite(databaseId) ? databaseId : null;
+}
+
+/**
+ * The smallest databaseId two or more comments share, or undefined when no
+ * finite id repeats. Ids that carry no sequence evidence cannot be duplicated
+ * evidence; the scanned ids are derived in sorted order so the caller's
+ * sentence does not depend on the group's order.
+ */
 function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | undefined {
-  const seen = new Set<number>();
+  const counts = new Map<number, number>();
   for (const comment of comments) {
-    if (comment.databaseId === null) {
+    const rank = rationaleSequenceRank(comment.databaseId);
+    if (rank === null) {
       continue;
     }
-    if (seen.has(comment.databaseId)) {
-      return comment.databaseId;
-    }
-    seen.add(comment.databaseId);
+    counts.set(rank, (counts.get(rank) ?? 0) + 1);
   }
-  return undefined;
+  const duplicated = [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([id]) => id)
+    .sort((left, right) => left - right);
+  return duplicated[0];
 }
 
 function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
