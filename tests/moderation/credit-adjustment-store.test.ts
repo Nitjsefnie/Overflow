@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Sql } from "postgres";
+import type { JSONValue, Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
-import { compareCalibration, type CalibrationPair } from "@/lib/calibration/statistics";
+import {
+  compareCalibration,
+  type CalibrationComparison,
+  type CalibrationPair,
+} from "@/lib/calibration/statistics";
 import { closeSql, getSql } from "@/lib/db/client";
 import type { OpenAccountAuditStoreInput } from "@/lib/moderation/service";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
@@ -408,6 +412,191 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       where prior_state = new_state and target_user_id = ${fixture.targetId}
     `).resolves.toEqual([{ count: 0 }]);
   });
+
+  it("refuses a stored snapshot that lists one outsider settlement twice", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const fixture = await seedActionableCohort();
+    const outsiderPairs = fixture.outsiderPairs.map((entry) => entry.pair);
+    const { cohortDefinition, cohortStatistics } = storedSnapshotJson({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      selfWorkPairs: fixture.selfWorkPairs,
+      outsiderPairs: [...outsiderPairs, outsiderPairs[0]!],
+    });
+    await insertSubstantiatedAuditWithSnapshot({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      cohortDefinition,
+      cohortStatistics,
+    });
+
+    const result = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      targetAccountId: fixture.targetId,
+      reason: "A snapshot listing a settlement twice is corrupt evidence.",
+    });
+    expect(result).toEqual({
+      kind: "conflict",
+      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/malformed/) },
+    });
+    await expect(sql<{ count: number }[]>`
+      select count(*)::integer as count
+      from moderation_credit_adjustments
+      where target_account_id = ${fixture.targetId}
+    `).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("refuses a stored snapshot that lists one self-work pair twice", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const fixture = await seedActionableCohort();
+    const { cohortDefinition, cohortStatistics } = storedSnapshotJson({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      selfWorkPairs: [...fixture.selfWorkPairs, fixture.selfWorkPairs[0]!],
+      outsiderPairs: fixture.outsiderPairs.map((entry) => entry.pair),
+    });
+    await insertSubstantiatedAuditWithSnapshot({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      cohortDefinition,
+      cohortStatistics,
+    });
+
+    const result = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      targetAccountId: fixture.targetId,
+      reason: "A snapshot listing a self-work pair twice inflates its own cohort.",
+    });
+    expect(result).toEqual({
+      kind: "conflict",
+      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/malformed/) },
+    });
+    await expect(sql<{ count: number }[]>`
+      select count(*)::integer as count
+      from moderation_credit_adjustments
+      where target_account_id = ${fixture.targetId}
+    `).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("refuses a snapshot whose stored counts disagree with the stored pairs", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const fixture = await seedActionableCohort();
+    const { cohortDefinition, cohortStatistics } = storedSnapshotJson({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      selfWorkPairs: fixture.selfWorkPairs,
+      outsiderPairs: fixture.outsiderPairs.map((entry) => entry.pair),
+    });
+    await insertSubstantiatedAuditWithSnapshot({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      cohortDefinition,
+      cohortStatistics: {
+        ...cohortStatistics,
+        selfWork: { ...cohortStatistics.selfWork, count: cohortStatistics.selfWork.count + 2 },
+      },
+    });
+
+    const result = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      targetAccountId: fixture.targetId,
+      reason: "Stored statistics that miscount their own pairs are corrupt evidence.",
+    });
+    expect(result).toEqual({
+      kind: "conflict",
+      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/counts disagree/) },
+    });
+    await expect(sql<{ count: number }[]>`
+      select count(*)::integer as count
+      from moderation_credit_adjustments
+      where target_account_id = ${fixture.targetId}
+    `).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("refuses a snapshot whose stored statistics overstate the gap its pairs support", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    // Both cohorts settle exactly one point above their openings, so the exact
+    // gap is zero; the stored statistics claim a four-point positive gap.
+    const fixture = await seedCohort({
+      selfWorkDeltas: Array.from({ length: 10 }, () => [4, 5] as const),
+      outsiderDeltas: Array.from({ length: 10 }, () => [4, 5] as const),
+    });
+    const { cohortDefinition } = storedSnapshotJson({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      selfWorkPairs: fixture.selfWorkPairs,
+      outsiderPairs: fixture.outsiderPairs.map((entry) => entry.pair),
+    });
+    const cohortStatistics: CalibrationComparison = {
+      selfWork: { count: 10, meanDelta: 5, medianDelta: 5 },
+      outsider: { count: 10, meanDelta: 1, medianDelta: 1 },
+      differenceBetweenMeans: 4,
+    };
+    await insertSubstantiatedAuditWithSnapshot({
+      targetId: fixture.targetId,
+      repositoryId: fixture.repositoryId,
+      cohortDefinition,
+      cohortStatistics,
+    });
+
+    const result = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      targetAccountId: fixture.targetId,
+      reason: "Statistics overstating the gap their pairs support are corrupt evidence.",
+    });
+    expect(result).toEqual({
+      kind: "conflict",
+      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/no compensable figure/) },
+    });
+    await expect(sql<{ count: number }[]>`
+      select count(*)::integer as count
+      from moderation_credit_adjustments
+      where target_account_id = ${fixture.targetId}
+    `).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("computes the figure from the newest substantiated audit's snapshot", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const targetId = await insertUser();
+    // The older audit's cohort undercredits outsiders by one point per pair.
+    const olderCohort = await seedCohort({
+      selfWorkDeltas: Array.from({ length: 10 }, () => [4, 5] as const),
+      outsiderDeltas: Array.from({ length: 10 }, () => [4, 4] as const),
+      targetId,
+    });
+    const olderAuditId = await openSubstantiatedAudit(olderCohort);
+    // The newer audit's cohort undercredits by two points per pair.
+    const newerCohort = await seedCohort({
+      selfWorkDeltas: Array.from({ length: 10 }, () => [4, 5] as const),
+      outsiderDeltas: Array.from({ length: 10 }, () => [4, 3] as const),
+      targetId,
+    });
+    const newerAuditId = await openSubstantiatedAudit(newerCohort);
+    expect(newerAuditId).not.toBe(olderAuditId);
+
+    const preview = await store.loadRecalibrationPreview(targetId);
+    expect(preview.kind).toBe("ok");
+    if (preview.kind !== "ok") {
+      throw new Error("Expected the preview to load.");
+    }
+    expect(preview.value.audit.id).toBe(newerAuditId);
+    expect(preview.value.totals).toEqual({ selfSum: 10, selfCount: 10, outSum: -10, outCount: 10 });
+    expect(preview.value.figure).toEqual({ gapPerPair: 2, pairCount: 10, totalAmount: 20 });
+
+    const result = await store.applyRecalibrationCreditAdjustment({
+      actorId: newerCohort.moderatorId,
+      targetAccountId: targetId,
+      reason: "The adjustment must be computed from the audit the moderator saw last.",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") {
+      throw new Error("Expected the adjustment to apply.");
+    }
+    expect(result.value.calibrationAuditId).toBe(newerAuditId);
+    expect(result.value.totalAmount).toBe(20);
+    expect(sumLinesFor(result.value.lines, newerCohort.creditorAId)).toBe(12);
+    expect(sumLinesFor(result.value.lines, newerCohort.creditorBId)).toBe(8);
+  });
 });
 
 type SeededOutsiderPair = { pair: CalibrationPair; settlementId: string; creditorId: string };
@@ -429,10 +618,12 @@ type CohortFixture = {
 async function seedCohort(input: {
   selfWorkDeltas: ReadonlyArray<readonly [number, number]>;
   outsiderDeltas: ReadonlyArray<readonly [number, number]>;
+  /** Reuses one sponsor across cohorts, so a target can hold two audits. */
+  targetId?: string;
 }): Promise<CohortFixture> {
   const moderatorId = await insertUser("MODERATOR");
-  const targetId = await insertUser();
-  const repositoryId = await insertRepository(await insertUser());
+  const targetId = input.targetId ?? (await insertUser());
+  const repositoryId = await insertRepository(targetId);
   const creditorAId = await insertUser();
   const creditorBId = await insertUser();
 
@@ -615,6 +806,55 @@ async function openSubstantiatedAudit(fixture: CohortFixture): Promise<string> {
     throw new Error("Expected the audit to substantiate.");
   }
   return opened.value.id;
+}
+
+/**
+ * Builds the JSONB payload a calibration audit stores for a cohort, as the
+ * open path would write it — with an optional hand-built comparison for
+ * crafting corrupt statistics.
+ */
+function storedSnapshotJson(input: {
+  targetId: string;
+  repositoryId: string;
+  selfWorkPairs: CalibrationPair[];
+  outsiderPairs: CalibrationPair[];
+  comparison?: CalibrationComparison;
+}): { cohortDefinition: Record<string, unknown>; cohortStatistics: CalibrationComparison } {
+  return {
+    cohortDefinition: {
+      targetAccountId: input.targetId,
+      repositoryId: input.repositoryId,
+      sampleStartedAt: SAMPLE_STARTED_AT,
+      sampleEndedAt: SAMPLE_ENDED_AT,
+      selfWorkPairs: input.selfWorkPairs,
+      outsiderSettlementPairs: input.outsiderPairs,
+    },
+    cohortStatistics: input.comparison ?? compareCalibration(input.selfWorkPairs, input.outsiderPairs),
+  };
+}
+
+/** Inserts a SUBSTANTIATED audit row directly, carrying the given crafted snapshot. */
+async function insertSubstantiatedAuditWithSnapshot(input: {
+  targetId: string;
+  repositoryId: string;
+  cohortDefinition: unknown;
+  cohortStatistics: unknown;
+}): Promise<string> {
+  const [audit] = await sql<{ id: string }[]>`
+    insert into calibration_audits (
+      account_id, repository_id, reporter_id, state, rationale,
+      sample_started_at, sample_ended_at, settled_sample_size,
+      cohort_definition, cohort_statistics, decided_at
+    )
+    values (
+      ${input.targetId}, ${input.repositoryId}, ${await insertUser()}, ${"SUBSTANTIATED"},
+      ${"A test-crafted substantiated audit."},
+      ${SAMPLE_STARTED_AT}, ${SAMPLE_ENDED_AT}, 10,
+      ${sql.json(input.cohortDefinition as JSONValue)}::jsonb, ${sql.json(input.cohortStatistics as JSONValue)}::jsonb, now()
+    )
+    returning id
+  `;
+  return audit.id;
 }
 
 async function insertUser(role: "MEMBER" | "MODERATOR" = "MEMBER"): Promise<string> {

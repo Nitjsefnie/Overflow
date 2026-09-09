@@ -780,30 +780,39 @@ function parseStoredPairs(value: unknown): CalibrationPair[] | null {
     return null;
   }
   const pairs: CalibrationPair[] = [];
+  const seenProofs = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null) {
       return null;
     }
     const pair = entry as Record<string, unknown>;
+    const proofSha256 = pair["proofSha256"];
     if (
       !isPositiveSafeInteger(pair["githubRepositoryId"]) ||
       !isPositiveSafeInteger(pair["githubIssueId"]) ||
       !isPositiveSafeInteger(pair["githubPullRequestId"]) ||
       !isDifficultyPoints(pair["offeredDifficulty"]) ||
       !isDifficultyPoints(pair["settledDifficulty"]) ||
-      typeof pair["proofSha256"] !== "string" ||
-      !/^[0-9a-f]{64}$/.test(pair["proofSha256"]) ||
+      typeof proofSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(proofSha256) ||
       typeof pair["mergedAt"] !== "string" ||
       Number.isNaN(Date.parse(pair["mergedAt"]))
     ) {
       return null;
     }
+    // A repeated proof inside one cohort list would compensate one settlement
+    // twice (or inflate a self cohort it does not belong to), so a snapshot
+    // carrying one is malformed evidence, refused before anything computes.
+    if (seenProofs.has(proofSha256)) {
+      return null;
+    }
+    seenProofs.add(proofSha256);
     pairs.push({
       githubRepositoryId: pair["githubRepositoryId"],
       githubIssueId: pair["githubIssueId"],
       githubPullRequestId: pair["githubPullRequestId"],
       mergedAt: pair["mergedAt"],
-      proofSha256: pair["proofSha256"],
+      proofSha256,
       offeredDifficulty: pair["offeredDifficulty"],
       settledDifficulty: pair["settledDifficulty"],
     });
