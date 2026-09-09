@@ -488,7 +488,7 @@ function moderatorDependencies(service: {
 }): RederivationRouteDependencies {
   return {
     getSession: async () => moderatorSession,
-    findAccountByTokenHash: vi.fn(),
+    findAccountByTokenHash: vi.fn().mockResolvedValue(null),
     getCurrentRole: async () => "MODERATOR",
     createService: async () =>
       ({
@@ -501,7 +501,7 @@ function moderatorDependencies(service: {
 function realServiceDependencies(store: RederivationStore): RederivationRouteDependencies {
   return {
     getSession: async () => moderatorSession,
-    findAccountByTokenHash: vi.fn(),
+    findAccountByTokenHash: vi.fn().mockResolvedValue(null),
     getCurrentRole: async () => "MODERATOR",
     createService: async () => new RepositoryRederivationService(store, () => requestedAt),
   };

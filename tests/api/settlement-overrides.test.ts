@@ -380,6 +380,45 @@ describe("settlement override decision API", () => {
     expect(response.status).toBe(404);
   });
 
+  // The decision route's private gate folded onto the shared one, so an
+  // authorize-path outage on the cookie path now answers in the shared gate's
+  // words — pinned here because the old local wording differed.
+  it.each([
+    ["session", "getSession"],
+    ["role", "getCurrentRole"],
+  ] as const)(
+    "answers a failed cookie-path %s lookup with the shared gate's 502",
+    async (_arm, failing) => {
+      const decideRequest = vi.fn();
+      const handler = createSettlementOverridePatchHandler({
+        getSession:
+          failing === "getSession"
+            ? vi.fn().mockRejectedValue(new Error("session store outage"))
+            : async () => ({ user: { id: moderatorId } }),
+        findAccountByTokenHash: async () => null,
+        getCurrentRole:
+          failing === "getCurrentRole"
+            ? vi.fn().mockRejectedValue(new Error("role store outage"))
+            : async () => "MODERATOR",
+        createService: async () => ({ decideRequest }),
+      });
+
+      const response = await handler(
+        jsonRequest({ action: "decline", reason: "Nope." }),
+        { params: Promise.resolve({ id: requestId }) },
+      );
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: "UPSTREAM_FAILURE",
+          message: "Unable to authorize the moderator request.",
+        },
+      });
+      expect(decideRequest).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses a foreign-origin decision before reading the session or the role", async () => {
     const dependencies = unusedDependencies();
     const handler = createSettlementOverridePatchHandler(dependencies);
