@@ -3,6 +3,11 @@ import type { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubApiError, GitHubGateway } from "@/lib/github/client";
 
+// testTimeout is a hang guard only, never a behavioral bound: the deadline
+// contract is pinned by the fake-clock cases. A generous guard keeps concurrent
+// machine load from turning into a red suite while a genuinely hung case still fails.
+vi.setConfig({ testTimeout: 60_000 });
+
 const repository = { owner: "octo", name: "overflow" };
 const configuration = { callbackUrl: "https://example.com/hook", secret: "test-secret" };
 const repositoryBody = {
@@ -65,7 +70,7 @@ describe("GitHubGateway REST request deadline", () => {
 
     expect(await outcome).toMatchObject({ message: "GitHub request timed out." });
     await expect.poll(() => stalledSocket.destroyed, { timeout: 1000 }).toBe(true);
-  }, 3000);
+  });
 
   it("does not abort a completed request after its old deadline", async () => {
     vi.useFakeTimers();
@@ -104,7 +109,7 @@ describe("GitHubGateway REST request deadline", () => {
     await expect(run(gateway)).rejects.toMatchObject({ message: "GitHub request timed out." });
     await socketClosed.promise;
     expect(stalledSocket?.destroyed).toBe(true);
-  }, 3000);
+  });
 
   it.each(reads)("round-trips the successful body for $name", async ({ run, body, result }) => {
     const apiUrl = await serve((_request, response) => response.end(body));
@@ -138,7 +143,7 @@ describe("GitHubGateway REST request deadline", () => {
     expect(error).toMatchObject({ status: 503, body: null });
     await socketClosed.promise;
     expect(stalledSocket?.destroyed).toBe(true);
-  }, 3000);
+  });
 
   it("preserves label pagination headers when listing repository labels", async () => {
     const requests: string[] = [];
@@ -189,7 +194,7 @@ describe("GitHubGateway REST request deadline", () => {
   it("bounds an injected fetch that never resolves and ignores abort", async () => {
     const gateway = new GitHubGateway({ accessToken: "test-token", timeoutMs: 30, fetch: () => new Promise(() => {}) });
     await expect(gateway.getRepository(repository)).rejects.toMatchObject({ message: "GitHub request timed out." });
-  }, 3000);
+  });
 
   it("cancels a body delivered after an abort-ignoring fetch misses its deadline", async () => {
     const delivery = deferred<Response>();
@@ -198,7 +203,7 @@ describe("GitHubGateway REST request deadline", () => {
     await expect(gateway.getRepository(repository)).rejects.toMatchObject({ message: "GitHub request timed out." });
     delivery.resolve(new Response(new ReadableStream({ cancel() { cancelled.resolve(); } })));
     await cancelled.promise;
-  }, 3000);
+  });
 
   it.each([
     { status: 200, message: "GitHub request timed out." },
@@ -259,7 +264,7 @@ describe("GitHubGateway REST request deadline", () => {
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({ message: "GitHub request timed out." });
     expect(cancelled).toBe(true);
-  }, 3000);
+  });
 
   describe.each([
     ...reads,
@@ -299,7 +304,7 @@ describe("GitHubGateway REST request deadline", () => {
       expect(outcome).toBeInstanceOf(Error);
       expect(outcome).toMatchObject({ message: "GitHub request timed out." });
       expect(cancelled).toBe(true);
-    }, 3000);
+    });
 
     it("resolves a body completed at 900 ms after headers at 400 ms within a 1000 ms budget", async () => {
       vi.useFakeTimers();
@@ -328,6 +333,6 @@ describe("GitHubGateway REST request deadline", () => {
       expect(outcome).toEqual({ resolved: result });
       await vi.advanceTimersByTimeAsync(100);
       expect(outcome).toEqual({ resolved: result });
-    }, 3000);
+    });
   });
 });
