@@ -343,7 +343,15 @@ async function reconcileRepositoryWhileCoordinated(
       )];
       const users = await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
       const snapshot: RepositoryFoldSnapshot = {
-        repository,
+        // The stored path can still carry the pre-rename name on the run that
+        // first observes the rename — recordVerifiedRepositoryIdentity above
+        // refreshes the database, not this in-memory value — so the fresh
+        // verify rides along and the fold can name the current path beside the
+        // stale one in a cross-repository reason.
+        repository: {
+          ...repository,
+          observedOwnerName: verified.fullName,
+        },
         users,
         issues: githubIssues.map((issue) => ({
           ...issue,

@@ -129,6 +129,73 @@ describe("reconciliation after the opening account is renamed", () => {
       }),
     ]);
   });
+
+  // The fold run that first observes a repository rename reads the stored path
+  // before it refreshes it, so a cross-repository closure recorded by that run
+  // must carry the observed path beside the stale one (issue 145).
+  it("names the stored and the freshly observed path in a cross-repository reason on the rename's first run", async () => {
+    const ownerLogin = `rename-owner-${externalId++}`;
+    const { store, repositoryId, githubIssueId, ownerName: observedName } = await registeredRepository(ownerLogin);
+    // The stored record predates the rename; the identity verify answers with
+    // the path the repository occupies now.
+    const storedName = `renamed/pre-rename-${repositoryId}`;
+    await sql`update registered_repositories set owner_name = ${storedName} where id = ${repositoryId}`;
+    const issue: GitHubIssue = {
+      ...openedIssue({ githubIssueId, authorLogin: "contributor", raterLogin: ownerLogin, title: "An opened issue" }),
+      state: "CLOSED",
+      stateReason: "COMPLETED",
+      closedAt: "2026-09-02T12:05:00.000Z",
+      closingPullRequests: [{
+        id: externalId++,
+        number: 11,
+        title: "Foreign pull request",
+        body: "Belongs to another repository",
+        url: "https://github.com/other/fork/pull/11",
+        state: "MERGED",
+        mergedAt: "2026-09-02T12:00:00.000Z",
+        mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
+        finalCommitAt: "2026-09-02T10:00:00.000Z",
+        authorLogin: "contributor",
+        authorGitHubUserId: null,
+        repositoryGitHubId: externalId++,
+        repositoryNameWithOwner: "other/fork",
+      }],
+    };
+    const github: ReconciliationGateway = {
+      listIssues: async () => [issue],
+      getIssue: async () => null,
+      getPullRequestClosingIssues: async () => [],
+      getPullRequestReviews: async () => [],
+      getPullRequestDiff: async () => "",
+      getRepositoryById: verifiedRepositoryAt(observedName),
+    };
+
+    await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
+    await expect(unwritableReason(githubIssueId)).resolves.toEqual([
+      {
+        kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+        reason: expect.stringContaining(storedName),
+      },
+    ]);
+    await expect(unwritableReason(githubIssueId)).resolves.toEqual([
+      {
+        kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+        reason: expect.stringContaining(observedName),
+      },
+    ]);
+
+    // The first run also refreshed the stored path, so the second reads the
+    // current path as both the stored and the observed one and the reason
+    // returns to naming it alone.
+    await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
+    await expect(unwritableReason(githubIssueId)).resolves.toEqual([
+      {
+        kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+        reason: "Closing pull request 11 belongs to other/fork, "
+          + `not the registered repository ${observedName}.`,
+      },
+    ]);
+  });
 });
 
 async function storedIssue(githubIssueId: number) {
@@ -136,6 +203,15 @@ async function storedIssue(githubIssueId: number) {
     select title, owner_github_login, opening_source_actor_login, opening_source_event_id,
            opening_source_at, opening_label, opening_comparison_points, opening_reserve_points
     from issues where github_issue_id = ${githubIssueId}
+  `;
+}
+
+async function unwritableReason(githubIssueId: number) {
+  return sql<{ kind: string; reason: string }[]>`
+    select unwritable_closures.kind::text, unwritable_closures.reason
+    from unwritable_closures
+    join issues on issues.id = unwritable_closures.issue_id
+    where issues.github_issue_id = ${githubIssueId}
   `;
 }
 
