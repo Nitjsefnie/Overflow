@@ -211,6 +211,39 @@ describe("calibration comparison", () => {
     expect(screen.getByText("Complete paired work to establish calibration.")).toBeVisible();
     expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
   });
+
+  // The statement qualifies every delta figure the panel prints, so its
+  // presence is read structurally, through its class: a prose match would fail
+  // on a faithful rewording and pass on a placement change.
+  it("states the opening-scale limitation wherever a delta figure renders", () => {
+    const { container } = render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 14, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    const limitation = container.querySelector(".calibration-scale-limitation");
+    expect(limitation).not.toBeNull();
+    expect(limitation).toBeVisible();
+  });
+
+  it("states no limitation in the no-samples state, where no delta figure renders", () => {
+    const { container } = render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    expect(container.querySelector(".calibration-scale-limitation")).toBeNull();
+  });
 });
 
 describe("formatSigned", () => {
