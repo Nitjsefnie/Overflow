@@ -70,24 +70,66 @@ function settlementCorrectionsRegion(): HTMLElement {
 }
 
 /**
+ * One open correction request whose settled outcome is no longer materialized:
+ * the settlement and calibration joins both come back empty, so the queue
+ * renders the request without evidence rows. Only the fields
+ * `listOpenRequests` maps are present, keyed as its query aliases them.
+ */
+function openCorrectionRow(): Record<string, unknown> {
+  return {
+    id: "request-1",
+    reason: "The rationale comment landed fourteen hours late.",
+    created_at: "2026-09-05T10:00:00.000Z",
+    requester_login: "mira",
+    repository_name: "co-op/harbour",
+    issue_number: 17,
+    issue_title: "Repair the tide gate",
+    issue_url: "https://github.com/co-op/harbour/issues/17",
+    settlement_id: null,
+    settlement_status: null,
+    opening_comparison_points: null,
+    settled_label: null,
+    settlement_settled_points: null,
+    review_rounds: null,
+    credits: null,
+    pull_request_number: null,
+    pull_request_title: null,
+    pull_request_url: null,
+    calibration_id: null,
+    calibration_owner_login: null,
+    calibration_opening_comparison_points: null,
+    calibration_actual_points: null,
+    calibration_pull_request_number: null,
+    calibration_pull_request_title: null,
+    calibration_pull_request_url: null,
+  };
+}
+
+/**
  * What a reader of the settlement corrections region depends on: the heading,
  * an explanation paragraph beneath it, and the correction queue — or its load
  * error — beneath that, in that order, all visible. The wording is never
  * asserted: a substring-preserving negation in the copy must not be caught
  * here (issue 218 accepts that radius), but removing, emptying or reordering
  * these elements must fail.
+ *
+ * The order is pinned where the two slots' tag shapes differ: with entries the
+ * queue renders a list, so the paragraph → list chain distinguishes the
+ * explanation slot from the queue slot. The empty-queue and load-error
+ * branches render a paragraph in both slots, so there they pin presence,
+ * visibility and emptiness only.
  */
-function expectExplanationAboveQueue(section: HTMLElement): void {
+function expectExplanationAboveQueue(section: HTMLElement, queueTag: "P" | "OL"): void {
   const heading = within(section).getByRole("heading");
   expect(heading).toHaveAttribute("id", "settlement-corrections-heading");
   const explanation = heading.nextElementSibling as HTMLElement | null;
   expect(explanation?.tagName, "an explanation paragraph renders directly beneath the heading").toBe("P");
   expect(explanation!).toBeVisible();
   expect(explanation!).not.toBeEmptyDOMElement();
-  const queueState = explanation!.nextElementSibling as HTMLElement | null;
-  expect(queueState?.tagName, "the correction queue (or its load error) renders directly beneath the explanation").toBe("P");
-  expect(queueState!).toBeVisible();
-  expect(queueState!).not.toBeEmptyDOMElement();
+  const queue = explanation!.nextElementSibling as HTMLElement | null;
+  expect(queue?.tagName, "the correction queue renders directly beneath the explanation").toBe(queueTag);
+  expect(queue!).toBeVisible();
+  expect(queue!).not.toBeEmptyDOMElement();
 }
 
 describe("unwritable closure queue", () => {
@@ -379,11 +421,28 @@ describe("moderation closure section", () => {
   });
 
   it("renders the settlement corrections explanation between the heading and the correction queue", async () => {
+    // When the queue has an entry it renders a list, and the paragraph → list
+    // chain is what pins the order and names the missing element: the other
+    // two branches render a paragraph in both slots, where a queue rendered
+    // before the explanation would be invisible.
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      if (strings.join("?").includes("from settlement_override_requests")) {
+        return [openCorrectionRow()];
+      }
+      return [];
+    });
+    render(await ModerationPage());
+
+    const listedSection = settlementCorrectionsRegion();
+    expectExplanationAboveQueue(listedSection, "OL");
+    expect(within(listedSection).getAllByRole("listitem")).toHaveLength(1);
+
+    cleanup();
     sql.mockImplementation(async () => []);
 
     render(await ModerationPage());
 
-    expectExplanationAboveQueue(settlementCorrectionsRegion());
+    expectExplanationAboveQueue(settlementCorrectionsRegion(), "P");
 
     // The same structure holds when the queue itself could not be loaded: the
     // explanation still renders, with the load error beneath it.
@@ -393,7 +452,7 @@ describe("moderation closure section", () => {
     });
     render(await ModerationPage());
 
-    expectExplanationAboveQueue(settlementCorrectionsRegion());
+    expectExplanationAboveQueue(settlementCorrectionsRegion(), "P");
   });
 
   it("shows a closure load error without hiding the other moderation queues", async () => {
