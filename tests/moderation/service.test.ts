@@ -972,6 +972,37 @@ describe("recalibration credit adjustments", () => {
       expect(error).not.toBeInstanceOf(ModerationServiceError);
       expect((error as Error).message).toMatch(/credit store/);
     });
+
+    // The guard order is load-bearing: requireModerator, then the credit store
+    // check, then normalization. A blank input paired with the missing store
+    // must surface the construction bug — not the INVALID_INPUT a
+    // normalization-first order would throw, and no store reached at all.
+    it.each([
+      ["previewing", (service: AccountModerationService) => service.previewRecalibration(moderator(), "   ")],
+      [
+        "applying",
+        (service: AccountModerationService) =>
+          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   "),
+      ],
+      [
+        "reversing",
+        (service: AccountModerationService) =>
+          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   "),
+      ],
+    ] as const)("refuses %s as a construction bug before normalizing a blank input", async (_label, call) => {
+      const store = eligibleStore();
+      const service = new AccountModerationService(store);
+
+      const error = await call(service).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ModerationServiceError);
+      expect((error as Error).message).toMatch(/credit store/);
+      expect(store.cohortReadCount).toBe(0);
+    });
   });
 });
 
