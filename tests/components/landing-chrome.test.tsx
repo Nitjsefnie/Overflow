@@ -96,7 +96,7 @@ describe("signed-out landing chrome", () => {
       new Set(
         Array.from(document.querySelectorAll("a[href]"))
           .map((anchor) => anchor.getAttribute("href"))
-          .filter((href) => href !== null && !href.startsWith("#")),
+          .filter((href): href is string => href !== null && !href.startsWith("#")),
       ),
     );
     expect(linked.length).toBeGreaterThan(0);

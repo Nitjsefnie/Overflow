@@ -275,17 +275,17 @@ describe("member dashboard", () => {
     // date the audit opened is shown. The section renders even though the
     // account is BANNED with no enforcement notices — the notice's presence
     // rides the open audit alone.
-    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
+    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]') as HTMLElement | null;
     expect(section).not.toBeNull();
     expect(section).toBeVisible();
     // The labelledby target is the heading itself: a refactor that drops or
     // renames its id would leave the section silently unlabelled.
-    const heading = within(section).getByRole("heading");
+    const heading = within(section!).getByRole("heading");
     expect(heading).toBeVisible();
     expect(heading).toHaveAttribute("id", "account-audit-heading");
-    expect(within(section).getByText(/2026-09-04/)).toBeVisible();
+    expect(within(section!).getByText(/2026-09-04/)).toBeVisible();
     // The day only: the raw timestamp form must not reach the page.
-    expect(within(section).queryByText(/2026-09-04T/)).not.toBeInTheDocument();
+    expect(within(section!).queryByText(/2026-09-04T/)).not.toBeInTheDocument();
   });
 
   it("announces the open audit with no enforcement state present and notices standing", () => {
@@ -316,15 +316,15 @@ describe("member dashboard", () => {
 
     // No enforcementState key at all, and a standing notice: the section's
     // presence still rides the open audit alone.
-    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
+    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]') as HTMLElement | null;
     expect(section).not.toBeNull();
     // The labelledby target is the heading itself: a refactor that drops or
     // renames its id would leave the section silently unlabelled.
-    const heading = within(section).getByRole("heading");
+    const heading = within(section!).getByRole("heading");
     expect(heading).toBeVisible();
     expect(heading).toHaveAttribute("id", "account-audit-heading");
-    expect(within(section).getByText(/2026-09-05/)).toBeVisible();
-    expect(within(section).queryByText(/2026-09-05T/)).not.toBeInTheDocument();
+    expect(within(section!).getByText(/2026-09-05/)).toBeVisible();
+    expect(within(section!).queryByText(/2026-09-05T/)).not.toBeInTheDocument();
   });
 
   it("renders no audit section when no audit is open on the account", () => {

@@ -64,7 +64,7 @@ describe("session recovery route", () => {
     expect(screen.queryByRole("link", { name: "Try the ledger again" })).not.toBeInTheDocument();
   });
 
-  it.each(["unavailable", "stale"])("submits sign-out through a server action for reason %s", async (reason) => {
+  it.each(["unavailable", "stale"] as const)("submits sign-out through a server action for reason %s", async (reason) => {
     render(<SessionRecovery reason={reason} />);
 
     const signOutButton = screen.getByRole("button", { name: "Sign out" });
