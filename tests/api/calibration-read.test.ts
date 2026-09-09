@@ -104,16 +104,17 @@ describe("GET /api/calibration", () => {
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
-  it("answers a self-work calibration query failure with the route's 502", async () => {
+  it("keeps the comparison answerable when the self-work calibrations cannot be read, answering selfWork null", async () => {
     const dependencies = calibrationDependencies({
       listSelfWorkCalibrations: vi.fn().mockRejectedValue(new Error("ledger outage")),
     });
 
     const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      error: { code: "UPSTREAM_FAILURE", message: "Unable to load the calibration comparison." },
+      comparison,
+      selfWork: null,
     });
   });
 });

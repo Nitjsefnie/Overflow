@@ -29,16 +29,25 @@ export function createCalibrationGetHandler(dependencies: CalibrationRouteDepend
       return session;
     }
 
+    // The comparison is what the route is for: its failure leaves nothing to
+    // answer with, so it takes the route's 502.
+    let comparison: CalibrationComparison;
     try {
-      // Sequential like the page that mirrors it: the comparison is what the
-      // route is for, and a comparison failure means there is nothing to list
-      // alongside.
-      const comparison = await dependencies.getCalibrationComparison(session.user.id);
-      const selfWork = await dependencies.listSelfWorkCalibrations(session.user.id);
-      return Response.json({ comparison, selfWork });
+      comparison = await dependencies.getCalibrationComparison(session.user.id);
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load the calibration comparison.");
     }
+
+    let selfWork: SelfWorkCalibrationProjection[] | null;
+    try {
+      selfWork = await dependencies.listSelfWorkCalibrations(session.user.id);
+    } catch {
+      // The comparison is still answerable when the calibration list is not:
+      // the calibration page renders the same degradation.
+      selfWork = null;
+    }
+
+    return Response.json({ comparison, selfWork });
   };
 }
 
