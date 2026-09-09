@@ -47,6 +47,7 @@ const repositoryLabels = [
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
@@ -465,8 +466,12 @@ describe("repository form catalog label selectboxes", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const { container } = render(<RepositoryForm initialValues={{ ...initialValues, repositoryUrl: "co-op/harbour" }} />);
+    // The read is debounced: the first repository's request goes out only
+    // after the reference has settled.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "octo/other" } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
     const opening = screen.getByLabelText("Opening label 1");
     await waitFor(() => expect(opening).toBeEnabled());
@@ -486,6 +491,59 @@ describe("repository form catalog label selectboxes", () => {
     expect(within(actual).getByRole("option", { name: "mast" })).toBeInTheDocument();
     expect(within(actual).queryByRole("option", { name: "harbour label" })).toBeNull();
     expect(container.querySelector(".labels-fetch-error")).toBeNull();
+  });
+
+  it("fires exactly one labels request once the reference stops changing", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ labels: ["pier", "mast"] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RepositoryForm />);
+
+    const repositoryField = screen.getByLabelText("GitHub repository");
+    // Rapid typing: several edits inside the quiet window, crossing from
+    // invalid to valid references along the way.
+    fireEvent.change(repositoryField, { target: { value: "o" } });
+    fireEvent.change(repositoryField, { target: { value: "octo" } });
+    fireEvent.change(repositoryField, { target: { value: "octo/over" } });
+    fireEvent.change(repositoryField, { target: { value: "octo/overflow" } });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(400);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/repositories/labels?owner=octo&name=overflow");
+    expect(screen.getByLabelText("Opening label 1")).toBeEnabled();
+    expect(within(screen.getByLabelText("Opening label 1")).getByRole("option", { name: "pier" })).toBeInTheDocument();
+  });
+
+  it("cancels the pending fetch when the reference changes inside the quiet window", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ labels: ["pier", "mast"] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RepositoryForm />);
+
+    const repositoryField = screen.getByLabelText("GitHub repository");
+    fireEvent.change(repositoryField, { target: { value: "co-op/harbour" } });
+    vi.advanceTimersByTime(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(repositoryField, { target: { value: "octo/other" } });
+    vi.advanceTimersByTime(400);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/repositories/labels?owner=octo&name=other");
+    expect(screen.getByLabelText("Opening label 1")).toBeEnabled();
+    expect(within(screen.getByLabelText("Opening label 1")).getByRole("option", { name: "mast" })).toBeInTheDocument();
   });
 
   it("shows an inline message and blocks submit when the labels fetch fails", async () => {
