@@ -694,7 +694,9 @@ describe("Overflow token registration", () => {
         });
       }
       if (failure === "repository lookup") {
-        dependencies.store.findRepositoryByGitHubId = async () => { throw new Error(apiToken); };
+        // The registration flow consults the by-id registration state, so the
+        // store failure it must surface without leaking the token is that lookup.
+        dependencies.store.findRepositoryRegistrationState = async () => { throw new Error(apiToken); };
       }
       if (failure === "repository creation") {
         dependencies.store.createRepository = async () => { throw new Error(apiToken); };
