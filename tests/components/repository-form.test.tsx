@@ -489,7 +489,7 @@ describe("repository form catalog label selectboxes", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toBe("/api/repositories/labels?owner=co-op&name=harbour");
-    expect(init.credentials).toBe("same-origin");
+    expect(init?.credentials).toBe("same-origin");
   });
 
   it("renders the fetched labels as the options of both catalogs' selectboxes", async () => {

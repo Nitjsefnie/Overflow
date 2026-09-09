@@ -286,7 +286,7 @@ describe("recalibration credit adjustment controls", () => {
   });
 
   it("sends no apply request while the verdict is not actionable, whatever the reason says", async () => {
-    const fetchMock = vi.fn(() => Promise.resolve(previewResponse(gaplessPreview)));
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(previewResponse(gaplessPreview)));
     vi.stubGlobal("fetch", fetchMock);
     render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
 
@@ -307,7 +307,7 @@ describe("recalibration credit adjustment controls", () => {
       ...actionablePreview,
       figure: { gapPerPair: 0.04, pairCount: 12, totalAmount: 0 },
     };
-    const fetchMock = vi.fn(() => Promise.resolve(previewResponse(zeroFigurePreview)));
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(previewResponse(zeroFigurePreview)));
     vi.stubGlobal("fetch", fetchMock);
     render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
 
@@ -324,7 +324,7 @@ describe("recalibration credit adjustment controls", () => {
   });
 
   it("requires a nonblank reason before a credit adjustment is applied", async () => {
-    const fetchMock = vi.fn(() => Promise.resolve(previewResponse(actionablePreview)));
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(previewResponse(actionablePreview)));
     vi.stubGlobal("fetch", fetchMock);
     render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
 

@@ -116,13 +116,13 @@ describe("calibration comparison", () => {
     const heading = screen.getByRole("heading", { name: "Calibration comparison", level: 1 });
     const headingSection = heading.closest("section");
     expect(headingSection).toHaveClass("page-heading");
-    expect(within(headingSection).getByText("Paired calibration evidence")).toBeVisible();
+    expect(within(headingSection!).getByText("Paired calibration evidence")).toBeVisible();
 
-    const card = headingSection.nextElementSibling;
+    const card = headingSection!.nextElementSibling;
     expect(card).not.toBeNull();
     expect(card).toHaveClass("calibration-panel");
-    expect(within(card).queryByRole("heading", { name: "Calibration comparison", level: 1 })).toBeNull();
-    expect(within(card).queryByText("Paired calibration evidence")).toBeNull();
+    expect(within(card as HTMLElement).queryByRole("heading", { name: "Calibration comparison", level: 1 })).toBeNull();
+    expect(within(card as HTMLElement).queryByText("Paired calibration evidence")).toBeNull();
   });
 
   it("renders no difference-between-means figure when only the self-work sample has pairs", () => {
