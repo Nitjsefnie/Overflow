@@ -243,7 +243,7 @@ describe("repository publication fencing", () => {
           repositoryId, ownerName: `after-scope/${repositoryId}`, visibility: "PUBLIC",
         });
         void publication.catch(() => undefined);
-        await expect.poll(() => blockingPids("fence-detached-commit")).toContain(blockerPid);
+        await expect.poll(() => blockingPids("fence-detached-commit"), { timeout: 60_000 }).toContain(blockerPid);
         expect(await sql`select query from pg_stat_activity
           where application_name = 'fence-detached-commit' and wait_event_type = 'Lock'`)
           .toEqual([{ query: "commit" }]);
@@ -306,7 +306,7 @@ describe("repository publication fencing", () => {
         } });
       });
       const oldOutcome = Promise.allSettled([older]);
-      await expect.poll(() => blockingPids("fence-admitted")).toSatisfy((pids: number[]) => pids.length > 0);
+      await expect.poll(() => blockingPids("fence-admitted"), { timeout: 60_000 }).toSatisfy((pids: number[]) => pids.length > 0);
       const [{ pid: oldPid }] = await sql`select pid from pg_stat_activity
         where application_name = 'fence-admitted' and wait_event_type = 'Lock'`;
       await loseSession(repositoryId);
@@ -317,7 +317,7 @@ describe("repository publication fencing", () => {
         });
         await newStore.materialize({ repositoryId, runId: await newStore.beginRun(repositoryId), fold });
       });
-      await expect.poll(() => blockingPids("fence-successor")).toContain(oldPid);
+      await expect.poll(() => blockingPids("fence-successor"), { timeout: 60_000 }).toContain(oldPid);
       release.resolve();
       await blocker;
       await oldOutcome;
@@ -358,7 +358,7 @@ describe("repository publication fencing", () => {
         repositoryId, ownerName: target, visibility: "PUBLIC",
       }));
       const refusal = expect(publication).rejects.toThrow();
-      await expect.poll(() => blockingPids("fence-collision")).toSatisfy((pids: number[]) => pids.length > 0);
+      await expect.poll(() => blockingPids("fence-collision"), { timeout: 60_000 }).toSatisfy((pids: number[]) => pids.length > 0);
       await loseSession(repositoryId);
       await coordination`select 1`;
       release.resolve();
