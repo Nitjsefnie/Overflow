@@ -302,6 +302,27 @@ describe("recalibration credit adjustment controls", () => {
     expect(fetchMock.mock.calls.every(([url]) => String(url) === previewUrl)).toBe(true);
   });
 
+  it("disables the apply button over a zero-point proposed adjustment, with the reason on its title", async () => {
+    const zeroFigurePreview = {
+      ...actionablePreview,
+      figure: { gapPerPair: 0.04, pairCount: 12, totalAmount: 0 },
+    };
+    const fetchMock = vi.fn(() => Promise.resolve(previewResponse(zeroFigurePreview)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Proposed adjustment total:/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Proposed adjustment total:/)).toHaveTextContent("0 points");
+    const applyButton = screen.getByRole("button", { name: "Apply credit adjustment" });
+    expect(applyButton).toBeDisabled();
+    expect(applyButton).toHaveAttribute("title", "The proposed adjustment total is 0 points — nothing to apply");
+
+    fireEvent.click(applyButton);
+    expect(fetchMock.mock.calls.every(([url]) => String(url) === previewUrl)).toBe(true);
+  });
+
   it("requires a nonblank reason before a credit adjustment is applied", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(previewResponse(actionablePreview)));
     vi.stubGlobal("fetch", fetchMock);
@@ -347,6 +368,37 @@ describe("recalibration credit adjustment controls", () => {
     expect(refresh).toHaveBeenCalled();
     const previewCalls = fetchMock.mock.calls.filter(([url]) => String(url) === previewUrl);
     expect(previewCalls).toHaveLength(2);
+  });
+
+  it("shows the structured API error and does not refresh when the apply POST is refused", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/moderation/recalibration/adjustment") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: { code: "CONFLICT", message: "The proposed figure is stale; reload the comparison." } }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(previewResponse(actionablePreview));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Proposed adjustment total:/)).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Reason for crediting mira"), {
+      target: { value: "The paired evidence shows outsiders were under-credited." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply credit adjustment" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("The proposed figure is stale; reload the comparison.");
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("renders an applied adjustment as reversed when its mirrored reversal exists", async () => {
@@ -399,6 +451,38 @@ describe("recalibration credit adjustment controls", () => {
     }));
     const previewCalls = fetchMock.mock.calls.filter(([url]) => String(url) === previewUrl);
     expect(previewCalls).toHaveLength(2);
+  });
+
+  it("shows the structured API error and does not refresh when the reversal POST is refused", async () => {
+    const applied = { ...actionablePreview, adjustments: [adjustmentRecord()] };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/moderation/adjustments/reversal") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: { code: "CONFLICT", message: "This adjustment was already reversed." } }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(previewResponse(applied));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reason for reversing adjustment 00000000-0000-4000-8000-0000000000c9")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Reason for reversing adjustment 00000000-0000-4000-8000-0000000000c9"), {
+      target: { value: "The stored evidence no longer matches the live settlements." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reverse adjustment" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("This adjustment was already reversed.");
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("shows the structured API error when the figure cannot be read", async () => {
