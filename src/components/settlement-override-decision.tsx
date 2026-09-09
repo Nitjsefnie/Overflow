@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { plural } from "@/lib/plural";
 
 type Decision = "grant" | "decline";
 type Feedback = { kind: "error" | "success"; message: string } | null;
@@ -85,7 +86,7 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
         kind: "success",
         message:
           decision === "grant"
-            ? `Issue #${issueNumber} is corrected to ${points} points.`
+            ? `Issue #${issueNumber} is corrected to ${points} ${plural(points, "point")}.`
             : `Issue #${issueNumber} keeps the outcome the fold recorded.`,
       });
       router.refresh();
