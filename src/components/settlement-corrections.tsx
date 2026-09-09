@@ -1,5 +1,6 @@
 import { SettlementOverrideRequestForm } from "@/components/settlement-override-request";
 import type { SettlementOverrideRequest, SettlementOverrideTarget } from "@/lib/overrides/service";
+import { plural } from "@/lib/plural";
 
 type SettlementCorrectionsProps = {
   target: SettlementOverrideTarget;
@@ -87,8 +88,13 @@ function stateSummary(request: SettlementOverrideRequest, kind: SettlementOverri
   switch (request.state) {
     case "OPEN":
       return "Awaiting a moderator";
-    case "GRANTED":
-      return `Granted at ${request.settledPoints ?? "unknown"} ${kind === "settlement" ? "settled" : "actual"} points`;
+    case "GRANTED": {
+      // The figure is stored as a number whenever it is known, so only the
+      // numeric case pluralizes; "unknown" keeps the plural noun it reads with.
+      const figure = request.settledPoints === null ? "unknown" : String(request.settledPoints);
+      const points = request.settledPoints === null ? "points" : plural(request.settledPoints, "point");
+      return `Granted at ${figure} ${kind === "settlement" ? "settled" : "actual"} ${points}`;
+    }
     case "DECLINED":
       return "Declined";
   }
