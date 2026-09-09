@@ -309,15 +309,19 @@ async function reconcileRepositoryWhileCoordinated(
           const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
             .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
           const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests);
-          const dirtyPullRequests = new Set(dirtySubjects.filter(({ kind }) => kind === "PULL_REQUEST").map(({ id }) => id));
+          const dirtyPullRequestSubjects = new Map(dirtySubjects
+            .filter(({ kind }) => kind === "PULL_REQUEST")
+            .map((subject) => [subject.id, subject]));
           const refreshedEvidence = await collectPullRequestEvidence(
             dependencies.github,
             reference,
             repository,
             full ? referencedPullRequests : [
               ...[...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests),
-              ...referencedPullRequests.filter(({ id }) => dirtyPullRequests.has(id) || !pullRequestEvidence.has(id)),
+              ...referencedPullRequests.filter(({ id }) => dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
             ],
+            discardUnresolvableSubject,
+            dirtyPullRequestSubjects,
           );
           for (const [id, evidence] of refreshedEvidence) pullRequestEvidence.set(id, evidence);
           const retainedPrIds = new Set(referencedPullRequests.filter((pr) => pr.state === "MERGED" && pr.mergedAt !== null
@@ -389,11 +393,29 @@ async function reconcileRepositoryWhileCoordinated(
   }
 }
 
+// A pull request's evidence read draws the same subject-alone arm the
+// per-subject reads draw: a NOT_FOUND for a pull request is definitive for
+// the subject, not a property of the run — the sweep revives FAILED jobs and
+// would retry the run forever — so the subject's dirty row, when one exists,
+// is discarded (keyed with its generation, so a genuine re-enqueue still
+// reconciles) and the subject is omitted from the returned evidence map. The
+// snapshot reads a missing evidence entry as reviews [] / rawDiff "" rather
+// than failing the fold. Every other class — a rate limit with its cooldown
+// path, auth, 5xx, network, the GraphQL budget held — is transient or
+// run-invalidating and rethrows, keeping whole-run retry; no other class
+// joins this arm.
 async function collectPullRequestEvidence(
   github: ReconciliationGateway,
   reference: GitHubRepositoryReference,
   registered: ReconciliationRepository,
   pullRequests: readonly GitHubPullRequest[],
+  discardUnresolvableSubject: (
+    failure: unknown,
+    kind: DirtyReconciliationSubject["kind"],
+    subject: GitHubSubject,
+    dirty: DirtyReconciliationSubject | undefined,
+  ) => Promise<boolean>,
+  dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
 ): Promise<Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>> {
   // A closing reference can name a pull request in another repository, and its
   // number means nothing here: reading it from the registered repository would
@@ -412,15 +434,29 @@ async function collectPullRequestEvidence(
   const evidence = await mapWithConcurrency(
     [...uniqueMergedPullRequests.values()],
     reconciliationConcurrency,
-    async (pullRequest) => [
-      pullRequest.id,
-      {
-        reviews: await github.getPullRequestReviews(reference, pullRequest.number),
-        rawDiff: await github.getPullRequestDiff(reference, pullRequest.number),
-      },
-    ] as const,
+    async (pullRequest) => {
+      try {
+        return [
+          pullRequest.id,
+          {
+            reviews: await github.getPullRequestReviews(reference, pullRequest.number),
+            rawDiff: await github.getPullRequestDiff(reference, pullRequest.number),
+          },
+        ] as const;
+      } catch (error) {
+        if (!(await discardUnresolvableSubject(
+          error,
+          "PULL_REQUEST",
+          pullRequest,
+          dirtyPullRequestSubjects.get(pullRequest.id),
+        ))) {
+          throw error;
+        }
+        return null;
+      }
+    },
   );
-  return new Map(evidence);
+  return new Map(evidence.filter((entry) => entry !== null));
 }
 
 async function declineCrawl(
