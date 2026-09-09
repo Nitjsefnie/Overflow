@@ -12,7 +12,6 @@ const clients: postgres.Sql[] = [];
 describe("reservations around shutdown of a reachable pool", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({
-      name: "issue226-pg",
       database: "reserve_shutdown",
       user: "reserve_shutdown",
       password: "reserve_shutdown",
