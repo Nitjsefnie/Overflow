@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
@@ -386,14 +387,4 @@ function describeSelection(
 function describeCandidate(candidate: AuditCandidateProjection): string {
   const summary = `${candidate.githubLogin} · ${candidate.selfWorkPairCount} self-work · ${candidate.outsiderPairCount} outsider ${plural(candidate.outsiderPairCount, "settlement")}`;
   return candidate.openAuditId === null ? summary : `${summary} · audit already open`;
-}
-
-function formatSigned(value: number): string {
-  if (value > 0) {
-    return `+${value}`;
-  }
-  if (value < 0) {
-    return `−${Math.abs(value)}`;
-  }
-  return "0";
 }
