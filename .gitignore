@@ -39,6 +39,9 @@ src/app/api/auth/*
 !src/app/api/auth/[[]...nextauth[]]/
 src/app/api/auth/[[]...nextauth[]]/*
 !src/app/api/auth/[[]...nextauth[]]/*.ts
+!src/app/api/calibration/
+src/app/api/calibration/*
+!src/app/api/calibration/*.ts
 !src/app/api/github/
 src/app/api/github/*
 !src/app/api/github/webhooks/
