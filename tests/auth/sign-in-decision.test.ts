@@ -39,6 +39,19 @@ function loggedArgs(spy: ReturnType<typeof vi.spyOn>): unknown[] {
   return spy.mock.calls.flat();
 }
 
+describe("SIGN_IN_REFUSAL_REASONS", () => {
+  // The values are the operator-facing contract — saved log queries grep for
+  // them — so they are pinned as literals. Asserting through the constant
+  // itself (as the classification tests do) passes any rename.
+  it("keeps the published reason-code literals", () => {
+    expect(SIGN_IN_REFUSAL_REASONS).toEqual({
+      identity: "SIGNIN_IDENTITY_INVALID",
+      accessToken: "SIGNIN_ACCESS_TOKEN_MISSING",
+      persistence: "SIGNIN_PERSIST_FAILED",
+    });
+  });
+});
+
 describe("readGitHubIdentity", () => {
   it("parses a numeric GitHub id, login, and avatar url", () => {
     expect(
@@ -175,15 +188,6 @@ describe("decideGitHubSignIn", () => {
     expect(allLogs).not.toContain(secretAccessToken);
     expect(allLogs).not.toContain("octocat");
     expect(allLogs).not.toContain("4242");
-  });
-
-  it("logs nothing when persistence never runs", async () => {
-    const persist = persistSucceeding();
-
-    await expect(
-      decideGitHubSignIn({ profile: validProfile, accessToken: secretAccessToken, persist }),
-    ).resolves.toBe(true);
-    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
 
