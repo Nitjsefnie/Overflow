@@ -104,28 +104,57 @@ function ruleWith(parsed: Rule[], selector: string): Rule {
 }
 
 /**
- * The header surface: selectors that decide how the header renders. A rule
- * touching it may only live where the contract says, so the inventory below
- * fails on an occurrence anywhere else — media'd or bare — even though every
- * named shape above still matches.
+ * The class components that decide header geometry, including the session
+ * controls: they are row 1 of the stacked layout, so a margin on them
+ * re-splits the header's vertical centres exactly as a nav wrap does.
  */
-const HEADER_SURFACE_PREFIXES = [".site-header", ".site-nav", ".wordmark", ".member-stamp"];
+const HEADER_SURFACE_CLASSES = [
+  ".site-header",
+  ".site-nav",
+  ".wordmark",
+  ".member-stamp",
+  ".session-controls",
+];
 
+/**
+ * A selector part touches the header surface when it contains any surface
+ * class on an identifier boundary anywhere in the compound — so
+ * `.app-shell .site-header nav`, `nav:has(.site-nav)` and `nav .site-nav`
+ * are all counted — or names the nav element in any form. The lookaheads
+ * keep lookalike names elsewhere (.site-navigation, .card-nav) out of the
+ * inventory. Enumerated against the shipped stylesheet: every nav /
+ * wordmark / member-stamp / session-controls selector in it is header
+ * surface, so nothing legitimate is tripped over.
+ *
+ * What the matcher still cannot see: it reasons about selector text, never
+ * cascade effect. A rule that moves header geometry through a selector with
+ * none of these components (a bare `header > a:first-child`, a universal
+ * sibling rule, inherited properties on body) is uncounted, and a nav hidden
+ * with `visibility: hidden` passes this guard and the harness's geometry
+ * judge alike. The vocabulary bounds the guarantee.
+ */
 function touchesHeaderSurface(selector: string): boolean {
   return selector
     .split(",")
     .map((part) => part.replace(/\s+/g, " ").trim())
     .some((part) =>
-      part === "nav" ||
-      HEADER_SURFACE_PREFIXES.some((prefix) =>
-        part === prefix || part.startsWith(`${prefix} `) ||
-        part.startsWith(`${prefix}:`) || part.startsWith(`${prefix}.`)));
+      HEADER_SURFACE_CLASSES.some((name) =>
+        new RegExp(`${name.replace(/\./g, "\\.")}(?![\\w-])`).test(part)) ||
+      /(^|[\s>+~(])nav(?![\w-])/.test(part));
 }
 
 /** Base rules sort before media'd ones; media blocks sort by max-width. */
 function whereRank(where: string): number {
   const parsed = where.match(/max-width:\s*(\d+(?:\.\d+)?)px/);
   return parsed ? Number(parsed[1]) : -1;
+}
+
+function byLocation(
+  a: { where: string; selector: string },
+  b: { where: string; selector: string },
+): number {
+  return whereRank(a.where) - whereRank(b.where) ||
+    (a.selector < b.selector ? -1 : a.selector > b.selector ? 1 : 0);
 }
 
 function headerSurfaceInventory(source: string): Array<{ where: string; selector: string }> {
@@ -145,9 +174,7 @@ function headerSurfaceInventory(source: string): Array<{ where: string; selector
     }
   }
 
-  return inventory.sort((a, b) =>
-    whereRank(a.where) - whereRank(b.where) ||
-    (a.selector < b.selector ? -1 : a.selector > b.selector ? 1 : 0));
+  return inventory.sort(byLocation);
 }
 
 /**
@@ -163,6 +190,7 @@ const expectedHeaderSurfaceRules: ReadonlyArray<{ where: string; selector: strin
     where: "base",
     selector: ".member-stamp, .mono-meta, .eyebrow, .points-stamp, .proof-fingerprint, .site-footer",
   },
+  { where: "base", selector: ".session-controls" },
   { where: "base", selector: ".site-header" },
   { where: "base", selector: ".site-nav" },
   { where: "base", selector: ".site-nav a" },
@@ -273,6 +301,7 @@ describe("responsive header contract", () => {
    * and must equal the sanctioned set exactly.
    */
   it("accounts for every rule touching the header surface, wherever it lives", () => {
-    expect(headerSurfaceInventory(stylesheet)).toEqual(expectedHeaderSurfaceRules);
+    expect(headerSurfaceInventory(stylesheet))
+      .toEqual([...expectedHeaderSurfaceRules].sort(byLocation));
   });
 });
