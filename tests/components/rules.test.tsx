@@ -23,6 +23,14 @@ describe("rules page", () => {
     expect(screen.getByText("Grace Hopper")).toBeVisible();
   });
 
+  it("points maintainers at a claim system they can install", () => {
+    render(<RulesContent memberName="Ada" isModerator={false} />);
+
+    // A reader depends on this link resolving, not on the sentence around it.
+    const claim = screen.getByRole("link", { name: /claim/i });
+    expect(claim).toHaveAttribute("href", "https://github.com/Nitjsefnie-Actions/claim");
+  });
+
   it("exposes six named section landmarks", () => {
     render(<RulesContent memberName="Ada" isModerator={false} />);
 
