@@ -115,6 +115,43 @@ describe("calibration comparison", () => {
     expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
   });
 
+  // A zero-pair pooled cohort has no mean either: printing the fabricated
+  // nought beneath a heading counting zero pairs reads as a measured perfect
+  // calibration, so the absence is named there too.
+  it("names an empty pooled outsider cohort as absent rather than as a delta of nought", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 12, meanDelta: -0.5, medianDelta: -1 },
+          outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    const outsider = within(screen.getByRole("region", { name: "Outsider settlement sample · 0 pairs" }));
+    expect(outsider.getByText("No outsider settlements yet")).toBeVisible();
+    expect(outsider.queryByText(/Mean delta/)).toBeNull();
+    expect(outsider.queryByText(/Median delta/)).toBeNull();
+  });
+
+  it("names an empty pooled self-work cohort as absent too", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 14, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    const selfWork = within(screen.getByRole("region", { name: "Self-work sample · 0 pairs" }));
+    expect(selfWork.getByText("No self-work pairs yet")).toBeVisible();
+    expect(selfWork.queryByText(/Mean delta/)).toBeNull();
+    expect(selfWork.queryByText(/Median delta/)).toBeNull();
+  });
+
   it("renders each panel's median delta through the shared formatter", () => {
     render(
       <CalibrationPanel
