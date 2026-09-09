@@ -93,9 +93,31 @@ describe("same-instant rationale evidence determinism", () => {
   );
 
   it.each(BOTH_ARRIVALS)(
+    "records the only identified comment when a same-instant tie carries one comment with the databaseId key absent ($name)",
+    ({ arrival }) => {
+      // An unvalidated passthrough can drop the key entirely rather than
+      // null it; the comment must rank as carrying no sequence evidence.
+      const snapshot = tieSnapshot(arrival, { "comment-a": null, "comment-b": 402 });
+      Reflect.deleteProperty(snapshot.issues[0]!.comments.find((comment) => comment.id === "comment-a")!, "databaseId");
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements[0]).toMatchObject({
+        status: "SETTLED",
+        credits: 6,
+        settledRationaleCommentId: "comment-b",
+        settledRationaleCommentedAt: TIE_INSTANT,
+      });
+      expect(result.unwritableClosures).toEqual([]);
+      expect(result.policyViolations).toEqual([]);
+    },
+  );
+
+  it.each(BOTH_ARRIVALS)(
     "rejects same-instant rationales carrying no database ids rather than picking one ($name)",
     ({ arrival }) => {
       const result = foldRepository(tieSnapshot(arrival, { "comment-a": null, "comment-b": null }));
+      const fromReversed = foldRepository(tieSnapshot([...arrival].reverse(), { "comment-a": null, "comment-b": null }));
 
       expect(result.settlements[0]).toMatchObject({
         status: "UNSETTLED",
@@ -110,8 +132,32 @@ describe("same-instant rationale evidence determinism", () => {
         githubPullRequestId: 201,
         reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
       }]);
+      // Re-folds compare reason bytes, so the sentence must not vary with the
+      // arrival order either.
+      expect(JSON.stringify(fromReversed.unwritableClosures)).toBe(JSON.stringify(result.unwritableClosures));
       expect(result.policyViolations).toEqual([]);
       expect(result.ledgerEntries).toEqual([]);
+    },
+  );
+
+  it.each(BOTH_ARRIVALS)(
+    "rejects same-instant rationales whose databaseId keys are all absent like null ones ($name)",
+    ({ arrival }) => {
+      const snapshot = tieSnapshot(arrival, { "comment-a": null, "comment-b": null });
+      for (const comment of snapshot.issues[0]!.comments) {
+        Reflect.deleteProperty(comment, "databaseId");
+      }
+
+      const result = foldRepository(snapshot);
+
+      expect(result.unwritableClosures).toEqual([{
+        githubIssueId: 101,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201,
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
+      }]);
+      expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, settledRationaleCommentId: null });
+      expect(result.policyViolations).toEqual([]);
     },
   );
 
@@ -119,6 +165,7 @@ describe("same-instant rationale evidence determinism", () => {
     "rejects same-instant rationales carrying one duplicated database id in either arrival order ($name)",
     ({ arrival }) => {
       const result = foldRepository(tieSnapshot(arrival, { "comment-a": 402, "comment-b": 402 }));
+      const fromReversed = foldRepository(tieSnapshot([...arrival].reverse(), { "comment-a": 402, "comment-b": 402 }));
 
       expect(result.settlements[0]).toMatchObject({
         status: "UNSETTLED",
@@ -132,9 +179,31 @@ describe("same-instant rationale evidence determinism", () => {
         githubPullRequestId: 201,
         reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
       }]);
+      // The named id must be derived in sorted order, so the sentence is
+      // byte-identical across arrival orders.
+      expect(JSON.stringify(fromReversed.unwritableClosures)).toBe(JSON.stringify(result.unwritableClosures));
       expect(result.policyViolations).toEqual([]);
     },
   );
+
+  it("names the smallest duplicated id when a tie duplicates several", () => {
+    const snapshot = tieSnapshot(["comment-a", "comment-b"], { "comment-a": 403, "comment-b": 402 });
+    snapshot.issues[0]!.comments.push(
+      { id: "comment-c", databaseId: 403, authorLogin: "sponsor", authorGitHubUserId: null, body: "Also delivered/6, independently.", createdAt: TIE_INSTANT, lastEditedAt: null },
+      { id: "comment-d", databaseId: 402, authorLogin: "sponsor", authorGitHubUserId: null, body: "delivered/6 again, from the second reviewer.", createdAt: TIE_INSTANT, lastEditedAt: null },
+    );
+    snapshot.issues[0]!.comments.reverse();
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
+    }]);
+    expect(result.policyViolations).toEqual([]);
+  });
 
   it("folds a snapshot containing the tie byte-identically under scrambled comment arrival order", () => {
     const comments = [
