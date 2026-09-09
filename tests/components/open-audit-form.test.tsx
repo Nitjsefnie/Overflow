@@ -117,6 +117,22 @@ describe("open audit form", () => {
     expect(screen.getByRole("option", { name: "overflow/ledger" })).toBeInTheDocument();
   });
 
+  it("reads a candidate's outsider settlement count with the plural its count takes", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const singlePairCandidate: AuditCandidateProjection = {
+      id: miraId,
+      githubLogin: "single",
+      enforcementState: "ACTIVE",
+      selfWorkPairCount: 3,
+      outsiderPairCount: 1,
+      openAuditId: null,
+    };
+    render(<OpenAuditForm candidates={[singlePairCandidate]} repositories={repositories} />);
+
+    expect(screen.queryByRole("option", { name: "single · 3 self-work · 1 outsider settlements" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "single · 3 self-work · 1 outsider settlement" })).toBeInTheDocument();
+  });
+
   it("refuses to open an audit without a target or without both sample window bounds", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -141,6 +157,33 @@ describe("open audit form", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Choose an audit target and both sample window bounds.");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads each cohort preview's pair counts with the plural its count takes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(cohortResponse({
+      targetAccountId: miraId,
+      repositoryId: null,
+      sampleStartedAt: startedAtInstant,
+      sampleEndedAt: endedAtInstant,
+      comparison: {
+        selfWork: { count: 1, meanDelta: 2, medianDelta: 2 },
+        outsider: { count: 2, meanDelta: -1, medianDelta: -1 },
+        differenceBetweenMeans: 3,
+      },
+      meetsMinimumSampleSize: false,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Self-work sample · 1 pair · mean delta +2")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Self-work sample · 1 pairs · mean delta +2")).not.toBeInTheDocument();
+    expect(screen.getByText("Outsider settlement sample · 2 pairs · mean delta −1")).toBeInTheDocument();
   });
 
   it("refuses a blank reason before any request is sent", () => {
@@ -542,6 +585,32 @@ describe("moderation page open-audit section", () => {
 
     const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
     expect(headings.slice(0, 2)).toEqual(["Open a calibration audit", "No account audits are open."]);
+  });
+
+  it("reads each open audit's settled sample size with the plural its count takes", async () => {
+    const auditedRow = {
+      id: auditId, target_account_id: nilsId, target_login: "audited-member", reporter_login: "existing-moderator",
+      repository_name: null, state: "OPEN", prior_enforcement_state: "WARNED", opened_at: startedAtInstant,
+      sample_started_at: startedAtInstant, sample_ended_at: endedAtInstant, settled_sample_size: 1,
+      cohort_definition: {}, cohort_statistics: comparison(),
+    };
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes("from calibration_audits")) {
+        return [
+          auditedRow,
+          { ...auditedRow, id: "audit-6", target_login: "second-member", settled_sample_size: 2, repository_name: "co-op/harbour" },
+        ];
+      }
+      return populatedModerationRows(query);
+    });
+
+    render(await ModerationPage());
+
+    const queue = screen.getByRole("region", { name: "Open audits" });
+    expect(within(queue).queryByText(/· 1 settled pairs ·/)).not.toBeInTheDocument();
+    expect(within(queue).getByText(/· 1 settled pair · all repositories/)).toBeVisible();
+    expect(within(queue).getByText(/· 2 settled pairs · co-op\/harbour/)).toBeVisible();
   });
 
   it("replaces the form with a readable message when the audit targets cannot be loaded", async () => {

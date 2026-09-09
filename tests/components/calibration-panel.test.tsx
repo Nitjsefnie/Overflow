@@ -97,6 +97,22 @@ describe("calibration comparison", () => {
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
+  it("reads each sample's pair count with the plural its count takes", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 1, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 2, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: 1,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("Self-work sample · 1 pairs")).toBeNull();
+    expect(screen.getByText("Self-work sample · 1 pair")).toBeVisible();
+    expect(screen.getByText("Outsider settlement sample · 2 pairs")).toBeVisible();
+  });
+
   it("names the next action when no paired samples exist", () => {
     render(
       <CalibrationPanel
