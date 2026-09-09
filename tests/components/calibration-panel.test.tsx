@@ -114,6 +114,21 @@ describe("calibration comparison", () => {
     expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
   });
 
+  it("renders each panel's median delta through the shared formatter", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 7, meanDelta: -0.5, medianDelta: -1.3333333333333333 },
+          outsider: { count: 9, meanDelta: 2.5, medianDelta: 1.2676 },
+          differenceBetweenMeans: -3,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Median delta −1.33")).toBeVisible();
+    expect(screen.getByText("Median delta +1.27")).toBeVisible();
+  });
+
   it("reads each sample's pair count with the plural its count takes", () => {
     render(
       <CalibrationPanel
