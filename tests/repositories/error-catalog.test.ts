@@ -245,6 +245,35 @@ const githubOutages: RegistrationFailure[] = gatewaySteps.map(({ step, named }) 
   publishes: (surfaced: string) => (cell: string) => cell === surfaced,
 }));
 
+// Label verification refuses a repository whose existing labels do not cover the submitted
+// catalog, substituting the backticked list of missing labels into the refusal.
+const missingLabelRefusals: RegistrationFailure[] = [
+  {
+    what: "a repository missing a submitted difficulty label",
+    status: invalidInputStatus,
+    raise: (dependencies) => {
+      // Every submitted label present except one, so the published message substitutes exactly
+      // that label — a list of one — into the otherwise fixed refusal.
+      dependencies.github.listRepositoryLabels = async () => {
+        const labels = new Set([
+          ...registrationInput().openingLabels.map(({ label }) => label),
+          ...registrationInput().actualLabels.map(({ label }) => label),
+        ]);
+        labels.delete("delivered/10");
+        return labels;
+      };
+    },
+    // The missing label list is substituted into this message, so only the text on either side of
+    // it can be compared with the catalog; the published cell carries <labels> in its place.
+    publishes: (surfaced) => {
+      const parts = surfaced.split("`delivered/10`");
+      expect(parts, `The surfaced message names delivered/10 other than once: ${surfaced}`).toHaveLength(2);
+      const [before, after] = parts as [string, string];
+      return (cell) => cell.startsWith(before) && cell.endsWith(after);
+    },
+  },
+];
+
 // Failures the registration itself raises about the submission, the account, or the store — no
 // gateway call involved, so each pins its published row by exact message.
 const registrationRefusals: RegistrationFailure[] = [
@@ -298,6 +327,7 @@ const registrationFailures = [
   ...githubAccessHidings,
   ...githubRateLimits,
   ...githubOutages,
+  ...missingLabelRefusals,
   ...registrationRefusals,
 ];
 
@@ -310,7 +340,7 @@ const routeLevelAnswers: Record<string, string> = {
   "Sign in is required.": "the route's session/bearer gate answers before registerRepository runs",
   "The request origin is not allowed.": "the route's origin check answers before registerRepository runs",
   "The request must use the application/json content type.": "the route's content-type gate answers before the token is read",
-  "The server is not configured to accept this request.": "the route's APP_URL check answers before registerRepository runs",
+  "The server is not configured to accept this request.": "answered by src/lib/security/request-origin.ts when APP_URL is missing or malformed, before registerRepository runs; pinned by tests/security/request-origin.test.ts",
   "Unable to initialize repository registration.": "the route's catch-all answers when registration itself fails unexpectedly",
 };
 
