@@ -10,6 +10,7 @@ import {
 } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import {
+  changeRepositoryCatalog,
   RepositoryRegistrationError,
   registerRepository,
   type RepositoryRegistrationDependencies,
@@ -55,39 +56,11 @@ export type RepositoryRouteDependencies = {
 
 export function createRepositoryPostHandler(dependencies: RepositoryRouteDependencies) {
   return async function postRepository(request: Request): Promise<Response> {
-    // Reading the credential is only a header parse, and it decides which guard
-    // this request gets. A cookie-authenticated request is one the browser
-    // authenticates on the client's behalf from whatever page asked, so it is
-    // same-origin only. A bearer credential is attached deliberately and never
-    // rides along on a cross-site request, so its origin is not consulted — but
-    // both paths must be JSON, and both are refused before the token is hashed,
-    // the session is read, or the body is parsed.
-    const credential = readApiTokenCredential(request);
-    const refusal =
-      credential === null ? rejectUntrustedRequest(request) : rejectUnsupportedMediaType(request);
-    if (refusal !== null) {
-      return refusal;
+    const authorized = await authorizeRepositoryRequest(request, dependencies);
+    if (authorized instanceof Response) {
+      return authorized;
     }
-
-    let session: RepositoryRouteSession | null;
-    try {
-      if (credential !== null) {
-        const hash = hashApiToken(credential);
-        if (hash === null) {
-          return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
-        }
-        const account = await dependencies.findAccountByTokenHash(hash);
-        if (account === null) {
-          return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
-        }
-        session = { user: { id: account.id, role: account.role } };
-      } else {
-        session = await dependencies.getSession();
-      }
-    } catch {
-      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
-    }
-    if (session === null) {
+    if (authorized === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
 
@@ -97,7 +70,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(session);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
       const { initialImportScheduled, claimPath, ...repository } = await registerRepository(
         registrationDependencies,
         input,
@@ -113,7 +86,122 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
   };
 }
 
+/**
+ * The catalog-change handler (issue 180). The submission is the same payload a
+ * registration takes, so the sponsor edits the catalog they know; the change
+ * appends a new catalog version rather than touching settled work, and reports
+ * which version it produced — or that the submitted catalog already is the
+ * current one.
+ */
+export function createRepositoryPatchHandler(dependencies: RepositoryRouteDependencies) {
+  return async function patchRepository(request: Request): Promise<Response> {
+    const authorized = await authorizeRepositoryRequest(request, dependencies);
+    if (authorized instanceof Response) {
+      return authorized;
+    }
+    if (authorized === null) {
+      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+    }
+
+    const input = await parseInput(request);
+    if (input === null) {
+      return errorResponse(400, "INVALID_REQUEST", "Invalid repository registration request.");
+    }
+
+    try {
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
+      const change = await changeRepositoryCatalog(registrationDependencies, input);
+      return Response.json(change, { status: 200 });
+    } catch (error) {
+      if (error instanceof RepositoryRegistrationError) {
+        return registrationErrorResponse(error);
+      }
+
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    }
+  };
+}
+
+/**
+ * Reading the credential is only a header parse, and it decides which guard
+ * this request gets. A cookie-authenticated request is one the browser
+ * authenticates on the client's behalf from whatever page asked, so it is
+ * same-origin only. A bearer credential is attached deliberately and never
+ * rides along on a cross-site request, so its origin is not consulted — but
+ * both paths must be JSON, and both are refused before the token is hashed,
+ * the session is read, or the body is parsed.
+ */
+async function authorizeRepositoryRequest(
+  request: Request,
+  dependencies: RepositoryRouteDependencies,
+): Promise<Response | RepositoryRouteSession> {
+  const credential = readApiTokenCredential(request);
+  const refusal =
+    credential === null ? rejectUntrustedRequest(request) : rejectUnsupportedMediaType(request);
+  if (refusal !== null) {
+    return refusal;
+  }
+
+  try {
+    if (credential !== null) {
+      const hash = hashApiToken(credential);
+      if (hash === null) {
+        return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+      }
+      const account = await dependencies.findAccountByTokenHash(hash);
+      if (account === null) {
+        return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+      }
+      return { user: { id: account.id, role: account.role } };
+    }
+    return await dependencies.getSession();
+  } catch {
+    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+  }
+}
+
 export const POST = createRepositoryPostHandler({
+  async findAccountByTokenHash(hash) {
+    return new PostgresApiTokenStore().findAccountByTokenHash(hash);
+  },
+  async getSession() {
+    const { auth } = await import("@/auth");
+    const session = await auth();
+    const user = session?.user as { id?: unknown; role?: unknown } | undefined;
+    if (
+      typeof user?.id !== "string" ||
+      (user.role !== "MEMBER" && user.role !== "MODERATOR")
+    ) {
+      return null;
+    }
+    return { user: { id: user.id, role: user.role } };
+  },
+  async createRegistrationDependencies(session) {
+    const store = new PostgresRepositoryStore();
+    const accessToken = await store.getGitHubAccessToken(session.user.id);
+    const enforcementState = await store.getEnforcementState(session.user.id);
+    if (accessToken === null) {
+      throw new Error("GitHub access token was unavailable.");
+    }
+    if (enforcementState === null) {
+      throw new Error("Account enforcement state was unavailable.");
+    }
+
+    return {
+      actor: { ...session.user, enforcementState },
+      github: new GitHubGateway({ accessToken, owner: session.user.id }),
+      store,
+      webhook: requiredWebhookConfiguration(),
+      // Existing issues predate the webhook this registration creates, so only a
+      // reconciliation can bring them in. See scheduleInitialImport in register.ts.
+      scheduleInitialImport(repositoryId) {
+        return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
+      },
+    };
+  },
+});
+
+export const PATCH = createRepositoryPatchHandler({
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },
