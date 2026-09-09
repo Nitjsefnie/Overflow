@@ -2114,6 +2114,31 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(pages).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
+  it("keeps the repo-wide 50-request bound when pages shift mid-walk", async () => {
+    const pages: string[] = [];
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
+        const page = Number(url.searchParams.get("page"));
+        const collection = url.pathname.endsWith("/issues/events") ? "events" : "comments";
+        pages.push(`${collection}:${page}`);
+        const link = page === 1
+          ? `<${url.origin}${url.pathname}?page=2>; rel="next", <${url.origin}${url.pathname}?page=25>; rel="last"`
+          : `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next"`;
+        return Response.json([], { headers: { link } });
+      }
+      const { query } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [{ ...issueNode(101, 1, "Shifting pages", { nodes: [], pageInfo }), timelineItems: { nodes: [], pageInfo } }], pageInfo,
+      } } } });
+      return countsResponse({ number1: 1 }, () => 0);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub timeline completeness could not be verified within 50 repository manifest requests.",
+    );
+    expect(pages).toEqual(["events:1", "comments:1", ...Array.from({ length: 48 }, (_, index) => `events:${index + 2}`)]);
+  });
+
   it("completes the manifest per issue when the repository-wide collections exceed the page budget", async () => {
     const repoWidePages: string[] = [];
     const perIssuePaths: string[] = [];
