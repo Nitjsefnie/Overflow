@@ -177,9 +177,10 @@ describe("registration form spacing stylesheet", () => {
     const actionButton = pinnedRule(".action-button");
 
     expect(pinnedRule(".form-intro").declarations["margin-bottom"], "the intro adds no bottom margin").toBeUndefined();
-    expect(rem(introGap.declarations["margin-top"], "the gap below the intro")).toBeGreaterThanOrEqual(
-      rem(sectionGap.declarations["margin-top"], "the form's section gap"),
-    );
+    expect(
+      rem(introGap.declarations["margin-top"], "the gap below the intro"),
+      "the intro keeps a strictly wider gap than the generic one",
+    ).toBeGreaterThan(rem(sectionGap.declarations["margin-top"], "the form's section gap"));
 
     // The wider gaps tie with the generic one on specificity, so each keeps
     // its own value only while the generic rule stays above it.
