@@ -174,6 +174,7 @@ describe("settlement history page", () => {
           openClaims: [],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
