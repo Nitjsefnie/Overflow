@@ -3,6 +3,13 @@ import {
   MINIMUM_CALIBRATION_SAMPLE_SIZE,
   type CalibrationPair,
 } from "@/lib/calibration/statistics";
+import type {
+  CreditAdjustmentRecord,
+  CreditAdjustmentResult,
+  RecalibrationCreditStore,
+  RecalibrationPreview,
+  RecalibrationPreviewResult,
+} from "@/lib/moderation/credit-adjustment-store";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -646,6 +653,328 @@ describe("sample-window bound normalization", () => {
   });
 });
 
+describe("recalibration credit adjustments", () => {
+  describe("previewRecalibration", () => {
+    it("composes the store's preview and the account's adjustments into the moderator's figure", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        previewResult: { kind: "ok", value: substantiatedPreview() },
+        adjustments: [appliedAdjustment()],
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      const preview = await service.previewRecalibration(moderator(), "  target-account  ");
+
+      expect(preview).toEqual({
+        audit: { id: "audit-1", decidedAt: "2026-02-02T00:00:00.000Z" },
+        actionability: { actionable: true, reason: "SELF_WORK_UNDERCREDITED_OUTSIDERS" },
+        totals: { selfSum: 20, selfCount: 10, outSum: 10, outCount: 10 },
+        figure: { gapPerPair: 1, pairCount: 10, totalAmount: 10 },
+        lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: 10 }],
+        adjustments: [appliedAdjustment()],
+      });
+      expect(creditStore.lastPreviewTarget).toBe("target-account");
+      expect(creditStore.listCallCount).toBe(1);
+    });
+
+    // The trigger failing is not a refusal to read: the moderator is shown the
+    // honest non-actionable figure — no figure, and the reason there is none.
+    it("passes a non-actionable stored comparison through as a figure with no action", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        previewResult: {
+          kind: "ok",
+          value: substantiatedPreview({
+            actionability: { actionable: false, reason: "NO_POSITIVE_CALIBRATION_GAP" },
+            figure: null,
+            lines: [],
+          }),
+        },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      const preview = await service.previewRecalibration(moderator(), "target-account");
+
+      expect(preview.actionability).toEqual({ actionable: false, reason: "NO_POSITIVE_CALIBRATION_GAP" });
+      expect(preview.figure).toBeNull();
+      expect(preview.lines).toEqual([]);
+    });
+
+    it("reports an account whose substantiated audit is missing", async () => {
+      const creditStore = new TestRecalibrationCreditStore({ previewResult: { kind: "not_found" } });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.previewRecalibration(moderator(), "target-account"),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+      expect(creditStore.listCallCount).toBe(0);
+    });
+
+    it("refuses a preview whose stored evidence no longer matches the live records", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        previewResult: {
+          kind: "conflict",
+          detail: {
+            cause: "SNAPSHOT_DRIFT",
+            description: "The settlement with proof fingerprint abc123 is no longer SETTLED.",
+          },
+        },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.previewRecalibration(moderator(), "target-account"),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "CONFLICT",
+        message:
+          "The audit's stored calibration evidence no longer matches the live records: The settlement with proof fingerprint abc123 is no longer SETTLED.",
+      });
+      expect(creditStore.listCallCount).toBe(0);
+    });
+
+    it("requires a moderator before reading a credit preview", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        previewResult: { kind: "ok", value: substantiatedPreview() },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.previewRecalibration({ id: "member", role: "MEMBER" }, "target-account"),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
+      expect(creditStore.previewCallCount).toBe(0);
+      expect(creditStore.listCallCount).toBe(0);
+    });
+  });
+
+  describe("applyRecalibrationCreditAdjustment", () => {
+    it("applies with the acting moderator, the normalized target and the trimmed reason", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        applyResult: { kind: "ok", value: appliedAdjustment() },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      const applied = await service.applyRecalibrationCreditAdjustment(
+        moderator(),
+        "  target-account  ",
+        "  Compensating the outsider cohort.  ",
+      );
+
+      expect(applied).toEqual(appliedAdjustment());
+      expect(creditStore.lastApplyInput).toEqual({
+        actorId: "moderator",
+        targetAccountId: "target-account",
+        reason: "Compensating the outsider cohort.",
+      });
+    });
+
+    it("refuses a blank reason before touching the store", async () => {
+      const creditStore = new TestRecalibrationCreditStore({});
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   "),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+      expect(creditStore.lastApplyInput).toBeUndefined();
+    });
+
+    it("refuses a blank target account identifier before touching the store", async () => {
+      const creditStore = new TestRecalibrationCreditStore({});
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "   ", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+      expect(creditStore.lastApplyInput).toBeUndefined();
+    });
+
+    it("reports a target account whose substantiated audit is missing", async () => {
+      const creditStore = new TestRecalibrationCreditStore({ applyResult: { kind: "not_found" } });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    });
+
+    it("refuses applying when the stored evidence no longer matches the live records", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        applyResult: {
+          kind: "conflict",
+          detail: {
+            cause: "SNAPSHOT_DRIFT",
+            description: "The settlement with proof fingerprint abc123 is no longer SETTLED.",
+          },
+        },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "CONFLICT",
+        message:
+          "The audit's stored calibration evidence no longer matches the live records: The settlement with proof fingerprint abc123 is no longer SETTLED.",
+      });
+    });
+
+    it("refuses a second apply for the same audit", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        applyResult: { kind: "conflict", detail: { cause: "ALREADY_APPLIED" } },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "CONFLICT",
+        message: "This audit already carries an applied credit adjustment.",
+      });
+    });
+
+    // A failed trigger is a caller error, not a store conflict: the moderator
+    // asked for an action the audit's own comparison does not support (422).
+    it("refuses applying when the audit's calibration gap does not support compensation", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        applyResult: {
+          kind: "not_actionable",
+          actionability: { actionable: false, reason: "NO_POSITIVE_CALIBRATION_GAP" },
+        },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "INVALID_INPUT",
+        message: "The audit's calibration gap does not support a compensating adjustment.",
+      });
+    });
+
+    it("requires a moderator before applying an adjustment", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        applyResult: { kind: "ok", value: appliedAdjustment() },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.applyRecalibrationCreditAdjustment({ id: "member", role: "MEMBER" }, "target-account", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
+      expect(creditStore.lastApplyInput).toBeUndefined();
+    });
+  });
+
+  describe("reverseModerationCreditAdjustment", () => {
+    it("reverses with the acting moderator, the normalized adjustment id and the trimmed reason", async () => {
+      const reversal = appliedAdjustment({
+        id: "reversal-1",
+        reversalOf: "adjustment-1",
+        lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: -10 }],
+      });
+      const creditStore = new TestRecalibrationCreditStore({
+        reverseResult: { kind: "ok", value: reversal },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      const reversed = await service.reverseModerationCreditAdjustment(
+        moderator(),
+        "  adjustment-1  ",
+        "  The adjustment compensated the wrong cohort.  ",
+      );
+
+      expect(reversed).toEqual(reversal);
+      expect(creditStore.lastReverseInput).toEqual({
+        actorId: "moderator",
+        adjustmentId: "adjustment-1",
+        reason: "The adjustment compensated the wrong cohort.",
+      });
+    });
+
+    it("refuses a blank reason before touching the store", async () => {
+      const creditStore = new TestRecalibrationCreditStore({});
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   "),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+      expect(creditStore.lastReverseInput).toBeUndefined();
+    });
+
+    it("refuses a blank adjustment identifier before touching the store", async () => {
+      const creditStore = new TestRecalibrationCreditStore({});
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.reverseModerationCreditAdjustment(moderator(), "   ", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
+      expect(creditStore.lastReverseInput).toBeUndefined();
+    });
+
+    it("reports an adjustment the store cannot find", async () => {
+      const creditStore = new TestRecalibrationCreditStore({ reverseResult: { kind: "not_found" } });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    });
+
+    it("refuses a second reversal of the same adjustment", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        reverseResult: { kind: "conflict", detail: { cause: "ALREADY_REVERSED" } },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({
+        code: "CONFLICT",
+        message: "This credit adjustment has already been reversed.",
+      });
+    });
+
+    it("requires a moderator before reversing an adjustment", async () => {
+      const creditStore = new TestRecalibrationCreditStore({
+        reverseResult: { kind: "ok", value: appliedAdjustment() },
+      });
+      const service = new AccountModerationService(eligibleStore(), creditStore);
+
+      await expect(
+        service.reverseModerationCreditAdjustment({ id: "member", role: "MEMBER" }, "adjustment-1", "A reason."),
+      ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
+      expect(creditStore.lastReverseInput).toBeUndefined();
+    });
+  });
+
+  // The credit store is an optional constructor argument, so a missing one is
+  // invisible until one of these methods runs. It is a server construction bug,
+  // not client input: a plain Error that names the dependency, never a
+  // ModerationServiceError an API layer would map onto a client-facing code.
+  describe("without a constructed credit store", () => {
+    it.each([
+      ["previewing", (service: AccountModerationService) => service.previewRecalibration(moderator(), "target-account")],
+      [
+        "applying",
+        (service: AccountModerationService) =>
+          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+      ],
+      [
+        "reversing",
+        (service: AccountModerationService) =>
+          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+      ],
+    ] as const)("refuses %s as a construction bug rather than a client-facing error", async (_label, call) => {
+      const service = new AccountModerationService(eligibleStore());
+
+      const error = await call(service).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ModerationServiceError);
+      expect((error as Error).message).toMatch(/credit store/);
+    });
+  });
+});
+
 type LoadedCohortRequest = {
   targetAccountId: string;
   repositoryId: string | null;
@@ -749,6 +1078,82 @@ function eligibleStore(): TestModerationStore {
     selfWorkPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 10_000),
     outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
   });
+}
+
+type CreditStoreOptions = {
+  previewResult?: RecalibrationPreviewResult;
+  applyResult?: CreditAdjustmentResult;
+  reverseResult?: CreditAdjustmentResult;
+  adjustments?: CreditAdjustmentRecord[];
+};
+
+class TestRecalibrationCreditStore implements RecalibrationCreditStore {
+  public previewCallCount = 0;
+  public listCallCount = 0;
+  public lastPreviewTarget: string | undefined;
+  public lastApplyInput: { actorId: string; targetAccountId: string; reason: string } | undefined;
+  public lastReverseInput: { actorId: string; adjustmentId: string; reason: string } | undefined;
+
+  public constructor(private readonly options: CreditStoreOptions = {}) {}
+
+  public async loadRecalibrationPreview(targetAccountId: string): Promise<RecalibrationPreviewResult> {
+    this.previewCallCount += 1;
+    this.lastPreviewTarget = targetAccountId;
+    return this.options.previewResult ?? { kind: "not_found" };
+  }
+
+  public async applyRecalibrationCreditAdjustment(input: {
+    actorId: string;
+    targetAccountId: string;
+    reason: string;
+  }): Promise<CreditAdjustmentResult> {
+    this.lastApplyInput = input;
+    return this.options.applyResult ?? { kind: "not_found" };
+  }
+
+  public async reverseModerationCreditAdjustment(input: {
+    actorId: string;
+    adjustmentId: string;
+    reason: string;
+  }): Promise<CreditAdjustmentResult> {
+    this.lastReverseInput = input;
+    return this.options.reverseResult ?? { kind: "not_found" };
+  }
+
+  public async listCreditAdjustments(): Promise<CreditAdjustmentRecord[]> {
+    this.listCallCount += 1;
+    return this.options.adjustments ?? [];
+  }
+}
+
+/** An actionable store preview: a positive gap of one point per pair over ten outsider pairs. */
+function substantiatedPreview(overrides: Partial<RecalibrationPreview> = {}): RecalibrationPreview {
+  return {
+    audit: { id: "audit-1", decidedAt: "2026-02-02T00:00:00.000Z" },
+    snapshot: emptyCohort(),
+    actionability: { actionable: true, reason: "SELF_WORK_UNDERCREDITED_OUTSIDERS" },
+    totals: { selfSum: 20, selfCount: 10, outSum: 10, outCount: 10 },
+    figure: { gapPerPair: 1, pairCount: 10, totalAmount: 10 },
+    lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: 10 }],
+    ...overrides,
+  };
+}
+
+function appliedAdjustment(overrides: Partial<CreditAdjustmentRecord> = {}): CreditAdjustmentRecord {
+  return {
+    id: "adjustment-1",
+    moderationEventId: "event-1",
+    calibrationAuditId: "audit-1",
+    targetAccountId: "target-account",
+    gapPerPair: 1,
+    pairCount: 10,
+    totalAmount: 10,
+    reversalOf: null,
+    reason: "Compensating the outsider cohort.",
+    createdAt: "2026-09-09T00:00:00.000Z",
+    lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: 10 }],
+    ...overrides,
+  };
 }
 
 function moderator() {
