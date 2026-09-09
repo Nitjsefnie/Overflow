@@ -4,9 +4,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModerationControls, RecalibrationPlanControl } from "@/components/moderation-controls";
 
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
+
 const auditId = "00000000-0000-4000-8000-000000000004";
 
 afterEach(() => {
+  refresh.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -100,5 +105,78 @@ describe("moderation audit controls", () => {
         plan: "Review ten completed contributions before new sponsorship.",
       }),
     }));
+  });
+
+  it("refreshes the moderation queue once after a successful dismissal and keeps the success feedback", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ audit: { state: "DISMISSED" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ModerationControls auditId={auditId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reason for audit decision"), {
+      target: { value: "The paired evidence does not support this audit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss audit" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Audit for mira was dismissed.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the moderation queue once after a successful substantiation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ audit: { state: "SUBSTANTIATED" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ModerationControls auditId={auditId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reason for audit decision"), {
+      target: { value: "The evidence is sufficient." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Substantiate audit" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Audit for mira was substantiated.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the recalibration list once after a successful reactivation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ recalibration: { targetState: "ACTIVE" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RecalibrationPlanControl targetAccountId="account-7" targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Recalibration plan for mira"), {
+      target: { value: "Review ten completed contributions before new sponsorship." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate account" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("mira was reactivated"));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh the moderation queue when a decision is refused", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: "CONFLICT", message: "This audit was already resolved." } }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ModerationControls auditId={auditId} targetLogin="mira" />);
+
+    fireEvent.change(screen.getByLabelText("Reason for audit decision"), {
+      target: { value: "The evidence is sufficient." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Substantiate audit" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("This audit was already resolved.");
+    });
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

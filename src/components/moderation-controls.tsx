@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type AuditAction = "dismiss" | "substantiate";
@@ -15,6 +16,7 @@ type ModerationResponse = {
 };
 
 export function ModerationControls({ auditId, targetLogin }: ModerationControlsProps) {
+  const router = useRouter();
   const [reason, setReason] = useState("");
   const [pendingAction, setPendingAction] = useState<AuditAction | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -47,6 +49,7 @@ export function ModerationControls({ auditId, targetLogin }: ModerationControlsP
         kind: "success",
         message: `Audit for ${targetLogin} was ${action === "dismiss" ? "dismissed" : "substantiated"}.`,
       });
+      router.refresh();
     } catch {
       setFeedback({
         kind: "error",
@@ -104,6 +107,7 @@ export function RecalibrationPlanControl({
   targetAccountId: string;
   targetLogin: string;
 }) {
+  const router = useRouter();
   const [plan, setPlan] = useState("");
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -132,6 +136,7 @@ export function RecalibrationPlanControl({
         return;
       }
       setFeedback({ kind: "success", message: `${targetLogin} was reactivated with the recorded plan.` });
+      router.refresh();
     } catch {
       setFeedback({ kind: "error", message: "The recalibration control could not reach Overflow. Try again." });
     } finally {
