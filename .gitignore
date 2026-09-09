@@ -129,6 +129,7 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/format-signed.ts
 !src/lib/plural.ts
 !src/lib/async/
 src/lib/async/*
