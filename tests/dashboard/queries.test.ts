@@ -497,6 +497,7 @@ describe("dashboard projections", () => {
           created_at: "2026-09-03T00:00:00.000Z",
         },
       ],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -558,6 +559,7 @@ describe("dashboard projections", () => {
         },
       ],
       [],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -585,6 +587,7 @@ describe("dashboard projections", () => {
         },
       ],
       [],
+      [],
     ]);
 
     await expect(getDashboard("member-1", { sql })).rejects.toThrow(
@@ -610,6 +613,7 @@ describe("dashboard projections", () => {
           reconciliation_last_failure_at: null,
         },
       ],
+      [],
       [],
     ]);
 
@@ -643,6 +647,7 @@ describe("dashboard projections", () => {
       [],
       [],
       [],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -657,7 +662,50 @@ describe("dashboard projections", () => {
       openClaims: [],
       registeredRepositories: [],
       enforcementNotices: [],
+      openAudit: null,
     });
+  });
+
+  it("projects the account's open audit, and null when none is open", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [],
+      [],
+      [{ id: "audit-1", opened_at: "2026-09-04T00:00:00.000Z" }],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.openAudit).toEqual({ id: "audit-1", openedAt: "2026-09-04T00:00:00.000Z" });
+    const auditSql = captures[5]?.text ?? "";
+    expect(auditSql).toMatch(/from calibration_audits/i);
+    expect(auditSql).toMatch(
+      /where calibration_audits\.account_id = \?\s+and calibration_audits\.state = 'OPEN'/i,
+    );
+    // The notice rides the open audit alone: nothing in the read consults the
+    // enforcement state or any moderator-facing column.
+    expect(auditSql).not.toMatch(
+      /enforcement_state|rationale|decision|cohort_|sample_|reporter|moderator/i,
+    );
+    expect(auditSql).not.toMatch(/encrypted_oauth_token|access_token|webhook_secret|credential/i);
+    expect(captures[5]?.values).toEqual(["member-1"]);
+  });
+
+  it("leaves the open audit out of the projection when no audit is open", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [],
+      [],
+      [],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.openAudit).toBeNull();
   });
 
   it("projects recent settlement proof links without credentials, secrets, or churn fields", async () => {
@@ -680,6 +728,7 @@ describe("dashboard projections", () => {
           settled_at: "2026-09-03T00:00:00.000Z",
         },
       ],
+      [],
       [],
       [],
       [],
@@ -748,6 +797,7 @@ describe("dashboard projections", () => {
       [],
       [],
       [],
+      [],
     ]);
 
     const dashboard = await getDashboard("member-1", { sql });
@@ -780,6 +830,7 @@ describe("dashboard projections", () => {
           settled_at: "2026-09-03T00:00:00.000Z",
         },
       ],
+      [],
       [],
       [],
       [],
@@ -1195,6 +1246,7 @@ describe("ambiguous claim assignee sentinel", () => {
       [],
       [],
       [],
+      [],
     ]);
 
     await getDashboard("sponsor-1", { sql });
@@ -1387,6 +1439,7 @@ function failingRepositoryResponses(lastFailureAt: unknown): unknown[][] {
         reconciliation_last_failure_at: lastFailureAt,
       },
     ],
+    [],
     [],
   ];
 }
