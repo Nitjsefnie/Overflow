@@ -1,24 +1,18 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
-import type { Profile } from "next-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { encryptToken } from "@/lib/security/token-cipher";
+import {
+  decideGitHubSignIn,
+  readGitHubIdentity,
+  type GitHubIdentity,
+  type PersistedGitHubUser,
+} from "@/lib/auth/sign-in-decision";
 
 export const githubOAuthScope = "admin:repo_hook";
-
-type PersistedGitHubUser = {
-  id: string;
-  role: UserRole;
-};
-
-type GitHubIdentity = {
-  githubUserId: number;
-  login: string;
-  avatarUrl: string | null;
-};
 
 export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -29,18 +23,11 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   callbacks: {
     async signIn({ account, profile }) {
-      const identity = readGitHubIdentity(profile);
-      const accessToken = account?.access_token;
-      if (identity === null || typeof accessToken !== "string" || accessToken.length === 0) {
-        return false;
-      }
-
-      try {
-        await upsertGitHubIdentity(identity, accessToken);
-        return true;
-      } catch {
-        return false;
-      }
+      return decideGitHubSignIn({
+        profile,
+        accessToken: account?.access_token,
+        persist: upsertGitHubIdentity,
+      });
     },
     async jwt({ token, profile }) {
       const identity = readGitHubIdentity(profile);
@@ -132,29 +119,4 @@ async function findGitHubUser(githubUserId: number): Promise<PersistedGitHubUser
     limit 1
   `;
   return user ?? null;
-}
-
-function readGitHubIdentity(profile: Profile | undefined): GitHubIdentity | null {
-  if (profile === undefined) {
-    return null;
-  }
-
-  const githubUserId = typeof profile.id === "number" ? profile.id : Number(profile.id);
-  const login = profile.login;
-  const avatarUrl = profile.avatar_url;
-  if (
-    !Number.isSafeInteger(githubUserId) ||
-    githubUserId <= 0 ||
-    typeof login !== "string" ||
-    login.trim().length === 0 ||
-    (avatarUrl !== undefined && avatarUrl !== null && typeof avatarUrl !== "string")
-  ) {
-    return null;
-  }
-
-  return {
-    githubUserId,
-    login,
-    avatarUrl: typeof avatarUrl === "string" ? avatarUrl : null,
-  };
 }
