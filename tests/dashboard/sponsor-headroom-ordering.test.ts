@@ -70,7 +70,8 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
 
   /**
    * The tier boundaries, isolated: the zero cliff, balance-size neutrality,
-   * the minus-ten demotion, and the display field every row still carries.
+   * the inclusive minus-ten boundary, the demotion past it, and the display
+   * field every row still carries.
    */
   describe("the tier boundaries", () => {
     let container: StartedTestContainer | undefined;
@@ -100,15 +101,16 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
     });
 
     it("orders the whole board by tier before reserve points", async () => {
-      // Tier 0: Erin (+50) and Flor (+500). Tier 1: Carol (-5), Dave (0),
-      // Hank (0). Tier 2: Gail (-11). Inside each tier, reserve points desc
-      // then created_at asc.
+      // Tier 0: Erin (+50) and Flor (+500). Tier 1: Carol (-5), Nina (-10),
+      // Dave (0), Hank (0). Tier 2: Gail (-11). Inside each tier, reserve
+      // points desc then created_at asc.
       const board = await listEligibleIssues(seededTiers.viewerId);
 
       expect(board.map((row) => row.title)).toEqual([
         "erin five",
         "flor five",
         "carol ten",
+        "nina ten",
         "dave five",
         "hank five",
         "gail ten",
@@ -144,10 +146,24 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       expect(positionOf("hank five")).toBeLessThan(positionOf("gail ten"));
     });
 
+    it("keeps a sponsor at exactly minus ten in the balanced tier, above the demoted one", async () => {
+      // Nina sits exactly on the boundary: zero balance, one outsider-claimed
+      // ten-pointer. The boundary is inclusive, so she shares the balanced
+      // tier and outranks Hank's lower reserve per the standing keys, above
+      // the demoted Gail below her. A boundary mutated to exclusive
+      // (`> -10`) drops Nina into the demoted tier, behind Gail's older
+      // ten-pointer, and behind Hank — both assertions fire on that mutant.
+      const board = await listEligibleIssues(seededTiers.viewerId);
+      const positionOf = (title: string) => board.findIndex((row) => row.title === title);
+
+      expect(positionOf("nina ten")).toBeLessThan(positionOf("gail ten"));
+      expect(positionOf("nina ten")).toBeLessThan(positionOf("hank five"));
+    });
+
     it("keeps the available-headroom display field on every returned row", async () => {
       const board = await listEligibleIssues(seededTiers.viewerId);
 
-      expect(board).toHaveLength(6);
+      expect(board).toHaveLength(7);
       for (const row of board) {
         expect(row.availableHeadroom).toBeDefined();
       }
@@ -156,6 +172,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
           ["erin five", 50],
           ["flor five", 500],
           ["carol ten", -5],
+          ["nina ten", -10],
           ["dave five", 0],
           ["hank five", 0],
           ["gail ten", -11],
@@ -227,6 +244,13 @@ async function seedTierWorld(): Promise<void> {
   await insertIssue({ repositoryId: gailRepo, issueNumber: 1, title: "gail drawn ten", points: 10, createdAt: "2026-01-12T00:00:00.000Z", assigneeLogin: "drifter-5", assigneeId: 920_002 });
   await insertIssue({ repositoryId: gailRepo, issueNumber: 2, title: "gail drawn one", points: 1, createdAt: "2026-01-13T00:00:00.000Z", assigneeLogin: "drifter-6", assigneeId: 920_003 });
   await insertIssue({ repositoryId: gailRepo, issueNumber: 3, title: "gail ten", points: 10, createdAt: "2026-04-01T00:00:00.000Z" });
+
+  // Nina: exactly on the boundary — zero balance, one outsider-claimed
+  // ten-pointer puts her at minus ten, the inclusive edge of the balanced tier.
+  const ninaId = await insertMember("nina", 820_008);
+  const ninaRepo = await insertRepository("nina/moor", ninaId);
+  await insertIssue({ repositoryId: ninaRepo, issueNumber: 1, title: "nina drawn", points: 10, createdAt: "2026-01-14T00:00:00.000Z", assigneeLogin: "drifter-7", assigneeId: 920_004 });
+  await insertIssue({ repositoryId: ninaRepo, issueNumber: 2, title: "nina ten", points: 10, createdAt: "2026-06-01T00:00:00.000Z" });
 
   // Hank: untouched zero balance — tier 1.
   const hankRepo = await insertRepository("hank/dale", hankId);
