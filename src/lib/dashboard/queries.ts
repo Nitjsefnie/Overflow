@@ -531,7 +531,11 @@ export async function getDashboard(
         where repositories.sponsor_id = ${accountId}
           and issues.state = 'OPEN'
           and issues.claim_assignee_github_login is not null
-          and lower(issues.claim_assignee_github_login) <> lower(sponsors.github_login)
+          -- Claimed-ness is the login's existence; who claims is decided by the
+          -- immutable account id (migrations 013 and 032). IS DISTINCT FROM so a
+          -- claimed issue whose assignee id is not yet reconciled cannot prove
+          -- self-assignment and stays reserved until GitHub backfills it.
+          and issues.claim_assignee_github_user_id is distinct from sponsors.github_user_id
       ), 0)::integer as reserved_points,
       (select users.enforcement_state::text from users where users.id = ${accountId}) as enforcement_state
   `;
@@ -688,7 +692,10 @@ export async function listEligibleIssues(
           )
             and reserved.state = 'OPEN'
             and reserved.claim_assignee_github_login is not null
-            and lower(reserved.claim_assignee_github_login) <> lower(sponsors.github_login)
+            -- Same identity rule as getDashboard's reserved_points above: the
+            -- login decides claimed-ness only, the account id decides who
+            -- claims, and a null id counts as reserved until reconciled.
+            and reserved.claim_assignee_github_user_id is distinct from sponsors.github_user_id
         ), 0)
       )::integer as available_headroom,
       issues.created_at
