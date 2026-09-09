@@ -2353,6 +2353,37 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(perIssueReads).toBe(1);
   });
 
+  it("surfaces a held GraphQL request budget during the repository-wide manifest walk", async () => {
+    const pages: string[] = [];
+    let manifestReads = 0;
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/events") || url.pathname.endsWith("/issues/comments")) {
+        const page = Number(url.searchParams.get("page"));
+        const collection = url.pathname.endsWith("/issues/events") ? "events" : "comments";
+        pages.push(`${collection}:${page}`);
+        manifestReads += 1;
+        const link = page === 1
+          ? `<${url.origin}${url.pathname}?page=2>; rel="next", <${url.origin}${url.pathname}?page=25>; rel="last"`
+          : `<${url.origin}${url.pathname}?page=${page + 1}>; rel="next"`;
+        return Response.json([], { headers: { link } });
+      }
+      const { query } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Held during walk", { nodes: [], pageInfo })], pageInfo } } } });
+      return countsResponse({ number1: 1 }, () => 0);
+    } });
+    // The estimate (25 + 25 = 50) fits, the walk starts, and the hold engages
+    // after the walk's first continuation page: the gate inside readPage must
+    // stop the walk before its next request.
+    const held = withGraphqlRequestBudget(
+      () => manifestReads >= 3 ? new Date("2026-09-09T00:10:00Z") : null,
+      () => gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions),
+    );
+    await expect(held).rejects.toThrow("Reconciliation GraphQL budget is below reserve.");
+    expect(pages).toEqual(["events:1", "comments:1", "events:2"]);
+  });
+
   it("still refuses a reread that the fresh evidence pair also contradicts", async () => {
     const fullTruth = [openingEvent(1), settledEvent, rationale];
     const short = [openingEvent(1), settledEvent];
