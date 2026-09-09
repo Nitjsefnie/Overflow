@@ -201,4 +201,32 @@ describe("settlement proof page", () => {
     expect(effect).toHaveTextContent(/^−1,234\.5$/);
     expect(effect).not.toHaveTextContent("−1234.5");
   });
+
+  it("drops a data-carried catalog name from both proof cells' values", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{
+          ...settlementRow,
+          opening_name: "perceived difficulty",
+          actual_name: "difficulty experienced",
+          opening_label: "perceived difficulty: 3",
+          settled_label: "difficulty experienced: 4",
+        }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const opening = screen.getByText("perceived difficulty").nextElementSibling;
+    expect(opening).toHaveTextContent(/^3 · 7$/);
+    expect(opening).not.toHaveTextContent("perceived difficulty");
+
+    const settled = screen.getByText("difficulty experienced").nextElementSibling;
+    expect(settled).toHaveTextContent(/^4 · 4$/);
+    expect(settled).not.toHaveTextContent("difficulty experienced");
+  });
 });
