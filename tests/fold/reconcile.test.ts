@@ -803,6 +803,62 @@ describe("reconcileRepository", () => {
     }
   });
 
+  it("keeps a discarded pull request's last-known evidence flowing until the next full pass", async () => {
+    // Incremental pass: the pull request is dirty and cached, the refresh
+    // fails with the production-true REST shape for the diff leg, and the
+    // cached entry keeps flowing instead of being blanked. The final
+    // assertion also pins the refresh filter's selection: a dirty cached
+    // pull request is in the refresh set.
+    const cachedReview = {
+      id: 3001,
+      state: "CHANGES_REQUESTED" as const,
+      submittedAt: "2026-09-01T09:30:00.000Z",
+      dismissal: null,
+    };
+    const dependencies = reconciliationDependencies({
+      github: {
+        getPullRequestReviews: vi.fn().mockResolvedValue([]),
+        getPullRequestDiff: vi.fn(async () => {
+          throw new GitHubApiError(404);
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+    ];
+    const discard = vi.fn().mockResolvedValue(undefined);
+    dependencies.store.discardDirtyReconciliationSubject = discard;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(discard).toHaveBeenCalledWith({
+        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
+      });
+      expect(dependencies.store.failRun).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=NOT_FOUND",
+      );
+      const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+      expect(materializeInput.synchronization?.pullRequests).toEqual([
+        { id: 201, reviews: [cachedReview], rawDiff: "cached diff" },
+      ]);
+      expect(vi.mocked(dependencies.github.getPullRequestDiff).mock.calls.map(([, number]) => number)).toEqual([11]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("fails the run without discarding when a merged closing pull request's evidence fetch fails transiently", async () => {
     const transient = new GitHubApiError(403, true, 60);
     const dependencies = reconciliationDependencies({

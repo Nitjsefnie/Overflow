@@ -404,16 +404,21 @@ function isPullRequestEvidenceGone(error: unknown): boolean {
 }
 
 // A pull request's evidence read draws the same subject-alone arm the
-// per-subject reads draw: a NOT_FOUND for a pull request is definitive for
-// the subject, not a property of the run — the sweep revives FAILED jobs and
-// would retry the run forever — so the subject's dirty row, when one exists,
-// is discarded (keyed with its generation, so a genuine re-enqueue still
-// reconciles) and the subject is omitted from the returned evidence map. The
-// snapshot reads a missing evidence entry as reviews [] / rawDiff "" rather
-// than failing the fold. Every other class — a rate limit with its cooldown
-// path, auth, 5xx, network, the GraphQL budget held — is transient or
-// run-invalidating and rethrows, keeping whole-run retry; no other class
-// joins this arm.
+// per-subject reads draw: a gone pull request is definitive for the
+// subject, not a property of the run — the sweep revives FAILED jobs and
+// would retry the run forever — so the subject's dirty row, when one
+// exists, is discarded (keyed with its generation, so a genuine re-enqueue
+// still reconciles) and the subject is omitted from the returned evidence
+// map. Omission is therefore read two ways: a subject the evidence cache
+// has never seen falls back to reviews [] / rawDiff "" in the snapshot,
+// while one the cache already holds keeps its last-known evidence until
+// the next full pass (at most six hours), because refreshed entries merge
+// over the cache and nothing erases a cached subject that stops
+// refreshing. Blank it instead and a probably-transient read failure
+// blanks a settlement's proof to the empty diff. Every other class — a
+// rate limit with its cooldown path, auth, 5xx, network, the GraphQL
+// budget held — is transient or run-invalidating and rethrows, keeping
+// whole-run retry; no other class joins this arm.
 async function collectPullRequestEvidence(
   github: ReconciliationGateway,
   reference: GitHubRepositoryReference,
