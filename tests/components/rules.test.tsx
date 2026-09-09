@@ -23,11 +23,11 @@ describe("rules page", () => {
     expect(screen.getByText("Grace Hopper")).toBeVisible();
   });
 
-  it("exposes five named section landmarks", () => {
+  it("exposes six named section landmarks", () => {
     render(<RulesContent memberName="Ada" isModerator={false} />);
 
     const regions = screen.getAllByRole("region");
-    expect(regions).toHaveLength(5);
+    expect(regions).toHaveLength(6);
     for (const region of regions) {
       expect(region).toHaveAccessibleName();
     }
