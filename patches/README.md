@@ -728,9 +728,14 @@ email on file, `find` returns `undefined`, and the sign-in throws
 `TypeError: Cannot read properties of undefined (reading 'email')` instead of
 refusing with a named reason. Runtime-reproduced against both the installed
 build and the published `@auth/core@0.41.3` from npm; the repro script and its
-output are posted on Overflow issue 308, and the same defect is reported
-upstream, still carried on upstream `main` as of 2026-09-09, at
-https://github.com/nextauthjs/next-auth/issues/13494.
+output are posted on Overflow issue 308, and the defect is reported upstream,
+still carried on upstream `main` as of 2026-09-09. The first filing,
+https://github.com/nextauthjs/next-auth/issues/13494, was closed the same day
+by the project's triage bot for want of a public reproduction link, so the
+defect was refiled with a public repro repository
+(Nitjsefnie/next-auth-github-emails-repro) at
+https://github.com/nextauthjs/next-auth/issues/13495 — the live upstream
+record.
 
 The stock branch is dead in production. Overflow PR 307 overrides the
 provider's `userinfo` request with `requestGitHubPublicIdentity` in
