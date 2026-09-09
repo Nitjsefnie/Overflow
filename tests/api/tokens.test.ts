@@ -9,9 +9,14 @@ import {
 import { apiTokenPrefix, hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import {
   createApiTokenPostHandler,
+  POST as productionPost,
   type ApiTokenIssuer,
   type ApiTokenRouteDependencies,
 } from "@/app/api/tokens/route";
+
+const { productionAuth } = vi.hoisted(() => ({ productionAuth: vi.fn() }));
+
+vi.mock("@/auth", () => ({ auth: productionAuth }));
 
 useTrustedOrigin();
 
@@ -178,6 +183,22 @@ describe("POST /api/tokens", () => {
     });
     expect(getSession).not.toHaveBeenCalled();
     expect(createTokenStore).not.toHaveBeenCalled();
+  });
+
+  // The invariant at the production wiring, not only through injected
+  // dependencies: a syntactically valid ovf_ credential in the Authorization
+  // header and no session is 401, because the production route module never
+  // wires a token lookup at all. A token cannot mint its successor.
+  it("refuses a syntactically valid bearer token with no session through the production route", async () => {
+    productionAuth.mockResolvedValueOnce(null);
+    const { token } = mintApiToken();
+
+    const response = await productionPost(mintRequest({ authorization: `Bearer ${token}` }));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
   });
 });
 
