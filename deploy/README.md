@@ -127,7 +127,12 @@ A first installation has no serving release: nothing serves while this section
 runs, and the release built here first serves after its switch, when section 6
 starts the service. The migrate-then-build window that section 10's migration
 check guards does not exist on this path — there is no previous release to
-serve against the new schema — so the check is not part of this flow.
+serve against the new schema — so the check is not part of this flow. A host
+being hardened by sections 1 and 6 is the exception: its old deployment still
+serves from the previous checkout while this section runs, so section 10's
+migration check applies on that path too. Carry the check out before this
+section's migrate step, and treat whatever is serving at migrate time as the
+previous release for the test.
 
 ```bash
 set -e
