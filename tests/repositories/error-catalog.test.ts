@@ -620,6 +620,15 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async findRepositoryByGitHubId() {
         return null;
       },
+      async findRepositoryRegistrationStateByOwnerName() {
+        return null;
+      },
+      async findRepositoryRegistrationState() {
+        return null;
+      },
+      async unregisterRepository(): Promise<never> {
+        throw new Error("The registration reached the store without an injected failure.");
+      },
       // Loud so a failure case that reaches the store without having raised its own failure is a
       // failed case, not a silently different registration outcome.
       async createRepository(): Promise<never> {

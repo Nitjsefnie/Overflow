@@ -403,6 +403,245 @@ describe("changing a registered repository's difficulty catalog", () => {
   }
 });
 
+describe("unregistering a repository against the real registered_repositories constraints", () => {
+  let container: StartedTestContainer | undefined;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "registration_unregistration",
+      user: "registration_unregistration",
+      password: "registration_unregistration",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = getSql();
+    await runMigrations();
+    store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
+  });
+
+  afterAll(async () => {
+    await closeSql();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
+  });
+
+  it("unregisters the sponsor's own active repository and deactivates the row", async () => {
+    const submission = await registeredViaStore();
+
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+    })).resolves.toMatchObject({
+      kind: "UNREGISTERED",
+      repository: {
+        githubRepositoryId: submission.githubRepositoryId,
+        ownerName: submission.ownerName,
+        sponsorId: submission.sponsorId,
+        visibility: "PUBLIC",
+        githubWebhookId: submission.githubWebhookId,
+      },
+    });
+
+    const [row] = await sql<UnregistrationRow[]>`
+      select active, unregistered_at
+      from registered_repositories
+      where owner_name = ${submission.ownerName}
+    `;
+    expect(row.active).toBe(false);
+    expect(row.unregistered_at).not.toBeNull();
+  });
+
+  it("refuses a non-sponsor and leaves the active row untouched", async () => {
+    const submission = await registeredViaStore();
+
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: await sponsor(),
+    })).resolves.toEqual({ kind: "FORBIDDEN" });
+
+    const [row] = await sql<UnregistrationRow[]>`
+      select active, unregistered_at
+      from registered_repositories
+      where owner_name = ${submission.ownerName}
+    `;
+    expect(row.active).toBe(true);
+    expect(row.unregistered_at).toBeNull();
+  });
+
+  it("answers NOT_REGISTERED for an owner name no registration holds", async () => {
+    await expect(store.unregisterRepository({
+      ownerName: `registration/nobody-${externalId++}`,
+      sponsorId: await sponsor(),
+    })).resolves.toEqual({ kind: "NOT_REGISTERED" });
+  });
+
+  it("reads a repeat unregister as already unregistered without writing", async () => {
+    const submission = await registeredViaStore();
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    const [afterFirst] = await sql<UnregistrationRow[]>`
+      select active, unregistered_at, updated_at
+      from registered_repositories
+      where owner_name = ${submission.ownerName}
+    `;
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+    })).resolves.toMatchObject({
+      kind: "ALREADY_UNREGISTERED",
+      repository: { githubRepositoryId: submission.githubRepositoryId },
+    });
+
+    const [afterSecond] = await sql<UnregistrationRow[]>`
+      select active, unregistered_at, updated_at
+      from registered_repositories
+      where owner_name = ${submission.ownerName}
+    `;
+    expect(afterSecond.active).toBe(false);
+    expect(afterSecond.unregistered_at).toEqual(afterFirst.unregistered_at);
+    expect(afterSecond.updated_at).toEqual(afterFirst.updated_at);
+  });
+
+  // The invariant the migration's check constraint pins: a still-active row was never
+  // unregistered. Unregistering satisfies it because the write deactivates in the same
+  // statement; a write that flips unregistered_at alone must be refused by the database.
+  it("refuses an unregistration instant on a still-active row", async () => {
+    const held = await registeredRepository();
+
+    await expect(sql`
+      update registered_repositories
+      set unregistered_at = ${new Date()}
+      where owner_name = ${held.ownerName}
+    `).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "registered_repositories_unregister_state_check",
+    });
+  });
+
+  it("reactivates a sponsor-unregistered registration with the submitted catalog as the next version", async () => {
+    const submission = await registeredViaStore();
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    const resubmission = newRepository({
+      sponsorId: submission.sponsorId,
+      githubRepositoryId: submission.githubRepositoryId,
+      ownerName: submission.ownerName,
+      difficultyScheme: changedScheme(),
+    });
+    expect(resubmission.githubWebhookId).not.toBe(submission.githubWebhookId);
+
+    await expect(store.createRepository(resubmission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+      githubWebhookId: resubmission.githubWebhookId,
+    });
+
+    const [row] = await sql<{ active: boolean; unregistered_at: Date | string | null; difficulty_scheme: unknown }[]>`
+      select active, unregistered_at, difficulty_scheme
+      from registered_repositories
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(row.active).toBe(true);
+    expect(row.unregistered_at).toBeNull();
+    expect(row.difficulty_scheme).toEqual(changedScheme());
+
+    const versions = await sql<VersionRow[]>`
+      select version_number, scheme
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+      order by version_number
+    `;
+    expect(versions.map((version) => version.scheme)).toEqual([difficultyScheme(), changedScheme()]);
+    expect(Number(versions[1]!.version_number)).toBe(2);
+  });
+
+  it("appends a version on reactivation even when the resubmitted catalog is identical", async () => {
+    const submission = await registeredViaStore();
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+    })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    const resubmission = newRepository({
+      sponsorId: submission.sponsorId,
+      githubRepositoryId: submission.githubRepositoryId,
+      ownerName: submission.ownerName,
+    });
+
+    await expect(store.createRepository(resubmission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+
+    const versions = await sql<VersionRow[]>`
+      select version_number, scheme
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+      order by version_number
+    `;
+    expect(versions.map((version) => version.scheme)).toEqual([difficultyScheme(), difficultyScheme()]);
+    expect(Number(versions[1]!.version_number)).toBe(2);
+  });
+
+  it("answers null when the held identity belongs to a moderation-deactivated registration", async () => {
+    const submission = await registeredViaStore();
+    await sql`
+      update registered_repositories
+      set active = false
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+
+    const resubmission = newRepository({
+      sponsorId: submission.sponsorId,
+      githubRepositoryId: submission.githubRepositoryId,
+      ownerName: submission.ownerName,
+    });
+    await expect(store.createRepository(resubmission)).resolves.toBeNull();
+
+    const [row] = await sql<{ active: boolean; unregistered_at: Date | string | null }[]>`
+      select active, unregistered_at
+      from registered_repositories
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(row.active).toBe(false);
+    expect(row.unregistered_at).toBeNull();
+    const versions = await sql<{ count: number | string }[]>`
+      select count(*) as count
+      from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(Number(versions[0]!.count)).toBe(1);
+  });
+
+  // The catalog-change tests register through the store rather than the direct insert
+  // above: a registration that never passed through createRepository carries no catalog
+  // version history for a reactivation's append to continue.
+  async function registeredViaStore(scheme: DifficultyScheme = difficultyScheme()): Promise<NewRegisteredRepository> {
+    const submission = newRepository({ sponsorId: await sponsor(), difficultyScheme: scheme });
+    await expect(store.createRepository(submission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+    return submission;
+  }
+});
+
+type UnregistrationRow = {
+  active: boolean;
+  unregistered_at: Date | string | null;
+  updated_at: Date | string | null;
+};
+
 describe("raising a database error the registration store must not convert", () => {
   it("rethrows a unique violation on a constraint neither conflict branch recognises", async () => {
     const reported = { code: "23505", constraint_name: "registered_repositories_pkey" };

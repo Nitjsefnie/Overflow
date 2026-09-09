@@ -9,7 +9,9 @@ import type {
   NewRegisteredRepository,
   RegisteredRepository,
   RepositoryCatalogChange,
+  RepositoryRegistrationState,
   RepositoryRegistrationStore,
+  RepositoryUnregisterOutcome,
 } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
@@ -28,6 +30,10 @@ type RepositoryRow = {
   sponsor_id: string;
   visibility: "PUBLIC" | "PRIVATE";
   github_webhook_id: number | string;
+};
+
+type RepositoryStateRow = RepositoryRow & {
+  unregistered_at: Date | null;
 };
 
 type OAuthTokenRow = {
@@ -60,13 +66,109 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     return row === undefined ? null : toRegisteredRepository(row);
   }
 
+  public async findRepositoryRegistrationStateByOwnerName(ownerName: string): Promise<RepositoryRegistrationState | null> {
+    const [row] = await this.sql<RepositoryStateRow[]>`
+      select
+        id,
+        github_repository_id,
+        owner_name,
+        sponsor_id,
+        visibility,
+        github_webhook_id,
+        unregistered_at
+      from registered_repositories
+      where owner_name = ${ownerName}
+      limit 1
+    `;
+    return row === undefined ? null : toRegistrationState(row);
+  }
+
+  public async findRepositoryRegistrationState(githubRepositoryId: number): Promise<RepositoryRegistrationState | null> {
+    const [row] = await this.sql<RepositoryStateRow[]>`
+      select
+        id,
+        github_repository_id,
+        owner_name,
+        sponsor_id,
+        visibility,
+        github_webhook_id,
+        unregistered_at
+      from registered_repositories
+      where github_repository_id = ${githubRepositoryId}
+      limit 1
+    `;
+    return row === undefined ? null : toRegistrationState(row);
+  }
+
+  public async unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome> {
+    return await this.sql.begin(async (transaction) => {
+      // The row lock holds to the end of the transaction, so the sponsor
+      // check, the unregistered_at check and the write all see one committed
+      // state: two racing unregister calls resolve sequentially, and a
+      // concurrent createRepository reactivation cannot interleave between
+      // them.
+      const [row] = await transaction<RepositoryStateRow[]>`
+        select
+          id,
+          github_repository_id,
+          owner_name,
+          sponsor_id,
+          visibility,
+          github_webhook_id,
+          unregistered_at
+        from registered_repositories
+        where owner_name = ${input.ownerName}
+        limit 1
+        for update
+      `;
+      if (row === undefined) {
+        return { kind: "NOT_REGISTERED" };
+      }
+      if (row.sponsor_id !== input.sponsorId) {
+        return { kind: "FORBIDDEN" };
+      }
+      if (row.unregistered_at !== null) {
+        return { kind: "ALREADY_UNREGISTERED", repository: toRegisteredRepository(row) };
+      }
+
+      // active and unregistered_at move in one statement so the check
+      // constraint's invariant — an active row was never unregistered —
+      // holds in every committed state.
+      const [updated] = await transaction<RepositoryRow[]>`
+        update registered_repositories
+        set active = false, unregistered_at = now(), updated_at = now()
+        where id = ${row.id} and sponsor_id = ${input.sponsorId}
+        returning
+          id,
+          github_repository_id,
+          owner_name,
+          sponsor_id,
+          visibility,
+          github_webhook_id
+      `;
+      // Unreachable through the flow above — the lock guarantees the row —
+      // but a zero-row write after a passed sponsor lock must not read as
+      // success.
+      if (updated === undefined) {
+        return { kind: "NOT_REGISTERED" };
+      }
+      return { kind: "UNREGISTERED", repository: toRegisteredRepository(updated) };
+    });
+  }
+
   public async createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null> {
     try {
       // The registration and its first catalog version are one statement, so a
       // repository row never exists without the version that governs from its
       // registration instant. `now()` is transaction time, the same instant
-      // created_at records, and `inserted` is empty on an on-conflict skip, so
-      // a re-submitted registration seeds no version either.
+      // created_at records. An on-conflict insert fires its update only when
+      // the held row carries an unregistration instant — the sponsor left, so
+      // the resubmission reactivates that same row, moving the stored catalog
+      // and appending the submitted one as the next version (the versions
+      // table's key is (github_repository_id, version_number), so a second
+      // version 1 would fail every re-registration). On a where-clause skip
+      // `inserted` is empty, so a still-registered resubmission seeds no
+      // version either.
       const [row] = await this.sql<RepositoryRow[]>`
         with eligible_sponsor as (
           select id
@@ -92,7 +194,16 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             ${repository.githubWebhookId},
             ${this.sql.json(repository.difficultyScheme)}
           from eligible_sponsor
-          on conflict (github_repository_id) do nothing
+          on conflict (github_repository_id) do update set
+            owner_name = excluded.owner_name,
+            sponsor_id = excluded.sponsor_id,
+            visibility = excluded.visibility,
+            github_webhook_id = excluded.github_webhook_id,
+            difficulty_scheme = excluded.difficulty_scheme,
+            active = true,
+            unregistered_at = null,
+            updated_at = now()
+          where registered_repositories.unregistered_at is not null
           returning
             id,
             github_repository_id,
@@ -110,7 +221,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           )
           select
             inserted.github_repository_id,
-            1,
+            coalesce((
+              select max(version_number)
+              from repository_difficulty_scheme_versions
+              where github_repository_id = inserted.github_repository_id
+            ), 0) + 1,
             ${this.sql.json(repository.difficultyScheme)},
             now()
           from inserted
@@ -285,6 +400,13 @@ function toRegisteredRepository(row: RepositoryRow): RegisteredRepository {
     sponsorId: row.sponsor_id,
     visibility: row.visibility,
     githubWebhookId: toSafeInteger(row.github_webhook_id),
+  };
+}
+
+function toRegistrationState(row: RepositoryStateRow): RepositoryRegistrationState {
+  return {
+    repository: toRegisteredRepository(row),
+    unregisteredAt: row.unregistered_at === null ? null : timestampToIso(row.unregistered_at),
   };
 }
 

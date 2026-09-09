@@ -737,6 +737,18 @@ function createHarness(options: HarnessOptions = {}) {
         duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
       },
+      async findRepositoryRegistrationStateByOwnerName() {
+        return null;
+      },
+      async findRepositoryRegistrationState(githubRepositoryId) {
+        duplicateLookupIds.push(githubRepositoryId);
+        return options.existing === null || options.existing === undefined
+          ? null
+          : { repository: options.existing, unregisteredAt: null };
+      },
+      async unregisterRepository() {
+        throw new Error("the flow reached the unregister write without an injected outcome");
+      },
       async appendDifficultySchemeVersion() {
         return null;
       },
