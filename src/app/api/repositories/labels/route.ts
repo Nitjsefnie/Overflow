@@ -42,6 +42,27 @@ export async function GET(request: Request): Promise<Response> {
     if (error instanceof GitHubApiError && error.status === 401) {
       return errorResponse(401, "GITHUB_CREDENTIALS", "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.");
     }
+    // Issue 338: a 403 or 404 carrying no rate-limit evidence is GitHub refusing
+    // or withholding the labels read — GitHub answers 404 rather than 403 when
+    // it will not reveal a resource, and a bare 403 cannot separate a missing
+    // application authorization from a secondary rate limit. Same access
+    // vocabulary as the registration endpoint's githubSetupError (register.ts);
+    // a 403 that does carry rate-limit evidence falls through to the
+    // rate-limit arm below.
+    if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
+      if (error.status === 404) {
+        return errorResponse(
+          403,
+          "GITHUB_ACCESS",
+          "GitHub answered 404 for the request to read the repository labels. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.",
+        );
+      }
+      return errorResponse(
+        403,
+        "GITHUB_ACCESS",
+        "GitHub refused to read the repository labels (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry before changing anything. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.",
+      );
+    }
     if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
       const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
       return errorResponse(

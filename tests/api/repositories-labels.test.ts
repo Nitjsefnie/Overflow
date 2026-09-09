@@ -216,6 +216,50 @@ describe("GET /api/repositories/labels", () => {
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
   });
 
+  it("answers a non-rate-limited GitHub 403 with the GITHUB_ACCESS guidance through the real gateway", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
+      new Response("private-body access-token-should-not-leak", {
+        status: 403,
+        headers: { "x-private": "private-header" },
+      })));
+
+    const response = await labelsRoute.GET(labelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      error: {
+        code: "GITHUB_ACCESS",
+        message: "GitHub refused to read the repository labels (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry before changing anything. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+  });
+
+  it("answers a GitHub 404 with the GITHUB_ACCESS guidance through the real gateway", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
+      new Response("private-body access-token-should-not-leak", {
+        status: 404,
+        headers: { "x-private": "private-header" },
+      })));
+
+    const response = await labelsRoute.GET(labelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      error: {
+        code: "GITHUB_ACCESS",
+        message: "GitHub answered 404 for the request to read the repository labels. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+  });
+
   it("reads the repository's labels with the account's stored token", async () => {
     readSession.mockResolvedValue(memberSession());
     stubStoredToken();
