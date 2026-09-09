@@ -242,6 +242,7 @@ h2 {
   align-items: start;
 }
 
+.surface,
 .ledger-card,
 .ledger-note,
 .proof-card,
@@ -250,6 +251,17 @@ h2 {
 .audit-queue,
 .empty-state {
   padding: clamp(1.25rem, 3vw, 2.3rem);
+}
+
+/*
+ * Consecutive card sections in the page column separate by one gap, taken
+ * from the lower section's margin-top so an adjoining edge never sums two
+ * gaps. This ties with the per-card margin rules below on specificity, so it
+ * must stay above them for those to keep their own spacing — the test pins
+ * that placement against `.recent-settlements`.
+ */
+.page-content > * + * {
+  margin-top: 1.5rem;
 }
 
 .ledger-card h2,
@@ -1024,7 +1036,8 @@ button:disabled {
 }
 
 /*
- * The bare `.surface` class carries no padding, so every card names its own.
+ * `.surface` carries the shared card padding, so a card class like this one
+ * names its own top margin; the padding repeated here is the same value.
  */
 .override-card {
   margin-top: 1.5rem;
