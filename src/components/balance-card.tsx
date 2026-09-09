@@ -19,19 +19,19 @@ export function BalanceCard({ dashboard }: BalanceCardProps) {
       <dl className="ledger-totals">
         <div>
           <dt>Earned</dt>
-          <dd>Earned {formatNumber(dashboard.earnedTotal)}</dd>
+          <dd>{formatNumber(dashboard.earnedTotal)}</dd>
         </div>
         <div>
           <dt>Given</dt>
-          <dd>Given {formatNumber(dashboard.givenTotal)}</dd>
+          <dd>{formatNumber(dashboard.givenTotal)}</dd>
         </div>
         <div>
           <dt>Reserved</dt>
-          <dd>Reserved {formatNumber(dashboard.reservedPoints)}</dd>
+          <dd>{formatNumber(dashboard.reservedPoints)}</dd>
         </div>
         <div>
           <dt>Available headroom</dt>
-          <dd>Available headroom {formatUnsignedPositive(dashboard.availableHeadroom)}</dd>
+          <dd>{formatUnsignedPositive(dashboard.availableHeadroom)}</dd>
         </div>
       </dl>
     </section>

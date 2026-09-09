@@ -25,17 +25,15 @@ export function IssueCard({ issue }: IssueCardProps) {
       <dl className="issue-facts">
         <div>
           <dt>{issue.openingName}</dt>
-          <dd>
-            {issue.openingName}: {issue.openingLabel}
-          </dd>
+          <dd>{issue.openingLabel}</dd>
         </div>
         <div>
           <dt>Comparison</dt>
-          <dd>Comparison {issue.comparisonPoints}</dd>
+          <dd>{issue.comparisonPoints}</dd>
         </div>
         <div>
           <dt>Reserve</dt>
-          <dd>Reserve {issue.reservePoints}</dd>
+          <dd>{issue.reservePoints}</dd>
         </div>
       </dl>
     </article>

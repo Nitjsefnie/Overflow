@@ -31,10 +31,7 @@ describe("member dashboard", () => {
 
     expect(screen.getByRole("heading", { name: "Ledger position" })).toBeVisible();
     expect(screen.getByText("+12")).toBeVisible();
-    expect(screen.getByText("Earned 19")).toBeVisible();
-    expect(screen.getByText("Given 7")).toBeVisible();
-    expect(screen.getByText("Reserved 4")).toBeVisible();
-    expect(screen.getByText("Available headroom 8")).toBeVisible();
+    expect(ledgerTotalValues()).toEqual(["19", "7", "4", "8"]);
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
@@ -825,7 +822,7 @@ describe("member dashboard", () => {
       />,
     );
     expect(screen.getByText("−2")).toBeVisible();
-    expect(screen.getByText("Available headroom −6")).toBeVisible();
+    expect(ledgerTotalValues()).toEqual(["1", "3", "4", "−6"]);
 
     rerender(
       <BalanceCard
@@ -838,8 +835,27 @@ describe("member dashboard", () => {
         }}
       />,
     );
-    expect(screen.getByText("0")).toBeVisible();
-    expect(screen.getByText("Available headroom 0")).toBeVisible();
+    expect(document.querySelector(".balance-number")?.textContent).toBe("0");
+    expect(ledgerTotalValues()).toEqual(["5", "5", "0", "0"]);
+  });
+
+  it("renders each ledger total's value alone under its term", () => {
+    render(
+      <BalanceCard
+        dashboard={{
+          settledBalance: 12,
+          earnedTotal: 19,
+          givenTotal: 7,
+          reservedPoints: 4,
+          availableHeadroom: 8,
+        }}
+      />,
+    );
+
+    // The term carries the field name and the value carries only the value —
+    // the figure itself never repeats the term as a prefix.
+    expect(ledgerTotalTerms()).toEqual(["Earned", "Given", "Reserved", "Available headroom"]);
+    expect(ledgerTotalValues()).toEqual(["19", "7", "4", "8"]);
   });
 
   it("keeps moderator navigation and controls out of member sessions", () => {
@@ -858,6 +874,14 @@ describe("member dashboard", () => {
     expect(screen.getByRole("link", { name: "Moderation" })).toHaveAttribute("href", "/moderation");
   });
 });
+
+function ledgerTotalTerms(): string[] {
+  return Array.from(document.querySelectorAll("dl.ledger-totals dt")).map((dt) => dt.textContent);
+}
+
+function ledgerTotalValues(): string[] {
+  return Array.from(document.querySelectorAll("dl.ledger-totals dd")).map((dd) => dd.textContent);
+}
 
 function registered(id: string, ownerName: string): RegisteredRepositoryProjection {
   return {
