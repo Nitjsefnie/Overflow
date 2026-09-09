@@ -205,6 +205,27 @@ describe("registration form spacing stylesheet", () => {
   });
 });
 
+describe("points stamp stylesheet", () => {
+  it("keeps the stamp on the surface with ordinary ink", () => {
+    const stamp = pinnedRule(".points-stamp");
+
+    expect(resolveColor(stamp.declarations.background!)).toBe("#fffaf0");
+    expect(resolveColor(stamp.declarations.color!)).toBe("#181714");
+  });
+
+  it("never wears the fill the primary action button wears", () => {
+    const stamp = pinnedRule(".points-stamp");
+    const actionButton = pinnedRule(".action-button");
+
+    // A read-only stamp beside a catalog row must not read as the primary
+    // action, so its fill can never resolve to the button's fill — however
+    // either declaration spells its color.
+    expect(resolveColor(stamp.declarations.background!)).not.toBe(
+      resolveColor(actionButton.declarations.background!),
+    );
+  });
+});
+
 describe("repository registration form", () => {
   describe.each([
     ["EVIDENCE_FOUND", "success", ""],

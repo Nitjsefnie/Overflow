@@ -573,8 +573,8 @@ dd {
   margin: 0;
   padding: 0.76rem;
   border: 2px solid var(--line);
-  background: var(--credit);
-  color: var(--credit-ink);
+  background: var(--surface);
+  color: var(--ink);
   font-size: 0.8rem;
   font-weight: 800;
   text-align: center;
