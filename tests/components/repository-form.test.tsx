@@ -200,6 +200,7 @@ describe("repository registration form", () => {
   it("reads the actual catalog's point stamps with the plural each count takes", () => {
     render(<RepositoryForm initialValues={initialValues} />);
 
+    expect(screen.queryByText("1 points")).toBeNull();
     expect(screen.getByText("1 point")).toBeVisible();
     expect(screen.getByText("2 points")).toBeVisible();
     expect(screen.getByText("10 points")).toBeVisible();
