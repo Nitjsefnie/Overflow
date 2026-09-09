@@ -1267,7 +1267,7 @@ describe("versioned difficulty catalogs", () => {
     ]);
   });
 
-  it("resolves the opening by the current catalog even for a closure an earlier version prices", () => {
+  it("resolves the opening by the catalog governing the issue's creation, pricing the closure by the window's catalog", () => {
     const snapshot = versionedSnapshot(versionsWithSecondEffectiveAt("2026-08-15T00:00:00.000Z"));
     const issue = snapshot.issues[0]!;
     issue.history = [
@@ -1285,9 +1285,9 @@ describe("versioned difficulty catalogs", () => {
 
     const result = foldRepository(snapshot);
 
-    // XL exists only in the appended catalog, so the current one resolves the
-    // opening — while the closure itself is priced by that same appended
-    // catalog, because its window closed after the change.
+    // XL exists only in the appended catalog, and the issue was created after
+    // the change began governing, so the appended catalog resolves the opening
+    // and prices the closure too.
     expect(result.issues[0]).toMatchObject({ openingLabel: "XL", openingComparisonPoints: 10 });
     expect(result.settlements).toEqual([
       expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
@@ -1309,10 +1309,87 @@ function repricedScheme(scheme: DifficultyScheme): DifficultyScheme {
   return {
     ...scheme,
     openingLabels: [...scheme.openingLabels, { label: "XL", comparisonPoints: 10, reservePoints: 10 }],
-    actualLabels: scheme.actualLabels.map((label) => {
-      if (label.label === "delivered/6") return { ...label, points: 7 };
-      if (label.label === "delivered/7") return { ...label, points: 6 };
-      return label;
-    }),
+    actualLabels: repricedLabels(scheme.actualLabels),
   };
 }
+
+function repricedLabels(labels: { label: string; points: number }[]): { label: string; points: number }[] {
+  return labels.map((label) => {
+    if (label.label === "delivered/6") return { ...label, points: 7 };
+    if (label.label === "delivered/7") return { ...label, points: 6 };
+    return label;
+  });
+}
+
+// v2 renames the opening label "M" away and adds "XL", so an opening can be
+// pinned to v1 (an issue created before the change) or resolved under v2
+// (created after) depending on when the issue came into existence.
+function renamedOpeningScheme(scheme: DifficultyScheme): DifficultyScheme {
+  return {
+    ...scheme,
+    openingLabels: [
+      { label: "S", comparisonPoints: 2, reservePoints: 2 },
+      { label: "Medium", comparisonPoints: 5, reservePoints: 5 },
+      { label: "L", comparisonPoints: 8, reservePoints: 8 },
+      { label: "XL", comparisonPoints: 10, reservePoints: 10 },
+    ],
+    actualLabels: repricedLabels(scheme.actualLabels),
+  };
+}
+
+describe("opening resolution under a changed catalog", () => {
+  // The DB keeps an issue's opening rating immutable from the moment it is
+  // first materialized, and refuses a materialization whose re-derived opening
+  // disagrees. An opening must therefore resolve by the catalog that governed
+  // when the issue was created — pinning it — not by the current catalog,
+  // which a sponsor may since have changed.
+  function renamedOpeningSnapshot(): RepositoryFoldSnapshot {
+    const snapshot = outsiderFixture();
+    const v2 = renamedOpeningScheme(difficultyScheme());
+    return {
+      ...snapshot,
+      repository: {
+        ...snapshot.repository,
+        difficultyScheme: v2,
+        difficultySchemeVersions: [
+          { versionNumber: 1, scheme: difficultyScheme(), effectiveFrom: "2026-01-01T00:00:00.000Z" },
+          { versionNumber: 2, scheme: v2, effectiveFrom: "2026-09-01T00:00:00.000Z" },
+        ],
+      },
+    };
+  }
+
+  it("keeps an opening resolving by the catalog governing the issue's creation", () => {
+    const snapshot = renamedOpeningSnapshot();
+
+    const result = foldRepository(snapshot);
+
+    // The issue was created 2026-08-30, under v1, and its opening label "M"
+    // was applied then. v2 renames that opening label away; the stored opening
+    // must not move, so v1 still prices it.
+    expect(result.issues[0]).toMatchObject({ openingLabel: "M", openingComparisonPoints: 5 });
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("resolves an opening label that only the changed catalog knows", () => {
+    const snapshot = renamedOpeningSnapshot();
+    const issue = snapshot.issues[0]!;
+    issue.createdAt = "2026-09-02T09:00:00.000Z";
+    issue.history = [
+      {
+        kind: "LABELED",
+        id: "opening-1",
+        actorLogin: "sponsor",
+        actorGitHubUserId: null,
+        label: "XL",
+        createdAt: "2026-09-02T09:30:00.000Z",
+      },
+      ...issue.history,
+    ];
+    issue.labels = ["XL", "delivered/6"];
+
+    const result = foldRepository(snapshot);
+
+    expect(result.issues[0]).toMatchObject({ openingLabel: "XL", openingComparisonPoints: 10 });
+  });
+});

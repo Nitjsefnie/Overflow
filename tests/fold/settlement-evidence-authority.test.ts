@@ -1083,6 +1083,7 @@ export function evidenceFixture(overrides: Partial<EvidenceLogins> = {}): Reposi
       active: true,
       registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: logins.sponsor, enforcementState: "ACTIVE", moderationEvents: [] },
+      difficultySchemeVersions: [],
       difficultyScheme: {
         openingName: "Size",
         actualName: "Delivered",

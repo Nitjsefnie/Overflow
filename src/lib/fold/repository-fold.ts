@@ -354,7 +354,18 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const registeredAtTime = Date.parse(snapshot.repository.registeredAt);
 
   for (const issue of snapshot.issues) {
-    const resolution = resolveOpening(issue, snapshot.repository.difficultyScheme, sponsor);
+    // An opening is pinned to the catalog governing when the issue was created:
+    // the materialized opening rating is immutable, so re-resolving it under a
+    // catalog the sponsor later changed would either fail the run or look like
+    // a mutation (issue 180). Settled evidence resolves by its own window
+    // below. With no version history the current catalog governs every
+    // creation instant, which is the one-catalog behavior.
+    const openingScheme = difficultySchemeInForceAt(
+      snapshot.repository.difficultySchemeVersions ?? [],
+      Date.parse(issue.createdAt),
+      snapshot.repository.difficultyScheme,
+    );
+    const resolution = resolveOpening(issue, openingScheme, sponsor);
     if (resolution.kind === "refused") {
       policyViolations.push({ ...resolution.violation, githubIssueId: issue.id });
       continue;
@@ -375,16 +386,18 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     // figure (issue 180). The selector never reads the clock: the instant is
     // GitHub's merge time, stable across every re-derivation of the same
     // evidence. Openings resolve by the current catalog above, unchanged.
-    const settledScheme = pullRequest === null
-      ? null
-      : difficultySchemeInForceAt(
-          snapshot.repository.difficultySchemeVersions,
-          Date.parse(pullRequest.mergedAt) + EVIDENCE_ORDERING_GRACE_MS,
-          snapshot.repository.difficultyScheme,
-        );
     const settledResolution = pullRequest === null
       ? null
-      : resolveSettledDifficulty(issue, pullRequest, settledScheme, sponsor);
+      : resolveSettledDifficulty(
+          issue,
+          pullRequest,
+          difficultySchemeInForceAt(
+            snapshot.repository.difficultySchemeVersions ?? [],
+            Date.parse(pullRequest.mergedAt) + EVIDENCE_ORDERING_GRACE_MS,
+            snapshot.repository.difficultyScheme,
+          ),
+          sponsor,
+        );
     // Said once for both gated recording sites. A closure's evidence window
     // shuts fifteen minutes after the merge that closed the issue — the same
     // fifteen minutes every rejection reason quotes back to a moderator — or,

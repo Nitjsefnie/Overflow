@@ -76,6 +76,7 @@ it("drains active PR collectors before releasing coordination and retains their 
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00Z",
+      difficultySchemeVersions: [],
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: { openingName: "Size", actualName: "Delivered",
         openingLabels: [{ label: "M", comparisonPoints: 5, reservePoints: 5 }],
@@ -194,6 +195,7 @@ it("settles every started HTTP request before a failed fold rejects and releases
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00Z",
+      difficultySchemeVersions: [],
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: { openingName: "Size", actualName: "Delivered",
         openingLabels: [{ label: "M", comparisonPoints: 5, reservePoints: 5 }],
@@ -311,6 +313,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,
       registeredAt: "2026-01-01T00:00:00.000Z",
+      difficultySchemeVersions: [],
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE" },
       difficultyScheme: {
         openingName: "Size", actualName: "Delivered",

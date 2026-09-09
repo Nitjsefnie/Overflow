@@ -598,6 +598,9 @@ function createHarness(options: HarnessOptions = {}) {
         duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
       },
+      async appendDifficultySchemeVersion() {
+        return null;
+      },
       async createRepository(repository) {
         createdRepositories.push(repository);
         if (options.databaseFailure) {

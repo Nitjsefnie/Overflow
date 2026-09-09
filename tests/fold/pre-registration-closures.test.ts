@@ -434,6 +434,7 @@ function rejectedEvidenceFixture(): RepositoryFoldSnapshot {
       active: true,
       registeredAt,
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
+      difficultySchemeVersions: [],
       difficultyScheme: {
         openingName: "Size",
         actualName: "Delivered",

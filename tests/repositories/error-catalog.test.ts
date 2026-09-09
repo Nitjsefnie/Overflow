@@ -190,6 +190,9 @@ async function surfacedFailure(
         return null;
       },
       createRepository,
+      async appendDifficultySchemeVersion() {
+        return null;
+      },
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
