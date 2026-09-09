@@ -1220,10 +1220,15 @@ describe("calibration comparison per repository", () => {
 
   const harbour = "co-op/harbour";
   const lighthouse = "co-op/lighthouse";
+  // Alphabetically first but identified last: a grouping or sort by
+  // repository_name instead of github_repository_id reorders this repository
+  // to the front, which is what makes this test able to tell the two apart.
+  const anchor = "co-op/anchor";
 
   it("returns one entry per repository, ordered by GitHub repository identifier", async () => {
     const { sql } = sqlHarness([
       [
+        selfWorkRow(9, anchor, 30, 4, 6),
         selfWorkRow(7, lighthouse, 20, 4, 8),
         selfWorkRow(2, harbour, 10, 5, 6),
       ],
@@ -1232,7 +1237,7 @@ describe("calibration comparison per repository", () => {
 
     const entries = await getCalibrationComparisonByRepository("member-1", { sql });
 
-    expect(entries.map((entry) => entry.repositoryName)).toEqual([harbour, lighthouse]);
+    expect(entries.map((entry) => entry.repositoryName)).toEqual([harbour, lighthouse, anchor]);
   });
 
   it("counts each repository's pairs against that repository's rows alone", async () => {
@@ -1354,24 +1359,31 @@ describe("calibration comparison per repository", () => {
     });
   });
 
-  // The breakdown must select the same cohorts the pooled comparison does: a
-  // drifted predicate would show a member two populations under one heading.
+  // The breakdown and the pooled comparison read one shared selection, so the
+  // predicates are identical by construction. What a pin can still lose is the
+  // account the selection binds: placeholder-rendered SQL text cannot see a
+  // bound value — the harness records strings.join("?") — so the captured bound
+  // values are asserted outright. The member's own account id is bound once in
+  // the self-work query (user_id = account) and twice in the outsider one
+  // (debtor_id = account and creditor_id <> account); a selection reading
+  // another member's rows fails here.
   it("selects both cohorts under the pooled comparison's own predicates", async () => {
-    const whereClauses = async (
+    const capturedValues = async (
       run: (accountId: string, dependencies: { sql: DashboardSql }) => Promise<unknown>,
     ) => {
       const { sql, captures } = sqlHarness([[], []]);
       await run("member-1", { sql });
-      return captures.map((capture) =>
-        capture.text.slice(capture.text.indexOf("where"), capture.text.indexOf("order by"))
-          .replace(/\s+/g, " ")
-          .trim(),
-      );
+      return captures.map((capture) => capture.values);
     };
 
-    expect(await whereClauses(getCalibrationComparisonByRepository)).toEqual(
-      await whereClauses(getCalibrationComparison),
-    );
+    expect(await capturedValues(getCalibrationComparisonByRepository)).toEqual([
+      ["member-1"],
+      ["member-1", "member-1"],
+    ]);
+    expect(await capturedValues(getCalibrationComparison)).toEqual([
+      ["member-1"],
+      ["member-1", "member-1"],
+    ]);
   });
 });
 
