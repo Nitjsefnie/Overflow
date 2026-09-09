@@ -291,8 +291,13 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
 
-  // An absent row means the numeric GitHub id the on-conflict arbiter watches was already
-  // taken, so the registration the sponsor submitted belongs to the row that holds it.
+  // An absent row has two causes, and both leave a registration the resubmission cannot
+  // reopen. Either the numeric GitHub id the on-conflict arbiter watches was already
+  // taken by a row still registered — active, so the where clause skipped it — and the
+  // registration the sponsor submitted belongs to the row that holds it; or the held row
+  // is moderation-deactivated (unregistered_at is null there too), which only a
+  // moderation reactivation may bring back, never a resubmission. Both are the same
+  // answer to the sponsor: this GitHub repository is already registered.
   if (created === null) {
     await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
