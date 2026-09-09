@@ -159,6 +159,9 @@ src/lib/github/*
 !src/lib/github/*.ts
 !src/lib/github/graphql-request-budget.ts
 !src/lib/github/graphql-cost.ts
+!src/lib/mcp/
+src/lib/mcp/*
+!src/lib/mcp/*.ts
 !src/lib/members/
 src/lib/members/*
 !src/lib/members/*.ts
