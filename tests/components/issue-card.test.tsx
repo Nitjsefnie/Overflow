@@ -103,9 +103,11 @@ describe("eligible issue card", () => {
     expect(main.querySelector("h2")).not.toBeNull();
     const lines = Array.from(main.children).filter((child) => child.tagName === "P");
     expect(lines).toHaveLength(4);
-    const markers = ["Sponsor:", "Claim:", "Headroom:", "Opened"];
+    // Lines are identified by fixture data, never by label wording, so a
+    // product-neutral rewording cannot fail a structural test.
+    const markers = ["harbour-owner", "mira", "−3", "2026-09-01"];
     const order = lines.map((line) =>
-      markers.findIndex((marker) => line.textContent?.startsWith(marker)),
+      markers.findIndex((marker) => line.textContent?.includes(marker)),
     );
     expect(order).toEqual([0, 1, 2, 3]);
   });
@@ -131,10 +133,11 @@ describe("eligible issue card", () => {
     const card = container.firstElementChild as HTMLElement;
     expect(card.children).toHaveLength(2);
     const [main, facts] = Array.from(card.children);
+    expect(facts.tagName).toBe("DL");
     expect(facts.classList.contains("issue-facts")).toBe(true);
     const lines = Array.from(main.children).filter((child) => child.tagName === "P");
     expect(lines).toHaveLength(1);
-    expect(lines[0].textContent?.startsWith("Opened")).toBe(true);
+    expect(lines[0].textContent?.includes("2026-09-01")).toBe(true);
   });
 
   it("treats GitHub strings as text rather than markup", () => {
