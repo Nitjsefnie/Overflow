@@ -187,6 +187,60 @@ describe("open audit form", () => {
     expect(screen.queryByText("Outsider settlement sample · 1 pairs · mean delta −1")).not.toBeInTheDocument();
   });
 
+  it("rounds a fractional cohort mean to the digits a reader uses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(cohortResponse({
+      targetAccountId: miraId,
+      repositoryId: null,
+      sampleStartedAt: startedAtInstant,
+      sampleEndedAt: endedAtInstant,
+      comparison: {
+        selfWork: { count: 7, meanDelta: -4 / 7, medianDelta: -4 / 7 },
+        outsider: { count: 3, meanDelta: -1, medianDelta: -1 },
+        differenceBetweenMeans: 3,
+      },
+      meetsMinimumSampleSize: false,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Self-work sample · 7 pairs · mean delta −0.57")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Self-work sample · 7 pairs · mean delta −0.5714285714285714"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the shared formatter's en-US grouping for a large positive mean", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(cohortResponse({
+      targetAccountId: miraId,
+      repositoryId: null,
+      sampleStartedAt: startedAtInstant,
+      sampleEndedAt: endedAtInstant,
+      comparison: {
+        selfWork: { count: 12, meanDelta: 1300, medianDelta: 1300 },
+        outsider: { count: 3, meanDelta: -1, medianDelta: -1 },
+        differenceBetweenMeans: 3,
+      },
+      meetsMinimumSampleSize: false,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    chooseTarget(miraId);
+    chooseWindow();
+    fireEvent.click(screen.getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Self-work sample · 12 pairs · mean delta +1,300")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +1300")).not.toBeInTheDocument();
+  });
+
   it("refuses a blank reason before any request is sent", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
