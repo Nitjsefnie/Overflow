@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
+import { withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
@@ -2142,6 +2143,7 @@ describe("GitHubGateway issue timeline query shape", () => {
   it("completes the manifest per issue when the repository-wide collections exceed the page budget", async () => {
     const repoWidePages: string[] = [];
     const perIssuePaths: string[] = [];
+    const operations: string[] = [];
     const truth: Record<number, Array<{ __typename: string; id: string }>> = {
       1: [openingEvent(1), rationale],
       2: [openingEvent(2), { ...rationale, id: "rationale-2" }],
@@ -2157,9 +2159,14 @@ describe("GitHubGateway issue timeline query shape", () => {
         const collection = url.pathname.endsWith("/issues/events") ? "events" : "comments";
         repoWidePages.push(`${collection}:${url.searchParams.get("page")}`);
         const last = collection === "events" ? 120 : 2;
-        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=${last}>; rel="last"` } });
+        // A genuine first page of a multi-page collection carries BOTH links:
+        // rel="last" alone would mean a single page and never reach the fallback.
+        return Response.json([], {
+          headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next", <${url.origin}${url.pathname}?page=${last}>; rel="last"` },
+        });
       }
       const { query, variables } = JSON.parse(String(init?.body));
+      operations.push(/query (\w+)/.exec(query)![1]!);
       if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
         nodes: [issueNode(101, 1, "Large repository", { nodes: [], pageInfo }),
           issueNode(102, 2, "Second scanned", { nodes: [], pageInfo })], pageInfo,
@@ -2176,11 +2183,15 @@ describe("GitHubGateway issue timeline query shape", () => {
       "/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments",
       "/repos/octo/overflow/issues/2/events", "/repos/octo/overflow/issues/2/comments",
     ]);
+    // One exact timeline read per issue and no further count batch: verification
+    // succeeded at the manifest stage, with no reread and no fresh pair.
+    expect(operations).toEqual(["RepositoryIssues", "IssueTimelineCounts", "IssueTimeline", "IssueTimeline"]);
   });
 
   it("falls back per issue when the repository-wide collection size is unknown", async () => {
     const repoWidePages: string[] = [];
     const perIssuePaths: string[] = [];
+    const operations: string[] = [];
     const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
       const perIssue = perIssueManifestResponse(input, { 1: [openingEvent(1), rationale] });
       if (perIssue !== null) {
@@ -2197,6 +2208,7 @@ describe("GitHubGateway issue timeline query shape", () => {
         return Response.json([]);
       }
       const { query, variables } = JSON.parse(String(init?.body));
+      operations.push(/query (\w+)/.exec(query)![1]!);
       if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
         nodes: [issueNode(101, 1, "Unknown size", { nodes: [], pageInfo })], pageInfo } } } });
       if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, () => 2);
@@ -2206,6 +2218,9 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(issue?.comments.map(({ id }) => id)).toEqual([rationale.id]);
     expect(repoWidePages).toEqual(["events:1", "comments:1"]);
     expect(perIssuePaths).toEqual(["/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments"]);
+    // One exact timeline read, one count batch: the per-issue fallback verified
+    // the timeline with no reread and no fresh pair.
+    expect(operations).toEqual(["RepositoryIssues", "IssueTimelineCounts", "IssueTimeline"]);
   });
 
   it("fails closed within the per-issue budget when per-issue collections keep paging", async () => {
@@ -2273,6 +2288,69 @@ describe("GitHubGateway issue timeline query shape", () => {
     expect(calls.indexOf("graphql:IssueTimelineCounts", reread + 1)).toBeGreaterThan(reread);
     expect(calls.indexOf("rest:/repos/octo/overflow/issues/1/events")).toBeGreaterThan(reread);
     expect(calls.indexOf("rest:/repos/octo/overflow/issues/1/comments")).toBeGreaterThan(reread);
+  });
+
+  it("refuses when the fresh manifest alone disagrees with the reread", async () => {
+    const staleTruth = [openingEvent(1), rationale];
+    const newTruth = [openingEvent(1), settledEvent, rationale];
+    let countReads = 0;
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/issues/1/events")) {
+        // The fresh COUNT below agrees with the reread; only this REST witness
+        // disagrees, so the manifest limb of the fresh comparison is the one
+        // under test and cannot be traded for the reread's own ids.
+        return Response.json([
+          { node_id: "opening-event-1", event: "labeled", issue: { id: 101, number: 1 } },
+          { node_id: "foreign-witness", event: "unlabeled", issue: { id: 101, number: 1 } },
+        ]);
+      }
+      if (url.pathname.endsWith("/issues/1/comments")) {
+        return Response.json([{ node_id: "rationale-node", issue_url: "https://api.github.com/repos/octo/overflow/issues/1" }]);
+      }
+      const manifest = manifestResponse(input, { 1: staleTruth });
+      if (manifest !== null) return manifest;
+      const { query, variables } = JSON.parse(String(init?.body));
+      const operation = /query (\w+)/.exec(query)![1]!;
+      if (operation === "RepositoryIssues") return Response.json({ data: { repository: { issues: {
+        nodes: [{
+          ...issueNode(101, 1, "Fresh witness contradicts", { nodes: [{ name: "settled: 6" }], pageInfo }),
+          timelineItems: { nodes: staleTruth, totalCount: 2, pageInfo },
+        }], pageInfo } } } });
+      if (operation === "IssueTimelineCounts") {
+        countReads += 1;
+        return countsResponse(variables, () => countReads === 1 ? 2 : 3);
+      }
+      return timelineResponse(newTruth);
+    } });
+    await expect(gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions)).rejects.toThrow(
+      "GitHub issue 1 timeline completeness could not be verified.",
+    );
+  });
+
+  it("surfaces a held GraphQL request budget during the per-issue fallback", async () => {
+    let perIssueReads = 0;
+    const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
+      const url = new URL(String(input));
+      if (/\/repos\/octo\/overflow\/issues\/1\/(events|comments)$/.test(url.pathname)) {
+        perIssueReads += 1;
+        return Response.json([]);
+      }
+      if (url.pathname.endsWith("/issues/events")) {
+        return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
+      }
+      if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
+      const { query } = JSON.parse(String(init?.body));
+      if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
+        nodes: [issueNode(101, 1, "Held budget", { nodes: [], pageInfo })], pageInfo } } } });
+      return countsResponse({ number1: 1 }, () => 0);
+    } });
+    const held = withGraphqlRequestBudget(
+      () => perIssueReads >= 1 ? new Date("2026-09-09T00:10:00Z") : null,
+      () => gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions),
+    );
+    await expect(held).rejects.toThrow("Reconciliation GraphQL budget is below reserve.");
+    expect(perIssueReads).toBe(1);
   });
 
   it("still refuses a reread that the fresh evidence pair also contradicts", async () => {
