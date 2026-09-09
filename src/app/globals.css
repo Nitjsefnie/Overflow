@@ -607,12 +607,16 @@ button:disabled {
 
 .calibration-grid {
   margin-top: 1.5rem;
+  grid-template-rows: repeat(3, auto);
   border-top: 2px solid var(--line);
   border-left: 2px solid var(--line);
   gap: 0;
 }
 
 .calibration-grid section {
+  display: grid;
+  grid-row: 1 / span 3;
+  grid-template-rows: subgrid;
   padding: 1.15rem;
   border-right: 2px solid var(--line);
   border-bottom: 2px solid var(--line);
@@ -795,6 +799,16 @@ button:disabled {
   .form-grid,
   .calibration-grid {
     grid-template-columns: 1fr;
+  }
+
+  .calibration-grid {
+    grid-template-rows: none;
+  }
+
+  .calibration-grid section {
+    display: block;
+    grid-row: auto;
+    grid-template-rows: none;
   }
 
   .catalog-row,
