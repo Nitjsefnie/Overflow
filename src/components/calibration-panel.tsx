@@ -16,58 +16,62 @@ type CalibrationPanelProps = {
 export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationPanelProps) {
   const noSamples = comparison.selfWork.count === 0 && comparison.outsider.count === 0;
   return (
-    <section className="calibration-panel surface shadow-offset" aria-labelledby="calibration-heading">
-      <p className="eyebrow">Paired calibration evidence</p>
-      <h1 id="calibration-heading">Calibration comparison</h1>
-      {noSamples ? (
-        <p className="empty-copy">Complete paired work to establish calibration.</p>
-      ) : null}
-      <div className="calibration-grid">
-        <section aria-labelledby="self-work-heading">
-          <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} {plural(comparison.selfWork.count, "pair")}</h2>
-          {comparison.selfWork.count === 0 ? (
-            <p>No self-work pairs yet</p>
-          ) : (
-            <>
-              <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
-              <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
-            </>
-          )}
-        </section>
-        <section aria-labelledby="outsider-heading">
-          <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} {plural(comparison.outsider.count, "pair")}</h2>
-          {comparison.outsider.count === 0 ? (
-            <p>No outsider settlements yet</p>
-          ) : (
-            <>
-              <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
-              <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
-            </>
-          )}
-        </section>
-      </div>
-      {!noSamples ? (
-        <p className="calibration-scale-limitation">
-          Deltas are measured on the opening scale of each repository. Where a scale spaces its comparison
-          points wider than one step — for example 1, 3, 5, 8, 10 — even a perfectly judged closure can carry a
-          delta the scale forces: an issue worth 4 can only ever be offered 3 or 5. The reported mean and
-          median delta do not separate that forced amount from judgment error.
-        </p>
-      ) : null}
-      {comparison.differenceBetweenMeans === null ? (
-        <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
-      ) : (
-        <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
-      )}
-      {byRepository.length === 0 ? null : (
-        <section aria-labelledby="calibration-by-repository-heading">
-          <h2 id="calibration-by-repository-heading">Calibration by repository</h2>
-          {byRepository.map((entry) => (
-            <RepositoryCalibration key={entry.githubRepositoryId} entry={entry} />
-          ))}
-        </section>
-      )}
-    </section>
+    <>
+      <section className="page-heading" aria-labelledby="calibration-heading">
+        <p className="eyebrow">Paired calibration evidence</p>
+        <h1 id="calibration-heading">Calibration comparison</h1>
+      </section>
+      <section className="calibration-panel surface shadow-offset" aria-labelledby="calibration-heading">
+        {noSamples ? (
+          <p className="empty-copy">Complete paired work to establish calibration.</p>
+        ) : null}
+        <div className="calibration-grid">
+          <section aria-labelledby="self-work-heading">
+            <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} {plural(comparison.selfWork.count, "pair")}</h2>
+            {comparison.selfWork.count === 0 ? (
+              <p>No self-work pairs yet</p>
+            ) : (
+              <>
+                <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
+                <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
+              </>
+            )}
+          </section>
+          <section aria-labelledby="outsider-heading">
+            <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} {plural(comparison.outsider.count, "pair")}</h2>
+            {comparison.outsider.count === 0 ? (
+              <p>No outsider settlements yet</p>
+            ) : (
+              <>
+                <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
+                <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
+              </>
+            )}
+          </section>
+        </div>
+        {!noSamples ? (
+          <p className="calibration-scale-limitation">
+            Deltas are measured on the opening scale of each repository. Where a scale spaces its comparison
+            points wider than one step — for example 1, 3, 5, 8, 10 — even a perfectly judged closure can carry a
+            delta the scale forces: an issue worth 4 can only ever be offered 3 or 5. The reported mean and
+            median delta do not separate that forced amount from judgment error.
+          </p>
+        ) : null}
+        {comparison.differenceBetweenMeans === null ? (
+          <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
+        ) : (
+          <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
+        )}
+        {byRepository.length === 0 ? null : (
+          <section aria-labelledby="calibration-by-repository-heading">
+            <h2 id="calibration-by-repository-heading">Calibration by repository</h2>
+            {byRepository.map((entry) => (
+              <RepositoryCalibration key={entry.githubRepositoryId} entry={entry} />
+            ))}
+          </section>
+        )}
+      </section>
+    </>
   );
 }
 

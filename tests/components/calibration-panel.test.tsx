@@ -99,6 +99,32 @@ describe("calibration comparison", () => {
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
+  // Every other page introduces itself with the eyebrow and heading in a
+  // page-heading section on the page background, above the cards. The heading
+  // inside the bordered card read as a different kind of page.
+  it("introduces the page above the card, with the card as a following sibling", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Calibration comparison", level: 1 });
+    const headingSection = heading.closest("section");
+    expect(headingSection).toHaveClass("page-heading");
+    expect(within(headingSection).getByText("Paired calibration evidence")).toBeVisible();
+
+    const card = headingSection.nextElementSibling;
+    expect(card).not.toBeNull();
+    expect(card).toHaveClass("calibration-panel");
+    expect(within(card).queryByRole("heading", { name: "Calibration comparison", level: 1 })).toBeNull();
+    expect(within(card).queryByText("Paired calibration evidence")).toBeNull();
+  });
+
   it("renders no difference-between-means figure when only the self-work sample has pairs", () => {
     render(
       <CalibrationPanel
