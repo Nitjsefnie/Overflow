@@ -229,4 +229,32 @@ describe("settlement proof page", () => {
     expect(settled).toHaveTextContent(/^4 · 4$/);
     expect(settled).not.toHaveTextContent("difficulty experienced");
   });
+
+  it("leaves a label whole when only the fallback term would name its prefix", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{
+          ...settlementRow,
+          opening_name: undefined,
+          actual_name: undefined,
+          opening_label: "Opening comparison: 3",
+          settled_label: "Settled points: 4",
+          opening_comparison_points: 3,
+          settled_points: 4,
+        }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const opening = screen.getByText("Opening comparison").nextElementSibling;
+    expect(opening).toHaveTextContent(/^Opening comparison: 3 · 3$/);
+
+    const settled = screen.getByText("Settled points").nextElementSibling;
+    expect(settled).toHaveTextContent(/^Settled points: 4 · 4$/);
+  });
 });
