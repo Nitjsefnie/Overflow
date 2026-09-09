@@ -174,16 +174,21 @@ describe("registration form spacing stylesheet", () => {
     const sectionGap = pinnedRule(".repository-form > * + *");
     const introGap = pinnedRule(".form-intro + *");
     const fieldset = pinnedRule(".catalog-fieldset");
+    const actionButton = pinnedRule(".action-button");
 
     expect(pinnedRule(".form-intro").declarations["margin-bottom"], "the intro adds no bottom margin").toBeUndefined();
     expect(rem(introGap.declarations["margin-top"], "the gap below the intro")).toBeGreaterThanOrEqual(
       rem(sectionGap.declarations["margin-top"], "the form's section gap"),
     );
 
-    // Both wider gaps tie with the generic one on specificity, so each keeps
+    // The wider gaps tie with the generic one on specificity, so each keeps
     // its own value only while the generic rule stays above it.
     expect(sectionGap.index).toBeLessThan(introGap.index);
     expect(sectionGap.index).toBeLessThan(fieldset.index);
+    expect(
+      sectionGap.index,
+      "the submit button keeps its own wider gap only while the generic rule stays above it",
+    ).toBeLessThan(actionButton.index);
     expect(fieldset.declarations.margin, "the fieldset keeps its own 2rem").toBe("2rem 0 0");
   });
 
