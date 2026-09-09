@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { plural } from "@/lib/plural";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type DashboardContentProps = {
@@ -55,7 +56,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
                     <p className="mono-meta">
                       {settlement.status === "UNCLAIMED"
                         ? `Awaiting a claim · credits pending claim · review deduction ${settlement.reviewRounds}`
-                        : `${settlement.credits} credits · review deduction ${settlement.reviewRounds}`}
+                        : `${settlement.credits} ${plural(settlement.credits, "credit")} · review deduction ${settlement.reviewRounds}`}
                     </p>
                     <Link className="text-link" href={`/settlements/${settlement.id}`}>
                       View proof for issue #{settlement.issueNumber}

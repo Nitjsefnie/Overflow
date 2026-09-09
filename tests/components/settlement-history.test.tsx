@@ -78,6 +78,22 @@ describe("settlement history page", () => {
     );
   });
 
+  it("reads each settlement's credit count with the plural its count takes", () => {
+    render(
+      <SettlementHistoryContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        settlements={[
+          { ...settled, id: "settlement-6", issueNumber: 6, credits: 1, reviewRounds: 2, balanceEffect: 1 },
+          { ...settled, id: "settlement-5", issueNumber: 5, credits: 2, reviewRounds: 1, balanceEffect: 2 },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/1 credit · review deduction 2/)).toBeVisible();
+    expect(screen.getByText(/2 credits · review deduction 1/)).toBeVisible();
+  });
+
   it("keeps unsettled work visible as found and scored zero rather than as an error", () => {
     render(
       <SettlementHistoryContent memberName="Ada Lovelace" isModerator={false} settlements={[unsettled]} />,

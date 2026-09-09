@@ -88,6 +88,60 @@ describe("member dashboard", () => {
     expect(screen.getByText("4 credits · review deduction 3")).toBeVisible();
   });
 
+  it("reads each settlement proof's credit count with the plural its count takes", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 12,
+          earnedTotal: 19,
+          givenTotal: 7,
+          reservedPoints: 4,
+          availableHeadroom: 8,
+          recentSettlements: [
+            {
+              id: "settlement-6",
+              status: "SETTLED",
+              repositoryName: "co-op/harbour",
+              issueNumber: 6,
+              issueTitle: "Close the lock",
+              issueUrl: "https://github.com/co-op/harbour/issues/6",
+              pullRequestNumber: 11,
+              pullRequestTitle: "Seal the lock",
+              pullRequestUrl: "https://github.com/co-op/harbour/pull/11",
+              proofSha256: "a".repeat(64),
+              credits: 1,
+              reviewRounds: 2,
+              settledAt: "2026-09-04T00:00:00.000Z",
+            },
+            {
+              id: "settlement-5",
+              status: "SETTLED",
+              repositoryName: "co-op/harbour",
+              issueNumber: 5,
+              issueTitle: "Chart the shoal",
+              issueUrl: "https://github.com/co-op/harbour/issues/5",
+              pullRequestNumber: 10,
+              pullRequestTitle: "Buoy the shoal",
+              pullRequestUrl: "https://github.com/co-op/harbour/pull/10",
+              proofSha256: "b".repeat(64),
+              credits: 2,
+              reviewRounds: 1,
+              settledAt: "2026-09-05T00:00:00.000Z",
+            },
+          ],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("1 credit · review deduction 2")).toBeVisible();
+    expect(screen.getByText("2 credits · review deduction 1")).toBeVisible();
+  });
+
   it("does not present an unclaimed settlement's credits as moved", () => {
     render(
       <DashboardContent
