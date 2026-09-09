@@ -18,12 +18,20 @@ import type { RepositoryRouteSession } from "@/app/api/repositories/route";
 
 import {
   RepositoryRegistrationEnforcementError,
+  RepositoryRegistrationError,
   RepositorySchemeChangeForbiddenError,
   RepositorySchemeChangeOrderError,
+  type RegisteredRepository,
   type RepositoryCatalogChange,
   type RepositoryRegistrationDependencies,
+  type RepositoryUnregisterOutcome,
 } from "@/lib/repositories/register";
-import { POST, createRepositoryPostHandler, createRepositoryPatchHandler } from "@/app/api/repositories/route";
+import {
+  POST,
+  createRepositoryDeleteHandler,
+  createRepositoryPostHandler,
+  createRepositoryPatchHandler,
+} from "@/app/api/repositories/route";
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
@@ -520,19 +528,22 @@ const tokenRejection = {
   error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
 };
 
-function tokenFixture(account: ApiTokenAccount | null = tokenAccount) {
+function tokenFixture(
+  account: ApiTokenAccount | null = tokenAccount,
+  options: SuccessfulDependenciesOptions = {},
+  method: "POST" | "DELETE" = "POST",
+) {
   const getSession = vi.fn(async () => ({
     user: { id: "cookie-account-id", role: "MODERATOR" as const },
   }));
   const findAccountByTokenHash = vi.fn<(hash: Buffer) => Promise<ApiTokenAccount | null>>(async () => account);
   const createRegistrationDependencies = vi.fn(async (session: RepositoryRouteSession) =>
-    successfulDependencies(session.user),
+    successfulDependencies(session.user, options),
   );
-  const handler = createRepositoryPostHandler({
-    getSession,
-    findAccountByTokenHash,
-    createRegistrationDependencies,
-  });
+  const handlerDependencies = { getSession, findAccountByTokenHash, createRegistrationDependencies };
+  const handler = method === "DELETE"
+    ? createRepositoryDeleteHandler(handlerDependencies)
+    : createRepositoryPostHandler(handlerDependencies);
   return { handler, getSession, findAccountByTokenHash, createRegistrationDependencies };
 }
 
@@ -564,6 +575,38 @@ function authorizedRequest(
     },
     body: JSON.stringify(body),
   });
+}
+
+/** A bearer-authenticated unregistration request against the same route URL. */
+function deleteRequest(
+  body: unknown = validUnregisterInput(),
+  credential = apiToken,
+  headers: Record<string, string> = {},
+): Request {
+  return new Request(routeUrl, {
+    method: "DELETE",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${credential}`,
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function validUnregisterInput() {
+  return { repositoryUrl: "https://github.com/octo/overflow.git" };
+}
+
+function registeredTarget(sponsorId = "moderator-id"): RegisteredRepository {
+  return {
+    id: "repository-id",
+    githubRepositoryId: 42,
+    ownerName: "octo/overflow",
+    sponsorId,
+    visibility: "PUBLIC",
+    githubWebhookId: 501,
+  };
 }
 
 describe("Overflow token registration", () => {
@@ -1144,6 +1187,261 @@ describe("PATCH /api/repositories", () => {
   });
 });
 
+describe("DELETE /api/repositories", () => {
+  it("returns a structured 401 without a session", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => null,
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 400 when the request is not one repository reference", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest({ repositories: ["octo/overflow"] }, "DELETE"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid repository unregistration request." },
+    });
+  });
+
+  it("returns a structured 404 when no registration holds the submitted path", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "NOT_FOUND",
+        message: "No registration holds the GitHub path octo/overflow, so there is nothing to unregister.",
+      },
+    });
+  });
+
+  it("returns a structured 403 when the requester is not the repository's sponsor", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
+      createRegistrationDependencies: async () => successfulDependencies(
+        { id: "outsider-id", role: "MEMBER" },
+        { unregisterTarget: registeredTarget("someone-else-id") },
+      ),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN",
+        message: "Only the repository's sponsor can unregister it.",
+      },
+    });
+  });
+
+  it("answers 200 with the unregister result once the hook is deleted and the write lands", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        unregisterTarget: registeredTarget(),
+        unregisterOutcome: { kind: "UNREGISTERED", repository: registeredTarget() },
+      }),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repository: registeredTarget(),
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+  });
+
+  it("answers 200 reporting an idempotent repeat as already unregistered", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        unregisterTarget: registeredTarget(),
+        unregisterOutcome: { kind: "ALREADY_UNREGISTERED", repository: registeredTarget() },
+      }),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repository: registeredTarget(),
+      webhookDeleted: true,
+      alreadyUnregistered: true,
+    });
+  });
+
+  it("passes a store-raised conflict through the shared error mapping unchanged", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        unregisterTarget: registeredTarget(),
+        unregisterStoreError: new RepositoryRegistrationError(
+          "CONFLICT",
+          "The GitHub path octo/overflow is claimed by a different registration.",
+        ),
+      }),
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "CONFLICT",
+        message: "The GitHub path octo/overflow is claimed by a different registration.",
+      },
+    });
+  });
+
+  it("returns a structured 502 when the route's registration dependencies cannot be built", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => {
+        throw new Error("GitHub webhook configuration must be set.");
+      },
+    });
+
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to unregister the repository." },
+    });
+  });
+
+  // A cross-site form post carries the session cookie by itself, so a forged
+  // unregistration must cost the server nothing: no token lookup, no session
+  // read, no unregister setup.
+  it("refuses a foreign-origin cookie request before the token lookup or the session read", async () => {
+    const dependencies = unusedRouteDependencies();
+    const handler = createRepositoryDeleteHandler(dependencies);
+
+    const response = await handler(foreignJsonRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin cookie request that is not JSON", async () => {
+    const dependencies = unusedRouteDependencies();
+    const handler = createRepositoryDeleteHandler(dependencies);
+
+    const response = await handler(trustedTextRequest(validUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("unregisters with a valid bearer token and never reads the cookie", async () => {
+    const fixture = tokenFixture(tokenAccount, {
+      unregisterTarget: registeredTarget("token-account-id"),
+      unregisterOutcome: { kind: "UNREGISTERED", repository: registeredTarget("token-account-id") },
+    }, "DELETE");
+
+    const response = await fixture.handler(deleteRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repository: { ...registeredTarget("token-account-id") },
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
+      createHash("sha256").update(apiToken).digest(),
+    );
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
+      user: { id: tokenAccount.id, role: tokenAccount.role },
+    });
+  });
+
+  it("rejects an unknown bearer credential without being rescued by a valid cookie", async () => {
+    const fixture = tokenFixture(null, {}, "DELETE");
+
+    const response = await fixture.handler(deleteRequest());
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual(tokenRejection);
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledTimes(0);
+  });
+
+  it("accepts a bearer request that carries a foreign origin header", async () => {
+    const fixture = tokenFixture(tokenAccount, {
+      unregisterTarget: registeredTarget("token-account-id"),
+      unregisterOutcome: { kind: "UNREGISTERED", repository: registeredTarget("token-account-id") },
+    }, "DELETE");
+
+    const response = await fixture.handler(deleteRequest(validUnregisterInput(), apiToken, {
+      origin: foreignOrigin,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(fixture.getSession).toHaveBeenCalledTimes(0);
+    expect(fixture.findAccountByTokenHash).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "a recognized credential", credential: apiToken },
+    { label: "a malformed credential", credential: "not-an-overflow-token" },
+  ])("refuses a text/plain DELETE bearer request carrying $label", async ({ credential }) => {
+    const fixture = tokenFixture(tokenAccount, {}, "DELETE");
+
+    const response = await fixture.handler(
+      deleteRequest(validUnregisterInput(), credential, { "content-type": "text/plain" }),
+    );
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "The request must use the application/json content type.",
+      },
+    });
+    expect(fixture.findAccountByTokenHash).not.toHaveBeenCalled();
+    expect(fixture.getSession).not.toHaveBeenCalled();
+    expect(fixture.createRegistrationDependencies).not.toHaveBeenCalled();
+  });
+});
+
 function validInput() {
   return {
     repositoryUrl: "https://github.com/octo/overflow.git",
@@ -1167,6 +1465,12 @@ type SuccessfulDependenciesOptions = {
   webhookFailure?: boolean;
   /** What the store answers for a catalog change: a result, or an error to raise. */
   catalogChange?: RepositoryCatalogChange | Error;
+  /** The registration the by-owner-name lookup holds; absent when nothing holds the path. */
+  unregisterTarget?: RegisteredRepository;
+  /** The outcome the fake unregister write answers with. */
+  unregisterOutcome?: RepositoryUnregisterOutcome;
+  /** The error the fake unregister write raises instead of answering. */
+  unregisterStoreError?: RepositoryRegistrationError;
 };
 
 function successfulDependencies(
@@ -1217,7 +1521,9 @@ function successfulDependencies(
           : null;
       },
       async findRepositoryRegistrationStateByOwnerName() {
-        return null;
+        return options.unregisterTarget === undefined
+          ? null
+          : { repository: options.unregisterTarget, unregisteredAt: null };
       },
       async findRepositoryRegistrationState() {
         return options.existingRepository
@@ -1234,7 +1540,13 @@ function successfulDependencies(
             }
           : null;
       },
-      async unregisterRepository(): Promise<never> {
+      async unregisterRepository(): Promise<RepositoryUnregisterOutcome> {
+        if (options.unregisterStoreError !== undefined) {
+          throw options.unregisterStoreError;
+        }
+        if (options.unregisterOutcome !== undefined) {
+          return options.unregisterOutcome;
+        }
         throw new Error("The route reached the unregister write without an injected outcome.");
       },
       async appendDifficultySchemeVersion() {
