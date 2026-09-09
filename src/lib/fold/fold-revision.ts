@@ -5,4 +5,4 @@
  * deliberately bumped integer rather than a hash of the fold source, because
  * a hash churns on every unrelated edit.
  */
-export const FOLD_REVISION = 2;
+export const FOLD_REVISION = 3;
