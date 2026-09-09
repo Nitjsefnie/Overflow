@@ -1887,6 +1887,91 @@ describe("GitHubGateway GraphQL account identities", () => {
   });
 });
 
+describe("GitHubGateway issue timeline ordering", () => {
+  const pageInfo = { hasNextPage: false, endCursor: null };
+
+  function issuesPage(): Response {
+    return Response.json({ data: { repository: { issues: {
+      nodes: [issueNode(101, 1, "Timeline ordering")],
+      pageInfo,
+    } } } });
+  }
+
+  function labeledEvent(id: string, createdAt: string): unknown {
+    return {
+      __typename: "LabeledEvent",
+      id,
+      createdAt,
+      actor: { login: "owner" },
+      label: { name: "size/M" },
+    };
+  }
+
+  function issueComment(id: string, databaseId: number, createdAt: string): unknown {
+    return {
+      __typename: "IssueComment",
+      id,
+      databaseId,
+      createdAt,
+      lastEditedAt: null,
+      author: { login: "owner" },
+      body: `Comment ${id} naming delivered/6.`,
+    };
+  }
+
+  it("orders history and comments by createdAt regardless of raw page order", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const { query, variables } = JSON.parse(String(init?.body));
+        if (query.includes("query RepositoryIssues")) {
+          return issuesPage();
+        }
+        // Deliberately NOT chronological, across two pages:
+        // history arrives as [late, early, mid]; comments arrive as [late, early].
+        return variables.cursor === null
+          ? timelineResponse([
+            labeledEvent("event-late", "2026-09-01T10:00:00.000Z"),
+            issueComment("comment-late", 502, "2026-09-01T11:30:00.000Z"),
+            labeledEvent("event-early", "2026-09-01T08:00:00.000Z"),
+          ], { hasNextPage: true, endCursor: "ordering-next" })
+          : timelineResponse([
+            labeledEvent("event-mid", "2026-09-01T09:00:00.000Z"),
+            issueComment("comment-early", 501, "2026-09-01T07:00:00.000Z"),
+          ]);
+      },
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issue?.history.map((event) => event.id)).toEqual(["event-early", "event-mid", "event-late"]);
+    expect(issue?.comments.map((comment) => comment.id)).toEqual(["comment-early", "comment-late"]);
+  });
+
+  it("orders several comments on one issue chronologically", async () => {
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (_input, init) => {
+        const { query } = JSON.parse(String(init?.body));
+        if (query.includes("query RepositoryIssues")) {
+          return issuesPage();
+        }
+        return timelineResponse([
+          issueComment("comment-c", 503, "2026-09-01T11:30:00.000Z"),
+          labeledEvent("event-only", "2026-09-01T10:00:00.000Z"),
+          issueComment("comment-a", 501, "2026-09-01T08:00:00.000Z"),
+          issueComment("comment-b", 502, "2026-09-01T09:30:00.000Z"),
+        ]);
+      },
+    });
+
+    const [issue] = await gateway.listIssues({ owner: "octo", name: "overflow" });
+
+    expect(issue?.comments.map((comment) => comment.id)).toEqual(["comment-a", "comment-b", "comment-c"]);
+    expect(issue?.history.map((event) => event.id)).toEqual(["event-only"]);
+  });
+});
+
 describe("GitHubGateway issue timeline query shape", () => {
   const settledEvent = {
     __typename: "LabeledEvent",

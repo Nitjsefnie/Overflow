@@ -1253,6 +1253,14 @@ function toGitHubIssueTimelineItem(
   }
 }
 
+/**
+ * Orders timeline items chronologically. Intra-instant order is DELIBERATELY
+ * unspecified: GitHub node ids are opaque and the timeline carries no
+ * sub-second sequence signal, so no data-determined order exists for events
+ * sharing an instant, and consumers must not depend on one. (A stable sort
+ * keeps arrival order within an instant; the settlement fold reduces
+ * same-instant label evidence by instant, not by arrival-ordered replay.)
+ */
 function compareIssueHistoryItems(
   left: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
   right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
