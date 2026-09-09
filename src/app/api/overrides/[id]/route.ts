@@ -1,10 +1,12 @@
 import { z } from "zod";
 import {
-  errorResponse,
-  getProductionSession,
   settlementOverrideErrorResponse,
   type SettlementOverrideRouteSession,
 } from "@/app/api/overrides/route";
+import {
+  errorResponse,
+  getProductionSession,
+} from "@/lib/security/member-route-auth";
 import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";

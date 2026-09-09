@@ -9,7 +9,11 @@ import {
   type SettlementOverrideTarget,
 } from "@/lib/overrides/service";
 import { guardByCredential } from "@/lib/security/route-credential";
-import { requiredMemberSession } from "@/lib/security/member-route-auth";
+import {
+  errorResponse,
+  getProductionSession,
+  requiredMemberSession,
+} from "@/lib/security/member-route-auth";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 // Strict on both sides of the union, so a body naming a settlement and a
@@ -90,10 +94,6 @@ export function settlementOverrideErrorResponse(error: unknown): Response {
   }
 }
 
-export function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}
-
 async function parseOverrideRequest(
   request: Request,
 ): Promise<{ target: SettlementOverrideTarget; reason: string } | null> {
@@ -111,16 +111,6 @@ async function parseOverrideRequest(
   } catch {
     return null;
   }
-}
-
-export async function getProductionSession(): Promise<SettlementOverrideRouteSession | null> {
-  const { auth } = await import("@/auth");
-  const session = await auth();
-  const user = session?.user as { id?: unknown; role?: unknown } | undefined;
-  if (typeof user?.id !== "string") {
-    return null;
-  }
-  return { user: { id: user.id, role: user.role as UserRole | undefined } };
 }
 
 export const POST = createSettlementOverridePostHandler({

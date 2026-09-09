@@ -1,4 +1,3 @@
-import type { UserRole } from "@/lib/db/types";
 import {
   listEligibleIssues,
   type EligibleIssueFilters,
@@ -6,6 +5,8 @@ import {
 } from "@/lib/dashboard/queries";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
+  errorResponse,
+  getProductionSession,
   requiredMemberSession,
   type MemberRouteDependencies,
 } from "@/lib/security/member-route-auth";
@@ -47,20 +48,6 @@ export const GET = createIssuesGetHandler({
   getCurrentRole: getCurrentUserRole,
   listEligibleIssues,
 });
-
-export function errorResponse(status: number, code: string, message: string): Response {
-  return Response.json({ error: { code, message } }, { status });
-}
-
-export async function getProductionSession(): Promise<{ user: { id: string; role?: UserRole } } | null> {
-  const { auth } = await import("@/auth");
-  const session = await auth();
-  const user = session?.user as { id?: unknown; role?: unknown } | undefined;
-  if (typeof user?.id !== "string") {
-    return null;
-  }
-  return { user: { id: user.id, role: user.role as UserRole | undefined } };
-}
 
 /**
  * The issues page's own filter parsing, over the URL a request carries:
