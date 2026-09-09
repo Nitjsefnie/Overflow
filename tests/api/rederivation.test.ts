@@ -65,6 +65,28 @@ describe("fold re-derivation status API", () => {
     expect(listRederivationStatus).not.toHaveBeenCalled();
   });
 
+  it("answers a failed session lookup with 502 upstream failure, reading nothing", async () => {
+    const listRederivationStatus = vi.fn().mockResolvedValue(emptyOverview);
+    const response = await createRederivationGetHandler({
+      ...moderatorDependencies({ listRederivationStatus }),
+      getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
+    })();
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+    expect(listRederivationStatus).not.toHaveBeenCalled();
+  });
+
+  it("answers a failed role lookup with 502 upstream failure, reading nothing", async () => {
+    const listRederivationStatus = vi.fn().mockResolvedValue(emptyOverview);
+    const response = await createRederivationGetHandler({
+      ...moderatorDependencies({ listRederivationStatus }),
+      getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
+    })();
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+    expect(listRederivationStatus).not.toHaveBeenCalled();
+  });
+
   it("reports every repository's stamped row counts alongside the current fold revision", async () => {
     const overview = {
       foldRevision: FOLD_REVISION,
@@ -165,6 +187,28 @@ describe("fold re-derivation status API", () => {
     })(jsonRequest({ repositoryId }));
 
     await expectRejection(response, 401, "UNAUTHENTICATED", "Sign in is required.");
+    expect(requestRederivation).not.toHaveBeenCalled();
+  });
+
+  it("answers a failed session lookup with 502 upstream failure, without queueing it", async () => {
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+    const response = await createRederivationPostHandler({
+      ...moderatorDependencies({ requestRederivation }),
+      getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
+    })(jsonRequest({ repositoryId }));
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+    expect(requestRederivation).not.toHaveBeenCalled();
+  });
+
+  it("answers a failed role lookup with 502 upstream failure, without queueing it", async () => {
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+    const response = await createRederivationPostHandler({
+      ...moderatorDependencies({ requestRederivation }),
+      getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
+    })(jsonRequest({ repositoryId }));
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
     expect(requestRederivation).not.toHaveBeenCalled();
   });
 

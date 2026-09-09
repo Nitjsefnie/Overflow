@@ -23,7 +23,7 @@ import {
   PATCH as productionAuditPatch,
   createModerationAuditPatchHandler,
 } from "@/app/api/moderation/[id]/route";
-import { createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
+import { createModeratorGetHandler, createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
 import {
   GET as productionCohortGet,
   createModerationCohortGetHandler,
@@ -481,6 +481,119 @@ describe("calibration cohort preview API", () => {
     await expect(memberResponse.json()).resolves.toEqual({
       error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
     });
+  });
+});
+
+// Issue 116: the moderator gate used to exist as private copies answering the
+// same failures differently. These pin the one shared contract through every
+// moderation route family, whatever file houses the handler: a backing-store
+// failure while authorizing is the codebase's 502 UPSTREAM_FAILURE answer (the
+// one requiredMemberSession already gives in the overrides routes and
+// tests/api/settlement-overrides.test.ts pins), a missing session stays 401,
+// and a demoted moderator is refused with one message everywhere.
+describe("the shared moderator authorization gate", () => {
+  type GateDependencies = {
+    getSession: () => Promise<unknown>;
+    getCurrentRole: (userId: string) => Promise<unknown>;
+    createService: () => Promise<unknown>;
+  };
+
+  const gateCases: ReadonlyArray<{
+    readonly family: string;
+    readonly invoke: (dependencies: GateDependencies) => Promise<Response>;
+  }> = [
+    {
+      family: "POST /api/moderation",
+      invoke: (dependencies) =>
+        createModerationPostHandler(
+          dependencies as Parameters<typeof createModerationPostHandler>[0],
+        )(jsonRequest(openPayload())),
+    },
+    {
+      family: "PATCH /api/moderation",
+      invoke: (dependencies) =>
+        createModerationClosePatchHandler(
+          dependencies as Parameters<typeof createModerationClosePatchHandler>[0],
+        )(
+          jsonRequest(
+            {
+              targetAccountId,
+              plan: "Review ten completed contributions before applying an opening label.",
+            },
+            "PATCH",
+          ),
+        ),
+    },
+    {
+      family: "PATCH /api/moderation/[id]",
+      invoke: (dependencies) =>
+        createModerationAuditPatchHandler(
+          dependencies as Parameters<typeof createModerationAuditPatchHandler>[0],
+        )(
+          jsonRequest(
+            { action: "dismiss", reason: "The snapshot supports the account-level pattern." },
+            "PATCH",
+          ),
+          { params: Promise.resolve({ id: auditId }) },
+        ),
+    },
+    {
+      family: "GET /api/moderation/moderators",
+      invoke: (dependencies) =>
+        createModeratorGetHandler(
+          dependencies as Parameters<typeof createModeratorGetHandler>[0],
+        )(),
+    },
+    {
+      family: "POST /api/moderation/moderators",
+      invoke: (dependencies) =>
+        createModeratorPostHandler(
+          dependencies as Parameters<typeof createModeratorPostHandler>[0],
+        )(jsonRequest({ targetAccountId, moderator: true })),
+    },
+    {
+      family: "GET /api/moderation/cohort",
+      invoke: (dependencies) =>
+        createModerationCohortGetHandler(
+          dependencies as Parameters<typeof createModerationCohortGetHandler>[0],
+        )(cohortRequest(cohortQuery())),
+    },
+  ];
+
+  it.each(gateCases)("$family answers a failed session lookup with 502 upstream failure", async ({ invoke }) => {
+    const createService = vi.fn(async () => serviceHarness());
+    const response = await invoke({
+      getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
+      getCurrentRole: vi.fn(),
+      createService,
+    });
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  it.each(gateCases)("$family answers a failed role lookup with 502 upstream failure", async ({ invoke }) => {
+    const createService = vi.fn(async () => serviceHarness());
+    const response = await invoke({
+      getSession: async () => moderatorSession,
+      getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
+      createService,
+    });
+
+    await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  it.each(gateCases)("$family answers a demoted moderator with the one 403 message", async ({ invoke }) => {
+    const createService = vi.fn(async () => serviceHarness());
+    const response = await invoke({
+      getSession: async () => memberSession,
+      getCurrentRole: async () => "MEMBER",
+      createService,
+    });
+
+    await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
+    expect(createService).not.toHaveBeenCalled();
   });
 });
 
