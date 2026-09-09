@@ -341,6 +341,31 @@ it.each([
   expect(() => validateDocument(`${readme}\n${payload}`)).toThrow(error);
 });
 
+// Issue 400's payloads: CommonMark swallows everything up to an HTML block's
+// terminator, so a code fence inside one never becomes a fence token and the
+// closed grammar never sees it. Each payload is appended, as its own block, to
+// a document that would otherwise hold exactly the three canonical installs —
+// and to the real README's text, which the guard reads without modifying it.
+it.each([
+  ["a <div> HTML block swallowing a non-canonical fenced install", "<div>\n```text\npnpm install\n```\n</div>", "Unsupported code fence inside an HTML block"],
+  ["a <script> HTML block swallowing a canonical fenced install", "<script>\n```bash\n" + canonicalInstall + "\n```\n</script>", "Unsupported code fence inside an HTML block"],
+  ["an unclosed <script> swallowing a canonical fenced install", "<script>\n```bash\n" + canonicalInstall + "\n```\n", "Unsupported code fence inside an HTML block"],
+  ["pnpm prose inside a <div> HTML block", "<div>\ndiscusses pnpm and its store\n</div>", "Unsupported pnpm mention inside an HTML block"],
+])("rejects an install hidden behind $0", async (_name, payload, error) => {
+  const synthetic = [0, 1, 2].map(() => `\`\`\`bash\n${canonicalInstall}\n\`\`\``).join("\n\n") + "\n";
+  expect(() => validateDocument(synthetic + payload)).toThrow(error);
+  const readme = await readFile("deploy/README.md", "utf8");
+  expect(() => validateDocument(`${readme}\n${payload}`)).toThrow(error);
+});
+
+// The HTML-block checks must not disturb the closed-comment rule: a CLOSED
+// comment may mention pnpm as prose, and the indented code after it is still
+// judged by the grammar. Mirror of the pinned multiline-comment test.
+it("keeps a closed HTML comment's pnpm prose and the code after it in prose", () => {
+  const comment = "<!--\nThe pnpm command below is only comment text.\n    pnpm install --frozen-lockfile\n-->";
+  expect(validateDocument(`${comment}\n    ${canonicalInstall}`)).toBe(1);
+});
+
 it.each(["bash", "sh", 'bash title="Install"', "shell"])("accepts canonical installs in %s fences", (info) => {
   expect(validateDocument(`\`\`\`${info}\n${canonicalInstall} # install packages\n\`\`\``)).toBe(1);
 });
