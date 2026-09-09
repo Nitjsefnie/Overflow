@@ -17,7 +17,13 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
       <section className="surface rules-card" aria-labelledby="rules-maintainers-heading">
         <h2 id="rules-maintainers-heading">Maintainers</h2>
         <ul className="rules-list">
-          <li>Have a claim system in place.</li>
+          <li>
+            Have a claim system in place —{" "}
+            <a href="https://github.com/Nitjsefnie-Actions/claim" rel="noreferrer">
+              Nitjsefnie-Actions/claim
+            </a>{" "}
+            provides /claim, /unclaim and /release for any repository.
+          </li>
           <li>Apply the label and rationale comment within 15 minutes of merge.</li>
         </ul>
       </section>
@@ -26,6 +32,7 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <h2 id="rules-contributors-heading">Contributors</h2>
         <ul className="rules-list">
           <li>Claim your issue.</li>
+          <li>Follow the repository&apos;s own rules — read its README, CONTRIBUTING and issue templates.</li>
           <li>Send a pull request with &quot;Fixes #N&quot;.</li>
         </ul>
       </section>
