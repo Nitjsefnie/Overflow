@@ -35,6 +35,13 @@ export async function GET(request: Request): Promise<Response> {
     const labels = await gateway.listRepositoryLabels(reference);
     return Response.json({ labels: [...labels] });
   } catch (error) {
+    // Issue 327: a 401 is GitHub rejecting the authorization Overflow holds —
+    // the token expired or was revoked, so retrying cannot fix it. Same
+    // credential vocabulary as the registration endpoint's githubSetupError
+    // (register.ts); the message names the one remedy that refreshes the token.
+    if (error instanceof GitHubApiError && error.status === 401) {
+      return errorResponse(401, "GITHUB_CREDENTIALS", "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.");
+    }
     if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
       const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
       return errorResponse(
