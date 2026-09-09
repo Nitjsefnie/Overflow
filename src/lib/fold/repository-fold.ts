@@ -750,6 +750,11 @@ function crossRepositoryReason(
     + `(GitHub repository ${pullRequest.repositoryGitHubId}, not ${registered.githubRepositoryId}).`;
 }
 
+/**
+ * The LABELED and UNLABELED history events of one actual-catalog label.
+ */
+type ActualCatalogLabelEvent = Extract<GitHubIssueHistoryEvent, { kind: "LABELED" | "UNLABELED" }>;
+
 function resolveSettledDifficulty(
   issue: RepositoryFoldIssue,
   pullRequest: AuthoritativeClosingPullRequest,
@@ -763,7 +768,7 @@ function resolveSettledDifficulty(
   const actualByLabel = new Map(scheme.actualLabels.map((entry) => [entry.label, entry]));
   const mergeTime = Date.parse(pullRequest.mergedAt);
   const finalCommitTime = Date.parse(pullRequest.finalCommitAt);
-  const activeLabels = new Map<string, Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>>();
+  const eventsByLabel = new Map<string, ActualCatalogLabelEvent[]>();
   let earliestLaterApplication: Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }> | undefined;
   for (const event of issue.history.filter(validIssueHistoryEvent).sort(compareHistoryItems)) {
     if (
@@ -778,10 +783,28 @@ function resolveSettledDifficulty(
       }
       continue;
     }
-    if (event.kind === "LABELED") {
-      activeLabels.set(event.label, event);
+    const events = eventsByLabel.get(event.label);
+    if (events === undefined) {
+      eventsByLabel.set(event.label, [event]);
     } else {
-      activeLabels.delete(event.label);
+      events.push(event);
+    }
+  }
+  // A label stands at the window close only where its latest actual-catalog
+  // events at-or-before the close leave it unambiguously applied: GitHub's
+  // timeline carries no sub-second sequence signal (node ids are opaque), so
+  // events sharing one instant have no defensible intra-instant order. Reducing
+  // each label by INSTANT rather than by replay keeps the outcome independent
+  // of the arrival order GitHub returned: the latest instant must hold exactly
+  // one LABELED event of that label and no UNLABELED event sharing it — a
+  // removal or a duplicate application at that instant leaves it not standing.
+  const activeLabels = new Map<string, Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>>();
+  for (const [label, events] of eventsByLabel) {
+    const latestInstant = Math.max(...events.map((event) => Date.parse(event.createdAt)));
+    const atLatestInstant = events.filter((event) => Date.parse(event.createdAt) === latestInstant);
+    const [latest] = atLatestInstant;
+    if (atLatestInstant.length === 1 && latest?.kind === "LABELED") {
+      activeLabels.set(label, latest);
     }
   }
   // Built once for every refusal below. All five describe the same shut window,
