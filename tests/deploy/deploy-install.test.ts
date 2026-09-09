@@ -213,6 +213,20 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
       if (token.content.includes("<!--") && !token.content.includes("-->")) {
         throw new Error("Unsupported unclosed HTML comment");
       }
+      // CommonMark: an HTML block swallows everything up to its terminator,
+      // so a code fence inside one never becomes a fence token and the closed
+      // grammar never sees it (issue 400). A fence-looking line in any HTML
+      // block — comments included — is structure, not prose, and is rejected
+      // by name instead of being silently skipped.
+      if (/`{3,}|~{3,}/.test(token.content)) {
+        throw new Error(`Unsupported code fence inside an HTML block: ${token.content.split("\n")[0].trim()}`);
+      }
+      // A closed HTML comment may mention pnpm as prose, so only non-comment
+      // blocks are held to the mention rule; the first line tells them apart.
+      const firstLine = token.content.split("\n")[0].trimStart();
+      if (!firstLine.startsWith("<!--") && mentionsPnpm(token.content)) {
+        throw new Error(`Unsupported pnpm mention inside an HTML block: ${token.content.split("\n")[0].trim()}`);
+      }
     }
   }
   return regions;
