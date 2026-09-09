@@ -786,7 +786,40 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+    }]);
+  });
+
+  // The label text in the body was never the requirement (issue 297): the
+  // sponsor's deliberate nonblank comment inside the window is. A body that
+  // states the points without restating the label qualifies, so the notice and
+  // the predicate enforce the same property.
+  it("accepts a nonblank sponsor rationale that never states the label text", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.comments[0] = {
+      ...snapshot.issues[0]!.comments[0]!,
+      body: "Settled at 6 points after reviewing the final diff.",
+    };
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", settledPoints: 6 });
+  });
+
+  it("rejects a label-bearing sponsor comment posted outside the window", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.comments[0] = {
+      ...snapshot.issues[0]!.comments[0]!,
+      body: "delivered/6 was applied by the sponsor.",
+    };
+    setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
   });
 
@@ -807,7 +840,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.selfWorkCalibrations).toEqual([expect.objectContaining({
       githubIssueId: 101, githubPullRequestId: 201, userId: "sponsor", actualPoints: null,
@@ -835,7 +868,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+      reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     }]);
     expect(result.pullRequests).toHaveLength(1);
     expect(result.settlements).toEqual([]);
@@ -862,7 +895,7 @@ describe("rejected settlement closure records", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "No rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
+        reason: "No nonblank rationale comment by the repository sponsor's account (login `sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
       },
     ]);
   });

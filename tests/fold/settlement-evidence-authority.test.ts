@@ -49,7 +49,7 @@ describe("integrated rejected settlement closure reasons", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "Every qualifying rationale comment by the repository sponsor's account (login `sponsor`) naming `delivered/6` was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
+      reason: "Every nonblank rationale comment by the repository sponsor's account (login `sponsor`) inside the window was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
     }]);
     expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
@@ -648,7 +648,10 @@ describe("rationale comment edits", () => {
     expect(result.policyViolations).toEqual([]);
   });
 
-  it("does not report an edit violation when the comment never named the label", () => {
+  // Issue 297: the wording never decided anything, so a comment whose body
+  // omits the label is edited evidence all the same — the edit check follows
+  // candidacy, and candidacy no longer reads the body.
+  it("reports the edit violation even when the comment never named the label", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.comments[0]!.body = "Looks fine.";
     snapshot.issues[0]!.comments[0]!.lastEditedAt = "2026-09-02T09:00:00.000Z";
@@ -656,7 +659,13 @@ describe("rationale comment edits", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null });
-    expect(result.policyViolations).toEqual([]);
+    expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "SETTLEMENT_EVIDENCE_REJECTED",
+      githubPullRequestId: 201,
+      reason: "Every nonblank rationale comment by the repository sponsor's account (login `sponsor`) inside the window was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
+    }]);
   });
 });
 
