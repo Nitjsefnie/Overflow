@@ -286,6 +286,37 @@ describe("same-instant settled label standing", () => {
     },
   );
 
+  it.each(["forward", "reversed"] as const)(
+    "rejects two same-instant removals of one standing settled label in either arrival order (%s)",
+    (arrival) => {
+      const snapshot = evidenceFixture();
+      snapshot.issues[0]!.history.push(
+        {
+          kind: "UNLABELED", id: "actual-uu-1", actorLogin: "sponsor", actorGitHubUserId: 1001,
+          label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+        },
+        {
+          kind: "UNLABELED", id: "actual-uu-2", actorLogin: "sponsor", actorGitHubUserId: 1001,
+          label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+        },
+      );
+      if (arrival === "reversed") snapshot.issues[0]!.history.reverse();
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements[0]).toMatchObject({
+        status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
+      });
+      expect(result.unwritableClosures).toEqual([{
+        githubIssueId: 101,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201,
+        reason: NO_STANDING_REASON,
+      }]);
+      expect(result.policyViolations).toEqual([]);
+    },
+  );
+
   it("still settles a removal and reapplication at distinct instants", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.history.push(
