@@ -220,6 +220,7 @@ describe("initial PostgreSQL materialization", () => {
       "026_incremental_reconciliation.sql",
       "027_issue_github_updated_at.sql",
       "028_repository_reconciliation_cost.sql",
+      "029_reconciliation_changes_recorded_seq.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -2405,14 +2406,16 @@ describe("initial PostgreSQL materialization", () => {
       select entity_kind, change_kind, pull_request_id
       from reconciliation_changes
       where reconciliation_run_id = ${removedRun} and change_kind = ${"REMOVE"}
-      order by entity_kind::text
+      order by recorded_seq
     `;
     // Every removal loses its pull request reference: the column is
     // `on delete set null`, and the pull request row is one of the deletions.
+    // Recorded order is write order: the settlement goes first, then the pull
+    // request, then the issue.
     expect(removalChanges).toEqual([
-      { entity_kind: "ISSUE", change_kind: "REMOVE", pull_request_id: null },
-      { entity_kind: "PULL_REQUEST", change_kind: "REMOVE", pull_request_id: null },
       { entity_kind: "SETTLEMENT", change_kind: "REMOVE", pull_request_id: null },
+      { entity_kind: "PULL_REQUEST", change_kind: "REMOVE", pull_request_id: null },
+      { entity_kind: "ISSUE", change_kind: "REMOVE", pull_request_id: null },
     ]);
   });
 
@@ -3213,7 +3216,7 @@ describe("initial PostgreSQL materialization", () => {
       from reconciliation_changes
       where reconciliation_run_id in (${addRun}, ${repairRun}, ${repeatRun}, ${acceptedRun})
         and entity_kind = 'UNWRITABLE_CLOSURE'
-      order by created_at, id
+      order by recorded_seq
     `;
     expect(changes).toEqual([
       { change_kind: "ADD", before_state: null, after_state: rejectedState },
@@ -3340,10 +3343,7 @@ describe("initial PostgreSQL materialization", () => {
       select entity_kind, change_kind, before_state, after_state
       from reconciliation_changes
       where reconciliation_run_id in (${selfWorkAddRun}, ${selfWorkChangeRun}, ${selfWorkRemoveRun})
-      -- Every change of one run shares its transaction timestamp, and the id
-      -- tie-break is a random uuid, so the run that writes three of them needs
-      -- a second ordering key to read back in a fixed order.
-      order by created_at, entity_kind::text, id
+      order by recorded_seq
     `;
     expect(selfWorkChanges).toEqual([
       {
@@ -3359,11 +3359,12 @@ describe("initial PostgreSQL materialization", () => {
         after_state: expect.objectContaining({ actualPoints: 7 }),
       },
       // The materialization the calibration was drawn from goes with it, and
-      // says so.
+      // says so. Recorded order is write order: the calibration goes first,
+      // then the pull request, then the issue.
       {
-        entity_kind: "ISSUE",
+        entity_kind: "SELF_WORK_CALIBRATION",
         change_kind: "REMOVE",
-        before_state: expect.objectContaining({ openingLabel: "M" }),
+        before_state: expect.objectContaining({ actualPoints: 7 }),
         after_state: null,
       },
       {
@@ -3373,9 +3374,9 @@ describe("initial PostgreSQL materialization", () => {
         after_state: null,
       },
       {
-        entity_kind: "SELF_WORK_CALIBRATION",
+        entity_kind: "ISSUE",
         change_kind: "REMOVE",
-        before_state: expect.objectContaining({ actualPoints: 7 }),
+        before_state: expect.objectContaining({ openingLabel: "M" }),
         after_state: null,
       },
     ]);
@@ -3435,7 +3436,7 @@ describe("initial PostgreSQL materialization", () => {
       select entity_kind, change_kind, before_state, after_state
       from reconciliation_changes
       where reconciliation_run_id in (${closureAddRun}, ${closureChangeRun}, ${closureRemoveRun})
-      order by created_at, id
+      order by recorded_seq
     `;
     expect(closureChanges).toEqual([
       {
@@ -3457,6 +3458,155 @@ describe("initial PostgreSQL materialization", () => {
         after_state: null,
       },
     ]);
+  });
+
+  it("orders one run's reconciliation changes by the sequence they were recorded in", async () => {
+    const sponsorLogin = `recorded-seq-sponsor-${nextExternalId()}`;
+    const contributorLogin = `recorded-seq-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
+    `;
+    const { firstIssueId, secondIssueId, snapshot } = twoSettledIssuesSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      sponsorLogin,
+      contributorLogin,
+    });
+
+    // One materialize call is one transaction, so its two SETTLEMENT rows share
+    // a created_at and a run, and only the write order distinguishes them. The
+    // fold sorts settlements by GitHub issue id, so the run records the first
+    // issue's settlement before the second's.
+    const store = new PostgresFoldStore(sql);
+    const runId = await store.beginRun(repositoryId);
+    await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
+      repositoryId,
+      runId,
+      fold: foldRepository(snapshot),
+    }))).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
+
+    const changes = await sql<{
+      entity_kind: string;
+      change_kind: string;
+      recorded_seq: string;
+      settled_issue: string;
+    }[]>`
+      select entity_kind, change_kind, recorded_seq, after_state->>'githubIssueId' as settled_issue
+      from reconciliation_changes
+      where reconciliation_run_id = ${runId}
+      order by recorded_seq
+    `;
+    expect(changes).toEqual([
+      { entity_kind: "SETTLEMENT", change_kind: "ADD", recorded_seq: expect.any(String), settled_issue: String(firstIssueId) },
+      { entity_kind: "SETTLEMENT", change_kind: "ADD", recorded_seq: expect.any(String), settled_issue: String(secondIssueId) },
+    ]);
+    const recordedSeqs = changes.map((change) => Number(change.recorded_seq));
+    expect([...recordedSeqs].sort((left, right) => left - right)).toEqual(recordedSeqs);
+    expect(new Set(recordedSeqs).size).toBe(recordedSeqs.length);
+    // One transaction means one created_at: the tie the sequence exists to break.
+    await expect(sql<{ created_at: string }[]>`
+      select distinct created_at from reconciliation_changes where reconciliation_run_id = ${runId}
+    `).resolves.toHaveLength(1);
+  });
+
+  it("assigns existing reconciliation changes a recorded sequence in insertion order", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `recorded_seq_upgrade_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      // Everything before the recorded sequence: the rows this run writes are
+      // existing rows from the upgrade's point of view.
+      await runMigrations({ upTo: "028_repository_reconciliation_cost.sql" });
+      const sponsorLogin = `recorded-seq-upgrade-sponsor-${nextExternalId()}`;
+      const contributorLogin = `recorded-seq-upgrade-contributor-${nextExternalId()}`;
+      const sponsorId = await insertUserWithLogin(upgradeSql, sponsorLogin);
+      const contributorId = await insertUserWithLogin(upgradeSql, contributorLogin);
+      const repositoryId = await insertRepository(upgradeSql, sponsorId);
+      const [repository] = await upgradeSql<{ owner_name: string; github_repository_id: number | string }[]>`
+        select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
+      `;
+      const { firstIssueId, secondIssueId, snapshot } = twoSettledIssuesSnapshot({
+        repositoryId,
+        ownerName: repository.owner_name,
+        githubRepositoryId: Number(repository.github_repository_id),
+        sponsorId,
+        contributorId,
+        sponsorGitHubUserId: await githubUserIdOf(upgradeSql, sponsorId),
+        contributorGitHubUserId: await githubUserIdOf(upgradeSql, contributorId),
+        sponsorLogin,
+        contributorLogin,
+      });
+
+      // Two runs, two transactions: the first records both settlements under
+      // one created_at, the second changes the first settlement afterwards, so
+      // the upgrade has existing rows whose insertion order is known.
+      const store = new PostgresFoldStore(upgradeSql, undefined, upgradeSql);
+      const addRun = await store.beginRun(repositoryId);
+      await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
+        repositoryId,
+        runId: addRun,
+        fold: foldRepository(snapshot),
+      }))).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
+
+      const changedSnapshot = structuredClone(snapshot);
+      const changedIssue = changedSnapshot.issues[0]!;
+      changedIssue.labels = changedIssue.labels.map((label) => label === "delivered/6" ? "delivered/7" : label);
+      const actualEvent = changedIssue.history.find((event) => event.kind === "LABELED" && event.label === "delivered/6");
+      if (actualEvent === undefined || actualEvent.kind !== "LABELED") {
+        throw new Error("Expected actual label history fixture.");
+      }
+      actualEvent.label = "delivered/7";
+      changedIssue.comments[0]!.body = "Settled as delivered/7.";
+      const changeRun = await store.beginRun(repositoryId);
+      await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
+        repositoryId,
+        runId: changeRun,
+        fold: foldRepository(changedSnapshot),
+      }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+
+      await expect(runMigrations()).resolves.toBeUndefined();
+
+      const upgradedChanges = await upgradeSql<{
+        recorded_run: string;
+        change_kind: string;
+        recorded_seq: string;
+        settled_issue: string;
+      }[]>`
+        select
+          case when reconciliation_run_id = ${addRun} then 'add run' else 'change run' end as recorded_run,
+          change_kind,
+          recorded_seq,
+          after_state->>'githubIssueId' as settled_issue
+        from reconciliation_changes
+        order by recorded_seq
+      `;
+      expect(upgradedChanges).toEqual([
+        { recorded_run: "add run", change_kind: "ADD", recorded_seq: expect.any(String), settled_issue: String(firstIssueId) },
+        { recorded_run: "add run", change_kind: "ADD", recorded_seq: expect.any(String), settled_issue: String(secondIssueId) },
+        { recorded_run: "change run", change_kind: "CHANGE", recorded_seq: expect.any(String), settled_issue: String(firstIssueId) },
+      ]);
+      const recordedSeqs = upgradedChanges.map((change) => Number(change.recorded_seq));
+      expect([...recordedSeqs].sort((left, right) => left - right)).toEqual(recordedSeqs);
+      expect(new Set(recordedSeqs).size).toBe(recordedSeqs.length);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
   });
 
   it("materializes a cross-repository closure with no pull request row behind it", async () => {
@@ -4321,6 +4471,52 @@ function materializationSnapshot(input: {
         ],
       },
     ],
+  };
+}
+
+/**
+ * A snapshot with two settled issues in one repository fold: one materialize
+ * call records both settlements in one transaction, so the two SETTLEMENT
+ * change rows share a run and a created_at and only the write order
+ * distinguishes them. The fold sorts settlements by GitHub issue id, so the
+ * first issue's settlement is recorded first.
+ */
+function twoSettledIssuesSnapshot(input: {
+  repositoryId: string;
+  ownerName: string;
+  githubRepositoryId: number;
+  sponsorId: string;
+  contributorId: string;
+  sponsorGitHubUserId: number;
+  contributorGitHubUserId: number;
+  sponsorLogin: string;
+  contributorLogin: string;
+}): { firstIssueId: number; secondIssueId: number; snapshot: RepositoryFoldSnapshot } {
+  const firstIssueId = nextExternalId();
+  const secondIssueId = nextExternalId();
+  const firstSnapshot = materializationSnapshot({
+    ...input,
+    issueLabels: ["M"],
+    actualLabel: "delivered/6",
+    githubIssueId: firstIssueId,
+    githubPullRequestId: nextExternalId(),
+  });
+  const secondSnapshot = materializationSnapshot({
+    ...input,
+    issueLabels: ["M"],
+    actualLabel: "delivered/6",
+    githubIssueId: secondIssueId,
+    githubPullRequestId: nextExternalId(),
+  });
+  // Issues are unique by (repository_id, issue_number), and so are pull
+  // requests by (repository_id, pull_request_number).
+  secondSnapshot.issues[0]!.number = 2;
+  secondSnapshot.issues[0]!.closingPullRequests[0]!.number = 2;
+
+  return {
+    firstIssueId,
+    secondIssueId,
+    snapshot: { ...firstSnapshot, issues: [...firstSnapshot.issues, ...secondSnapshot.issues] },
   };
 }
 
