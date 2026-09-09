@@ -222,6 +222,7 @@ describe("initial PostgreSQL materialization", () => {
       "028_repository_reconciliation_cost.sql",
       "029_reconciliation_changes_recorded_seq.sql",
       "030_repository_difficulty_scheme_versions.sql",
+      "031_tighten_issue_evidence_completeness.sql",
       "032_immutable_claim_assignee_identity.sql",
     ].map((name) => ({ name, count: 1 })));
   });
@@ -1046,7 +1047,8 @@ describe("initial PostgreSQL materialization", () => {
       .rejects.toThrow("Issue opening rating is immutable");
     // A login still cannot be blanked away while opening evidence remains
     // attached. The trigger refuses every blanking transition, including the
-    // whitespace spellings that the completeness check's space-only trim admits.
+    // whitespace spellings; since migration 031 the completeness check refuses
+    // them too, so the trigger is a backstop rather than the only guard.
     for (const blanked of [null, "", "   ", "\t", "\n", " \t\n "]) {
       await expect(sql`
         update issues set owner_github_login = ${blanked} where id = ${issue.id}
@@ -1064,69 +1066,13 @@ describe("initial PostgreSQL materialization", () => {
     }]);
   });
 
-  it("keeps a row that already holds a whitespace-only display login writable", async () => {
-    // `issues_opening_source_complete_check` trims spaces only, so a row written
-    // before the trigger carried a whitespace arm can already hold a tab. The arm
-    // is keyed on the transition rather than on the new value precisely so such a
-    // row stays writable: a clause reading only the new value would refuse every
-    // later update to its logins and wedge the row with no way back.
-    const issue = await insertIssue(sql);
-    const openingEventId = `opening-event-whitespace-${nextExternalId()}`;
-    const recoveredLogin = `login-recovered-${nextExternalId()}`;
-    await sql`
-      update issues
-      set owner_github_login = ${"\t"},
-          opening_source_event_id = ${openingEventId},
-          opening_source_actor_login = ${"\t"},
-          opening_source_at = ${"2026-09-01T09:00:00.000Z"}
-      where id = ${issue.id}
-    `;
-
-    // The owner login stays whitespace-only across this update, so a value-keyed
-    // arm would refuse it even though nothing is being blanked.
-    await sql`
-      update issues set opening_source_actor_login = ${recoveredLogin} where id = ${issue.id}
-    `;
-    await sql`
-      update issues set owner_github_login = ${recoveredLogin} where id = ${issue.id}
-    `;
-
-    await expect(sql`
-      select owner_github_login, opening_source_actor_login
-      from issues where id = ${issue.id}
-    `).resolves.toEqual([{
-      owner_github_login: recoveredLogin,
-      opening_source_actor_login: recoveredLogin,
-    }]);
-  });
-
-  it("refuses redating an opening timestamp standing without its event id", async () => {
-    // The completeness check is three-valued, so it admits a row carrying an
-    // opening timestamp and nothing else (issue 19). From that state the guard's
-    // event-id half sees nothing, and only its timestamp half can refuse a
-    // redate of evidence the row already holds.
-    const issue = await insertIssue(sql);
-    await sql`
-      update issues set opening_source_at = ${"2026-09-01T09:00:00.000Z"} where id = ${issue.id}
-    `;
-    await expect(sql`
-      select owner_github_login, opening_source_event_id, opening_source_actor_login, opening_source_at
-      from issues where id = ${issue.id}
-    `).resolves.toEqual([{
-      owner_github_login: null,
-      opening_source_event_id: null,
-      opening_source_actor_login: null,
-      opening_source_at: new Date("2026-09-01T09:00:00.000Z"),
-    }]);
-
-    await expect(sql`
-      update issues set opening_source_at = ${"2026-09-02T09:00:00.000Z"} where id = ${issue.id}
-    `).rejects.toThrow("Issue opening rating is immutable");
-    await expect(sql`
-      select opening_source_at from issues where id = ${issue.id}
-    `).resolves.toEqual([{ opening_source_at: new Date("2026-09-01T09:00:00.000Z") }]);
-  });
-
+  // Migration 031 made both evidence-completeness checks two-valued, so the
+  // whitespace-only and partially-null records they used to admit can no longer
+  // be written at all. The two tests this file once carried for those hole
+  // states — keeping a whitespace-only login row writable, and redating an
+  // opening timestamp standing without its event id — described states that
+  // are now unwritable, and their rejection coverage moved to
+  // tests/db/evidence-completeness.test.ts.
   it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
     const pullRequest = await insertPullRequest(sql);
     const mergeCommitOid = "0123456789abcdef0123456789abcdef01234567";
