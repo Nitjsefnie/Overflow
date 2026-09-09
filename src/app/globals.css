@@ -895,6 +895,21 @@ button:disabled {
   .site-nav {
     justify-content: flex-start;
   }
+
+  /*
+   * The signed-out shell renders the nav deliberately empty, and an empty
+   * stacked nav would still generate its grid row — the nav element is the
+   * row 2 item, so hiding only the empty list leaves the 1rem row-gap under
+   * the wordmark. Hiding the nav itself removes the row; browsers without
+   * :has() keep the pre-existing 16px quirk instead of breaking.
+   */
+  .site-nav:empty {
+    display: none;
+  }
+
+  .site-header nav:has(.site-nav:empty) {
+    display: none;
+  }
 }
 
 .rules-card {
