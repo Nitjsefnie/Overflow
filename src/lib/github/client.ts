@@ -622,10 +622,11 @@ export class GitHubGateway {
   }
 
   /**
-   * Rebuilds every manifest entry from per-issue REST collections, mirroring
-   * the repo-wide walk's validation: identical zod schemas, and the same
-   * identity error when a row names a different issue or a foreign id. The
-   * issue number comes from the request path, so no issue_url parsing happens.
+   * Rebuilds every manifest entry from per-issue REST collections. Per-issue
+   * event rows carry no `issue` field: the request path names the issue, so a
+   * row binds to the entry the trusted scan node itself requested, and the
+   * databaseId cross-check is possible only on the repo-wide walk. Comment
+   * rows do carry `issue_url`, cross-checked to name the requested issue.
    * This enumerator is also the fresh witness on the suspect path, so it must
    * depend on nothing captured before the reread it verifies.
    */
@@ -635,7 +636,6 @@ export class GitHubGateway {
   ): Promise<Map<number, Set<string>>> {
     const manifest = new Map(issues.map((issue) => [issue.number, new Set<string>()]));
     if (issues.length === 0) return manifest;
-    const identities = new Map(issues.map((issue) => [issue.number, issue.databaseId]));
     const watchedEvents = new Set(["labeled", "unlabeled", "assigned", "unassigned"]);
     const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/issues`;
     const budget = issues.length * 4 + 4;
@@ -651,16 +651,17 @@ export class GitHubGateway {
           const response = await this.request(`${path}/${issue.number}/${collection}?per_page=100&page=${page}`);
           const payload = await responseJson<unknown>(response);
           if (collection === "events") {
-            for (const event of manifestEventRows.parse(payload)) {
-              if (event.issue.number !== issue.number || identities.get(issue.number) !== event.issue.id) {
-                throw new Error("GitHub timeline manifest issue identity was invalid.");
-              }
+            for (const event of perIssueEventRows.parse(payload)) {
               if (watchedEvents.has(event.event)) {
                 manifest.get(issue.number)!.add(event.node_id);
               }
             }
           } else {
             for (const comment of manifestCommentRows.parse(payload)) {
+              const match = /\/issues\/([1-9]\d*)$/.exec(new URL(comment.issue_url).pathname);
+              if (match === null || Number(match[1]) !== issue.number) {
+                throw new Error("GitHub timeline manifest issue identity was invalid.");
+              }
               manifest.get(issue.number)!.add(comment.node_id);
             }
           }
@@ -1476,9 +1477,13 @@ function timelineMatchesEvidence(
     && expectedIds?.size === expectedCount && ids.every((id) => expectedIds.has(id));
 }
 
-/** Identical row schemas for the repo-wide walk and the per-issue fallback. */
+/**
+ * Repo-wide event rows carry the owning issue; per-issue event rows do not —
+ * the request path names it. Comment rows carry `issue_url` on both paths.
+ */
 const manifestEventRows = z.array(z.object({
   node_id: z.string().min(1), event: z.string(),
   issue: z.object({ id: z.number().int().positive().safe(), number: z.number().int().positive().safe() }),
 }));
+const perIssueEventRows = z.array(z.object({ node_id: z.string().min(1), event: z.string() }));
 const manifestCommentRows = z.array(z.object({ node_id: z.string().min(1), issue_url: z.url() }));
