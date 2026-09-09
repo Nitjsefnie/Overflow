@@ -595,6 +595,33 @@ describe("the shared moderator authorization gate", () => {
     await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
     expect(createService).not.toHaveBeenCalled();
   });
+
+  it.each(gateCases)("$family answers a missing session with 401 before any service work", async ({ invoke }) => {
+    const createService = vi.fn(async () => serviceHarness());
+    const response = await invoke({
+      getSession: async () => null,
+      getCurrentRole: vi.fn(),
+      createService,
+    });
+
+    await expectRejection(response, 401, "UNAUTHENTICATED", "Sign in is required.");
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  // A role lookup that answers null — an account the deployment no longer
+  // knows — is not an exempted caller: it fails the moderator comparison like
+  // every other non-moderator answer.
+  it.each(gateCases)("$family answers a null database role with the one 403 message", async ({ invoke }) => {
+    const createService = vi.fn(async () => serviceHarness());
+    const response = await invoke({
+      getSession: async () => moderatorSession,
+      getCurrentRole: async () => null,
+      createService,
+    });
+
+    await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
+    expect(createService).not.toHaveBeenCalled();
+  });
 });
 
 describe("moderation mutations reachable only from the deployment's own origin", () => {
