@@ -88,13 +88,10 @@ function stateSummary(request: SettlementOverrideRequest, kind: SettlementOverri
   switch (request.state) {
     case "OPEN":
       return "Awaiting a moderator";
-    case "GRANTED": {
-      // The figure is stored as a number whenever it is known, so only the
-      // numeric case pluralizes; "unknown" keeps the plural noun it reads with.
-      const figure = request.settledPoints === null ? "unknown" : String(request.settledPoints);
-      const points = request.settledPoints === null ? "points" : plural(request.settledPoints, "point");
-      return `Granted at ${figure} ${kind === "settlement" ? "settled" : "actual"} ${points}`;
-    }
+    case "GRANTED":
+      // The unreadable figure keeps its "unknown" fallback and the plural noun
+      // it reads beside; a known figure pluralizes through the helper.
+      return `Granted at ${request.settledPoints ?? "unknown"} ${kind === "settlement" ? "settled" : "actual"} ${plural(request.settledPoints ?? 0, "point")}`;
     case "DECLINED":
       return "Declined";
   }

@@ -58,7 +58,9 @@ describe("settlement correction decision controls", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Issue #44 is corrected to 1 point.");
+    const status = await screen.findByRole("status");
+    expect(screen.queryByText("Issue #44 is corrected to 1 points.")).toBeNull();
+    expect(status).toHaveTextContent("Issue #44 is corrected to 1 point.");
 
     fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
