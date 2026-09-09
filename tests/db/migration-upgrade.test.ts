@@ -235,6 +235,10 @@ describe("the settled status check a fresh database enforces", () => {
       name: "unsettled work carrying a settled amount",
       row: { status: "UNSETTLED", settledPoints: 6, credits: 0 },
     },
+    {
+      name: "unsettled work carrying a zero settled amount",
+      row: { status: "UNSETTLED", settledPoints: 0, credits: 0 },
+    },
   ])("refuses $name", async ({ row }) => {
     await expect(insertSettlementRow(getSql(), { sponsorId, creditorId, ...row }))
       .rejects.toThrow(/settlements_materialized_status_check/);
@@ -359,6 +363,7 @@ interface SeededRepository {
   visibility: string;
   github_webhook_id: number;
   difficulty_scheme: unknown;
+  active: boolean;
 }
 
 interface SeededIssue {
@@ -502,14 +507,16 @@ async function insertRepository(
     visibility: "PUBLIC",
     github_webhook_id: nextExternalId(),
     difficulty_scheme: validDifficultyScheme(),
+    active: true,
   };
   const [repository] = await sql<{ id: string }[]>`
     insert into registered_repositories (
-      github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme
+      github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme,
+      active
     )
     values (
       ${row.github_repository_id}, ${row.owner_name}, ${sponsor.id}, ${row.visibility},
-      ${row.github_webhook_id}, ${asJson(sql, row.difficulty_scheme)}::jsonb
+      ${row.github_webhook_id}, ${asJson(sql, row.difficulty_scheme)}::jsonb, ${row.active}
     )
     returning id
   `;
@@ -661,7 +668,8 @@ async function databaseContents(sql: Sql): Promise<DatabaseContents> {
           sponsor.github_login as sponsor_login,
           registered_repositories.visibility::text as visibility,
           registered_repositories.github_webhook_id::integer,
-          registered_repositories.difficulty_scheme
+          registered_repositories.difficulty_scheme,
+          registered_repositories.active
         from registered_repositories
         join users as sponsor on sponsor.id = registered_repositories.sponsor_id
       `,
