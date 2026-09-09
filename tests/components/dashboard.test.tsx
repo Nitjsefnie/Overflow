@@ -272,7 +272,11 @@ describe("member dashboard", () => {
     const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
     expect(section).not.toBeNull();
     expect(section).toBeVisible();
-    expect(within(section).getByRole("heading")).toBeVisible();
+    // The labelledby target is the heading itself: a refactor that drops or
+    // renames its id would leave the section silently unlabelled.
+    const heading = within(section).getByRole("heading");
+    expect(heading).toBeVisible();
+    expect(heading).toHaveAttribute("id", "account-audit-heading");
     expect(within(section).getByText(/2026-09-04/)).toBeVisible();
     // The day only: the raw timestamp form must not reach the page.
     expect(within(section).queryByText(/2026-09-04T/)).not.toBeInTheDocument();
@@ -308,7 +312,11 @@ describe("member dashboard", () => {
     // presence still rides the open audit alone.
     const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
     expect(section).not.toBeNull();
-    expect(within(section).getByRole("heading")).toBeVisible();
+    // The labelledby target is the heading itself: a refactor that drops or
+    // renames its id would leave the section silently unlabelled.
+    const heading = within(section).getByRole("heading");
+    expect(heading).toBeVisible();
+    expect(heading).toHaveAttribute("id", "account-audit-heading");
     expect(within(section).getByText(/2026-09-05/)).toBeVisible();
     expect(within(section).queryByText(/2026-09-05T/)).not.toBeInTheDocument();
   });
