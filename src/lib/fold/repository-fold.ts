@@ -256,8 +256,9 @@ export type FoldResult = {
  *
  * Both evidence windows are sequences a person performs by hand, and the order
  * things land in is routinely off by seconds or minutes. Settlement: push the
- * final commit, apply the settled label, comment naming it, merge — the comment
- * gets written before the label, or both are remembered just after the merge.
+ * final commit, apply the settled label, post the rationale comment, merge —
+ * the comment gets written before the label, or both are remembered just after
+ * the merge.
  * Opening: label the issue, then assign it — but `gh issue create --label
  * --assignee` applies the assignee FIRST, so the opening label lands a second
  * after the assignment it was meant to precede.
