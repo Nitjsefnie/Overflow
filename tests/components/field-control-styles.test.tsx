@@ -27,10 +27,16 @@ const stylesheet = readFileSync(new URL("../../src/app/globals.css", import.meta
 /**
  * Every leaf rule in the stylesheet, comments stripped, source order kept,
  * each carrying its enclosing at-rule preludes.
+ *
+ * The parser models exactly one shape: leaf rules at top level or inside at-rules.
+ * Style-rule nesting is real CSS that the browser applies and this parser cannot
+ * attribute, so a nested rule — or any `&` prelude — fails the parse loudly rather
+ * than being absorbed as a lookalike top-level rule a mutant could hide behind.
  */
 function styleRules(css: string): StyleRule[] {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, " ");
   const rules: StyleRule[] = [];
+  const unmodelled: string[] = [];
   const preludes: string[] = [];
   const sawNested: boolean[] = [];
   let text = "";
@@ -43,11 +49,15 @@ function styleRules(css: string): StyleRule[] {
       const prelude = preludes.pop() ?? "";
       const hadNested = sawNested.pop() ?? false;
       if (!hadNested && prelude !== "" && !prelude.startsWith("@") && text.trim() !== "") {
-        rules.push({
-          selector: prelude,
-          declarations: text.trim(),
-          atRules: preludes.filter((enclosing) => enclosing.startsWith("@")),
-        });
+        if (preludes.some((enclosing) => !enclosing.startsWith("@")) || prelude.includes("&")) {
+          unmodelled.push(prelude);
+        } else {
+          rules.push({
+            selector: prelude,
+            declarations: text.trim(),
+            atRules: preludes.filter((enclosing) => enclosing.startsWith("@")),
+          });
+        }
       }
       text = "";
       if (sawNested.length > 0) {
@@ -59,12 +69,32 @@ function styleRules(css: string): StyleRule[] {
       text += character;
     }
   }
+  if (unmodelled.length > 0) {
+    throw new Error(
+      `the stylesheet uses style-rule nesting, which this parser does not model; `
+        + `attribute these rules explicitly or restructure them: ${unmodelled.join(", ")}`,
+    );
+  }
   return rules;
 }
 
-/** The selector's parts, whitespace-normalized, e.g. `.field input:focus` → `.field input:focus`. */
+/**
+ * The selector's parts, whitespace-normalized. Type and pseudo-class names are
+ * case-insensitive in CSS, class names are not: lowercase everything outside a
+ * class token, so `.field SELECT` compares equal to `.field select` while
+ * `.Field select` does not.
+ */
 function selectorParts(rule: StyleRule): string[] {
-  return rule.selector.split(",").map((part) => part.replace(/\s+/g, " ").trim());
+  return rule.selector
+    .split(",")
+    .map((part) =>
+      part
+        .split(/(\.[A-Za-z][\w-]*)/)
+        .map((chunk, index) => (index % 2 === 1 ? chunk : chunk.toLowerCase()))
+        .join("")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
 }
 
 /** Whether any part of the selector names the control exactly: `.field input`, `.field select:focus`. */
@@ -119,6 +149,7 @@ describe("field control styles", () => {
     );
 
     expect(fontReset, "a font: inherit reset exists for the form controls").toBeDefined();
+    expect(fontReset?.atRules, "the font reset applies at every viewport").toEqual([]);
     expect(
       selectorParts(fontReset ?? { selector: "", declarations: "", atRules: [] }).includes("select"),
       "the font reset names select, which otherwise renders at the platform default size",

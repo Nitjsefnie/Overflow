@@ -64,6 +64,7 @@ ${formMarkup}
 </main>
 <pre id="results" style="display:none"></pre>
 <script>
+  window.focus();
   const controls = [
     ["input.repository", document.querySelector('.field input[name="repository"]')],
     ["input.openingLabel", document.querySelector('.field input[name="openingLabel"]')],
@@ -73,24 +74,45 @@ ${formMarkup}
   for (const [name, element] of controls) {
     const box = element.getBoundingClientRect();
     const computed = getComputedStyle(element);
-    element.focus();
-    // A headless run can silently fail to move focus; an unfocused reading of
-    // border-color is the --line value, which would read as agreement. Record
-    // whether focus actually landed so the runner can refuse the measurement.
-    const focused = document.activeElement === element;
-    const focusBorder = getComputedStyle(element).borderTopColor;
-    element.blur();
+    // Focus ownership (document.activeElement) can hold while the :focus
+    // STYLE has not applied — headless window focus flaps — and then
+    // border-color reads the unfocused value on every control, which compares
+    // as agreement. Read the unfocused border first, then focus and wait
+    // through timers (virtual time drives timers; rAF is not waited for by
+    // --dump-dom) before reading the focused value, and record whether the
+    // reading actually changed so the runner can refuse a dead run.
     measured.push({
       control: name,
       height: box.height,
       borderWidth: computed.borderTopWidth,
       background: computed.backgroundColor,
       fontSize: computed.fontSize,
-      focusBorderColor: focusBorder,
-      focused,
+      focusBorderColor: "",
+      focused: false,
+      focusApplied: false,
+      unfocusedBorder: computed.borderTopColor,
     });
   }
-  document.getElementById("results").textContent = JSON.stringify(measured);
+  const focusNext = () => {
+    if (measured.every((entry) => entry.focused)) {
+      for (const entry of measured) delete entry.unfocusedBorder;
+      document.getElementById("results").textContent = JSON.stringify(measured);
+      return;
+    }
+    const index = measured.findIndex((entry) => !entry.focused);
+    const name = measured[index].control;
+    const element = controls.find(([candidate]) => candidate === name)[1];
+    element.focus();
+    measured[index].focused = document.activeElement === element;
+    setTimeout(() => {
+      const focusBorder = getComputedStyle(element).borderTopColor;
+      measured[index].focusBorderColor = focusBorder;
+      measured[index].focusApplied = focusBorder !== measured[index].unfocusedBorder;
+      element.blur();
+      setTimeout(focusNext, 30);
+    }, 30);
+  };
+  focusNext();
 </script>
 </body>
 </html>`;
@@ -103,20 +125,25 @@ type MeasuredControl = {
   fontSize: string;
   focusBorderColor: string;
   focused: boolean;
+  focusApplied: boolean;
 };
 
 const directory = await mkdtemp(path.join(tmpdir(), "field-controls-"));
 const fixturePath = path.join(directory, "fixture.html");
 await writeFile(fixturePath, fixture);
 
-try {
-  const measured = await new Promise<MeasuredControl[]>((resolve, reject) => {
+/** One headless chromium run over the fixture; the parsed per-control measurements. */
+function measureOnce(): Promise<MeasuredControl[]> {
+  return new Promise<MeasuredControl[]>((resolve, reject) => {
     const chromium = spawn(
       "chromium",
       [
         "--headless=new",
         "--no-sandbox",
         "--disable-gpu",
+        // A per-run profile: the shared default profile carries state whose
+        // effect on window focus is one more variable a flaky reading hides.
+        `--user-data-dir=${path.join(directory, "chromium-profile")}`,
         `--window-size=${viewportWidth},1200`,
         "--virtual-time-budget=2000",
         "--dump-dom",
@@ -148,35 +175,56 @@ try {
       resolve(JSON.parse(decoded));
     });
   });
+}
 
-  console.log(JSON.stringify(measured, null, 2));
+/**
+ * Headless window focus flaps between runs; a run whose :focus style never
+ * applied is refused (focused/focusApplied false), not scored. Retry a refusal
+ * a few times before giving up — each accepted run has asserted the applied
+ * focus reading on every control, so a retry can never launder a false green.
+ */
+const maxAttempts = 4;
+try {
+  let measured: MeasuredControl[] | undefined;
+  for (let attempt = 1; attempt <= maxAttempts && measured === undefined; attempt++) {
+    const run = await measureOnce();
+    if (run.some((entry) => !entry.focused || !entry.focusApplied)) {
+      continue;
+    }
+    measured = run;
+  }
 
-  const failures: string[] = [];
-  if (measured.some((entry) => !entry.focused)) {
+  if (measured === undefined) {
     console.error(
-      "Focus could not be established on every control; the focus-border reading would be the unfocused value. Re-run.",
+      "Focus ownership or :focus style application failed on every attempt; the focus-border reading would be the unfocused value. Either the headless window never focused, or no :focus rule changes any control's border colour.",
     );
-    process.exit(2);
-  }
-  const inputs = measured.filter((entry) => entry.control.startsWith("input."));
-  const select = measured.find((entry) => entry.control === "select.claimState");
-  if (!select || inputs.length < 2) {
-    console.error("The fixture did not yield the three controls to compare.");
-    process.exit(1);
-  }
-  for (const property of ["height", "borderWidth", "background", "fontSize", "focusBorderColor"] as const) {
-    const reference = inputs[0][property];
-    for (const entry of [inputs[1], select]) {
-      if (entry[property] !== reference) {
-        failures.push(`${entry.control} ${property} is ${entry[property]}, expected ${reference}`);
+    process.exitCode = 2;
+  } else {
+    console.log(JSON.stringify(measured, null, 2));
+
+    const failures: string[] = [];
+    const inputs = measured.filter((entry) => entry.control.startsWith("input."));
+    const select = measured.find((entry) => entry.control === "select.claimState");
+    if (!select || inputs.length < 2) {
+      console.error("The fixture did not yield the three controls to compare.");
+      process.exitCode = 1;
+    } else {
+      for (const property of ["height", "borderWidth", "background", "fontSize", "focusBorderColor"] as const) {
+        const reference = inputs[0][property];
+        for (const entry of [inputs[1], select]) {
+          if (entry[property] !== reference) {
+            failures.push(`${entry.control} ${property} is ${entry[property]}, expected ${reference}`);
+          }
+        }
+      }
+      if (failures.length > 0) {
+        console.error(`MISMATCHES:\n${failures.map((line) => `  - ${line}`).join("\n")}`);
+        process.exitCode = 1;
+      } else {
+        console.error("All three controls agree on height, border, background, font size and focus border.");
       }
     }
   }
-  if (failures.length > 0) {
-    console.error(`MISMATCHES:\n${failures.map((line) => `  - ${line}`).join("\n")}`);
-    process.exit(1);
-  }
-  console.error("All three controls agree on height, border, background, font size and focus border.");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }
