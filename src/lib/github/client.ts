@@ -611,11 +611,13 @@ export class GitHubGateway {
       }
       return manifest;
     }
-    // The estimate refused the repo-wide walk, or pages shifted beyond it
-    // mid-walk. The repository has outgrown the budget; that is a cost problem,
-    // not a verdict about the timeline, so enumerate each scanned issue's own
-    // REST collections instead. Exhaustion below is a cost guard — the queue's
-    // retry backoff remains the recovery path, and no cooldown is set for it.
+    // The estimate refused the repo-wide walk: UNKNOWN size, or a page count
+    // that does not fit the 50-request budget. (A walk that exhausts mid-flight
+    // because pages shifted throws from readPage and never reaches here.) This
+    // is a cost problem, not a verdict about the timeline, so enumerate each
+    // scanned issue's own REST collections instead. Exhaustion below is a cost
+    // guard — the queue's retry backoff remains the recovery path, and no
+    // cooldown is set for it.
     return this.getPerIssueTimelineManifest(repository, issues);
   }
 
