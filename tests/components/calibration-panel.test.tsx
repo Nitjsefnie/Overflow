@@ -229,6 +229,10 @@ describe("calibration comparison", () => {
     const limitation = container.querySelector(".calibration-scale-limitation");
     expect(limitation).not.toBeNull();
     expect(limitation).toBeVisible();
+    // A statement that renders but carries no words still satisfies the class
+    // query, so the element must hold text of its own — read as length, never
+    // as wording.
+    expect((limitation?.textContent ?? "").trim().length).toBeGreaterThan(0);
   });
 
   it("states no limitation in the no-samples state, where no delta figure renders", () => {
