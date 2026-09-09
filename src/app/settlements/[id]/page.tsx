@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { SettlementCorrections } from "@/components/settlement-corrections";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { formatSigned } from "@/lib/format-signed";
+import { stripNamePrefix } from "@/lib/strip-name-prefix";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
 
 type SettlementPageProps = {
@@ -53,11 +54,11 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
             </div>
             <div>
               <dt>{settlement.openingName ?? "Opening comparison"}</dt>
-              <dd>{settlement.openingLabel ?? "Unknown label"} · {settlement.openingComparisonPoints}</dd>
+              <dd>{stripNamePrefix(settlement.openingLabel ?? "Unknown label", settlement.openingName)} · {settlement.openingComparisonPoints}</dd>
             </div>
             <div>
               <dt>{settlement.actualName ?? "Settled points"}</dt>
-              <dd>{settlement.settledLabel ?? "Awaiting settlement"} · {settlement.settledPoints ?? "Awaiting settlement"}</dd>
+              <dd>{stripNamePrefix(settlement.settledLabel ?? "Awaiting settlement", settlement.actualName)} · {settlement.settledPoints ?? "Awaiting settlement"}</dd>
             </div>
             <div>
               <dt>Review deduction</dt>
