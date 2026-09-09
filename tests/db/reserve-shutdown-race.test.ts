@@ -9,25 +9,6 @@ let databaseUrl: string;
 let observer: postgres.Sql;
 const clients: postgres.Sql[] = [];
 
-// An observation window, as in issue 226's probe: end() itself has no timeout or
-// forced disconnect to settle it. Keep the server reachable until assertions finish.
-async function observe<T>(promise: Promise<T>) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise.then(
-        (value) => ({ status: "resolved" as const, value }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      ),
-      new Promise<{ status: "pending" }>((resolve) => {
-        timer = setTimeout(() => resolve({ status: "pending" }), 20_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 describe("reservations around shutdown of a reachable pool", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -59,15 +40,17 @@ describe("reservations around shutdown of a reachable pool", () => {
     // exposes the hang instead of repairing it with release() from the test.
     const ending = sql.end();
     const reservation = sql.reserve();
-    const [shutdown, reserved] = await Promise.all([observe(ending), observe(reservation)]);
+    // Settled, not raced against a window: both outcomes are asserted below, and a
+    // wall-clock cap here would fail only when the machine ran correct code slower.
+    const [shutdown, reserved] = await Promise.allSettled([ending, reservation]);
 
     await expect(observer`select 1 as value`).resolves.toEqual([{ value: 1 }]);
     expect({ shutdown: shutdown.status, reservation: reserved.status }).toEqual({
-      shutdown: "resolved",
+      shutdown: "fulfilled",
       reservation: "rejected",
     });
     if (reserved.status === "rejected") {
-      expect(reserved.error).toMatchObject({ code: "CONNECTION_ENDED" });
+      expect(reserved.reason).toMatchObject({ code: "CONNECTION_ENDED" });
     }
   });
 
@@ -78,24 +61,25 @@ describe("reservations around shutdown of a reachable pool", () => {
     const held = await sql.reserve();
     const [{ pid }] = await held<{ pid: number }[]>`select pg_backend_pid()::int as pid`;
 
-    const ending = sql.end();
-    const shutdown = observe(ending);
-    // Reproduce the issue's held-across-end ordering. The completed observer round
-    // trip also proves shutdown's initial microtask ran before the release.
-    await delay(500);
+    const shutdown = sql.end();
+    // Reproduce the issue's held-across-end ordering. The completed observer round trip
+    // proves shutdown's initial microtask ran before the release, without any fixed
+    // sleep standing in for it: end()'s continuation is queued as microtasks of the
+    // turn that called end(), and a database round trip spans event-loop turns of real
+    // I/O, so those microtasks have always run by the time one completes.
     await expect(observer`select 1 as value`).resolves.toEqual([{ value: 1 }]);
     held.release();
 
-    const result = await shutdown;
+    await shutdown;
     await expect(observer`select 1 as value`).resolves.toEqual([{ value: 1 }]);
-    expect({ shutdown: result.status, reservation: "released" }).toEqual({
-      shutdown: "resolved",
-      reservation: "released",
-    });
     // Promise settlement alone is insufficient: release must also close the backend.
-    await expect.poll(async () => {
+    // Waited on as a condition, unboundedly: a fixed budget here would fail only when
+    // the machine ran the same correct code slower, and the runner's own test timeout
+    // -- not this suite -- is the backstop for a build that never closes the backend.
+    for (;;) {
       const rows = await observer`select pid from pg_stat_activity where pid = ${pid}`;
-      return rows.length;
-    }, { timeout: 5_000 }).toBe(0);
+      if (rows.length === 0) break;
+      await delay(50);
+    }
   });
 });

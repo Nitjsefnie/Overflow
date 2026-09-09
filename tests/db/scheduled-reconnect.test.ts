@@ -16,9 +16,10 @@ const unavailable = message("E", Buffer.from("SFATAL\0C57P03\0Mnot ready\0\0"));
 const completed = message("C", Buffer.from("SET\0"));
 
 /**
- * Real TCP and postgres.js; only the retry timer's callback is wrapped to record its firing.
- * Removing shutdown's acceleration of fresh dispatch makes "backoff elapsed" precede serving
- * the query and settling shutdown. Cancelling that dispatch instead loses the recorded command.
+ * Real TCP and postgres.js; only the retry timer's callback and the shutdown's cancellation of
+ * that timer are wrapped, to record both. Removing shutdown's acceleration of fresh dispatch
+ * makes "backoff elapsed" precede serving the query and settling shutdown. Cancelling that
+ * dispatch instead loses the recorded command.
  */
 describe("shutdown during a pool-scheduled reconnect", () => {
   it.each([1, 3])("serves fresh dispatch before its %s-second backoff elapses", async (backoffSeconds) => {
@@ -63,6 +64,7 @@ describe("shutdown during a pool-scheduled reconnect", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 
     const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
     let watchSchedule = false;
     let scheduled: ReturnType<typeof setTimeout> | undefined;
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
@@ -75,7 +77,14 @@ describe("shutdown during a pool-scheduled reconnect", () => {
       }, delay);
       return scheduled;
     });
-    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    // Recorded rather than left silent: the case pins the acceleration as an order of
+    // operations -- the scheduled backoff handle is cancelled before the fresh attempt
+    // opens -- instead of inferring it from the timer's silence, which is only readable
+    // against a wall-clock budget the process can lose to background load.
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+      if (timer === scheduled) observed.push("backoff cancelled");
+      return realClearTimeout(timer);
+    });
     let resolveShutdown!: (shutdown: Promise<void>) => void;
     const shutdownStarted = new Promise<void>((resolve) => { resolveShutdown = resolve; });
     let closing = false;
@@ -90,6 +99,7 @@ describe("shutdown during a pool-scheduled reconnect", () => {
         if (closing) return;
         closing = true;
         watchSchedule = true;
+        observed.push("shutdown requested");
         // end() yields one microtask; onclose dispatches the queued query before it resumes.
         const shutdown = sql.end().then(() => { observed.push("shutdown settled"); });
         resolveShutdown(shutdown);
@@ -108,7 +118,9 @@ describe("shutdown during a pool-scheduled reconnect", () => {
       await expect(failed).resolves.toBe("57P03");
       await expect(fresh).resolves.toBe("SET");
       expect(observed).toEqual([
+        "shutdown requested",
         "fresh attempt scheduled",
+        "backoff cancelled",
         "fresh attempt opened",
         "set application_name = 'issue224'",
         "fresh query resolved",
