@@ -64,6 +64,79 @@ describe("eligible issue card", () => {
     expect(screen.queryByText(/__overflow_ambiguous_claim__/)).not.toBeInTheDocument();
   });
 
+  it("reads the supporting lines down one column beside the facts grid", () => {
+    const { container } = render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "Promise band",
+          openingLabel: "moonlit ridge",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          sponsorLogin: "harbour-owner",
+          assigneeGitHubLogin: "mira",
+          claimState: "CLAIMED",
+          availableHeadroom: -3,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    const card = container.firstElementChild as HTMLElement;
+    // The card grid places exactly two blocks, so nothing else can alternate
+    // between its two columns.
+    expect(card.children).toHaveLength(2);
+
+    const [main, facts] = Array.from(card.children);
+    expect(facts.tagName).toBe("DL");
+    expect(facts.classList.contains("issue-facts")).toBe(true);
+
+    // No supporting line is a direct grid child; they all sit inside the
+    // first block with the heading.
+    const directParagraphs = Array.from(card.children).filter((child) => child.tagName === "P");
+    expect(directParagraphs).toHaveLength(0);
+
+    expect(main.querySelector("h2")).not.toBeNull();
+    const lines = Array.from(main.children).filter((child) => child.tagName === "P");
+    expect(lines).toHaveLength(4);
+    const markers = ["Sponsor:", "Claim:", "Headroom:", "Opened"];
+    const order = lines.map((line) =>
+      markers.findIndex((marker) => line.textContent?.startsWith(marker)),
+    );
+    expect(order).toEqual([0, 1, 2, 3]);
+  });
+
+  it("keeps the single reading column when the optional facts are absent", () => {
+    const { container } = render(
+      <IssueCard
+        issue={{
+          id: "issue-99",
+          repositoryName: "co-op/harbour",
+          issueNumber: 99,
+          title: "<strong>untrusted GitHub title</strong>",
+          url: "https://github.com/co-op/harbour/issues/99",
+          openingName: "Promise band",
+          openingLabel: "blue / green",
+          comparisonPoints: 1,
+          reservePoints: 1,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.children).toHaveLength(2);
+    const [main, facts] = Array.from(card.children);
+    expect(facts.classList.contains("issue-facts")).toBe(true);
+    const lines = Array.from(main.children).filter((child) => child.tagName === "P");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent?.startsWith("Opened")).toBe(true);
+  });
+
   it("treats GitHub strings as text rather than markup", () => {
     render(
       <IssueCard
