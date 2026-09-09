@@ -88,6 +88,62 @@ describe("foldRepository", () => {
     expect(result.unwritableClosures[0]!.reason).toContain("11");
   });
 
+  it("names only the registered path when the snapshot carries no freshly observed path", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = "other/fork";
+
+    const result = foldRepository(snapshot);
+
+    // A consumer folding without a fresh identity verify (overrides) leaves
+    // observedOwnerName unset, and its reason must stay byte-identical.
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "Closing pull request 11 belongs to other/fork, "
+        + "not the registered repository octo/example.",
+    }]);
+  });
+
+  it("names the registered path and the freshly observed path when a rename is in flight", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = "other/fork";
+    snapshot.repository.observedOwnerName = "octo/renamed-example";
+
+    const result = foldRepository(snapshot);
+
+    // First run after the rename: the stored record still carries the
+    // pre-rename path and this same run is what refreshes it, so the reason
+    // has to name both — either one alone reads as a contradiction afterwards.
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "Closing pull request 11 belongs to other/fork, "
+        + "not the registered repository octo/example "
+        + "(the same repository was observed as octo/renamed-example on this run).",
+    }]);
+  });
+
+  it.each(["octo/example", "Octo/Example"])("keeps the registered-path-only reason when the observed path matches it (%s)", (observedOwnerName) => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryNameWithOwner = "other/fork";
+    snapshot.repository.observedOwnerName = observedOwnerName;
+
+    const result = foldRepository(snapshot);
+
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "Closing pull request 11 belongs to other/fork, "
+        + "not the registered repository octo/example.",
+    }]);
+  });
+
   it("reports a foreign closing pull request without merge proof as no closing pull request", () => {
     const snapshot = outsiderFixture();
     const pullRequest = snapshot.issues[0]!.closingPullRequests[0]!;
@@ -133,6 +189,25 @@ describe("foldRepository", () => {
     expect(result.pullRequests).toEqual([]);
     // Naming both repositories here would read "belongs to octo/example, not
     // the registered repository octo/example", which tells a moderator nothing.
+    expect(result.unwritableClosures).toEqual([{
+      githubIssueId: 101,
+      kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
+      githubPullRequestId: null,
+      reason: "Closing pull request 11 does not belong to the registered repository: "
+        + "another repository now carries the name octo/example (GitHub repository 5002, not 5001).",
+    }]);
+  });
+
+  it("keeps the name-reuse reason byte-identical even when a freshly observed path rides along", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0]!.closingPullRequests[0]!.repositoryGitHubId = 5002;
+    snapshot.repository.observedOwnerName = "octo/renamed-example";
+
+    const result = foldRepository(snapshot);
+
+    // A freed name genuinely belongs to the other repository now, so this
+    // sentence is already legible with ids on both sides; a rename observed on
+    // the same run adds nothing and must not reword it.
     expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101,
       kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
