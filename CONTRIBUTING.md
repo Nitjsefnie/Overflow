@@ -345,8 +345,9 @@ reply: it confirms the assignment, or explains why there was none.
 
 Release an issue you stop working on, and do it before the merge that would
 close it. The workflow acts on open issues only, so once the issue is closed a
-stale assignment on it can no longer be removed — and until it is removed, it is
-still holding reserve points against the sponsor.
+stale assignment on it can no longer be removed. Closing the issue releases the
+reserve on its own — only open issues hold points against the sponsor — but
+while it is open, your assignment makes it unclaimable by anyone else.
 
 ## The `offered:` and `settled:` labels are product data
 
