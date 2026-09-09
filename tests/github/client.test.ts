@@ -82,7 +82,21 @@ describe("GitHubGateway REST transport", () => {
       fetch: async () => { throw new Error("GitHub API request failed with status 403."); },
     });
 
-    await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).rejects.toThrow("GitHub request failed.");
+    await expect(gateway.getRepository({ owner: "octo", name: "overflow" })).rejects.toMatchObject({
+      message: "GitHub request failed: /repos/octo/overflow",
+    });
+  });
+
+  it("preserves a network-level transport failure as the cause and names the request path", async () => {
+    const networkError = new Error("getaddrinfo ENOTFOUND api.github.invalid");
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => { throw networkError; },
+    });
+
+    const error = await gateway.getRepository({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ message: "GitHub request failed: /repos/octo/overflow" });
+    expect((error as Error).cause).toBe(networkError);
   });
 
   it.each([
@@ -670,6 +684,18 @@ describe("GitHubGateway workflow files", () => {
     });
 
     await expect(gateway.listWorkflowFiles({ owner: "octo", name: "overflow" })).rejects.toBe(upstreamError);
+  });
+
+  it("preserves a network-level listing failure as the cause and names the request path", async () => {
+    const networkError = new Error("getaddrinfo ENOTFOUND api.github.invalid");
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async () => { throw networkError; },
+    });
+
+    const error = await gateway.listWorkflowFiles({ owner: "octo", name: "overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ message: "GitHub request failed: /repos/octo/overflow/contents/.github/workflows" });
+    expect((error as Error).cause).toBe(networkError);
   });
 
   it.each([404, 500])("propagates a file-read HTTP %s instead of skipping the file", async (status) => {

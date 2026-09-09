@@ -14,11 +14,11 @@ const repositoryResult = {
   visibility: "PUBLIC", url: "https://github.com/octo/overflow", canAdminister: false,
 };
 const reads = [
-  { name: "getRepository", run: (gateway: GitHubGateway) => gateway.getRepository(repository), body: JSON.stringify(repositoryBody), result: repositoryResult },
-  { name: "getRepositoryById", run: (gateway: GitHubGateway) => gateway.getRepositoryById(42), body: JSON.stringify(repositoryBody), result: repositoryResult },
-  { name: "createWebhook", run: (gateway: GitHubGateway) => gateway.createWebhook(repository, configuration), body: '{"id":42}', result: { id: 42 } },
-  { name: "getPullRequestDiff", run: (gateway: GitHubGateway) => gateway.getPullRequestDiff(repository, 42), body: "diff --git a/é b/é\n", result: "diff --git a/é b/é\n" },
-  { name: "listRepositoryLabels", run: (gateway: GitHubGateway) => gateway.listRepositoryLabels(repository), body: "[]", result: new Set<string>() },
+  { name: "getRepository", path: "/repos/octo/overflow", run: (gateway: GitHubGateway) => gateway.getRepository(repository), body: JSON.stringify(repositoryBody), result: repositoryResult },
+  { name: "getRepositoryById", path: "/repositories/42", run: (gateway: GitHubGateway) => gateway.getRepositoryById(42), body: JSON.stringify(repositoryBody), result: repositoryResult },
+  { name: "createWebhook", path: "/repos/octo/overflow/hooks", run: (gateway: GitHubGateway) => gateway.createWebhook(repository, configuration), body: '{"id":42}', result: { id: 42 } },
+  { name: "getPullRequestDiff", path: "/repos/octo/overflow/pulls/42", run: (gateway: GitHubGateway) => gateway.getPullRequestDiff(repository, 42), body: "diff --git a/é b/é\n", result: "diff --git a/é b/é\n" },
+  { name: "listRepositoryLabels", path: "/repos/octo/overflow/labels?per_page=100&page=1", run: (gateway: GitHubGateway) => gateway.listRepositoryLabels(repository), body: "[]", result: new Set<string>() },
 ];
 
 const servers = new Set<Server>();
@@ -174,16 +174,16 @@ describe("GitHubGateway REST request deadline", () => {
       accessToken: "test-token",
       fetch: async () => { throw new Error("connection failed"); },
     });
-    await expect(gateway.getRepository(repository)).rejects.toMatchObject({ message: "GitHub request failed." });
+    await expect(gateway.getRepository(repository)).rejects.toMatchObject({ message: `GitHub request failed: /repos/octo/overflow` });
   });
 
-  it.each(reads)("reclassifies a mid-body transport failure as a failed request for $name", async ({ run }) => {
+  it.each(reads)("reclassifies a mid-body transport failure as a failed request for $name", async ({ run, path }) => {
     const apiUrl = await serve((_request, response) => {
       response.writeHead(200, { "Content-Length": "1024", Connection: "close" });
       response.end('{"id":');
     });
     const gateway = new GitHubGateway({ accessToken: "test-token", apiUrl });
-    await expect(run(gateway)).rejects.toMatchObject({ message: "GitHub request failed." });
+    await expect(run(gateway)).rejects.toMatchObject({ message: `GitHub request failed: ${path}` });
   });
 
   it("bounds an injected fetch that never resolves and ignores abort", async () => {

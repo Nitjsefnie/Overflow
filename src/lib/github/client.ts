@@ -408,7 +408,7 @@ export class GitHubGateway {
       } catch (error) {
         controller.signal.throwIfAborted();
         if (error instanceof GitHubApiError) throw error;
-        throw new Error("GitHub request failed.");
+        throw new Error(`GitHub request failed: ${path}`, { cause: error });
       }
       if (!response.ok) {
         const body = await beforeDeadline(boundedResponseText(response, Infinity, controller.signal)).catch(() => null);
@@ -860,7 +860,7 @@ export class GitHubGateway {
 
       controller.signal.throwIfAborted();
 
-      throw new Error("GitHub request failed.");
+      throw new Error(`GitHub request failed: ${path}`, { cause: error });
     } finally {
       clearTimeout(timeout);
     }
