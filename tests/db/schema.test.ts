@@ -3205,6 +3205,18 @@ describe("initial PostgreSQL materialization", () => {
     await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: acceptedRun, fold: foldRepository(acceptedSnapshot) })))
       .resolves.toEqual({ adds: 0, changes: 1, removals: 1 });
     expect((await reconciliationMaterializationState(repositoryId)).unwritableClosures).toEqual([]);
+    // The read-back must follow the sequence the changes were recorded in,
+    // not their creation order: recorded_seq exists precisely because
+    // created_at is the recording transaction's start time and id is a random
+    // uuid, so neither is the record order. Demote the CHANGE row's created_at
+    // below its neighbours' to build that disagreement into the fixture
+    // deterministically — under the old `order by created_at, id` this query
+    // returns CHANGE, ADD, REMOVE and the assertion below fails.
+    await sql`
+      update reconciliation_changes
+      set created_at = ${"2020-01-01T00:00:00.000Z"}
+      where reconciliation_run_id = ${repairRun} and entity_kind = 'UNWRITABLE_CLOSURE'
+    `;
     const changes = await sql`
       select change_kind, before_state, after_state
       from reconciliation_changes
@@ -3420,6 +3432,17 @@ describe("initial PostgreSQL materialization", () => {
       runId: closureRemoveRun,
       fold: closureRemoveFold,
     }))).resolves.toEqual({ adds: 0, changes: 0, removals: 1 });
+
+    // Same pin as the rejected-evidence provenance read-back above: the query
+    // must follow the recorded sequence, not `created_at, id` — created_at is
+    // the transaction's start time, not the record order, and the random uuid
+    // id orders nothing. Demote the CHANGE row's created_at so the old sort
+    // deterministically returns CHANGE, ADD, REMOVE here too.
+    await sql`
+      update reconciliation_changes
+      set created_at = ${"2020-01-01T00:00:00.000Z"}
+      where reconciliation_run_id = ${closureChangeRun} and entity_kind = 'UNWRITABLE_CLOSURE'
+    `;
 
     const closureChanges = await sql<{
       entity_kind: string;
