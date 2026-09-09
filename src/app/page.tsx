@@ -1,5 +1,6 @@
 import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
+import { PublicAppShell } from "@/components/app-shell";
 
 async function signInWithGitHub() {
   "use server";
@@ -8,7 +9,7 @@ async function signInWithGitHub() {
 
 export function LandingPage() {
   return (
-    <main className="landing-page">
+    <main className="landing-page" id="main-content">
       <section className="landing-hero" aria-labelledby="landing-title">
         <p className="eyebrow">A cooperative ledger for open-source work</p>
         <h1 id="landing-title">Cooperative credit for open-source work.</h1>
@@ -47,5 +48,9 @@ export default async function HomePage() {
   if (typeof user?.id === "string" && (user.role === "MEMBER" || user.role === "MODERATOR")) {
     redirect("/dashboard");
   }
-  return <LandingPage />;
+  return (
+    <PublicAppShell>
+      <LandingPage />
+    </PublicAppShell>
+  );
 }
