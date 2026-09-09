@@ -4,6 +4,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettlementOverrideRequestForm } from "@/components/settlement-override-request";
 
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
+
 const settlementId = "00000000-0000-4000-8000-000000000001";
 const calibrationId = "00000000-0000-4000-8000-000000000005";
 
@@ -11,6 +15,7 @@ const settlementTarget = { kind: "settlement", settlementId } as const;
 const calibrationTarget = { kind: "calibration", calibrationId } as const;
 
 afterEach(() => {
+  refresh.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -85,6 +90,67 @@ describe("settlement correction request form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Report this settlement as incorrect" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("could not reach Overflow");
+  });
+
+  it("refreshes the server projection once after a successful report and keeps the success feedback", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ request: { id: "request-id", state: "OPEN" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettlementOverrideRequestForm target={settlementTarget} />);
+
+    fireEvent.change(screen.getByLabelText("Why is this settlement wrong?"), {
+      target: { value: "The rationale comment landed after the window closed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report this settlement as incorrect" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("A moderator will review this settlement.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh the server projection when the report is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: "CONFLICT", message: "This issue already has a correction request awaiting a moderator." } }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    render(<SettlementOverrideRequestForm target={settlementTarget} />);
+
+    fireEvent.change(screen.getByLabelText("Why is this settlement wrong?"), {
+      target: { value: "The settled points are wrong." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report this settlement as incorrect" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "This issue already has a correction request awaiting a moderator.",
+      );
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh the server projection when the report cannot reach Overflow", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<SettlementOverrideRequestForm target={settlementTarget} />);
+
+    fireEvent.change(screen.getByLabelText("Why is this settlement wrong?"), {
+      target: { value: "The settled points are wrong." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report this settlement as incorrect" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("could not reach Overflow");
+    });
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 

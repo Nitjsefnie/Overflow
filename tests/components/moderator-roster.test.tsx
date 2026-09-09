@@ -4,12 +4,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModeratorRoster } from "@/components/moderator-roster";
 
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
+
 const moderators = [
   { accountId: "self-id", githubLogin: "ada", isConfigured: true },
   { accountId: "other-id", githubLogin: "grace", isConfigured: false },
 ];
 
 afterEach(() => {
+  refresh.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -85,5 +90,57 @@ describe("moderator roster", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The requested moderation transition is not available.",
     );
+  });
+
+  it("refreshes the roster once after a successful change and keeps the success feedback", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ change: { targetGitHubLogin: "grace", role: "MEMBER" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ModeratorRoster moderators={moderators} currentAccountId="self-id" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke grace" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("grace is no longer a moderator.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh the roster when a change is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: "The requested moderation transition is not available." } }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    render(<ModeratorRoster moderators={moderators} currentAccountId="self-id" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke grace" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The requested moderation transition is not available.",
+      );
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh the roster when the change cannot reach Overflow", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<ModeratorRoster moderators={moderators} currentAccountId="self-id" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke grace" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("could not reach Overflow");
+    });
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

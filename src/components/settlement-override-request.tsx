@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { SettlementOverrideTarget } from "@/lib/overrides/service";
 
@@ -27,6 +28,7 @@ type OverrideResponse = {
  * fold never wrote.
  */
 export function SettlementOverrideRequestForm({ target }: SettlementOverrideRequestFormProps) {
+  const router = useRouter();
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -62,6 +64,7 @@ export function SettlementOverrideRequestForm({ target }: SettlementOverrideRequ
         return;
       }
       setFeedback({ kind: "success", message: `A moderator will review this ${outcome}.` });
+      router.refresh();
       setReason("");
     } catch {
       setFeedback({

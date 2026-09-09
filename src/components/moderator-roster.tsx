@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type Moderator = {
@@ -21,6 +22,7 @@ type RoleChangeResponse = {
 };
 
 export function ModeratorRoster({ moderators, currentAccountId }: ModeratorRosterProps) {
+  const router = useRouter();
   const [targetAccountId, setTargetAccountId] = useState("");
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function ModeratorRoster({ moderators, currentAccountId }: ModeratorRoste
         kind: "success",
         message: moderator ? `${login} is now a moderator.` : `${login} is no longer a moderator.`,
       });
+      router.refresh();
     } catch {
       setFeedback({ kind: "error", message: "The moderator change could not reach Overflow." });
     } finally {

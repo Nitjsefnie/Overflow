@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
 type ApiTokenPanelProps = {
@@ -7,6 +8,7 @@ type ApiTokenPanelProps = {
 };
 
 export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
+  const router = useRouter();
   const [issued, setIssued] = useState<{ token: string; createdAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -27,6 +29,7 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
       }
       const body = await response.json() as { token: string; createdAt: string };
       setIssued({ token: body.token, createdAt: body.createdAt });
+      router.refresh();
     } catch {
       setError("The request could not reach Overflow. Check your connection and try again.");
     } finally {

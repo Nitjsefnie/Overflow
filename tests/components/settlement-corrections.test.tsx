@@ -1,9 +1,13 @@
 /** @vitest-environment jsdom */
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SettlementCorrections } from "@/components/settlement-corrections";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
+
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
 
 const settlementId = "00000000-0000-4000-8000-000000000001";
 const calibrationId = "00000000-0000-4000-8000-000000000005";
