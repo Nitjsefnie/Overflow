@@ -80,10 +80,17 @@ describe("GitHub OAuth scope", () => {
 
   it("asks the GitHub provider for exactly the webhook administration scope", async () => {
     const { githubOAuthScope } = await import("@/auth");
+    // Imported after resetModules so this reference is the same module
+    // instance the auth config captured.
+    const { requestGitHubPublicIdentity } = await import("@/lib/auth/github-userinfo");
 
     expect(githubOAuthScope).toBe("admin:repo_hook");
     expect(mocks.github).toHaveBeenCalledWith({
       authorization: { params: { scope: "admin:repo_hook" } },
+      userinfo: {
+        url: "https://api.github.com/user",
+        request: requestGitHubPublicIdentity,
+      },
     });
   });
 
