@@ -8,7 +8,8 @@ import { requiredModeratorSession, type ModerationRouteSession } from "@/lib/mod
 import { AccountModerationService } from "@/lib/moderation/service";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const auditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dismiss"), reason: z.string() }).strict(),
@@ -24,12 +25,12 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
     request: Request,
     context: ModerationAuditRouteContext,
   ): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -58,6 +59,7 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
 
 export const PATCH = createModerationAuditPatchHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());

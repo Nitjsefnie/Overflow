@@ -31,6 +31,11 @@ useTrustedOrigin();
 
 const { json: jsonRequest } = guardedRequests("/api/moderation/rederivation");
 
+/** The unorigin-guarded read's request shape: no Origin header, no credential. */
+function plainGet(): Request {
+  return new Request(new URL("/api/moderation/rederivation", "https://overflow.internal"));
+}
+
 describe("repository re-derivation status", () => {
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -138,7 +143,7 @@ describe("repository re-derivation status", () => {
       select owner_name from registered_repositories where id = ${repositoryId}
     `;
 
-    const response = await createRederivationGetHandler(dependencies())();
+    const response = await createRederivationGetHandler(dependencies())(plainGet());
     const body = (await response.json()) as { rederivation: { foldRevision: number; repositories: RepositoryRederivationStatus[] } };
 
     expect(response.status).toBe(200);
@@ -227,6 +232,7 @@ describe("repository re-derivation status", () => {
 function dependencies(now: Date = firstRequestedAt) {
   return {
     getSession: async () => moderator,
+    findAccountByTokenHash: async () => null,
     getCurrentRole: async () => "MODERATOR" as const,
     createService: async () =>
       new RepositoryRederivationService(new PostgresFoldStore(sql), () => now),

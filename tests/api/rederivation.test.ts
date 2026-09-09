@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
   expectNoDependencyCall,
   guardedRequests,
+  requestHost,
   unusedDependencies,
   useTrustedOrigin,
 } from "../support/trusted-origin";
@@ -37,6 +39,44 @@ afterEach(() => {
 const { json: jsonRequest, foreignJson: foreignJsonRequest, trustedText: trustedTextRequest } =
   guardedRequests("/api/moderation/rederivation");
 
+const ownerId = "00000000-0000-4000-8000-000000000012";
+const apiCredential = `ovf_${"rederivation-gate".padEnd(43, "_")}`;
+const apiCredentialHash = createHash("sha256").update(apiCredential).digest();
+const tokenRejection = {
+  error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
+};
+
+/** The request shape the browser GET produces: no Origin header, no credential. */
+function plainGet(): Request {
+  return new Request(new URL("/api/moderation/rederivation", requestHost));
+}
+
+/** The request shape a programmatic token client produces for either verb. */
+function tokenRequest(method: "GET" | "POST"): Request {
+  return new Request(new URL("/api/moderation/rederivation", requestHost), {
+    method,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiCredential}`,
+    },
+    ...(method === "POST" ? { body: JSON.stringify({ repositoryId }) } : {}),
+  });
+}
+
+/**
+ * Token-path dependencies over the cookie fixtures: the owner's token resolves,
+ * the session mock must never be reached, and the fresh-role lookup answers for
+ * the owner.
+ */
+function tokenDependencies(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+  return {
+    getSession: vi.fn(),
+    findAccountByTokenHash: vi.fn().mockResolvedValue({ id: ownerId }),
+    getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+    ...overrides,
+  };
+}
+
 describe("fold re-derivation status API", () => {
   // The service these two build would answer 200, so an ungated route reads as a
   // successful status page rather than as a confusing failure inside a stub.
@@ -47,7 +87,7 @@ describe("fold re-derivation status API", () => {
       ...moderatorDependencies({ listRederivationStatus }),
       getSession: async () => memberSession,
       getCurrentRole,
-    })();
+    })(plainGet());
 
     await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
     expect(getCurrentRole).toHaveBeenCalledWith(memberSession.user.id);
@@ -59,7 +99,7 @@ describe("fold re-derivation status API", () => {
     const response = await createRederivationGetHandler({
       ...moderatorDependencies({ listRederivationStatus }),
       getSession: async () => null,
-    })();
+    })(plainGet());
 
     await expectRejection(response, 401, "UNAUTHENTICATED", "Sign in is required.");
     expect(listRederivationStatus).not.toHaveBeenCalled();
@@ -70,7 +110,7 @@ describe("fold re-derivation status API", () => {
     const response = await createRederivationGetHandler({
       ...moderatorDependencies({ listRederivationStatus }),
       getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
-    })();
+    })(plainGet());
 
     await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
     expect(listRederivationStatus).not.toHaveBeenCalled();
@@ -81,7 +121,7 @@ describe("fold re-derivation status API", () => {
     const response = await createRederivationGetHandler({
       ...moderatorDependencies({ listRederivationStatus }),
       getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
-    })();
+    })(plainGet());
 
     await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
     expect(listRederivationStatus).not.toHaveBeenCalled();
@@ -110,7 +150,7 @@ describe("fold re-derivation status API", () => {
     const listRederivationStatus = vi.fn().mockResolvedValue(overview);
     const response = await createRederivationGetHandler(
       moderatorDependencies({ listRederivationStatus }),
-    )();
+    )(plainGet());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ rederivation: overview, startupRecoverySkipped: false });
@@ -240,6 +280,101 @@ describe("fold re-derivation status API", () => {
   });
 });
 
+// The same bearer-credential contract the shared moderator gate describe in
+// tests/api/moderation.test.ts pins for the other five families, pinned here
+// for the two rederivation verbs — the read stays unorigin-guarded and the
+// mutation takes the credential-shaped guard.
+describe("the rederivation gate's bearer credential", () => {
+  it("authorizes a MODERATOR-owned token as its owner on the status read, without reading the session", async () => {
+    const deps = { ...moderatorDependencies({}), ...tokenDependencies() };
+    const listRederivationStatus = vi.fn().mockResolvedValue(emptyOverview);
+    deps.createService = async () =>
+      ({ listRederivationStatus }) as unknown as RederivationRouteService;
+
+    const response = await createRederivationGetHandler(deps)(tokenRequest("GET"));
+
+    expect(response.status).toBe(200);
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(apiCredentialHash);
+    expect(listRederivationStatus).toHaveBeenCalledWith({ id: ownerId, role: "MODERATOR" });
+  });
+
+  it("authorizes a MODERATOR-owned token as its owner on the request verb, without reading the session", async () => {
+    const deps = { ...moderatorDependencies({}), ...tokenDependencies() };
+    const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+    deps.createService = async () =>
+      ({ requestRederivation }) as unknown as RederivationRouteService;
+
+    const response = await createRederivationPostHandler(deps)(tokenRequest("POST"));
+
+    expect(response.status).toBe(200);
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(requestRederivation).toHaveBeenCalledWith({ id: ownerId, role: "MODERATOR" }, repositoryId);
+  });
+
+  it.each(["GET", "POST"] as const)(
+    "answers a %s from a demoted owner with the one 403 message",
+    async (method) => {
+      const deps = {
+        ...moderatorDependencies({}),
+        ...tokenDependencies({ getCurrentRole: vi.fn().mockResolvedValue("MEMBER") }),
+      };
+      const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+      deps.createService = async () =>
+        ({ requestRederivation }) as unknown as RederivationRouteService;
+
+      const response =
+        method === "GET"
+          ? await createRederivationGetHandler(deps)(tokenRequest("GET"))
+          : await createRederivationPostHandler(deps)(tokenRequest("POST"));
+
+      await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
+      expect(requestRederivation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["GET", "POST"] as const)(
+    "answers a %s carrying an unknown token with the credential rejection",
+    async (method) => {
+      const deps = {
+        ...moderatorDependencies({}),
+        ...tokenDependencies({ findAccountByTokenHash: vi.fn().mockResolvedValue(null) }),
+      };
+
+      const response =
+        method === "GET"
+          ? await createRederivationGetHandler(deps)(tokenRequest("GET"))
+          : await createRederivationPostHandler(deps)(tokenRequest("POST"));
+
+      await expectRejection(response, 401, "UNAUTHENTICATED", tokenRejection.error.message);
+      expect(deps.getSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["GET", "POST"] as const)(
+    "answers a %s during a token-store outage with 502 upstream failure",
+    async (method) => {
+      const deps = {
+        ...moderatorDependencies({}),
+        ...tokenDependencies({
+          findAccountByTokenHash: vi.fn().mockRejectedValue(new Error("token store outage")),
+        }),
+      };
+      const requestRederivation = vi.fn().mockResolvedValue(outstandingRequest);
+      deps.createService = async () =>
+        ({ requestRederivation }) as unknown as RederivationRouteService;
+
+      const response =
+        method === "GET"
+          ? await createRederivationGetHandler(deps)(tokenRequest("GET"))
+          : await createRederivationPostHandler(deps)(tokenRequest("POST"));
+
+      await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+      expect(requestRederivation).not.toHaveBeenCalled();
+    },
+  );
+});
+
 // The real service is wired in here so that the route's answers are the ones a
 // moderator would actually see, rather than whatever a stub chose to return.
 describe("fold re-derivation service reached through its route", () => {
@@ -261,12 +396,12 @@ describe("fold re-derivation service reached through its route", () => {
     });
     vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", skipped ? undefined : "1");
     const get = createRederivationGetHandler(realServiceDependencies(storeHarness()));
-    const response = await get();
+    const response = await get(plainGet());
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ startupRecoverySkipped: skipped });
     await Promise.resolve();
     tick();
-    const afterSweep = await get();
+    const afterSweep = await get(plainGet());
     expect(await afterSweep.json()).toMatchObject({ startupRecoverySkipped: skipped });
   });
 
@@ -299,7 +434,7 @@ describe("fold re-derivation service reached through its route", () => {
 
   it("renders stored counts and timestamps as the wire shape", async () => {
     const store = storeHarness();
-    const response = await createRederivationGetHandler(realServiceDependencies(store))();
+    const response = await createRederivationGetHandler(realServiceDependencies(store))(plainGet());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -353,6 +488,7 @@ function moderatorDependencies(service: {
 }): RederivationRouteDependencies {
   return {
     getSession: async () => moderatorSession,
+    findAccountByTokenHash: vi.fn(),
     getCurrentRole: async () => "MODERATOR",
     createService: async () =>
       ({
@@ -365,6 +501,7 @@ function moderatorDependencies(service: {
 function realServiceDependencies(store: RederivationStore): RederivationRouteDependencies {
   return {
     getSession: async () => moderatorSession,
+    findAccountByTokenHash: vi.fn(),
     getCurrentRole: async () => "MODERATOR",
     createService: async () => new RepositoryRederivationService(store, () => requestedAt),
   };

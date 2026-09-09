@@ -15,7 +15,8 @@ import {
   type RederivationOverview,
 } from "@/lib/moderation/rederivation-service";
 import type { ModerationActor } from "@/lib/moderation/service";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const rederivationRequestSchema = z
   .object({
@@ -33,6 +34,7 @@ export type RederivationRouteService = {
 
 export type RederivationRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<RederivationRouteService>;
 };
@@ -42,11 +44,13 @@ export type RederivationRouteDependencies = {
  * older revision's output, per repository — issue 197's third obligation.
  */
 export function createRederivationGetHandler(dependencies: RederivationRouteDependencies) {
-  return async function getRederivationStatus(): Promise<Response> {
-    // rejectUntrustedRequest refuses a request carrying no Origin header, but a
-    // same-origin browser fetch() GET sends none, so guarding this verb would
-    // refuse every read the moderation page makes.
-    const session = await requiredModeratorSession(dependencies);
+  return async function getRederivationStatus(request: Request): Promise<Response> {
+    // This read stays deliberately unorigin-guarded: rejectUntrustedRequest
+    // refuses a request carrying no Origin header, but a same-origin browser
+    // fetch() GET sends none, so guarding this verb would refuse every read
+    // the moderation page makes. The gate still resolves a bearer credential
+    // from the headers.
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -65,12 +69,12 @@ export function createRederivationGetHandler(dependencies: RederivationRouteDepe
 /** Asks for one repository's derived rows to be recomputed — obligation 2. */
 export function createRederivationPostHandler(dependencies: RederivationRouteDependencies) {
   return async function postRederivation(request: Request): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -103,6 +107,7 @@ async function parseRederivationRequest(request: Request): Promise<{ repositoryI
 
 const productionDependencies: RederivationRouteDependencies = {
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new RepositoryRederivationService(new PostgresFoldStore());

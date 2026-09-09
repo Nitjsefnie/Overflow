@@ -9,7 +9,8 @@ import {
   type OpenAccountAuditInput,
   type RecalibrationClosure,
 } from "@/lib/moderation/service";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const openAccountAuditSchema = z
   .object({
@@ -39,18 +40,19 @@ export type ModerationRouteService = Pick<
 
 export type ModerationRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModerationRouteService>;
 };
 
 export function createModerationPostHandler(dependencies: ModerationRouteDependencies) {
   return async function postModeration(request: Request): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -71,12 +73,12 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
 
 export function createModerationClosePatchHandler(dependencies: ModerationRouteDependencies) {
   return async function patchModeration(request: Request): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -101,6 +103,7 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
 
 export const POST = createModerationPostHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());
@@ -109,6 +112,7 @@ export const POST = createModerationPostHandler({
 
 export const PATCH = createModerationClosePatchHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());

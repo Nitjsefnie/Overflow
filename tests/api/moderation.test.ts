@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   expectNoDependencyCall,
@@ -52,6 +53,7 @@ describe("account moderation API", () => {
     const createService = vi.fn(async () => serviceHarness());
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole,
       createService,
     } as Parameters<typeof createModerationPostHandler>[0]);
@@ -69,6 +71,7 @@ describe("account moderation API", () => {
   it("returns a structured 401 before parsing an unauthenticated audit request", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => null,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
@@ -84,6 +87,7 @@ describe("account moderation API", () => {
   it("returns a structured 403 for a non-moderator", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => memberSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => serviceHarness(),
     });
@@ -99,6 +103,7 @@ describe("account moderation API", () => {
   it("returns a structured 422 for an invalid payload instead of accepting settlement corrections", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
@@ -119,6 +124,7 @@ describe("account moderation API", () => {
     const { store, loadCalibrationCohort } = unreachableCohortStore();
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => new AccountModerationService(store),
     });
@@ -139,6 +145,7 @@ describe("account moderation API", () => {
   ] as const)("maps a %s service outcome to structured HTTP %s", async (code, status) => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
@@ -159,6 +166,7 @@ describe("account moderation API", () => {
   it("returns a sanitized 500 without database or upstream details", async () => {
     const handler = createModerationPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
@@ -182,6 +190,7 @@ describe("account moderation API", () => {
   it("allows only dismissal or substantiation for a specific audit id", async () => {
     const handler = createModerationAuditPatchHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
@@ -221,6 +230,7 @@ describe("account moderation API", () => {
   it("requires a plan and moderator session before closing recalibration", async () => {
     const handler = createModerationClosePatchHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness(),
     });
@@ -256,6 +266,7 @@ describe("calibration cohort preview API", () => {
     const previewCalibrationCohort = vi.fn().mockResolvedValue(preview);
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
     });
@@ -279,6 +290,7 @@ describe("calibration cohort preview API", () => {
     const previewCalibrationCohort = vi.fn().mockResolvedValue(previewFixture({ repositoryId: null }));
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
     });
@@ -307,6 +319,7 @@ describe("calibration cohort preview API", () => {
     });
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness({ preview: async () => preview }),
     });
@@ -322,6 +335,7 @@ describe("calibration cohort preview API", () => {
     const createService = vi.fn(async () => serviceHarness());
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole,
       createService,
     } as Parameters<typeof createModerationCohortGetHandler>[0]);
@@ -340,6 +354,7 @@ describe("calibration cohort preview API", () => {
     const createService = vi.fn(async () => serviceHarness());
     const handler = createModerationCohortGetHandler({
       getSession: async () => null,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService,
     } as Parameters<typeof createModerationCohortGetHandler>[0]);
@@ -364,6 +379,7 @@ describe("calibration cohort preview API", () => {
     const previewCalibrationCohort = vi.fn();
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
     });
@@ -386,6 +402,7 @@ describe("calibration cohort preview API", () => {
     const previewCalibrationCohort = vi.fn();
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => serviceHarness({ preview: previewCalibrationCohort }),
     });
@@ -408,6 +425,7 @@ describe("calibration cohort preview API", () => {
     const { store, loadCalibrationCohort } = unreachableCohortStore();
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => new AccountModerationService(store),
     });
@@ -427,6 +445,7 @@ describe("calibration cohort preview API", () => {
   ] as const)("maps a %s preview outcome to structured HTTP %s", async (code, status) => {
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
@@ -447,6 +466,7 @@ describe("calibration cohort preview API", () => {
   it("returns a sanitized 500 without database or upstream details", async () => {
     const handler = createModerationCohortGetHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () =>
         serviceHarness({
@@ -491,118 +511,139 @@ describe("calibration cohort preview API", () => {
 // one requiredMemberSession already gives in the overrides routes and
 // tests/api/settlement-overrides.test.ts pins), a missing session stays 401,
 // and a demoted moderator is refused with one message everywhere.
-describe("the shared moderator authorization gate", () => {
-  type GateDependencies = {
-    getSession: () => Promise<unknown>;
-    getCurrentRole: (userId: string) => Promise<unknown>;
-    createService: () => Promise<unknown>;
-  };
+type GateDependencies = {
+  getSession: () => Promise<unknown>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<unknown>;
+  getCurrentRole: (userId: string) => Promise<unknown>;
+  createService: () => Promise<unknown>;
+};
 
-  const gateCases: ReadonlyArray<{
+const gateCases: ReadonlyArray<{
     readonly family: string;
-    readonly invoke: (dependencies: GateDependencies) => Promise<Response>;
+    readonly request: () => Request;
+    readonly invoke: (dependencies: GateDependencies, request: Request) => Promise<Response>;
   }> = [
     {
       family: "POST /api/moderation",
-      invoke: (dependencies) =>
+      request: () => jsonRequest(openPayload()),
+      invoke: (dependencies, request) =>
         createModerationPostHandler(
           dependencies as Parameters<typeof createModerationPostHandler>[0],
-        )(jsonRequest(openPayload())),
+        )(request),
     },
     {
       family: "PATCH /api/moderation",
-      invoke: (dependencies) =>
+      request: () =>
+        jsonRequest(
+          {
+            targetAccountId,
+            plan: "Review ten completed contributions before applying an opening label.",
+          },
+          "PATCH",
+        ),
+      invoke: (dependencies, request) =>
         createModerationClosePatchHandler(
           dependencies as Parameters<typeof createModerationClosePatchHandler>[0],
-        )(
-          jsonRequest(
-            {
-              targetAccountId,
-              plan: "Review ten completed contributions before applying an opening label.",
-            },
-            "PATCH",
-          ),
-        ),
+        )(request),
     },
     {
       family: "PATCH /api/moderation/[id]",
-      invoke: (dependencies) =>
+      request: () =>
+        jsonRequest(
+          { action: "dismiss", reason: "The snapshot supports the account-level pattern." },
+          "PATCH",
+        ),
+      invoke: (dependencies, request) =>
         createModerationAuditPatchHandler(
           dependencies as Parameters<typeof createModerationAuditPatchHandler>[0],
-        )(
-          jsonRequest(
-            { action: "dismiss", reason: "The snapshot supports the account-level pattern." },
-            "PATCH",
-          ),
-          { params: Promise.resolve({ id: auditId }) },
-        ),
+        )(request, { params: Promise.resolve({ id: auditId }) }),
     },
     {
       family: "GET /api/moderation/moderators",
-      invoke: (dependencies) =>
+      request: () => new Request(new URL("/api/moderation/moderators", requestHost)),
+      invoke: (dependencies, request) =>
         createModeratorGetHandler(
           dependencies as Parameters<typeof createModeratorGetHandler>[0],
-        )(),
+        )(request),
     },
     {
       family: "POST /api/moderation/moderators",
-      invoke: (dependencies) =>
+      request: () => jsonRequest({ targetAccountId, moderator: true }),
+      invoke: (dependencies, request) =>
         createModeratorPostHandler(
           dependencies as Parameters<typeof createModeratorPostHandler>[0],
-        )(jsonRequest({ targetAccountId, moderator: true })),
+        )(request),
     },
     {
       family: "GET /api/moderation/cohort",
-      invoke: (dependencies) =>
+      request: () => cohortRequest(cohortQuery()),
+      invoke: (dependencies, request) =>
         createModerationCohortGetHandler(
           dependencies as Parameters<typeof createModerationCohortGetHandler>[0],
-        )(cohortRequest(cohortQuery())),
+        )(request),
     },
   ];
 
-  it.each(gateCases)("$family answers a failed session lookup with 502 upstream failure", async ({ invoke }) => {
+describe("the shared moderator authorization gate", () => {
+  it.each(gateCases)("$family answers a failed session lookup with 502 upstream failure", async ({ invoke, request }) => {
     const createService = vi.fn(async () => serviceHarness());
-    const response = await invoke({
-      getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
-      getCurrentRole: vi.fn(),
-      createService,
-    });
+    const response = await invoke(
+      {
+        getSession: vi.fn().mockRejectedValue(new Error("session store outage")),
+        findAccountByTokenHash: async () => null,
+        getCurrentRole: vi.fn(),
+        createService,
+      },
+      request(),
+    );
 
     await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
     expect(createService).not.toHaveBeenCalled();
   });
 
-  it.each(gateCases)("$family answers a failed role lookup with 502 upstream failure", async ({ invoke }) => {
+  it.each(gateCases)("$family answers a failed role lookup with 502 upstream failure", async ({ invoke, request }) => {
     const createService = vi.fn(async () => serviceHarness());
-    const response = await invoke({
-      getSession: async () => moderatorSession,
-      getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
-      createService,
-    });
+    const response = await invoke(
+      {
+        getSession: async () => moderatorSession,
+        findAccountByTokenHash: async () => null,
+        getCurrentRole: vi.fn().mockRejectedValue(new Error("role store outage")),
+        createService,
+      },
+      request(),
+    );
 
     await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
     expect(createService).not.toHaveBeenCalled();
   });
 
-  it.each(gateCases)("$family answers a demoted moderator with the one 403 message", async ({ invoke }) => {
+  it.each(gateCases)("$family answers a demoted moderator with the one 403 message", async ({ invoke, request }) => {
     const createService = vi.fn(async () => serviceHarness());
-    const response = await invoke({
-      getSession: async () => memberSession,
-      getCurrentRole: async () => "MEMBER",
-      createService,
-    });
+    const response = await invoke(
+      {
+        getSession: async () => memberSession,
+        findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => "MEMBER",
+        createService,
+      },
+      request(),
+    );
 
     await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
     expect(createService).not.toHaveBeenCalled();
   });
 
-  it.each(gateCases)("$family answers a missing session with 401 before any service work", async ({ invoke }) => {
+  it.each(gateCases)("$family answers a missing session with 401 before any service work", async ({ invoke, request }) => {
     const createService = vi.fn(async () => serviceHarness());
-    const response = await invoke({
-      getSession: async () => null,
-      getCurrentRole: vi.fn(),
-      createService,
-    });
+    const response = await invoke(
+      {
+        getSession: async () => null,
+        findAccountByTokenHash: async () => null,
+        getCurrentRole: vi.fn(),
+        createService,
+      },
+      request(),
+    );
 
     await expectRejection(response, 401, "UNAUTHENTICATED", "Sign in is required.");
     expect(createService).not.toHaveBeenCalled();
@@ -611,17 +652,123 @@ describe("the shared moderator authorization gate", () => {
   // A role lookup that answers null — an account the deployment no longer
   // knows — is not an exempted caller: it fails the moderator comparison like
   // every other non-moderator answer.
-  it.each(gateCases)("$family answers a null database role with the one 403 message", async ({ invoke }) => {
+  it.each(gateCases)("$family answers a null database role with the one 403 message", async ({ invoke, request }) => {
     const createService = vi.fn(async () => serviceHarness());
-    const response = await invoke({
-      getSession: async () => moderatorSession,
-      getCurrentRole: async () => null,
-      createService,
-    });
+    const response = await invoke(
+      {
+        getSession: async () => moderatorSession,
+        findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => null,
+        createService,
+      },
+      request(),
+    );
 
     await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
     expect(createService).not.toHaveBeenCalled();
   });
+});
+
+// A bearer ovf_ token now authenticates every moderator-gated family as the
+// account that minted it, on the same terms as that account's session: the
+// programmatic request carries no Origin header, the owner's CURRENT role is
+// read at request time, and the one credential rejection is the repositories
+// route's wording.
+describe("the shared moderator gate's bearer credential", () => {
+  const ownerId = "00000000-0000-4000-8000-00000000000a";
+  const apiCredential = `ovf_${"moderation-gate".padEnd(43, "_")}`;
+
+  /**
+   * The request shape a script actually produces: no Origin header at all,
+   * the credential attached deliberately. Built from each family's ordinary
+   * request so the only variables are the credential and the missing origin.
+   */
+  function asProgrammaticTokenRequest(request: Request, credential: string = apiCredential): Request {
+    request.headers.delete("origin");
+    request.headers.set("authorization", `Bearer ${credential}`);
+    return request;
+  }
+
+  const bearerDeps = (overrides: Record<string, ReturnType<typeof vi.fn>> = {}) => ({
+    getSession: vi.fn(),
+    findAccountByTokenHash: vi.fn().mockResolvedValue({ id: ownerId }),
+    getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+    // Every family's service shape at once, so the one harness serves the
+    // whole it.each: the moderation service's five methods and the moderators
+    // route's two.
+    createService: vi.fn(async () => ({
+      ...serviceHarness(),
+      listModerators: async () => [],
+      setModeratorRole: async () => roleChange,
+    })),
+    ...overrides,
+  });
+
+  it.each(gateCases)(
+    "$family authorizes a MODERATOR-owned token as its owner without reading the session",
+    async ({ invoke, request }) => {
+      const deps = bearerDeps();
+      const response = await invoke(deps, asProgrammaticTokenRequest(request()));
+
+      expect(response.ok).toBe(true);
+      expect(deps.getSession).not.toHaveBeenCalled();
+      expect(deps.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
+        createHash("sha256").update(apiCredential).digest(),
+      );
+      expect(deps.getCurrentRole).toHaveBeenCalledExactlyOnceWith(ownerId);
+    },
+  );
+
+  it.each(gateCases)(
+    "$family answers a demoted owner's token with the one 403 message",
+    async ({ invoke, request }) => {
+      const deps = bearerDeps({ getCurrentRole: vi.fn().mockResolvedValue("MEMBER") });
+      const response = await invoke(deps, asProgrammaticTokenRequest(request()));
+
+      await expectRejection(response, 403, "FORBIDDEN", "Moderator authorization is required.");
+      expect(deps.createService).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(gateCases)(
+    "$family answers an unknown token with the credential rejection",
+    async ({ invoke, request }) => {
+      const deps = bearerDeps({ findAccountByTokenHash: vi.fn().mockResolvedValue(null) });
+      const response = await invoke(deps, asProgrammaticTokenRequest(request()));
+
+      await expectRejection(response, 401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+      expect(deps.getSession).not.toHaveBeenCalled();
+      expect(deps.createService).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(gateCases)(
+    "$family rejects a malformed bearer before any lookup",
+    async ({ invoke, request }) => {
+      const deps = bearerDeps();
+      const response = await invoke(
+        deps,
+        asProgrammaticTokenRequest(request(), "deliberately-malformed-credential"),
+      );
+
+      await expectRejection(response, 401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
+      expect(deps.findAccountByTokenHash).not.toHaveBeenCalled();
+      expect(deps.getSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(gateCases)(
+    "$family answers a token-store outage with 502 upstream failure",
+    async ({ invoke, request }) => {
+      const deps = bearerDeps({
+        findAccountByTokenHash: vi.fn().mockRejectedValue(new Error("token store outage")),
+      });
+      const response = await invoke(deps, asProgrammaticTokenRequest(request()));
+
+      await expectRejection(response, 502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
+      expect(deps.createService).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("moderation mutations reachable only from the deployment's own origin", () => {
@@ -740,6 +887,7 @@ describe("moderation mutations reachable only from the deployment's own origin",
     const setModeratorRole = vi.fn().mockResolvedValue(roleChange);
     const handler = createModeratorPostHandler({
       getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({ listModerators: async () => [], setModeratorRole }),
     });

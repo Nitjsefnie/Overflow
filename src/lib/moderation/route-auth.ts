@@ -1,4 +1,8 @@
 import type { UserRole } from "@/lib/db/types";
+import {
+  resolveRouteCredential,
+  type RouteCredentialSession,
+} from "@/lib/security/route-credential";
 
 /**
  * The session shape the moderation routes hand the gate: only the user id is
@@ -18,6 +22,7 @@ export type AuthorizedModerationRouteSession = {
  */
 export type ModerationSessionDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
 
@@ -26,10 +31,17 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 /**
- * The one moderator authorization gate behind every moderation route.
+ * The one moderator authorization gate behind every moderation route, and
+ * behind the settlement-override decision route.
  *
- * The role is re-read from the database rather than trusted from the session,
- * because a session issued before a revocation still carries MODERATOR.
+ * The request's credential decides whose account is acting. A cookie session
+ * and a bearer API token arrive by different paths and get different origin
+ * treatment upstream of this gate (see guardByCredential), but once resolved
+ * they authorize identically: the role is re-read from the database rather
+ * than trusted — neither from the session nor from the token's account row —
+ * because a session issued before a revocation still carries MODERATOR, and a
+ * token's row is only as fresh as the moment it was read. A token therefore
+ * fails exactly where its owner's session would fail.
  *
  * A backing-store failure while authorizing is the codebase's established
  * 502 UPSTREAM_FAILURE answer, not a 500: a 500 marks the whole request a
@@ -38,21 +50,25 @@ function errorResponse(status: number, code: string, message: string): Response 
  * keep separate catch blocks so neither can swallow the other's window.
  */
 export async function requiredModeratorSession(
+  request: Request,
   dependencies: ModerationSessionDependencies,
 ): Promise<AuthorizedModerationRouteSession | Response> {
-  let session: ModerationRouteSession | null;
+  let credential: RouteCredentialSession | Response | null;
   try {
-    session = await dependencies.getSession();
+    credential = await resolveRouteCredential(request, dependencies);
   } catch {
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
   }
-  if (session === null) {
+  if (credential instanceof Response) {
+    return credential;
+  }
+  if (credential === null) {
     return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
   }
 
   let currentRole: UserRole | null;
   try {
-    currentRole = await dependencies.getCurrentRole(session.user.id);
+    currentRole = await dependencies.getCurrentRole(credential.user.id);
   } catch {
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
   }
@@ -60,5 +76,5 @@ export async function requiredModeratorSession(
     return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
   }
 
-  return { user: { id: session.user.id, role: currentRole } };
+  return { user: { id: credential.user.id, role: currentRole } };
 }
