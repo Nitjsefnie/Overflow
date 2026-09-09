@@ -134,7 +134,7 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
 async function authorizeRepositoryRequest(
   request: Request,
   dependencies: RepositoryRouteDependencies,
-): Promise<Response | RepositoryRouteSession> {
+): Promise<Response | RepositoryRouteSession | null> {
   const credential = readApiTokenCredential(request);
   const refusal =
     credential === null ? rejectUntrustedRequest(request) : rejectUnsupportedMediaType(request);
