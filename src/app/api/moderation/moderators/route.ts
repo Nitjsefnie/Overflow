@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -86,34 +87,6 @@ export function createModeratorPostHandler(dependencies: ModeratorRouteDependenc
       return moderationErrorResponse(error);
     }
   };
-}
-
-// The role is re-read from the database rather than trusted from the session,
-// because a session issued before a revocation still carries MODERATOR.
-async function requiredModeratorSession(
-  dependencies: ModeratorRouteDependencies,
-): Promise<{ user: { id: string; role: "MODERATOR" } } | Response> {
-  let session: ModeratorRouteSession | null;
-  try {
-    session = await dependencies.getSession();
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
-  }
-  if (session === null) {
-    return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-  }
-
-  let role: UserRole | null;
-  try {
-    role = await dependencies.getCurrentRole(session.user.id);
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
-  }
-  if (role !== "MODERATOR") {
-    return errorResponse(403, "FORBIDDEN", "Moderator permission is required.");
-  }
-
-  return { user: { id: session.user.id, role: "MODERATOR" } };
 }
 
 function moderationErrorResponse(error: unknown): Response {
