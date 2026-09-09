@@ -744,6 +744,32 @@ describe("unregistering a registered repository", () => {
     expect(harness.callOrder).toEqual([]);
   });
 
+  it("maps a failing by-owner-name lookup to UPSTREAM_FAILURE and exposes nothing of the store error", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      stateLookupFailure: new Error("database connectivity secret"),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message: "Unable to unregister the repository.",
+    });
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("maps a failing unregister write to UPSTREAM_FAILURE and exposes nothing of the store error", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      storeUnregisterFailure: new Error("database connectivity secret"),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message: "Unable to unregister the repository.",
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
+  });
+
   it("answers NOT_FOUND for an owner name no registration holds", async () => {
     const harness = createHarness();
 
@@ -826,6 +852,10 @@ type HarnessOptions = {
   existingUnregistered?: boolean;
   /** The outcome the fake unregister write answers with (default: unregisters the held row). */
   storeUnregisterOutcome?: RepositoryUnregisterOutcome;
+  /** The rejection the fake unregister write raises (after recording the call). */
+  storeUnregisterFailure?: unknown;
+  /** The rejection the by-owner-name state lookup raises. */
+  stateLookupFailure?: unknown;
   /** The rejection the fake webhook deletion raises (after recording the call). */
   deleteWebhookFailure?: unknown;
   /** The label names the fake GitHub answers `listRepositoryLabels` with. */
@@ -920,6 +950,9 @@ function createHarness(options: HarnessOptions = {}) {
       },
       async findRepositoryRegistrationStateByOwnerName(ownerName: string) {
         stateLookupsByOwnerName.push(ownerName);
+        if (options.stateLookupFailure !== undefined) {
+          throw options.stateLookupFailure;
+        }
         return existingState();
       },
       async findRepositoryRegistrationState(githubRepositoryId) {
@@ -929,6 +962,9 @@ function createHarness(options: HarnessOptions = {}) {
       async unregisterRepository(input) {
         callOrder.push(`unregisterRepository:${input.ownerName}`);
         unregisterInputs.push(input);
+        if (options.storeUnregisterFailure !== undefined) {
+          throw options.storeUnregisterFailure;
+        }
         return options.storeUnregisterOutcome ?? { kind: "UNREGISTERED", repository: registeredRepository() };
       },
       async appendDifficultySchemeVersion() {
