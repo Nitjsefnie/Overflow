@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const releaseNamePattern = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
+// One release-name grammar backs both the directory check and the per-release
+// `.tsconfig.json` sidecar names written beside each release directory.
+const releaseStemPattern = "\\.next-release-\\d{8}T\\d{6}Z-[a-f0-9]{7,40}";
+const releaseNamePattern = new RegExp(`^${releaseStemPattern}$`);
+const releaseSidecarPattern = new RegExp(`^(${releaseStemPattern})\\.tsconfig\\.json$`);
 
 const usage =
   "Usage: node scripts/release.ts switch <tree> <releaseDir> [--expect-current <absent|path>]\n" +
@@ -194,6 +198,31 @@ async function pruneReleases(tree: string, keep: number): Promise<void> {
     await rm(directory, { recursive: true });
     if (removed === 0 && unprotected) console.log(unprotected);
     console.log(directory);
+    removed++;
+    const sidecar = `${directory}.tsconfig.json`;
+    try {
+      await unlink(sidecar);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      continue;
+    }
+    console.log(sidecar);
+    removed++;
+  }
+  // Sweep sidecars whose release directory is absent, whatever removed the
+  // directory. Only regular files are swept; anything else shaped like a
+  // sidecar is foreign material prune does not own.
+  const remaining = await readdir(releases, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return [];
+  });
+  const directories = new Set(remaining.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+  for (const entry of remaining) {
+    const stem = releaseSidecarPattern.exec(entry.name)?.[1];
+    if (!stem || !entry.isFile() || directories.has(stem)) continue;
+    const sidecar = path.join(releases, entry.name);
+    await unlink(sidecar);
+    console.log(sidecar);
     removed++;
   }
   if (removed === 0) console.log(["Nothing to remove.", unprotected].filter(Boolean).join(" "));

@@ -770,4 +770,152 @@ describe("release prune", () => {
     expect(result.stdout.trim()).not.toBe("");
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
   });
+
+  it("removes the pruned release's tsconfig sidecar alongside its directory", async () => {
+    const old = await release("20260904T101500Z-abc1234");
+    const newest = await release("20260907T101500Z-abc1234");
+    const oldSidecar = `${old}.tsconfig.json`;
+    await writeFile(oldSidecar, "{}");
+    await symlink(path.basename(newest), path.join(tree, ".next"));
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readdir(tree)).toEqual([".next", path.basename(newest)]);
+    expect(result.stdout.trim().split("\n")).toEqual([old, oldSidecar]);
+  });
+
+  it("fails loudly when a pruned release's sidecar is a directory", async () => {
+    await release("20260904T101500Z-abc1234");
+    await release("20260907T101500Z-abc1234");
+    const sidecar = path.join(tree, ".next-release-20260904T101500Z-abc1234.tsconfig.json");
+    await mkdir(sidecar);
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(sidecar);
+    expect(await readdir(sidecar)).toEqual([]);
+  });
+
+  it("sweeps orphaned sidecars whose release directory is gone", async () => {
+    const retained = await release("20260907T101500Z-abc1234");
+    const retainedSidecar = `${retained}.tsconfig.json`;
+    await writeFile(retainedSidecar, "{}");
+    const swept = [
+      ".next-release-20260901T101500Z-abc1234.tsconfig.json",
+      ".next-release-20260902T101500Z-def5678.tsconfig.json",
+    ];
+    for (const name of swept) await writeFile(path.join(tree, name), "{}");
+    // A stem present only as a symlink is not a real directory, so its sidecar is swept.
+    await mkdir(path.join(tree, "payload"));
+    await symlink("payload", path.join(tree, ".next-release-20260903T101500Z-abc1234"));
+    swept.push(".next-release-20260903T101500Z-abc1234.tsconfig.json");
+    await writeFile(path.join(tree, swept[2]), "{}");
+    const kept = {
+      retained: path.basename(retainedSidecar),
+      notes: ".next-release-notes.tsconfig.json",
+      directoryShaped: ".next-release-20260904T101500Z-abc1234.tsconfig.json",
+    };
+    await writeFile(path.join(tree, kept.notes), "keep");
+    await mkdir(path.join(tree, kept.directoryShaped));
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readdir(tree)).toEqual([
+      ".next-release-20260903T101500Z-abc1234",
+      kept.directoryShaped,
+      path.basename(retained),
+      kept.retained,
+      kept.notes,
+      "payload",
+    ].sort());
+    expect(result.stdout.trim().split("\n").sort()).toEqual(swept.map((name) => path.join(tree, name)).sort());
+  });
+
+  it("ends a prune with exactly one sidecar per retained release", async () => {
+    for (const name of ["20260904T101500Z-abc1234", "20260905T101500Z-abc1234", "20260906T101500Z-abc1234", "20260907T101500Z-abc1234"]) {
+      const directory = await release(name);
+      await writeFile(`${directory}.tsconfig.json`, "{}");
+    }
+    for (const stem of ["20260901T101500Z-abc1234", "20260902T101500Z-def5678"]) {
+      await writeFile(path.join(tree, `.next-release-${stem}.tsconfig.json`), "{}");
+    }
+    await symlink(".next-release-20260907T101500Z-abc1234", path.join(tree, ".next"));
+
+    const result = run("prune", tree, "--keep", "2");
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readdir(tree);
+    expect(entries).toEqual([
+      ".next",
+      ".next-release-20260906T101500Z-abc1234",
+      ".next-release-20260906T101500Z-abc1234.tsconfig.json",
+      ".next-release-20260907T101500Z-abc1234",
+      ".next-release-20260907T101500Z-abc1234.tsconfig.json",
+    ]);
+    expect(entries.filter((name) => name.includes(".tsconfig.json"))).toHaveLength(2);
+    expect(entries.filter((name) => name.startsWith(".next-release-") && !name.includes(".tsconfig.json"))).toHaveLength(2);
+    expect(result.stdout.trim().split("\n").sort()).toEqual([
+      ".next-release-20260904T101500Z-abc1234",
+      ".next-release-20260904T101500Z-abc1234.tsconfig.json",
+      ".next-release-20260905T101500Z-abc1234",
+      ".next-release-20260905T101500Z-abc1234.tsconfig.json",
+      ".next-release-20260901T101500Z-abc1234.tsconfig.json",
+      ".next-release-20260902T101500Z-def5678.tsconfig.json",
+    ].map((name) => path.join(tree, name)).sort());
+  });
+
+  it("leaves a .next-release-notes directory and its sidecar-shaped neighbour untouched", async () => {
+    const retained = await release("20260907T101500Z-abc1234");
+    await mkdir(path.join(tree, ".next-release-notes"));
+    const notes = path.join(tree, ".next-release-notes/operator-notes.txt");
+    await writeFile(notes, "operator notes");
+    const notesSidecar = path.join(tree, ".next-release-notes.tsconfig.json");
+    await writeFile(notesSidecar, "keep");
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readFile(notes, "utf8")).toBe("operator notes");
+    expect(await readFile(notesSidecar, "utf8")).toBe("keep");
+    expect(await readdir(tree)).toEqual([
+      path.basename(retained),
+      ".next-release-notes",
+      ".next-release-notes.tsconfig.json",
+    ].sort());
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+  });
+
+  it("leaves a backup copy of a sidecar untouched", async () => {
+    const retained = await release("20260907T101500Z-abc1234");
+    const backup = path.join(tree, ".next-release-20260904T101500Z-abc1234.tsconfig.json.bak");
+    await writeFile(backup, "keep");
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readFile(backup, "utf8")).toBe("keep");
+    expect(await readdir(tree)).toEqual([
+      ".next-release-20260904T101500Z-abc1234.tsconfig.json.bak",
+      path.basename(retained),
+    ].sort());
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+  });
+
+  it("keeps the served and retained releases' sidecars", async () => {
+    for (const name of ["20260904T101500Z-abc1234", "20260906T101500Z-abc1234", "20260907T101500Z-abc1234"]) {
+      const directory = await release(name);
+      await writeFile(`${directory}.tsconfig.json`, "{}");
+    }
+    await symlink(".next-release-20260904T101500Z-abc1234", path.join(tree, ".next"));
+
+    const result = run("prune", tree, "--keep", "1");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readFile(path.join(tree, ".next-release-20260904T101500Z-abc1234.tsconfig.json"), "utf8")).toBe("{}");
+    expect(await readFile(path.join(tree, ".next-release-20260907T101500Z-abc1234.tsconfig.json"), "utf8")).toBe("{}");
+    expect(await realpath(path.join(tree, ".next"))).toBe(path.join(tree, ".next-release-20260904T101500Z-abc1234"));
+  });
 });
