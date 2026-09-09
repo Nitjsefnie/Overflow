@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGraphqlClient } from "@/lib/github/graphql";
+import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 
 describe("GitHubGraphqlClient failures", () => {
@@ -1004,7 +1005,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(query).toMatch(/\bstateReason\b/);
   });
 
-  it("maps only one unambiguous GraphQL assignee as an issue claim lock", async () => {
+  it("maps one assignee to its login, none to null, and several to the ambiguous-claim sentinel", async () => {
     let query = "";
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
@@ -1039,7 +1040,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
     expect(issues.map((issue) => issue.claimAssigneeGitHubLogin)).toEqual([
       "claim-holder",
       null,
-      null,
+      AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
     ]);
     expect(query).toMatch(/assignees\(first:\s*2\)/);
   });

@@ -1,5 +1,16 @@
 import type { IssueState, PullRequestState, RepositoryVisibility } from "@/lib/db/types";
 
+/**
+ * Reserved claim-assignee value standing for "GitHub reports two or more assignees".
+ *
+ * GitHub logins admit only alphanumerics and hyphens, so underscores are invalid
+ * and this string can never collide with a real assignee's login. Every consumer
+ * that decides on the column's nullity therefore reads the ambiguity
+ * conservatively: the issue stays off the available-work board, and the
+ * sponsor's exposure stays reserved as if an outsider held the claim.
+ */
+export const AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN = "__overflow_ambiguous_claim__";
+
 export type GitHubRepositoryReference = {
   owner: string;
   name: string;

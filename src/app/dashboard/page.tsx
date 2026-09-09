@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type DashboardContentProps = {
   memberName: string;
@@ -72,7 +73,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
             {dashboard.openClaims.map((claim) => (
               <li key={claim.id}>
                 <a href={claim.url}>{claim.repositoryName} #{claim.issueNumber}: {claim.title}</a>
-                {" · "}{claim.assigneeGitHubLogin}{" · "}{claim.openingName}: {claim.openingLabel}{" · reserve "}{claim.reservePoints}
+                {" · "}{claimAssigneePhrase(claim.assigneeGitHubLogin)}{" · "}{claim.openingName}: {claim.openingLabel}{" · reserve "}{claim.reservePoints}
               </li>
             ))}
           </ul>
@@ -126,6 +127,16 @@ function unavailabilityPhrase(reason: string): string {
     default:
       return "unavailable";
   }
+}
+
+/**
+ * The open-claims line's plain reading of who holds a claim. The reserved
+ * ambiguous-claim login is a machine value, so the sponsor reads the situation
+ * it stands for — never the sentinel itself. The same phrase is rendered on the
+ * issue card's claim line, and the two must stay legible together.
+ */
+function claimAssigneePhrase(login: string): string {
+  return login === AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN ? "assignment ambiguous" : login;
 }
 
 /**
