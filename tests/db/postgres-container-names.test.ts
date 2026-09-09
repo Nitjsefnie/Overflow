@@ -10,9 +10,14 @@ interface Source {
 }
 
 /**
- * This file, as the scan names it. The raw withName pass skips it: its own
- * fixture below carries the pattern text, and a guard that arrests itself is
- * no guard.
+ * This file, named on the ONE basis the whole guard shares — a path relative
+ * to the scanned root, exactly as the walk names it — because an exclusion
+ * comparing two namings never fires: that dead skip was found by review, and
+ * the guard stayed green only by a regex accident (the fixture's newline
+ * escape put a word character against the w of withName, so the word boundary
+ * could not match). The fixture below keeps its leading space on purpose:
+ * this file stays a raw-pass offender in text, so a broken exclusion fails
+ * loud, naming this file.
  */
 const selfPath = relative(resolve("tests"), fileURLToPath(import.meta.url));
 
@@ -35,6 +40,10 @@ describe("no suite pins a fixed testcontainer name", () => {
 
   it("scans a non-empty set of test sources", () => {
     expect(sources.length).toBeGreaterThan(0);
+  });
+
+  it("names this file in the scanned set exactly as the raw pass excludes it", () => {
+    expect(sources.some(({ path }) => path === selfPath)).toBe(true);
   });
 
   it("chains withName nowhere under tests/", () => {
@@ -64,7 +73,9 @@ describe("no suite pins a fixed testcontainer name", () => {
  * first, offender after — and pins the direction permanently.
  */
 describe("the name guard's raw pass", () => {
-  const desyncedFixture = 'const re = /["\'\\\\]/g;\nwithName("issue226-pg");\n';
+  // The space before withName is load-bearing: it lets the raw pattern match
+  // this file's own text, so the self-exclusion is exercised on every run.
+  const desyncedFixture = 'const re = /["\'\\\\]/g;\n withName("issue226-pg");\n';
 
   it("catches a withName offender where a quote-bearing regex literal desyncs the strip", () => {
     const fixture: Source[] = [
@@ -73,17 +84,31 @@ describe("the name guard's raw pass", () => {
 
     expect(withNameOffenders(fixture)).toEqual(["deploy/desynced-fixture.test.ts"]);
   });
+
+  it("skips this file's own text and no other file's", () => {
+    const armed: Source[] = [
+      { path: selfPath, source: 'withName("issue226-pg");', stripped: "" },
+      { path: "db/other.test.ts", source: 'withName("issue226-pg");', stripped: "" },
+    ];
+
+    expect(withNameOffenders(armed)).toEqual(["db/other.test.ts"]);
+  });
 });
 
-/** Every .ts and .tsx file under root, recursively, raw and stripped. */
+/** Every .ts and .tsx file under root, recursively, raw and stripped, each named relative to root. */
 async function scannedSources(root: string): Promise<Source[]> {
+  return scanDirectory(root, root);
+}
+
+/** The recursion half of scannedSources: `root` fixes the one naming basis, `directory` walks. */
+async function scanDirectory(root: string, directory: string): Promise<Source[]> {
   const sources: Source[] = [];
 
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const full = join(root, entry.name);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const full = join(directory, entry.name);
 
     if (entry.isDirectory()) {
-      sources.push(...(await scannedSources(full)));
+      sources.push(...(await scanDirectory(root, full)));
     } else if (/\.[jt]sx?$/.test(entry.name)) {
       const source = await readFile(full, "utf8");
 
