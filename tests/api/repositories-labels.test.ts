@@ -194,6 +194,28 @@ describe("GET /api/repositories/labels", () => {
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
   });
 
+  it("answers a GitHub credential rejection with 401 even when it carries rate-limit headers", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubStoredToken();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () =>
+      new Response("private-body access-token-should-not-leak", {
+        status: 401,
+        headers: { "retry-after": "60", "x-private": "private-header" },
+      })));
+
+    const response = await labelsRoute.GET(labelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body).toEqual({
+      error: {
+        code: "GITHUB_CREDENTIALS",
+        message: "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+  });
+
   it("reads the repository's labels with the account's stored token", async () => {
     readSession.mockResolvedValue(memberSession());
     stubStoredToken();
