@@ -40,6 +40,7 @@ function requestedUrls(fetchMock: ReturnType<typeof vi.fn>): string[] {
 describe("requestGitHubPublicIdentity", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("fetches only /user and tolerates a profile with no email, never touching /user/emails", async () => {
@@ -103,6 +104,74 @@ describe("requestGitHubPublicIdentity", () => {
     const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe(`Bearer ${secretAccessToken}`);
+  });
+
+  it("rejects a 403 JSON body with a typed status error and logs the upstream reason code, never the rate-limit object as a profile", async () => {
+    const rateLimitBody = {
+      message: "API rate limit exceeded for 169.58.58.201.",
+      documentation_url: "https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting",
+    };
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(rateLimitBody), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } }).then(
+      () => expect.fail("expected requestGitHubPublicIdentity to reject on a 403 /user response"),
+      (rejection: unknown) => rejection,
+    );
+
+    // The typed error carries the numeric status; the rate-limit body never
+    // resolves as the profile (the request rejects instead) and its
+    // documentation_url never leaks into the error or the diagnostic.
+    expect(error).toMatchObject({
+      name: "GitHubUserinfoStatusError",
+      status: 403,
+      message: expect.stringContaining("API rate limit exceeded for 169.58.58.201."),
+    });
+    expect(error).not.toBeInstanceOf(SyntaxError);
+    expect(String((error as Error).message)).not.toContain("documentation_url");
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(logged).toContain("SIGNIN_UPSTREAM_UNAVAILABLE");
+    expect(logged).toContain("403");
+    expect(logged).toContain("API rate limit exceeded for 169.58.58.201.");
+    expect(logged).not.toContain("documentation_url");
+  });
+
+  it("rejects a 502 HTML body with a typed status error, never a raw SyntaxError, keeping the diagnostic bounded", async () => {
+    const htmlBody =
+      "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center>" +
+      "<hr><p>nginx/1.24.0 repeats the upstream failure page over and over to bulk this body past any reasonable log bound.</p>".repeat(6) +
+      "<p>END_OF_LONG_BODY_MARKER</p></body></html>";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(htmlBody, {
+        status: 502,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } }).then(
+      () => expect.fail("expected requestGitHubPublicIdentity to reject on a 502 /user response"),
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toMatchObject({ name: "GitHubUserinfoStatusError", status: 502 });
+    expect(error).not.toBeInstanceOf(SyntaxError);
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(logged).toContain("SIGNIN_UPSTREAM_UNAVAILABLE");
+    expect(logged).toContain("502");
+    expect(logged).not.toContain(htmlBody);
+    expect(logged).not.toContain("END_OF_LONG_BODY_MARKER");
   });
 });
 
