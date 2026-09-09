@@ -483,7 +483,9 @@ deploy also resets retained caches other than the serving cache, so hand the
 previous cache back before the restart, even if it was writable when that
 release last ran. The block takes the same deploy lock as section 10, so a
 rollback cannot interleave with a deploy, and its switch is conditional on
-`.next` still resolving to the release the rollback started from.
+`.next` still resolving to the release the rollback started from. Paste the
+block into a fresh shell, never one that already holds the deploy lock: its
+`exec 9>` re-opens fd 9, which would release the lock that deploy still holds.
 
 ```bash
 set -e
@@ -587,9 +589,8 @@ migration block at the switch step.
 The block is serialized with an exclusive `flock` on `/run/overflow-deploy.lock`
 (`command -v flock`: `/usr/bin/flock`, util-linux), held for the whole
 procedure: pull, install, migrate, build, ownership reset, switch, restart,
-verification, webhook upgrade and prune all run under one lock, so two deploys
-started together run one after the other instead of interleaving, and prune
-runs under the same protection. A concurrent deploy waits up to 900 seconds for
+verification and webhook upgrade all run under one lock, so two deploys
+started together run one after the other instead of interleaving. A concurrent deploy waits up to 900 seconds for
 the lock and then refuses; refusing is the fail-safe behavior, and a deploy
 must never proceed without it. The lock is kernel-owned and disappears when the
 holding process dies, so a crashed deploy cannot deadlock the next one.
@@ -710,7 +711,11 @@ ownership or mode checks; preserving the old cache permissions is required too.
 The immediate restart picks up the new release's cache.
 
 Expect `active` and HTTP `200`, then exercise the application and inspect the
-journal as in section 7. Only prune after those checks succeed. Before pruning,
+journal as in section 7. Only prune after those checks succeed. Prune in the
+same shell that ran the deploy block above: the deploy lock is held until that
+shell exits, and the prune fence below re-locks fd 9 before touching anything,
+so pasting it into a fresh shell fails loudly by design instead of pruning
+unserialized. Before pruning,
 list the retained directories and confirm the recorded previous release is
 among the three greatest names; if it is older, raise `--keep` enough to include
 it or skip pruning. Failed build directories count too, and a rollback can
@@ -725,6 +730,7 @@ LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1 \
 ```
 
 ```bash
+flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
 pnpm release:prune /srv/overflow --keep 3
 ```
 
