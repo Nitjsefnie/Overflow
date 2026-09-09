@@ -954,6 +954,25 @@ describe("member dashboard", () => {
     expect(document.querySelector(".balance-number")?.textContent).toBe("0");
   });
 
+  it("renders negative headroom whose magnitude rounds to zero as a bare 0", () => {
+    render(
+      <BalanceCard
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 1,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: -0.004,
+        }}
+      />,
+    );
+
+    // The headroom's magnitude formats to "0" at two fractional digits, so
+    // prefixing the minus sign reads "−0" — the unsigned formatter carries the
+    // same zero-magnitude pin as its signed twin.
+    expect(ledgerTotalValues()).toEqual(["1", "0", "0", "0"]);
+  });
+
   it("renders each ledger total's value alone under its term", () => {
     render(
       <BalanceCard
