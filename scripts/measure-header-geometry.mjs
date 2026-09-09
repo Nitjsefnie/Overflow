@@ -30,10 +30,11 @@ const USAGE = `usage: node scripts/measure-header-geometry.mjs [--css PATH] [--o
 Sweeps the real header (member, moderator and signed-out variants) across
 viewport widths in headless chromium and prints, per width: nav row count,
 wordmark / stamp / session-controls centres, header height, and a
-pass/DEFECT verdict. Around the header breakpoint the stylesheet declares
-it dense-samples every 5px across [breakpoint-100, breakpoint+200] so a
-wrong breakpoint cannot hide between coarse steps; the rest of the band is
-swept at 30px with 1280px as the desktop reference.
+pass/DEFECT verdict. Dense-samples every 5px across [600, breakpoint+200]
+around the header breakpoint the stylesheet declares — the full responsive
+band, so a narrow media band cannot hide between coarse steps — and sweeps
+30px above it, 1280px as the desktop reference. Exits 1 when any DEFECT
+row exists, so a CI promotion gates on the status code.
 
   --css PATH   stylesheet to measure (default: src/app/globals.css)
   --out PATH   also write every raw row as JSON
@@ -372,9 +373,10 @@ async function main() {
   const declared = declaredHeaderBreakpoint(readFileSync(cssPath, "utf8"));
   const sweep = new Set(WIDTHS);
   if (declared === null) {
-    console.log("no declared header breakpoint found in the stylesheet; coarse sweep only");
+    for (let width = 600; width <= 1000; width += 5) sweep.add(width);
+    console.log("no declared header breakpoint found; dense 600-1000 step 5, coarse elsewhere");
   } else {
-    for (let width = declared - 100; width <= declared + 200; width += 5) sweep.add(width);
+    for (let width = 600; width <= declared + 200; width += 5) sweep.add(width);
   }
   const widths = [...sweep].sort((a, b) => a - b);
 
@@ -429,11 +431,11 @@ async function main() {
 
   console.log("Header geometry sweep — real markup, real stylesheet, headless chromium");
   if (declared === null) {
-    console.log("no declared header breakpoint found in the stylesheet; coarse sweep only");
+    console.log("no declared header breakpoint found; dense 600-1000 step 5, coarse elsewhere");
   } else {
     console.log(
-      `declared header breakpoint ${declared}px; dense 5px sweep ` +
-        `${declared - 100}-${declared + 200}, coarse 30px elsewhere`,
+      `dense 5px sweep 600-${declared + 200} around declared header breakpoint ${declared}px; ` +
+        `coarse 30px above`,
     );
   }
   console.log(`stamp text: "Signed in as ${MEMBER_NAME}"; ${widths.length} widths per variant\n`);
@@ -463,6 +465,12 @@ async function main() {
   if (outPath) {
     await writeFile(outPath, `${JSON.stringify(results, null, 2)}\n`);
     console.log(`JSON written to ${outPath}`);
+  }
+
+  const defects = results.filter((row) => row.defect).length;
+  if (defects > 0) {
+    console.log(`${defects} DEFECT rows — failing`);
+    process.exit(1);
   }
 }
 
