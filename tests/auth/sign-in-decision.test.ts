@@ -48,6 +48,7 @@ describe("SIGN_IN_REFUSAL_REASONS", () => {
       identity: "SIGNIN_IDENTITY_INVALID",
       accessToken: "SIGNIN_ACCESS_TOKEN_MISSING",
       persistence: "SIGNIN_PERSIST_FAILED",
+      upstream: "SIGNIN_UPSTREAM_UNAVAILABLE",
     });
   });
 });
