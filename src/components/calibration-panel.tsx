@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CalibrationComparison } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import { plural } from "@/lib/plural";
 
 type CalibrationPanelProps = {
   comparison: CalibrationComparison;
@@ -17,12 +18,12 @@ export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
       ) : null}
       <div className="calibration-grid">
         <section aria-labelledby="self-work-heading">
-          <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} pairs</h2>
+          <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} {plural(comparison.selfWork.count, "pair")}</h2>
           <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
           <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
         </section>
         <section aria-labelledby="outsider-heading">
-          <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} pairs</h2>
+          <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} {plural(comparison.outsider.count, "pair")}</h2>
           <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
           <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
         </section>

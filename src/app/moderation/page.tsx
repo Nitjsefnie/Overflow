@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
+import { plural } from "@/lib/plural";
 import type {
   AuditCandidateProjection,
   EnforcementHistoryProjection,
@@ -118,7 +119,7 @@ export default async function ModerationPage() {
             {audits.map((audit) => (
               <li key={audit.id}>
                 <p>
-                  <strong>{audit.targetLogin}</strong> · reported by {audit.reporterLogin} · {audit.settledSampleSize} settled pairs
+                  <strong>{audit.targetLogin}</strong> · reported by {audit.reporterLogin} · {audit.settledSampleSize} settled {plural(audit.settledSampleSize, "pair")}
                   {audit.repositoryName === null ? " · all repositories" : ` · ${audit.repositoryName}`}
                 </p>
                 <p>Window: {audit.sampleStartedAt ?? "unknown"} to {audit.sampleEndedAt ?? "unknown"}</p>

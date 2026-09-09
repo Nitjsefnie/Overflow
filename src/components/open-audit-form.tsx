@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import { plural } from "@/lib/plural";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 type PendingRequest = "preview" | "open";
@@ -252,11 +253,11 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
           <h3 id="cohort-preview-heading">Cohort preview</h3>
           <p>Previewed {describeSelection(currentPreview.selection, candidates, repositories)}</p>
           <p>
-            Self-work sample · {currentPreview.comparison.selfWork.count} pairs · mean delta{" "}
+            Self-work sample · {currentPreview.comparison.selfWork.count} {plural(currentPreview.comparison.selfWork.count, "pair")} · mean delta{" "}
             {formatSigned(currentPreview.comparison.selfWork.meanDelta)}
           </p>
           <p>
-            Outsider settlement sample · {currentPreview.comparison.outsider.count} pairs · mean delta{" "}
+            Outsider settlement sample · {currentPreview.comparison.outsider.count} {plural(currentPreview.comparison.outsider.count, "pair")} · mean delta{" "}
             {formatSigned(currentPreview.comparison.outsider.meanDelta)}
           </p>
           <p>Difference between means {formatSigned(currentPreview.comparison.differenceBetweenMeans)}</p>
@@ -375,7 +376,7 @@ function describeSelection(
 }
 
 function describeCandidate(candidate: AuditCandidateProjection): string {
-  const summary = `${candidate.githubLogin} · ${candidate.selfWorkPairCount} self-work · ${candidate.outsiderPairCount} outsider settlements`;
+  const summary = `${candidate.githubLogin} · ${candidate.selfWorkPairCount} self-work · ${candidate.outsiderPairCount} outsider ${plural(candidate.outsiderPairCount, "settlement")}`;
   return candidate.openAuditId === null ? summary : `${summary} · audit already open`;
 }
 
