@@ -16,7 +16,16 @@ let sql: Sql;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 23).toString("base64url");
 
-const V2_EFFECTIVE_FROM = new Date("2026-09-01T00:00:00.000Z");
+// The acceptance timeline for issue 180. Closure A's evidence window closes
+// before the repository registers, under catalog v1; the sponsor then appends
+// v2, repricing one actual label, beginning to govern a day after registration;
+// closure B merges later still. On every re-derivation closure A must keep
+// resolving at its v1 figure, and v2 must govern only the later closure. The
+// append and closure B are timed relative to the registration instant, because
+// a real catalog change always begins governing after the version before it.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+
 const closureAIssueId = 8_900_101;
 const closureBIssueId = 8_900_201;
 
@@ -66,6 +75,16 @@ describe("changing a repository's difficulty catalog", () => {
     const repositoryId = created!.id;
     const ownerName = `catalog/repo-${repositoryGitHubId}`;
 
+    // Registration is the instant catalog v1 begins governing, so the append
+    // and closure B are timed forward from it, as the real API's now()-based
+    // appends always are.
+    const [registered] = await sql<{ created_at: Date | string }[]>`
+      select created_at from registered_repositories where id = ${repositoryId}
+    `;
+    const registeredAtMs = new Date(registered!.created_at).getTime();
+    const v2EffectiveFrom = new Date(registeredAtMs + DAY_MS);
+    const closureB = closureIssue(closureBTimeline(registeredAtMs), ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin);
+
     const gateway = (issues: GitHubIssue[]): ReconciliationGateway => ({
       getRepositoryById: verifiedRepository(ownerName),
       getIssue: async () => null,
@@ -78,7 +97,7 @@ describe("changing a repository's difficulty catalog", () => {
     const foldStore = new PostgresFoldStore(sql, tokenEncryptionKey);
     await foldStore.beginRun(repositoryId);
     const firstSummary = await reconcileRepository(
-      { store: foldStore, github: gateway([closureIssue("A", ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin)]) },
+      { store: foldStore, github: gateway([closureIssue(closureATimeline(), ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin)]) },
       repositoryId,
     );
     expect(firstSummary.skipped).toBe(false);
@@ -99,7 +118,7 @@ describe("changing a repository's difficulty catalog", () => {
       githubRepositoryId: repositoryGitHubId,
       sponsorId,
       scheme: catalogV2(),
-      effectiveFrom: V2_EFFECTIVE_FROM,
+      effectiveFrom: v2EffectiveFrom,
     });
     expect(appendResult).toMatchObject({ changed: true, versionNumber: 2 });
 
@@ -112,8 +131,8 @@ describe("changing a repository's difficulty catalog", () => {
       {
         store: foldStore,
         github: gateway([
-          closureIssue("A", ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin),
-          closureIssue("B", ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin),
+          closureIssue(closureATimeline(), ownerName, repositoryGitHubId, contributorGitHubUserId, sponsorLogin, contributorLogin),
+          closureB,
         ]),
       },
       repositoryId,
@@ -146,11 +165,11 @@ describe("changing a repository's difficulty catalog", () => {
     const versions = await sql<VersionReading[]>`
       select version_number, scheme, effective_from
       from repository_difficulty_scheme_versions
-      where repository_id = ${repositoryId}
+      where github_repository_id = ${repositoryGitHubId}
       order by version_number
     `;
     expect(versions.map((version) => version.scheme)).toEqual([catalogV1(), catalogV2()]);
-    expect(Number(versions[1]?.effective_from)).toBe(V2_EFFECTIVE_FROM.getTime());
+    expect(Number(versions[1]?.effective_from)).toBe(v2EffectiveFrom.getTime());
   });
 });
 
@@ -222,45 +241,57 @@ async function insertUser(githubUserId: number, githubLogin: string, withToken: 
   return row!.id;
 }
 
+// Closure A's evidence window closes before the repository registers, so it
+// exercises the pre-registration fallback to the earliest catalog version.
+function closureATimeline() {
+  return {
+    githubIssueId: closureAIssueId,
+    issueNumber: 1,
+    pullRequestId: 8_900_301,
+    pullRequestNumber: 11,
+    created: "2026-08-01T09:00:00.000Z",
+    openingLabelApplied: "2026-08-01T09:30:00.000Z",
+    assigned: "2026-08-01T10:00:00.000Z",
+    finalCommit: "2026-08-02T10:00:00.000Z",
+    actualLabelApplied: "2026-08-02T10:30:00.000Z",
+    rationale: "2026-08-02T11:00:00.000Z",
+    merged: "2026-08-02T12:00:00.000Z",
+    closed: "2026-08-02T12:05:00.000Z",
+    openingLabel: "M",
+  };
+}
+
+// Closure B merges a day after catalog v2 begins governing, so v2 prices it.
+function closureBTimeline(registeredAtMs: number) {
+  return {
+    githubIssueId: closureBIssueId,
+    issueNumber: 2,
+    pullRequestId: 8_900_302,
+    pullRequestNumber: 12,
+    created: iso(registeredAtMs + 2 * DAY_MS),
+    openingLabelApplied: iso(registeredAtMs + 2 * DAY_MS + 30 * MINUTE_MS),
+    assigned: iso(registeredAtMs + 2 * DAY_MS + 60 * MINUTE_MS),
+    finalCommit: iso(registeredAtMs + 3 * DAY_MS),
+    actualLabelApplied: iso(registeredAtMs + 3 * DAY_MS + 30 * MINUTE_MS),
+    rationale: iso(registeredAtMs + 3 * DAY_MS + 60 * MINUTE_MS),
+    merged: iso(registeredAtMs + 3 * DAY_MS + 2 * 60 * MINUTE_MS),
+    closed: iso(registeredAtMs + 3 * DAY_MS + 2 * 60 * MINUTE_MS + 5 * MINUTE_MS),
+    openingLabel: "S",
+  };
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
 function closureIssue(
-  variant: "A" | "B",
+  timeline: ReturnType<typeof closureATimeline>,
   ownerName: string,
   repositoryGitHubId: number,
   contributorGitHubUserId: number,
   sponsorLogin: string,
   contributorLogin: string,
 ): GitHubIssue {
-  const timeline = variant === "A"
-    ? {
-        githubIssueId: closureAIssueId,
-        issueNumber: 1,
-        pullRequestId: 8_900_301,
-        pullRequestNumber: 11,
-        created: "2026-08-01T09:00:00.000Z",
-        openingLabelApplied: "2026-08-01T09:30:00.000Z",
-        assigned: "2026-08-01T10:00:00.000Z",
-        finalCommit: "2026-08-02T10:00:00.000Z",
-        actualLabelApplied: "2026-08-02T10:30:00.000Z",
-        rationale: "2026-08-02T11:00:00.000Z",
-        merged: "2026-08-02T12:00:00.000Z",
-        closed: "2026-08-02T12:05:00.000Z",
-        openingLabel: "M",
-      }
-    : {
-        githubIssueId: closureBIssueId,
-        issueNumber: 2,
-        pullRequestId: 8_900_302,
-        pullRequestNumber: 12,
-        created: "2026-09-02T09:00:00.000Z",
-        openingLabelApplied: "2026-09-02T09:30:00.000Z",
-        assigned: "2026-09-02T10:00:00.000Z",
-        finalCommit: "2026-09-03T10:00:00.000Z",
-        actualLabelApplied: "2026-09-03T10:30:00.000Z",
-        rationale: "2026-09-03T11:00:00.000Z",
-        merged: "2026-09-03T12:00:00.000Z",
-        closed: "2026-09-03T12:05:00.000Z",
-        openingLabel: "S",
-      };
   return {
     id: timeline.githubIssueId,
     number: timeline.issueNumber,

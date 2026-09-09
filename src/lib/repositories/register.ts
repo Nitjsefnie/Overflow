@@ -49,6 +49,26 @@ export type RepositoryRegistrationGateway = {
 export type RepositoryRegistrationStore = {
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null>;
   createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null>;
+  /**
+   * Appends the submitted catalog as the repository's next version and moves
+   * the stored current catalog in the same transaction (issue 180). Answers
+   * `changed: false` when the submitted catalog already is the current one,
+   * and null when no registration holds the GitHub identity.
+   */
+  appendDifficultySchemeVersion(input: {
+    githubRepositoryId: number;
+    sponsorId: string;
+    scheme: DifficultyScheme;
+    effectiveFrom: Date;
+  }): Promise<RepositoryCatalogChange | null>;
+};
+
+export type RepositoryCatalogChange = {
+  changed: boolean;
+  /** The appended version's number, null when nothing changed. */
+  versionNumber: number | null;
+  /** The instant the appended version begins governing, ISO-8601, null when nothing changed. */
+  effectiveFrom: string | null;
 };
 
 export type RepositoryRegistrationDependencies = {
@@ -92,6 +112,20 @@ export class RepositoryRegistrationEnforcementError extends Error {
   public constructor() {
     super("The account is not eligible to register repositories.");
     this.name = "RepositoryRegistrationEnforcementError";
+  }
+}
+
+export class RepositorySchemeChangeForbiddenError extends Error {
+  public constructor(public readonly githubRepositoryId: number) {
+    super("Only the repository's sponsor can change its difficulty catalog.");
+    this.name = "RepositorySchemeChangeForbiddenError";
+  }
+}
+
+export class RepositorySchemeChangeOrderError extends Error {
+  public constructor(public readonly githubRepositoryId: number) {
+    super("A difficulty catalog version cannot begin governing before the version before it.");
+    this.name = "RepositorySchemeChangeOrderError";
   }
 }
 
@@ -242,6 +276,107 @@ export async function registerRepository(
   }
 
   return { ...created, initialImportScheduled, claimPath };
+}
+
+/**
+ * Changes a registered repository's difficulty catalog (issue 180).
+ *
+ * The submission is validated exactly like a registration and resolved through
+ * GitHub to the same numeric identity, so the catalog change lands on the
+ * repository the sponsor actually administers. The change itself is an append:
+ * the submitted catalog becomes the repository's next catalog version and the
+ * stored current catalog moves with it in one transaction, so closures already
+ * settled keep the catalog their evidence window closed under.
+ */
+export async function changeRepositoryCatalog(
+  dependencies: RepositoryRegistrationDependencies,
+  input: RepositoryRegistrationInput,
+): Promise<RepositoryCatalogChangeResult> {
+  if (
+    dependencies.actor.enforcementState !== undefined &&
+    !isParticipationEligible(dependencies.actor.enforcementState)
+  ) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "The account is not eligible to change repository catalogs.",
+    );
+  }
+
+  const difficultyScheme = toDifficultyScheme(input);
+  const validation = validateDifficultyScheme(difficultyScheme);
+  if (!validation.ok) {
+    throw new RepositoryRegistrationError("INVALID_INPUT", validation.reason);
+  }
+
+  let submittedRepository: GitHubRepositoryReference;
+  try {
+    submittedRepository = parseGitHubRepository(input.repositoryUrl);
+  } catch {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit one GitHub repository as owner/name or a canonical GitHub URL.",
+    );
+  }
+
+  const repository = await getSubmittedRepository(dependencies.github, submittedRepository);
+  if (repository.visibility !== "PUBLIC") {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only public GitHub repositories can keep a registered difficulty catalog.",
+    );
+  }
+
+  if (!repository.canAdminister) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "GitHub administrator permission is required for the submitted repository.",
+    );
+  }
+
+  const registered = await findRegisteredRepository(dependencies.store, repository.id);
+  if (registered === null) {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      "This GitHub repository is not registered, so there is no catalog to change.",
+    );
+  }
+
+  const labels = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels].map((label) => label.label);
+  try {
+    await dependencies.github.ensureDifficultyLabels(submittedRepository, labels);
+  } catch (error) {
+    throw githubSetupError(error, repository, "configure difficulty labels");
+  }
+
+  try {
+    return await dependencies.store.appendDifficultySchemeVersion({
+      githubRepositoryId: repository.id,
+      sponsorId: dependencies.actor.id,
+      scheme: difficultyScheme,
+      effectiveFrom: new Date(),
+    });
+  } catch (error) {
+    if (error instanceof RepositorySchemeChangeForbiddenError) {
+      throw new RepositoryRegistrationError("FORBIDDEN", error.message);
+    }
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the difficulty catalog change.");
+  }
+}
+
+export type RepositoryCatalogChangeResult = RepositoryCatalogChange & {
+  /** The registered repository whose catalog changed. */
+  repository: RegisteredRepository;
+};
+
+async function findRegisteredRepository(
+  store: RepositoryRegistrationStore,
+  githubRepositoryId: number,
+): Promise<RegisteredRepository | null> {
+  try {
+    return await store.findRepositoryByGitHubId(githubRepositoryId);
+  } catch {
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the difficulty catalog change.");
+  }
 }
 
 function githubSetupError(
