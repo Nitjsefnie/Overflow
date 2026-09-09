@@ -53,6 +53,9 @@ src/app/api/github/webhooks/*
 !src/app/api/issues/
 src/app/api/issues/*
 !src/app/api/issues/*.ts
+!src/app/api/mcp/
+src/app/api/mcp/*
+!src/app/api/mcp/*.ts
 !src/app/api/moderation/
 src/app/api/moderation/*
 !src/app/api/moderation/*.ts
