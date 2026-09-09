@@ -18,6 +18,18 @@ export type DifficultyScheme = {
 
 export type DifficultySchemeValidation = { ok: true } | { ok: false; reason: string };
 
+/**
+ * One entry of a repository's catalog history (issue 180): the catalog this
+ * repository's sponsor registered or appended, and the instant from which it
+ * governs. `effectiveFrom` is ISO-8601, held as text so the value survives the
+ * store-to-fold boundary exactly as the fold reads it.
+ */
+export type DifficultySchemeVersion = {
+  versionNumber: number;
+  scheme: DifficultyScheme;
+  effectiveFrom: string;
+};
+
 export type OpeningDifficulty =
   | {
       kind: "ok";
@@ -148,4 +160,37 @@ export function parseActualDifficulty(labels: string[], scheme: DifficultyScheme
 
 function isPointsValue(value: number): boolean {
   return Number.isInteger(value) && value >= minimumPoints && value <= maximumPoints;
+}
+
+/**
+ * The catalog in force at an instant, for closures whose evidence window closed
+ * then (issue 180): the latest version that began governing at or before the
+ * instant, the earliest version for instants before any began, and the current
+ * catalog when the repository carries no readable version history at all —
+ * which is the one-catalog behavior every repository had before versioning.
+ *
+ * The caller supplies the instant; nothing here reads the clock, so a
+ * re-derivation run of the same evidence selects the same version forever,
+ * whatever a sponsor appends later. Appends are additive: later versions begin
+ * governing; no earlier version's window is ever rewritten.
+ */
+export function difficultySchemeInForceAt(
+  versions: readonly DifficultySchemeVersion[],
+  at: number,
+  current: DifficultyScheme,
+): DifficultyScheme {
+  const readable = [...versions]
+    .map((version) => ({ version, effectiveAt: Date.parse(version.effectiveFrom) }))
+    .filter((entry) => Number.isFinite(entry.effectiveAt))
+    .sort((left, right) => left.effectiveAt - right.effectiveAt || left.version.versionNumber - right.version.versionNumber);
+  if (readable.length === 0) {
+    return current;
+  }
+  let inForce = readable[0]!.version.scheme;
+  for (const entry of readable) {
+    if (entry.effectiveAt <= at) {
+      inForce = entry.version.scheme;
+    }
+  }
+  return inForce;
 }

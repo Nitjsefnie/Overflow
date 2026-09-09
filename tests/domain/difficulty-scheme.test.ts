@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  difficultySchemeInForceAt,
   parseActualDifficulty,
   parseOpeningDifficulty,
   validateDifficultyScheme,
   type DifficultyScheme,
+  type DifficultySchemeVersion,
 } from "@/lib/domain/difficulty-scheme";
 
 function createScheme(): DifficultyScheme {
@@ -20,6 +22,22 @@ function createScheme(): DifficultyScheme {
       points: index + 1,
     })),
   };
+}
+
+function secondScheme(): DifficultyScheme {
+  const scheme = createScheme();
+  return {
+    ...scheme,
+    actualLabels: scheme.actualLabels.map((label) => {
+      if (label.label === "delivered/6") return { ...label, points: 7 };
+      if (label.label === "delivered/7") return { ...label, points: 6 };
+      return label;
+    }),
+  };
+}
+
+function version(scheme: DifficultyScheme, versionNumber: number, effectiveFrom: string): DifficultySchemeVersion {
+  return { versionNumber, scheme, effectiveFrom };
 }
 
 describe("difficulty schemes", () => {
@@ -103,5 +121,53 @@ describe("difficulty schemes", () => {
     scheme.actualLabels.pop();
 
     expect(validateDifficultyScheme(scheme)).toMatchObject({ ok: false });
+  });
+});
+
+describe("selecting the difficulty catalog in force at an instant", () => {
+  const current = secondScheme();
+
+  it("keeps the sole registered catalog governing when no version history exists", () => {
+    const registered = createScheme();
+
+    expect(difficultySchemeInForceAt([], Date.parse("2026-09-01T00:00:00.000Z"), registered)).toBe(registered);
+  });
+
+  it("selects the latest version whose effective instant is at or before the given instant", () => {
+    const versions = [
+      version(createScheme(), 1, "2026-01-01T00:00:00.000Z"),
+      version(current, 2, "2026-09-01T00:00:00.000Z"),
+    ];
+
+    expect(difficultySchemeInForceAt(versions, Date.parse("2026-08-31T23:59:59.999Z"), current)).toBe(versions[0]!.scheme);
+    expect(difficultySchemeInForceAt(versions, Date.parse("2026-09-01T00:00:00.000Z"), current)).toBe(current);
+  });
+
+  it("lets the earliest version govern instants before the first version began", () => {
+    const versions = [
+      version(createScheme(), 1, "2026-01-01T00:00:00.000Z"),
+      version(current, 2, "2026-09-01T00:00:00.000Z"),
+    ];
+
+    expect(difficultySchemeInForceAt(versions, Date.parse("2025-01-01T00:00:00.000Z"), current)).toBe(versions[0]!.scheme);
+  });
+
+  it("selects by time order rather than list order", () => {
+    const versions = [
+      version(current, 2, "2026-09-01T00:00:00.000Z"),
+      version(createScheme(), 1, "2026-01-01T00:00:00.000Z"),
+    ];
+
+    expect(difficultySchemeInForceAt(versions, Date.parse("2026-08-31T23:59:59.999Z"), current)).toBe(versions[1]!.scheme);
+    expect(difficultySchemeInForceAt(versions, Date.parse("2026-09-01T00:00:00.000Z"), current)).toBe(current);
+  });
+
+  it("ignores a version carrying an unreadable effective instant and falls back to the usable ones", () => {
+    const versions = [
+      version(createScheme(), 1, "2026-01-01T00:00:00.000Z"),
+      version(secondScheme(), 2, "not-a-timestamp"),
+    ];
+
+    expect(difficultySchemeInForceAt(versions, Date.parse("2026-08-01T00:00:00.000Z"), current)).toBe(versions[0]!.scheme);
   });
 });
