@@ -83,7 +83,7 @@ const otherShellLines = new Set([
   "chmod -R u=rwX,g=rX,o= \"$previous_release/cache\"",
   "git pull --ff-only origin main",
   "exec 9>/run/overflow-deploy.lock",
-  "flock -w 900 9 || { echo \"Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes.\" >&2; exit 1; }",
+  "flock -w 900 9 || { echo \"Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running.\" >&2; exit 1; }",
   "expected_serving=$(readlink -f /srv/overflow/.next || printf absent)",
   "previous_release=$(readlink -f /srv/overflow/.next)",
   "serving_cache=\"$previous_release/cache\"",
@@ -320,8 +320,8 @@ it("requires the deploy serialization lines in their blocks, in order", async ()
       .map((tokens) => tokens.join(" ")));
   const exec = tokenizeLines("exec 9>/run/overflow-deploy.lock")[0].join(" ");
   const flock = tokenizeLines(
-    'flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. '
-    + 'Re-run this procedure when the other deploy finishes." >&2; exit 1; }',
+    'flock -w 900 9 || { echo "Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. '
+    + "Consult the deploy procedure's serialization notes before re-running.\" >&2; exit 1; }",
   )[0].join(" ");
   const anchor = tokenizeLines("expected_serving=$(readlink -f /srv/overflow/.next || printf absent)")[0].join(" ");
   const deploy = blocks.find((lines) => lines.includes("git pull --ff-only origin main"));
