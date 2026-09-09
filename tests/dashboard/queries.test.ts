@@ -1257,6 +1257,7 @@ describe("calibration comparison per repository", () => {
 
     expect(entries).toEqual([
       {
+        githubRepositoryId: 2,
         repositoryName: harbour,
         comparison: {
           selfWork: { count: 2, meanDelta: -0.5, medianDelta: -0.5 },
@@ -1265,6 +1266,7 @@ describe("calibration comparison per repository", () => {
         },
       },
       {
+        githubRepositoryId: 7,
         repositoryName: lighthouse,
         comparison: {
           selfWork: { count: 1, meanDelta: 4, medianDelta: 4 },

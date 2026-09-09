@@ -1176,7 +1176,8 @@ export async function getCalibrationComparisonByRepository(
   // after the first one's, so the merged order is not the query's.
   return [...groups.entries()]
     .sort(([left], [right]) => left - right)
-    .map(([, group]) => ({
+    .map(([githubRepositoryId, group]) => ({
+      githubRepositoryId,
       repositoryName: group.repositoryName,
       comparison: compareCalibration(group.selfWork, group.outsider),
     }));

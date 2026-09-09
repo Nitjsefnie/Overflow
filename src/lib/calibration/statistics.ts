@@ -33,6 +33,8 @@ export type CalibrationComparison = {
  */
 export type RepositoryCalibrationEntry = {
   repositoryName: string;
+  /** The GitHub repository identifier the entries are grouped and ordered by — also the panel list's key. */
+  githubRepositoryId: number;
   comparison: CalibrationComparison;
 };
 

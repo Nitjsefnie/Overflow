@@ -19,6 +19,7 @@ const comparison: CalibrationComparison = {
 
 const byRepository: RepositoryCalibrationEntry[] = [
   {
+    githubRepositoryId: 92731604,
     repositoryName: "Nitjsefnie-Harness-Commons/daedalus",
     comparison: {
       selfWork: { count: 8, meanDelta: 0.5, medianDelta: 1 },
@@ -27,6 +28,7 @@ const byRepository: RepositoryCalibrationEntry[] = [
     },
   },
   {
+    githubRepositoryId: 92731750,
     repositoryName: "Nitjsefnie/Overflow",
     comparison: {
       selfWork: { count: 4, meanDelta: 1.25, medianDelta: 1 },
@@ -122,6 +124,42 @@ describe("GET /api/calibration", () => {
     expect(dependencies.getCalibrationComparison).toHaveBeenCalledExactlyOnceWith(memberId);
     expect(dependencies.getCalibrationComparisonByRepository).toHaveBeenCalledExactlyOnceWith(memberId);
     expect(dependencies.listSelfWorkCalibrations).toHaveBeenCalledExactlyOnceWith(memberId);
+  });
+
+  // The two comparison queries read independent rows, so they are issued
+  // together: awaiting the first before asking for the second puts two
+  // unindexed scans back to back on every request. Both are left in flight
+  // while the issue order is read, then the first is released. Either
+  // rejection still takes the route's 502 — the cases below pin that.
+  it("issues both calibration queries together, while the first is still unanswered", async () => {
+    const started: string[] = [];
+    let releaseComparison: (value: CalibrationComparison) => void = () => {};
+    const dependencies = calibrationDependencies({
+      getCalibrationComparison: vi.fn(() => {
+        started.push("comparison");
+        return new Promise<CalibrationComparison>((resolve) => {
+          releaseComparison = resolve;
+        });
+      }),
+      getCalibrationComparisonByRepository: vi.fn(() => {
+        started.push("byRepository");
+        return Promise.resolve(byRepository);
+      }),
+    });
+
+    const handled = createCalibrationGetHandler(dependencies)(calibrationRequest());
+    await vi.waitFor(() => expect(started).toContain("comparison"));
+
+    expect(started).toEqual(["comparison", "byRepository"]);
+
+    releaseComparison(comparison);
+    const response = await handled;
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      comparison,
+      byRepository,
+      selfWork: [selfWorkCalibration],
+    });
   });
 
   // The breakdown is part of the answer, not a decoration on it: a member
