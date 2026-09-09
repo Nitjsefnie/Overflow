@@ -178,7 +178,12 @@ async function surfacedFailure(
           canAdminister: true,
         };
       },
-      async ensureDifficultyLabels() {},
+      async listRepositoryLabels() {
+        return new Set([
+          ...registrationInput().openingLabels.map(({ label }) => label),
+          ...registrationInput().actualLabels.map(({ label }) => label),
+        ]);
+      },
       async listWorkflowFiles() { return []; },
       async createWebhook() {
         return { id: 501 };

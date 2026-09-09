@@ -12,6 +12,7 @@ import {
   RepositoryRegistrationEnforcementError,
   RepositoryRegistrationError,
   RepositoryWebhookIdConflictError,
+  changeRepositoryCatalog,
   parseGitHubRepository,
   registerRepository,
 } from "@/lib/repositories/register";
@@ -41,28 +42,70 @@ describe("explicit repository registration", () => {
 
     expect(harness.createdRepositories).toHaveLength(1);
     expect(harness.createdRepositories[0]?.difficultyScheme).toEqual(toDifficultyScheme(input));
-    expect(harness.configuredLabels).toEqual([
-      "size/S",
-      "size/M",
-      "size/L",
-      "delivered/1",
-      "delivered/2",
-      "delivered/3",
-      "delivered/4",
-      "delivered/5",
-      "delivered/6",
-      "delivered/7",
-      "delivered/8",
-      "delivered/9",
-      "delivered/10",
-    ]);
     expect(harness.githubCalls).toEqual([
       "getRepository:octo/overflow",
-      "ensureDifficultyLabels:octo/overflow",
+      "listRepositoryLabels:octo/overflow",
       "createWebhook:octo/overflow",
       "listWorkflowFiles:octo/overflow",
     ]);
     expect(harness.githubCalls.some((call) => call.includes("listAccessibleRepositories"))).toBe(false);
+  });
+
+  it("registers a repository whose difficulty labels all already exist in GitHub", async () => {
+    const harness = createHarness();
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      githubRepositoryId: 42,
+      githubWebhookId: 501,
+    });
+    expect(harness.githubCalls).toEqual([
+      "getRepository:octo/overflow",
+      "listRepositoryLabels:octo/overflow",
+      "createWebhook:octo/overflow",
+      "listWorkflowFiles:octo/overflow",
+    ]);
+  });
+
+  it("refuses registration naming every scheme label the repository is missing", async () => {
+    const harness = createHarness({ repositoryLabels: ["size/S", "delivered/1"] });
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    const message = (error as Error).message;
+    expect(message).toContain("size/M");
+    expect(message).toContain("size/L");
+    expect(message).toContain("delivered/2");
+    expect(message).toContain("delivered/3");
+    expect(message).toContain("delivered/4");
+    expect(message).toContain("delivered/5");
+    expect(message).toContain("delivered/6");
+    expect(message).toContain("delivered/7");
+    expect(message).toContain("delivered/8");
+    expect(message).toContain("delivered/9");
+    expect(message).toContain("delivered/10");
+    expect(message).toContain("register again");
+    expect(message).not.toContain("`size/S`");
+    expect(message).not.toContain("`delivered/1`");
+    expect(harness.createdRepositories).toEqual([]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.githubCalls).toEqual([
+      "getRepository:octo/overflow",
+      "listRepositoryLabels:octo/overflow",
+    ]);
+  });
+
+  it("refuses a catalog change naming every scheme label the repository is missing", async () => {
+    const harness = createHarness({ existing: registeredRepository(), repositoryLabels: [] });
+
+    const error = await changeRepositoryCatalog(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "INVALID_INPUT" });
+    const message = (error as Error).message;
+    expect(message).toContain("`size/S`");
+    expect(message).toContain("`delivered/10`");
+    expect(message).toContain("retry the catalog change");
+    expect(harness.deletedWebhookIds).toEqual([]);
   });
 
   it("allows a signed-in member who has GitHub administrator permission for the submitted repository", async () => {
@@ -73,7 +116,7 @@ describe("explicit repository registration", () => {
     });
     expect(harness.githubCalls).toEqual([
       "getRepository:octo/overflow",
-      "ensureDifficultyLabels:octo/overflow",
+      "listRepositoryLabels:octo/overflow",
       "createWebhook:octo/overflow",
       "listWorkflowFiles:octo/overflow",
     ]);
@@ -104,7 +147,7 @@ describe("explicit repository registration", () => {
       });
       expect(harness.githubCalls).toEqual([
         "getRepository:octo/overflow",
-        "ensureDifficultyLabels:octo/overflow",
+        "listRepositoryLabels:octo/overflow",
         "createWebhook:octo/overflow",
         "listWorkflowFiles:octo/overflow",
       ]);
@@ -137,7 +180,7 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
-  it("rejects a private repository before duplicate lookup, label creation, webhook creation, or persistence", async () => {
+  it("rejects a private repository before duplicate lookup, label verification, webhook creation, or persistence", async () => {
     const harness = createHarness({ visibility: "PRIVATE" });
 
     await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
@@ -146,7 +189,6 @@ describe("explicit repository registration", () => {
     });
     expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
     expect(harness.duplicateLookupIds).toEqual([]);
-    expect(harness.configuredLabels).toEqual([]);
     expect(harness.createdRepositories).toEqual([]);
     expect(harness.deletedWebhookIds).toEqual([]);
   });
@@ -273,12 +315,12 @@ describe("explicit repository registration", () => {
   });
 
   it.each([
-    ["ensureDifficultyLabels", "configure difficulty labels", 403, "ORGANIZATION"],
-    ["ensureDifficultyLabels", "configure difficulty labels", 404, "ORGANIZATION"],
+    ["listRepositoryLabels", "read the repository difficulty labels", 403, "ORGANIZATION"],
+    ["listRepositoryLabels", "read the repository difficulty labels", 404, "ORGANIZATION"],
     ["createWebhook", "create the repository webhook", 403, "ORGANIZATION"],
     ["createWebhook", "create the repository webhook", 404, "ORGANIZATION"],
-    ["ensureDifficultyLabels", "configure difficulty labels", 403, "USER"],
-    ["ensureDifficultyLabels", "configure difficulty labels", 404, "USER"],
+    ["listRepositoryLabels", "read the repository difficulty labels", 403, "USER"],
+    ["listRepositoryLabels", "read the repository difficulty labels", 404, "USER"],
     ["createWebhook", "create the repository webhook", 403, "USER"],
     ["createWebhook", "create the repository webhook", 404, "USER"],
   ] as const)("explains %s (%s) HTTP %s access failures for %s owners", async (step, description, status, ownerType) => {
@@ -307,7 +349,7 @@ describe("explicit repository registration", () => {
       expect(message).not.toContain("GitHub denied Overflow access to this repository.");
       expect(message).not.toMatch(/organization|oauth_application_policy/i);
     }
-    if (step === "ensureDifficultyLabels") {
+    if (step === "listRepositoryLabels") {
       expect(message).not.toContain("webhook");
       expect(harness.githubCalls).toEqual(["getRepository:octo/overflow"]);
     }
@@ -315,9 +357,9 @@ describe("explicit repository registration", () => {
   });
 
   it.each([
-    ["ensureDifficultyLabels", new Error("network secret"), "Unable to configure difficulty labels on GitHub."],
+    ["listRepositoryLabels", new Error("network secret"), "Unable to read the repository difficulty labels on GitHub."],
     ["createWebhook", new Error("network secret"), "Unable to create the repository webhook on GitHub."],
-    ["ensureDifficultyLabels", new GitHubApiError(500), "Unable to configure difficulty labels on GitHub."],
+    ["listRepositoryLabels", new GitHubApiError(500), "Unable to read the repository difficulty labels on GitHub."],
     ["createWebhook", new GitHubApiError(500), "Unable to create the repository webhook on GitHub."],
   ] as const)("keeps %s failure %s as a sanitized upstream failure", async (step, failure, message) => {
     const harness = createHarness();
@@ -348,7 +390,7 @@ describe("explicit repository registration", () => {
 
   describe.each([
     ["getRepository", "retrieve the submitted GitHub repository", "Unable to retrieve the submitted GitHub repository."],
-    ["ensureDifficultyLabels", "configure difficulty labels", "Unable to configure difficulty labels on GitHub."],
+    ["listRepositoryLabels", "read the repository difficulty labels", "Unable to read the repository difficulty labels on GitHub."],
     ["createWebhook", "create the repository webhook", "Unable to create the repository webhook on GitHub."],
   ] as const)("%s error classification", (step, description, upstreamMessage) => {
     it("treats a plain object with GitHub error fields as an upstream failure", async () => {
@@ -525,6 +567,8 @@ type HarnessOptions = {
   ownerType?: "USER" | "ORGANIZATION";
   visibility?: "PUBLIC" | "PRIVATE";
   existing?: RegisteredRepository | null;
+  /** The label names the fake GitHub answers `listRepositoryLabels` with. */
+  repositoryLabels?: readonly string[];
   webhookFailure?: boolean;
   databaseFailure?: boolean;
   storeRejectsAsDuplicateId?: boolean;
@@ -540,7 +584,6 @@ type HarnessOptions = {
 
 function createHarness(options: HarnessOptions = {}) {
   const githubCalls: string[] = [];
-  const configuredLabels: string[] = [];
   const deletedWebhookIds: number[] = [];
   const duplicateLookupIds: number[] = [];
   const scheduledRepositoryIds: string[] = [];
@@ -570,9 +613,9 @@ function createHarness(options: HarnessOptions = {}) {
           canAdminister: options.canAdminister ?? true,
         };
       },
-      async ensureDifficultyLabels(repository, labels) {
-        githubCalls.push(`ensureDifficultyLabels:${repository.owner}/${repository.name}`);
-        configuredLabels.push(...labels);
+      async listRepositoryLabels(repository) {
+        githubCalls.push(`listRepositoryLabels:${repository.owner}/${repository.name}`);
+        return new Set(options.repositoryLabels ?? defaultRepositoryLabels());
       },
       async createWebhook(repository) {
         githubCalls.push(`createWebhook:${repository.owner}/${repository.name}`);
@@ -645,7 +688,6 @@ function createHarness(options: HarnessOptions = {}) {
   return {
     dependencies,
     githubCalls,
-    configuredLabels,
     deletedWebhookIds,
     duplicateLookupIds,
     createdRepositories,
@@ -676,6 +718,11 @@ function actualLabels() {
     label: `delivered/${index + 1}`,
     points: index + 1,
   }));
+}
+
+/** Every label the default submitted scheme names — the fake GitHub starts from a complete repository. */
+function defaultRepositoryLabels(): string[] {
+  return [...createInput().openingLabels, ...createInput().actualLabels].map(({ label }) => label);
 }
 
 function toDifficultyScheme(input: RepositoryRegistrationInput): DifficultyScheme {

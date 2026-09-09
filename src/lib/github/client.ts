@@ -321,20 +321,31 @@ export class GitHubGateway {
     }
   }
 
-  public async ensureDifficultyLabels(
-    repository: GitHubRepositoryReference,
-    configuredLabels: readonly string[],
-  ): Promise<void> {
-    const existingLabels = await this.listLabelNames(repository);
-    const labelsToCreate = [...new Set(configuredLabels)].filter((label) => !existingLabels.has(label));
+  /**
+   * The repository's label names, read with no scope beyond public reads.
+   * Registration verifies the submitted scheme against this set and refuses to
+   * name what is missing; nothing here creates labels.
+   */
+  public async listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>> {
+    const labels = new Set<string>();
+    let page = 1;
+    let hasNextPage = true;
 
-    for (const label of labelsToCreate) {
-      await this.request(`/repos/${segment(repository.owner)}/${segment(repository.name)}/labels`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: label, color: "0E8A16" }),
-      });
+    while (hasNextPage) {
+      const response = await this.request(
+        `/repos/${segment(repository.owner)}/${segment(repository.name)}/labels?per_page=100&page=${page}`,
+      );
+      const payload = await responseJson<Array<{ name: string }>>(response);
+      for (const label of payload) {
+        if (typeof label.name === "string") {
+          labels.add(label.name);
+        }
+      }
+      hasNextPage = hasNextLink(response.headers.get("link"));
+      page += 1;
     }
+
+    return labels;
   }
 
   public async getPullRequestDiff(
@@ -715,28 +726,6 @@ export class GitHubGateway {
       throw new Error("GitHub GraphQL response was invalid.");
     }
     return page;
-  }
-
-  private async listLabelNames(repository: GitHubRepositoryReference): Promise<Set<string>> {
-    const labels = new Set<string>();
-    let page = 1;
-    let hasNextPage = true;
-
-    while (hasNextPage) {
-      const response = await this.request(
-        `/repos/${segment(repository.owner)}/${segment(repository.name)}/labels?per_page=100&page=${page}`,
-      );
-      const payload = await responseJson<Array<{ name: string }>>(response);
-      for (const label of payload) {
-        if (typeof label.name === "string") {
-          labels.add(label.name);
-        }
-      }
-      hasNextPage = hasNextLink(response.headers.get("link"));
-      page += 1;
-    }
-
-    return labels;
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<GitHubRestResponse> {
