@@ -87,7 +87,7 @@ export type RepositoryRegistrationResult = RegisteredRepository & {
 
 export class RepositoryRegistrationError extends Error {
   public constructor(
-    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
+    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "UPSTREAM_FAILURE",
     message: string,
   ) {
     super(message);
@@ -443,6 +443,18 @@ function githubSetupError(
   repository: GitHubRepository | null,
   step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook",
 ): RepositoryRegistrationError {
+  // Issue 93: a 401 says GitHub rejected the authorization Overflow itself holds — the token
+  // expired or was revoked, unlike a 403/404, which is about the repository or the
+  // application's approval. Retrying cannot fix the token, so the message carries the one
+  // remedy that refreshes it.
+  if (error instanceof GitHubApiError && error.status === 401) {
+    return new RepositoryRegistrationError(
+      "GITHUB_CREDENTIALS",
+      `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to ${step}. `
+        + "To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.",
+    );
+  }
+
   if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
     let cause = repository?.ownerType === "ORGANIZATION"
       ? `This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/${repository.owner}/settings/oauth_application_policy.`

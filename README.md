@@ -155,6 +155,7 @@ status and code, then use the message to distinguish causes:
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
 | 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
+| 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
 | 403 | `FORBIDDEN` | `The account is not eligible to register repositories.` | The account is banned or recalibrating. Resolve the account restriction; regenerating the token does not remove it. |
 | 403 | `FORBIDDEN` | `Only public GitHub repositories can be registered.` | Choose a public repository. |

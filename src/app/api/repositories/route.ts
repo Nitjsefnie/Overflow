@@ -270,6 +270,8 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
   switch (error.code) {
     case "INVALID_INPUT":
       return errorResponse(400, error.code, error.message);
+    case "GITHUB_CREDENTIALS":
+      return errorResponse(401, error.code, error.message);
     case "FORBIDDEN":
     case "GITHUB_ACCESS":
       return errorResponse(403, error.code, error.message);
