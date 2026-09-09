@@ -69,6 +69,7 @@ it("drains active PR collectors before releasing coordination and retains their 
       usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
+    discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async (_id, work) => {
       coordinated = true;
       try { return await work(); } finally { coordinated = false; released = true; }
@@ -189,6 +190,7 @@ it("settles every started HTTP request before a failed fold rejects and releases
     assessReconciliationFairness: async ({ now }) => ({ state: "ADMITTED", holdUntil: null,
       usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getDirtyReconciliationSubjects: async () => [],
+    discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async (_id, work) => {
       try { return await work(); } finally { events.push({ event: "released", outstanding: outstanding() }); }
     },
@@ -309,6 +311,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
       usage: { debt: 0, measuredAt: now, ratePerSecond: 0 } }),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
+    discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async (_id, work) => work(),
     getRepository: async () => ({
       id: "repository", githubRepositoryId: 5001, ownerName: "sponsor/repository", active: true,

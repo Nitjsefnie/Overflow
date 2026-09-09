@@ -18,7 +18,7 @@ export type GitHubWebhookDelivery = {
   repositoryGitHubId: number;
   repositoryFullName: string;
   subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
-  /** Present only for genuine issue envelopes; PR comments remain enqueue-only. */
+  /** Present only for genuine, PR-free issue envelopes; a PR-carrying envelope yields no subject at all. */
   issue?: GitHubWebhookIssue;
 };
 

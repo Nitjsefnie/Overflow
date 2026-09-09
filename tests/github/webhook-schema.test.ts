@@ -30,6 +30,15 @@ describe("webhook issue views", () => {
     // carry the true id.
     expect(parse(event, { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } })).toBeNull();
   });
+
+  it.each(["issues", "issue_comment"])("drops a %s PR envelope even when its issue view is malformed", (event) => {
+    // The pull_request field decides the drop before the view is read, so a
+    // malformed view must not resurrect the envelope as a bare subject.
+    expect(parse(event, {
+      ...issue, title: undefined,
+      pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" },
+    })).toBeNull();
+  });
 });
 
 function parse(event: string, value: unknown) {
