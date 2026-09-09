@@ -47,6 +47,25 @@ describe("settlement correction decision controls", () => {
     );
   });
 
+  it("reads a granted correction's point count with the plural its count takes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Reason for the decision"), {
+      target: { value: "The delivered label was applied by the issue owner." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Issue #44 is corrected to 1 point.");
+
+    fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Issue #44 is corrected to 2 points.");
+  });
+
   it("declines a correction with a reason and no points", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal("fetch", fetchMock);
