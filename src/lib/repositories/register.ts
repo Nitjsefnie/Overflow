@@ -349,12 +349,13 @@ export async function changeRepositoryCatalog(
   }
 
   try {
-    return await dependencies.store.appendDifficultySchemeVersion({
+    const change = await dependencies.store.appendDifficultySchemeVersion({
       githubRepositoryId: repository.id,
       sponsorId: dependencies.actor.id,
       scheme: difficultyScheme,
       effectiveFrom: new Date(),
     });
+    return { ...change, repository: registered };
   } catch (error) {
     if (error instanceof RepositorySchemeChangeForbiddenError) {
       throw new RepositoryRegistrationError("FORBIDDEN", error.message);

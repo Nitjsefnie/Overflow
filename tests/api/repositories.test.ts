@@ -18,9 +18,11 @@ import type { RepositoryRouteSession } from "@/app/api/repositories/route";
 
 import {
   RepositoryRegistrationEnforcementError,
+  RepositorySchemeChangeForbiddenError,
+  type RepositoryCatalogChange,
   type RepositoryRegistrationDependencies,
 } from "@/lib/repositories/register";
-import { POST, createRepositoryPostHandler } from "@/app/api/repositories/route";
+import { POST, PATCH, createRepositoryPostHandler, createRepositoryPatchHandler } from "@/app/api/repositories/route";
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
@@ -866,6 +868,156 @@ const {
   trustedText: trustedTextRequest,
 } = guardedRequests("/api/repositories");
 
+describe("PATCH /api/repositories", () => {
+  it("returns a structured 401 without a session", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => null,
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 400 when the request is not one repository catalog submission", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest({ repositories: ["octo/overflow"] }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid repository registration request." },
+    });
+  });
+
+  it("answers 200 with the appended version when the catalog changed", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        existingRepository: true,
+        catalogChange: {
+          changed: true,
+          versionNumber: 2,
+          effectiveFrom: "2026-09-09T12:00:00.000Z",
+        },
+      }),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repository: {
+        id: "repository-id",
+        githubRepositoryId: 42,
+        ownerName: "octo/overflow",
+        sponsorId: "moderator-id",
+        visibility: "PUBLIC",
+        githubWebhookId: 501,
+      },
+      changed: true,
+      versionNumber: 2,
+      effectiveFrom: "2026-09-09T12:00:00.000Z",
+    });
+  });
+
+  it("answers 200 with changed false when the submitted catalog already is the current one", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        existingRepository: true,
+      }),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
+    expect(body.repository).toMatchObject({ githubRepositoryId: 42 });
+  });
+
+  it("returns a structured 409 when the submitted repository is not registered", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "CONFLICT",
+        message: "This GitHub repository is not registered, so there is no catalog to change.",
+      },
+    });
+  });
+
+  it("returns a structured 403 when the requester is not the repository's sponsor", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
+      createRegistrationDependencies: async () => successfulDependencies(
+        { id: "outsider-id", role: "MEMBER" },
+        {
+          existingRepository: true,
+          catalogChange: new RepositorySchemeChangeForbiddenError(42),
+        },
+      ),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN",
+        message: "Only the repository's sponsor can change its difficulty catalog.",
+      },
+    });
+  });
+
+  it("returns a structured 400 for a catalog that fails the registration validation", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, { existingRepository: true }),
+    });
+    const incomplete = { ...validInput(), actualLabels: validInput().actualLabels.slice(0, 9) };
+
+    const response = await handler(jsonRequest(incomplete));
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("INVALID_INPUT");
+  });
+
+  it("keeps the POST registration behavior untouched beside the change path", async () => {
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(201);
+  });
+});
+
 function validInput() {
   return {
     repositoryUrl: "https://github.com/octo/overflow.git",
@@ -887,6 +1039,8 @@ type SuccessfulDependenciesOptions = {
   canAdminister?: boolean;
   existingRepository?: boolean;
   webhookFailure?: boolean;
+  /** What the store answers for a catalog change: a result, or an error to raise. */
+  catalogChange?: RepositoryCatalogChange | Error;
 };
 
 function successfulDependencies(
@@ -933,6 +1087,12 @@ function successfulDependencies(
               githubWebhookId: 501,
             }
           : null;
+      },
+      async appendDifficultySchemeVersion() {
+        if (options.catalogChange instanceof Error) {
+          throw options.catalogChange;
+        }
+        return options.catalogChange ?? { changed: false, versionNumber: null, effectiveFrom: null };
       },
       async createRepository(repository) {
         return {
