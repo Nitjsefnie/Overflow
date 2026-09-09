@@ -29,9 +29,7 @@ describe("eligible issue card", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Map the tidal cache" })).toBeVisible();
-    expect(screen.getByText("Promise band: moonlit ridge")).toBeVisible();
-    expect(screen.getByText("Comparison 5")).toBeVisible();
-    expect(screen.getByText("Reserve 8")).toBeVisible();
+    expect(factValues()).toEqual(["moonlit ridge", "5", "8"]);
     expect(screen.getByText("Sponsor: harbour-owner")).toBeVisible();
     expect(screen.getByText("Claim: assigned to mira")).toBeVisible();
     expect(screen.getByText("Headroom: −3")).toBeVisible();
@@ -140,6 +138,30 @@ describe("eligible issue card", () => {
     expect(lines[0].textContent?.includes("2026-09-01")).toBe(true);
   });
 
+  it("renders each fact's value alone under its term", () => {
+    render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "Promise band",
+          openingLabel: "moonlit ridge",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    // The term carries the field name and the value carries only the value —
+    // the opening row's label never repeats the term as a name prefix.
+    expect(factTerms()).toEqual(["Promise band", "Comparison", "Reserve"]);
+    expect(factValues()).toEqual(["moonlit ridge", "5", "8"]);
+  });
+
   it("treats GitHub strings as text rather than markup", () => {
     render(
       <IssueCard
@@ -162,3 +184,11 @@ describe("eligible issue card", () => {
     expect(document.querySelector("strong")).toBeNull();
   });
 });
+
+function factTerms(): string[] {
+  return Array.from(document.querySelectorAll("dl.issue-facts dt")).map((dt) => dt.textContent);
+}
+
+function factValues(): string[] {
+  return Array.from(document.querySelectorAll("dl.issue-facts dd")).map((dd) => dd.textContent);
+}
