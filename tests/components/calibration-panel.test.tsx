@@ -4,9 +4,10 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CalibrationProofPage from "@/app/calibration/[id]/page";
 import CalibrationPage from "@/app/calibration/page";
-import { CalibrationPanel, formatSigned, SelfWorkCalibrationList } from "@/components/calibration-panel";
+import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import { formatSigned } from "@/lib/format-signed";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 
 const { redirect, refresh, sql } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn(), sql: vi.fn() }));
