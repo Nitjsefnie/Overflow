@@ -303,7 +303,10 @@ this window to the removal, switch and restart, rather than the whole build.
 The removed directory provides no release-level rollback. If switching fails
 after removal, keep the completed new release, correct the reported failure
 and rerun the switch and restart; do not start another build into `.next`.
-Continue with section 10's verification before pruning.
+A refused switch can leave `.next` a symlink, so re-running this block aborts
+at `test ! -L /srv/overflow/.next`; that abort is the signal to recover through
+the standing section 10 procedure, which expects the symlink layout. Continue
+with section 10's verification before pruning.
 
 ## 6. Install the unit and switch onto it
 
@@ -491,7 +494,7 @@ block into a fresh shell, never one that already holds the deploy lock: its
 set -e
 cd /srv/overflow
 exec 9>/run/overflow-deploy.lock
-flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
+flock -w 900 9 || { echo "Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 expected_serving=$(readlink -f /srv/overflow/.next || printf absent)
 previous_release='.next-release-REPLACE-WITH-RECORDED-ID'
 test -f "$previous_release/BUILD_ID"
@@ -615,7 +618,7 @@ section 5's copy import do not need that migration.
 set -e
 cd /srv/overflow
 exec 9>/run/overflow-deploy.lock
-flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
+flock -w 900 9 || { echo "Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 expected_serving=$(readlink -f /srv/overflow/.next || printf absent)
 git pull --ff-only origin main
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
@@ -730,7 +733,7 @@ LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1 \
 ```
 
 ```bash
-flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
+flock -w 900 9 || { echo "Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 pnpm release:prune /srv/overflow --keep 3
 ```
 
