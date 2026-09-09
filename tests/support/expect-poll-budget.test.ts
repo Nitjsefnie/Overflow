@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
@@ -12,13 +13,15 @@ import { fileURLToPath } from "node:url";
  * appeared empty because the fence path needed longer than the silent default
  * to reach its first blocked statement (issue 286).
  *
- * This guard is a tree-wide scan, not a lint rule: every `expect.poll(` call
- * under tests/ must carry an explicit `timeout:` in its trailing options
- * object, so no future poll can land silently on the 1-second default. The
- * scan is textual and deliberately conservative — an options argument built by
- * a helper call cannot prove it carries a timeout, so it is flagged; inline
- * the object instead. The marker is matched verbatim: an aliased or
- * whitespace-split spelling evades the scan, and none exists.
+ * This guard is a tree-wide scan, not a lint rule: in every .ts and .tsx file
+ * under tests/ (the only extensions present there today; vitest's default
+ * include runs both), every `expect.poll(` call must carry an explicit
+ * `timeout:` in its trailing options object, so no future poll can land
+ * silently on the 1-second default. The scan is textual and deliberately
+ * conservative — an options argument built by a helper call cannot prove it
+ * carries a timeout, so it is flagged; inline the object instead. The marker
+ * is matched verbatim: an aliased or whitespace-split spelling evades the
+ * scan, and none exists.
  */
 const MARKER = "expect.poll" + "(";
 
@@ -57,7 +60,7 @@ function scanSource(source: string): { violations: string[]; siteCount: number }
           `poll runs on vitest's silent 1000ms default. Pass { timeout: … } explicitly.`,
       );
     } else {
-      const options = args[args.length - 1].trim();
+      const options = stripComments(args[args.length - 1]).trim();
       if (!/(^|[{,\s(])timeout\s*:/.test(options)) {
         violations.push(
           `${describePosition(source, markerAt)} — options ${options} carries no explicit timeout; ` +
@@ -140,7 +143,40 @@ function splitTopLevelArgs(argsText: string): string[] {
     i++;
   }
   parts.push(argsText.slice(start));
+  // A trailing comma yields an empty final part, which is not an argument;
+  // drop it so a protected call is not mistaken for an unprotected one.
+  while (parts.length > 1 && parts[parts.length - 1].trim() === "") parts.pop();
   return parts;
+}
+
+/** The text with line and block comments removed; string literals kept verbatim. */
+function stripComments(text: string): string {
+  let stripped = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const end = skipString(text, i);
+      stripped += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const newline = text.indexOf("\n", i);
+      i = newline === -1 ? text.length : newline + 1;
+      stripped += " ";
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+      stripped += " ";
+      continue;
+    }
+    stripped += ch;
+    i++;
+  }
+  return stripped;
 }
 
 /** Index just past the string opening at `start`, honoring escapes and ${…}. */
@@ -179,8 +215,9 @@ function skipBraces(source: string, sourceStart: number): number {
   return i;
 }
 
-function scanTestsTree(): Scan {
-  const testsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const TESTS_DIRECTORY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function scanTestsTree(rootDir: string = TESTS_DIRECTORY): Scan {
   const violations: string[] = [];
   let siteCount = 0;
   const filesWithSites: string[] = [];
@@ -192,19 +229,22 @@ function scanTestsTree(): Scan {
         walk(full);
         continue;
       }
-      if (entry.name.endsWith(".ts")) {
+      // .ts and .tsx are the only file extensions under tests/ today (138 and
+      // 30 files respectively at this guard's writing); vitest's default
+      // include runs both. Extend the set consciously if a new one appears.
+      if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
         // This guard's own fixtures quote the call shape inside string
         // literals; the scan reads raw source and would flag its own file.
-        if (full === path.join(testsDir, "support", "expect-poll-budget.test.ts")) continue;
+        if (full === path.join(TESTS_DIRECTORY, "support", "expect-poll-budget.test.ts")) continue;
         const { violations: fileViolations, siteCount: fileSites } = scanSource(readFileSync(full, "utf8"));
-        const relative = path.relative(testsDir, full);
+        const relative = path.relative(rootDir, full);
         violations.push(...fileViolations.map((entry) => entry.replace(/^line (\d+)/, `${relative}:$1`)));
         siteCount += fileSites;
         if (fileSites > 0) filesWithSites.push(relative);
       }
     }
   };
-  walk(testsDir);
+  walk(rootDir);
 
   return { violations, siteCount, filesWithSites };
 }
@@ -298,5 +338,42 @@ describe("every expect.poll under tests/ carries an explicit timeout", () => {
     expect(filesWithSites).toContain("fold/reconciliation-write-fencing.test.ts");
     expect(filesWithSites).toContain("github/workflow-deadline.test.ts");
     expect(filesWithSites).toContain("github/request-deadline.test.ts");
+  });
+
+  it("scans .tsx files, which vitest runs and the tree contains", () => {
+    const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "poll-budget-fixture-"));
+    try {
+      const fixtureDir = path.join(fixtureRoot, "components");
+      mkdirSync(fixtureDir);
+      const fixture = path.join(fixtureDir, "example.test.tsx");
+      writeFileSync(fixture, `await expect.poll(() => mounted()).toBe(true);\n`, "utf8");
+
+      const { violations, siteCount, filesWithSites } = scanTestsTree(fixtureRoot);
+
+      expect(siteCount).toBe(1);
+      expect(filesWithSites).toEqual(["components/example.test.tsx"]);
+      expect(violations).toEqual([
+        "components/example.test.tsx:1 — no options argument; poll runs on vitest's silent 1000ms default. Pass { timeout: … } explicitly.",
+      ]);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag a trailing comma after a protected options argument", () => {
+    const result = scanSource(`await expect.poll(fn, { timeout: 1000 },).toBe(1);`);
+
+    expect(result.siteCount).toBe(1);
+    expect(result.violations).toEqual([]);
+  });
+
+  it("does not let a comment inside the options pose as a timeout", () => {
+    const result = scanSource(
+      `await expect.poll(fn, { interval: 50 } /* timeout: 1000 */).toBe(true);`,
+    );
+
+    expect(result.siteCount).toBe(1);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toMatch(/carries no explicit timeout/);
   });
 });
