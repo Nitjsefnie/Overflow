@@ -25,6 +25,35 @@ describe("GitHub webhook route", () => {
     },
   );
 
+  // PR-carrying issue envelopes are deliberately ignored (webhook-schema's
+  // pull_request guard), and an ignored delivery must read as success to
+  // GitHub — any 2xx counts as delivered — or its delivery log turns red on
+  // traffic Overflow chose to ignore and hides real failures.
+  it.each(["issues", "issue_comment"])("answers 204 for a deliberately ignored PR-carrying %s envelope", async (event) => {
+    const processWebhookMock = vi.fn().mockResolvedValue(undefined);
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(request(JSON.stringify({
+      action: event === "issues" ? "edited" : "created",
+      repository: { id: 42, full_name: "octo/example" },
+      issue: { id: 201, number: 11, state: "closed", updated_at: "2026-09-08T10:00:00Z",
+        title: "Issue", body: null, html_url: "https://github.com/octo/example/issues/11",
+        pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } },
+    }), { "x-github-event": event, "x-github-delivery": "pr-carrying" }));
+    expect(response.status).toBe(204);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 for a correctly signed unparseable JSON body", async () => {
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(request("{", {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "bad-json",
+    }));
+    expect(response.status).toBe(400);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
   // Mutants: DROP_SUBJECT_ID, IGNORE_MERGED_PR_REVIEW.
   it.each([
     { event: "issues", action: "edited", key: "issue", kind: "ISSUE" },
