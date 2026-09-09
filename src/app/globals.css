@@ -344,17 +344,6 @@ dd {
   position: relative;
 }
 
-.ledger-note::before {
-  position: absolute;
-  top: -0.75rem;
-  right: 1rem;
-  width: 4.5rem;
-  height: 0.75rem;
-  background: var(--credit);
-  content: "";
-  transform: rotate(2deg);
-}
-
 .recent-settlements {
   margin-top: 2rem;
   padding: clamp(1.25rem, 3vw, 2.3rem);
