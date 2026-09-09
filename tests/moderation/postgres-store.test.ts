@@ -381,6 +381,62 @@ describe("PostgreSQL account moderation transitions", () => {
     },
   );
 
+  it("reactivates the moderated repository and leaves the sponsor-unregistered one alone", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const moderatedRepositoryId = await insertRepository(targetId);
+    const unregisteredRepositoryId = await insertRepository(targetId);
+    const pairs = await insertCalibrationPairs({ targetId, repositoryId: moderatedRepositoryId, count: 10 });
+    const store = new PostgresModerationStore(sql);
+    const input = auditInput({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      repositoryId: moderatedRepositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+      ...pairs,
+    });
+    for (const count of [1, 2]) {
+      const audit = await openAudit(store, input);
+      await expect(store.substantiateAccountAudit({
+        actorId: moderatorId,
+        auditId: audit.id,
+        reason: `Independent review confirms pattern ${count}.`,
+      })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
+    }
+    expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
+    expect(await repositoryStates(targetId)).toEqual(expectedRepositoryStates([
+      { id: moderatedRepositoryId, active: false },
+      { id: unregisteredRepositoryId, active: false },
+    ]));
+
+    // The sponsor unregisters one of the two while the account is recalibrating; the row stays
+    // inactive, so closing the recalibration must not hand it back.
+    const unregisteredAt = "2031-05-06T07:08:09.000Z";
+    await sql`
+      update registered_repositories
+      set unregistered_at = ${unregisteredAt}
+      where id = ${unregisteredRepositoryId}
+    `;
+
+    await expect(store.closeRecalibration({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      plan: "The account completed the authorized recalibration plan.",
+    })).resolves.toMatchObject({
+      kind: "ok",
+      value: { targetState: "ACTIVE", confirmedPatternCount: 2, reactivatedRepositoryCount: 1 },
+    });
+    expect(await repositoryStates(targetId)).toEqual(expectedRepositoryStates([
+      { id: moderatedRepositoryId, active: true },
+      { id: unregisteredRepositoryId, active: false },
+    ]));
+    const [unregisteredRow] = await sql<{ unregistered_at: Date }[]>`
+      select unregistered_at from registered_repositories where id = ${unregisteredRepositoryId}
+    `;
+    expect(toIso(unregisteredRow.unregistered_at)).toBe(unregisteredAt);
+  });
+
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);

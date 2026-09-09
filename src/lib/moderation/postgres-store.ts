@@ -299,7 +299,7 @@ export class PostgresModerationStore implements ModerationStore {
       const reactivatedRepositories = await transaction<{ id: string }[]>`
         update registered_repositories
         set active = true, updated_at = now()
-        where sponsor_id = ${target.id} and active = false
+        where sponsor_id = ${target.id} and active = false and unregistered_at is null
         returning id
       `;
       const cohort = toCohortSnapshot(audit);
