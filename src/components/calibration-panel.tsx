@@ -25,13 +25,25 @@ export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationP
       <div className="calibration-grid">
         <section aria-labelledby="self-work-heading">
           <h2 id="self-work-heading">Self-work sample · {comparison.selfWork.count} {plural(comparison.selfWork.count, "pair")}</h2>
-          <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
-          <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
+          {comparison.selfWork.count === 0 ? (
+            <p>No self-work pairs yet</p>
+          ) : (
+            <>
+              <p>Mean delta {formatSigned(comparison.selfWork.meanDelta)}</p>
+              <p>Median delta {formatSigned(comparison.selfWork.medianDelta)}</p>
+            </>
+          )}
         </section>
         <section aria-labelledby="outsider-heading">
           <h2 id="outsider-heading">Outsider settlement sample · {comparison.outsider.count} {plural(comparison.outsider.count, "pair")}</h2>
-          <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
-          <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
+          {comparison.outsider.count === 0 ? (
+            <p>No outsider settlements yet</p>
+          ) : (
+            <>
+              <p>Mean delta {formatSigned(comparison.outsider.meanDelta)}</p>
+              <p>Median delta {formatSigned(comparison.outsider.medianDelta)}</p>
+            </>
+          )}
         </section>
       </div>
       {comparison.differenceBetweenMeans === null ? (
