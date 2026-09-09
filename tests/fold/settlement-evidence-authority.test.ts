@@ -178,7 +178,7 @@ describe("same-instant settlement evidence ordering", () => {
     }]);
   });
 
-  it.each([false, true])("selects tied rationales in input order (reversed: %s)", (reverse) => {
+  it.each([false, true])("records the lower database id for tied same-instant rationales in either arrival order (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.comments.push({ ...issue.comments[0]!, id: "comment-2", databaseId: 402 });
@@ -187,7 +187,7 @@ describe("same-instant settlement evidence ordering", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED", credits: 6, settledRationaleCommentId: reverse ? "comment-2" : "comment-1",
+      status: "SETTLED", credits: 6, settledRationaleCommentId: "comment-1",
     });
     expect(result.policyViolations).toEqual([]);
   });

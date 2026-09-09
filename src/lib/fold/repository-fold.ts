@@ -902,7 +902,7 @@ function resolveSettledDifficulty(
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
   const candidates = issue.comments
     .filter(validIssueComment)
-    .sort(compareHistoryItems)
+    .sort((left, right) => compareHistoryItems(left, right) || compareRationaleSequence(left, right))
     .filter((comment) => {
       const commentTime = Date.parse(comment.createdAt);
       return (
@@ -931,6 +931,26 @@ function resolveSettledDifficulty(
       reason: candidates.length > 0
         ? `Every qualifying rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was edited after the settlement evidence window closed at ${new Date(windowCloseTime).toISOString()}.`
         : `No rationale comment by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` was posted between fifteen minutes before the label at ${new Date(source.createdAt).toISOString()} and fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
+    };
+  }
+  // The sequence order the sort applied to same-instant candidates is only as
+  // good as the ids behind it: a group sharing the selected instant is
+  // decidable only where its sequence evidence covers every member but one at
+  // most — at most one missing databaseId and no duplicated one. Otherwise no
+  // evidence-backed rule can say which comment was written first, and the
+  // selection is refused rather than made silently arbitrary.
+  const tieGroup = qualifyingRationales.filter(
+    (comment) => Date.parse(comment.createdAt) === Date.parse(rationale.createdAt),
+  );
+  const missingDatabaseIdCount = tieGroup.filter((comment) => comment.databaseId === null).length;
+  const duplicatedDatabaseId = findDuplicatedDatabaseId(tieGroup);
+  if (missingDatabaseIdCount > 1 || duplicatedDatabaseId !== undefined) {
+    return {
+      kind: "rejected",
+      reach: windowReach,
+      reason: duplicatedDatabaseId === undefined
+        ? `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()} without GitHub database ids, so no evidence-backed rule can order them.`
+        : `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()}, and more than one carries the GitHub database id ${duplicatedDatabaseId}, so the ids cannot order them.`,
     };
   }
   const configured = actualByLabel.get(label)!;
@@ -1242,6 +1262,61 @@ function compareHistoryItems(
   right: Pick<GitHubIssueHistoryEvent | GitHubIssueComment, "createdAt" | "id">,
 ): number {
   return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+}
+
+/**
+ * Breaks the same-instant ties `compareHistoryItems` leaves among RATIONALE
+ * CANDIDATES ONLY, by GitHub's per-comment creation sequence: the numeric
+ * `IssueComment.databaseId` is assigned in creation order, so among comments
+ * sharing one instant the smallest id is the first-written. This is the rule
+ * family issue 260 settles on — an explicit deterministic rule whose basis is
+ * evidence, or an undecidable refusal rather than a silently arbitrary pick
+ * (`resolveSettledDifficulty` checks the selected instant's group after
+ * selection and rejects a tie its ids cannot order).
+ *
+ * Node ids (`IssueComment.id`, `IC_…`) never key a selection: they are opaque
+ * strings encoding no creation order, unlike the numeric databaseId, so
+ * reordering by them would only launder arrival order again.
+ *
+ * A null databaseId is NO sequence evidence and sorts after every non-null
+ * id — it cannot claim to be the earliest. The order between two nulls is
+ * deliberately unspecified (the sort is stable, so it is arrival order):
+ * callers must not rely on it, and a selected tie carrying two or more nulls
+ * is rejected as undecidable.
+ *
+ * `compareHistoryItems` itself is unchanged and stays the primary key, so
+ * distinct-instant selection and every other consumer of it are untouched.
+ *
+ * Already-persisted rationale ids from a prior arrival-order run are safe to
+ * move: `settled_rationale_comment_id` is deliberately overwritten by the
+ * fold's ordinary issue upsert on every run (unlike the opening evidence,
+ * which is immutable), so a tie row swaps its citation once on the next fold
+ * and then stays stable — label, points, actor, instant and credits do not
+ * change.
+ */
+function compareRationaleSequence(
+  left: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
+  right: Pick<GitHubIssueComment, "createdAt" | "databaseId">,
+): number {
+  if (left.databaseId === null || right.databaseId === null) {
+    return (left.databaseId === null ? 1 : 0) - (right.databaseId === null ? 1 : 0);
+  }
+  return left.databaseId - right.databaseId;
+}
+
+/** The databaseId two or more comments share, or undefined when all distinct. */
+function findDuplicatedDatabaseId(comments: GitHubIssueComment[]): number | undefined {
+  const seen = new Set<number>();
+  for (const comment of comments) {
+    if (comment.databaseId === null) {
+      continue;
+    }
+    if (seen.has(comment.databaseId)) {
+      return comment.databaseId;
+    }
+    seen.add(comment.databaseId);
+  }
+  return undefined;
 }
 
 function isParticipationEligibleAt(user: FoldUser, timestamp: string): boolean {
