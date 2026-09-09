@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RepositoryForm, type RepositoryFormValues } from "@/components/repository-form";
 
@@ -27,6 +27,23 @@ const initialValues: RepositoryFormValues = {
     { label: "ocean", points: 10 },
   ],
 };
+
+/** Every label the stubbed repository answers the labels route with. */
+const repositoryLabels = [
+  "moonlit ridge",
+  "granite path",
+  "rill",
+  "stream",
+  "brook",
+  "river",
+  "estuary",
+  "delta",
+  "harbour",
+  "sound",
+  "sea",
+  "ocean",
+  "shelf",
+];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -62,6 +79,28 @@ function relativeLuminance(hex: string): number {
   return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
 }
 
+/**
+ * Routes the form's two calls by URL: the labels read goes to the labels
+ * route, everything else is a registration or catalog-change submission whose
+ * calls are recorded for the assertions.
+ */
+function stubFormApi(submit: () => Response, labels: () => Response = defaultLabelsResponse) {
+  const submitCalls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    if (String(input).includes("/api/repositories/labels")) {
+      return labels();
+    }
+    submitCalls.push({ url: String(input), init: init ?? {} });
+    return submit();
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, submitCalls };
+}
+
+function defaultLabelsResponse(): Response {
+  return Response.json({ labels: repositoryLabels });
+}
+
 describe("feedback stylesheet", () => {
   it("keeps the warning visible with a light amber background and dark ink", () => {
     const rule = feedbackDeclarations("warning");
@@ -90,11 +129,11 @@ describe("repository registration form", () => {
       [false, "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."],
       [undefined, "co-op/harbour is registered."],
     ])("composes the complete message with initialImportScheduled: %s", async (initialImportScheduled, importMessage) => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      stubFormApi(() => Response.json({
         repository: { ownerName: "co-op/harbour" },
         initialImportScheduled,
         claimPath,
-      }, { status: 201 })));
+      }, { status: 201 }));
       const { container } = render(<RepositoryForm initialValues={initialValues} />);
 
       fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
@@ -110,10 +149,10 @@ describe("repository registration form", () => {
   });
 
   it("keeps the existing success message for missing claimPath", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+    stubFormApi(() => Response.json({
       repository: { ownerName: "co-op/harbour" },
       initialImportScheduled: true,
-    }, { status: 201 })));
+    }, { status: 201 }));
     render(<RepositoryForm initialValues={initialValues} />);
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
@@ -127,9 +166,9 @@ describe("repository registration form", () => {
 
   it.each([403, 429, 502])("shows an HTTP %s API response's error message verbatim", async (status) => {
     const message = "GitHub rate-limited the request to create the repository webhook (HTTP 403). Retry after 60 seconds. Please retry registration later.";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+    stubFormApi(() => Response.json({
       error: { code: "GITHUB_RATE_LIMITED", message },
-    }, { status })));
+    }, { status }));
     render(<RepositoryForm initialValues={initialValues} />);
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
@@ -137,43 +176,47 @@ describe("repository registration form", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(message);
   });
 
-  it("keeps configured display names, arbitrary labels, and all actual mappings editable", () => {
+  it("keeps configured display names and the catalog's picked labels editable", async () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
     render(<RepositoryForm initialValues={initialValues} />);
 
     expect(screen.getByLabelText("Opening catalog display name")).toHaveValue("Promise band");
     expect(screen.getByLabelText("Actual catalog display name")).toHaveValue("Landing measure");
-    expect(screen.getByLabelText("Opening label 1")).toHaveValue("moonlit ridge");
-    expect(screen.getByLabelText("Actual label for 1 point")).toHaveValue("rill");
+    const openingLabel = await selectLoadedOption("Opening label 1", "moonlit ridge");
+    await selectLoadedOption("Actual label for 1 point", "rill");
+    // A preseeded initialValues label survives the mount; only a reference
+    // change after the mount clears selections.
     expect(screen.getByLabelText("Actual label for 10 points")).toHaveValue("ocean");
-
     for (const points of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
       expect(screen.getByText(`${points} points`)).toBeVisible();
     }
 
-    fireEvent.change(screen.getByLabelText("Actual label for 7 points"), { target: { value: "shelf" } });
+    await selectLoadedOption("Actual label for 7 points", "shelf");
     expect(screen.getByLabelText("Actual label for 7 points")).toHaveValue("shelf");
+    expect(openingLabel).toHaveValue("moonlit ridge");
   });
 
-  it("keeps an opening-label input focused throughout a multi-step edit", () => {
+  it("keeps an opening-label select focused throughout a multi-step edit", async () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
     render(<RepositoryForm initialValues={initialValues} />);
 
-    const openingLabel = screen.getByLabelText("Opening label 1");
+    const openingLabel = await selectLoadedOption("Opening label 1", "moonlit ridge");
     openingLabel.focus();
 
-    fireEvent.change(openingLabel, { target: { value: "m" } });
+    fireEvent.change(openingLabel, { target: { value: "rill" } });
     expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
     expect(openingLabel).toHaveFocus();
-    expect(openingLabel).toHaveValue("m");
+    expect(openingLabel).toHaveValue("rill");
 
-    fireEvent.change(openingLabel, { target: { value: "mo" } });
+    fireEvent.change(openingLabel, { target: { value: "stream" } });
     expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
     expect(openingLabel).toHaveFocus();
-    expect(openingLabel).toHaveValue("mo");
+    expect(openingLabel).toHaveValue("stream");
 
-    fireEvent.change(openingLabel, { target: { value: "moon" } });
+    fireEvent.change(openingLabel, { target: { value: "moonlit ridge" } });
     expect(screen.getByLabelText("Opening label 1")).toBe(openingLabel);
     expect(openingLabel).toHaveFocus();
-    expect(openingLabel).toHaveValue("moon");
+    expect(openingLabel).toHaveValue("moonlit ridge");
   });
 
   it("rejects more than one submitted repository before contacting the API", () => {
@@ -199,53 +242,44 @@ describe("repository registration form", () => {
   });
 
   it("submits the existing registration API shape and announces success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ repository: { ownerName: "co-op/harbour" } }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { submitCalls } = stubFormApi(() => Response.json(
+      { repository: { ownerName: "co-op/harbour" } },
+      { status: 201, headers: { "content-type": "application/json" } },
+    ));
     render(<RepositoryForm initialValues={initialValues} />);
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(initialValues);
+    await waitFor(() => expect(submitCalls).toHaveLength(1));
+    expect(JSON.parse(String(submitCalls[0]!.init.body))).toEqual(initialValues);
     expect((await screen.findByRole("status")).textContent).toBe("co-op/harbour is registered.");
   });
 
   it("says the initial import could not be scheduled when the registration failed to enqueue it", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, initialImportScheduled: false }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { submitCalls } = stubFormApi(() => Response.json(
+      { repository: { ownerName: "co-op/harbour" }, initialImportScheduled: false },
+      { status: 201, headers: { "content-type": "application/json" } },
+    ));
     render(<RepositoryForm initialValues={initialValues} />);
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(submitCalls).toHaveLength(1));
     expect((await screen.findByRole("status")).textContent).toBe(
       "co-op/harbour is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep.",
     );
   });
 
   it("says the existing issues are on their way when the registration scheduled the import", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ repository: { ownerName: "co-op/harbour" }, initialImportScheduled: true }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { submitCalls } = stubFormApi(() => Response.json(
+      { repository: { ownerName: "co-op/harbour" }, initialImportScheduled: true },
+      { status: 201, headers: { "content-type": "application/json" } },
+    ));
     render(<RepositoryForm initialValues={initialValues} />);
 
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(submitCalls).toHaveLength(1));
     expect((await screen.findByRole("status")).textContent).toBe(
       "co-op/harbour is registered. Its existing issues are being imported and will appear shortly.",
     );
@@ -253,18 +287,17 @@ describe("repository registration form", () => {
 });
 
 describe("repository catalog change form", () => {
-  function changeForm() {
-    return <RepositoryForm variant="catalog-change" initialValues={initialValues} />;
+  function changeForm(overrides: Partial<RepositoryFormValues> = {}) {
+    return <RepositoryForm variant="catalog-change" initialValues={{ ...initialValues, ...overrides }} />;
   }
 
   it("submits the catalog as a PATCH with the registration payload shape and announces the change", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+    const { submitCalls } = stubFormApi(() => Response.json({
       repository: { ownerName: "co-op/harbour" },
       changed: true,
       versionNumber: 2,
       effectiveFrom: "2026-09-09T12:00:00.000Z",
     }, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
     render(changeForm());
 
     fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
@@ -274,24 +307,24 @@ describe("repository catalog change form", () => {
     expect(feedback.textContent).toContain("co-op/harbour");
     expect(feedback.textContent).toContain("version 2");
     expect(feedback.textContent).toContain("already settled");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, request] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(submitCalls).toHaveLength(1);
+    const { url, init } = submitCalls[0]!;
     expect(url).toBe("/api/repositories");
-    expect(request.method).toBe("PATCH");
-    expect(request.credentials).toBe("same-origin");
-    const body = JSON.parse(String(request.body));
+    expect(init.method).toBe("PATCH");
+    expect(init.credentials).toBe("same-origin");
+    const body = JSON.parse(String(init.body));
     expect(body.repositoryUrl).toBe("co-op/harbour");
     expect(body.openingName).toBe("Promise band");
     expect(body.actualLabels).toHaveLength(10);
   });
 
   it("says nothing needed to change when the submitted catalog already is the current one", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+    stubFormApi(() => Response.json({
       repository: { ownerName: "co-op/harbour" },
       changed: false,
       versionNumber: null,
       effectiveFrom: null,
-    }, { status: 200 })));
+    }, { status: 200 }));
     render(changeForm());
 
     fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
@@ -303,9 +336,9 @@ describe("repository catalog change form", () => {
 
   it.each([400, 403, 409, 502])("shows an HTTP %s API response's error message verbatim", async (status) => {
     const message = "This GitHub repository is not registered, so there is no catalog to change.";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+    stubFormApi(() => Response.json({
       error: { code: "CONFLICT", message },
-    }, { status })));
+    }, { status }));
     render(changeForm());
 
     fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
@@ -316,7 +349,7 @@ describe("repository catalog change form", () => {
   it("rejects a noncanonical repository reference before contacting the API", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    render(changeForm());
+    render(<RepositoryForm variant="catalog-change" />);
 
     fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "not a repository" } });
     fireEvent.submit(screen.getByRole("form", { name: "Change a repository's difficulty catalog" }));
@@ -326,3 +359,117 @@ describe("repository catalog change form", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("repository form catalog label selectboxes", () => {
+  it("loads the repository's labels and enables the selects once they arrive", async () => {
+    const { fetchMock } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    const openingLabel = screen.getByLabelText("Opening label 1") as HTMLSelectElement;
+    expect(openingLabel).toBeDisabled();
+
+    await waitFor(() => expect(openingLabel).toBeEnabled());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("/api/repositories/labels?owner=co-op&name=harbour");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("renders the fetched labels as the options of both catalogs' selectboxes", async () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "co-op/harbour" } });
+
+    const opening = screen.getByLabelText("Opening label 1");
+    await waitFor(() => expect(opening).toBeEnabled());
+    const actual = screen.getByLabelText("Actual label for 1 point");
+    for (const label of repositoryLabels) {
+      expect(within(opening).getByRole("option", { name: label })).toBeInTheDocument();
+      expect(within(actual).getByRole("option", { name: label })).toBeInTheDocument();
+    }
+    expect(within(opening).getByRole("option", { name: "Select a label" })).toHaveAttribute("disabled");
+  });
+
+  it("keeps the placeholder selectboxes empty until a label is picked", async () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "co-op/harbour" } });
+
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toBeEnabled());
+    expect(screen.getByLabelText("Opening label 1")).toHaveValue("");
+    expect(screen.getByLabelText("Actual label for 1 point")).toHaveValue("");
+  });
+
+  it("hides a label picked in one row from the other rows of its own catalog", async () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    const picked = await selectLoadedOption("Opening label 1", "moonlit ridge");
+    const siblingRow = screen.getByLabelText("Opening label 2");
+    expect(within(picked).getByRole("option", { name: "moonlit ridge" })).toBeInTheDocument();
+    expect(within(siblingRow).queryByRole("option", { name: "moonlit ridge" })).toBeNull();
+
+    // The actual catalog's options are untouched: exclusivity is per catalog.
+    expect(within(screen.getByLabelText("Actual label for 1 point")).getByRole("option", { name: "moonlit ridge" }))
+      .toBeInTheDocument();
+  });
+
+  it("disables the selectboxes and fetches nothing for an invalid reference", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<RepositoryForm initialValues={{ ...initialValues, repositoryUrl: "not a repository" }} />);
+
+    expect(screen.getByLabelText("Opening label 1")).toBeDisabled();
+    expect(screen.getByLabelText("Actual label for 5 points")).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the selections and refetches when the reference changes", async () => {
+    const labels = [Response.json({ labels: ["harbour label", "extra"] }), Response.json({ labels: ["pier", "mast"] })];
+    stubFormApi(
+      () => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }),
+      () => labels.shift() ?? Response.json({ labels: [] }),
+    );
+    render(<RepositoryForm initialValues={{ ...initialValues, repositoryUrl: "co-op/harbour" }} />);
+
+    await selectLoadedOption("Opening label 1", "harbour label");
+    await selectLoadedOption("Actual label for 2 points", "harbour label");
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "octo/other" } });
+
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toHaveValue(""));
+    await waitFor(() => expect(screen.getByLabelText("Actual label for 2 points")).toHaveValue(""));
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toBeEnabled());
+    const opening = screen.getByLabelText("Opening label 1");
+    expect(within(opening).getByRole("option", { name: "pier" })).toBeInTheDocument();
+    expect(within(opening).queryByRole("option", { name: "harbour label" })).toBeNull();
+  });
+
+  it("shows an inline message and blocks submit when the labels fetch fails", async () => {
+    const { fetchMock, submitCalls } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }),
+      () => Response.json({ error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitHub." } }, { status: 502 }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "co-op/harbour" } });
+
+    expect(await screen.findByText(/could not read the labels of co-op\/harbour/)).toBeVisible();
+    expect(screen.getByLabelText("Opening label 1")).toBeDisabled();
+
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    expect(screen.getByRole("alert").textContent).toBe("Give every catalog entry a label and a points mapping.");
+    expect(submitCalls).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+async function selectLoadedOption(label: string, value: string): Promise<HTMLElement> {
+  const select = await screen.findByLabelText(label);
+  await waitFor(() => expect(select).toBeEnabled());
+  fireEvent.change(select, { target: { value } });
+  return select;
+}
