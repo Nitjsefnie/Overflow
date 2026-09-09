@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
+import { enforcementStateLabel, visibilityLabel } from "@/lib/dashboard/labels";
 import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { plural } from "@/lib/plural";
@@ -77,8 +78,26 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
           <ul>
             {dashboard.openClaims.map((claim) => (
               <li key={claim.id}>
-                <a href={claim.url}>{claim.repositoryName} #{claim.issueNumber}: {claim.title}</a>
-                {" · "}{claimAssigneePhrase(claim.assigneeGitHubLogin)}{" · "}{claim.openingName}: {claim.openingLabel}{" · reserve "}{claim.reservePoints}
+                <dl className="issue-facts">
+                  <div>
+                    <dt>Issue</dt>
+                    <dd>
+                      <a href={claim.url}>{claim.repositoryName} #{claim.issueNumber}: {claim.title}</a>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Assignee</dt>
+                    <dd>{claimAssigneePhrase(claim.assigneeGitHubLogin)}</dd>
+                  </div>
+                  <div>
+                    <dt>Catalog</dt>
+                    <dd>{claim.openingName}: {claim.openingLabel}</dd>
+                  </div>
+                  <div>
+                    <dt>Reserve</dt>
+                    <dd>{claim.reservePoints}</dd>
+                  </div>
+                </dl>
               </li>
             ))}
           </ul>
@@ -94,10 +113,36 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
               const reconciliation = reconciliationPhrase(repository);
               return (
                 <li key={repository.id}>
-                  {repository.ownerName} · {repository.visibility} · {repository.active ? "active" : "inactive"}
-                  {" · "}{repository.openingName} / {repository.actualName}
-                  {repository.unavailableReason === null ? null : ` · ${unavailabilityPhrase(repository.unavailableReason)}`}
-                  {reconciliation === null ? null : ` · ${reconciliation}`}
+                  <dl className="issue-facts">
+                    <div>
+                      <dt>Repository</dt>
+                      <dd>{repository.ownerName}</dd>
+                    </div>
+                    <div>
+                      <dt>Visibility</dt>
+                      <dd>{visibilityLabel(repository.visibility)}</dd>
+                    </div>
+                    <div>
+                      <dt>Activity</dt>
+                      <dd>{repository.active ? "Active" : "Inactive"}</dd>
+                    </div>
+                    <div>
+                      <dt>Catalog</dt>
+                      <dd>{repository.openingName} / {repository.actualName}</dd>
+                    </div>
+                    {repository.unavailableReason === null ? null : (
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{unavailabilityPhrase(repository.unavailableReason)}</dd>
+                      </div>
+                    )}
+                    {reconciliation === null ? null : (
+                      <div>
+                        <dt>Reconciliation</dt>
+                        <dd>{reconciliation}</dd>
+                      </div>
+                    )}
+                  </dl>
                 </li>
               );
             })}
@@ -115,7 +160,24 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
         {dashboard.enforcementNotices.length === 0 ? <p>No enforcement notices are recorded.</p> : (
           <ol>
             {dashboard.enforcementNotices.map((notice) => (
-              <li key={notice.id}>{notice.createdAt.slice(0, 10)} · {notice.priorState} → {notice.newState} · {notice.reason}</li>
+              <li key={notice.id}>
+                <dl className="issue-facts">
+                  <div>
+                    <dt>Recorded</dt>
+                    <dd>{notice.createdAt.slice(0, 10)}</dd>
+                  </div>
+                  <div>
+                    <dt>Transition</dt>
+                    <dd>
+                      {enforcementStateLabel(notice.priorState)} → {enforcementStateLabel(notice.newState)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Reason</dt>
+                    <dd>{notice.reason}</dd>
+                  </div>
+                </dl>
+              </li>
             ))}
           </ol>
         )}
@@ -141,7 +203,7 @@ function unavailabilityPhrase(reason: string): string {
 }
 
 /**
- * The open-claims line's plain reading of who holds a claim. The reserved
+ * The open-claims assignee cell's plain reading of who holds a claim. The reserved
  * ambiguous-claim login is a machine value, so the sponsor reads the situation
  * it stands for — never the sentinel itself. The same phrase is rendered on the
  * issue card's claim line, and the two must stay legible together.

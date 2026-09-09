@@ -241,7 +241,10 @@ describe("member dashboard", () => {
     expect(document.querySelector("script")).toBeNull();
     expect(screen.getByRole("heading", { name: "Registered repositories" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Enforcement notices" })).toBeVisible();
-    expect(screen.getByText(/UNDER_AUDIT → WARNED/)).toBeVisible();
+    expect(cellValue("enforcement-notices-heading", "2026-09-03", "Transition")).toBe(
+      "Under audit → Warned",
+    );
+    expect(screen.queryByText(/UNDER_AUDIT|WARNED/)).not.toBeInTheDocument();
   });
 
   it("announces an open audit in its own section whatever the enforcement state and notices say", () => {
@@ -374,7 +377,9 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(/· assignment ambiguous ·/)).toBeVisible();
+    expect(cellValue("open-claims-heading", "Chart the double crew", "Assignee")).toBe(
+      "assignment ambiguous",
+    );
     expect(screen.queryByText(/__overflow_ambiguous_claim__/)).not.toBeInTheDocument();
   });
 
@@ -403,10 +408,14 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(/co-op\/harbour.*· unavailable: not found on GitHub or no longer public$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/lighthouse.*· unavailable: no longer public$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/breakwater.*· unavailable: identity mismatch$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/seawall/)).not.toHaveTextContent(/unavailable/i);
+    const repos = "registered-repositories-heading";
+    expect(cellValue(repos, "co-op/harbour", "Status")).toBe(
+      "unavailable: not found on GitHub or no longer public",
+    );
+    expect(cellValue(repos, "co-op/lighthouse", "Status")).toBe("unavailable: no longer public");
+    expect(cellValue(repos, "co-op/breakwater", "Status")).toBe("unavailable: identity mismatch");
+    // The available repository says nothing extra: no Status cell, no unavailable copy.
+    expect(listItem(repos, "co-op/seawall")).not.toHaveTextContent(/unavailable/i);
     expect(screen.queryByText(/NOT_FOUND|NOT_PUBLIC|IDENTITY_MISMATCH/)).not.toBeInTheDocument();
   });
 
@@ -432,7 +441,9 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(/co-op\/harbour.*· unavailable$/)).toBeVisible();
+    expect(cellValue("registered-repositories-heading", "co-op/harbour", "Status")).toBe(
+      "unavailable",
+    );
     expect(screen.queryByText(/ARCHIVED_UPSTREAM/)).not.toBeInTheDocument();
   });
 
@@ -476,14 +487,19 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(
-      /co-op\/harbour.*· reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
-    )).toBeVisible();
-    expect(screen.getByText(/co-op\/lighthouse.*· retrying reconciliation after a failure$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/breakwater.*· retrying reconciliation after a failure$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/jetty.*· reconciliation queued$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/quay.*· reconciliation queued$/)).toBeVisible();
-    expect(screen.getByText(/co-op\/seawall/)).not.toHaveTextContent(/reconciliation/i);
+    const repos = "registered-repositories-heading";
+    expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
+      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+    );
+    expect(cellValue(repos, "co-op/lighthouse", "Reconciliation")).toBe(
+      "retrying reconciliation after a failure",
+    );
+    expect(cellValue(repos, "co-op/breakwater", "Reconciliation")).toBe(
+      "retrying reconciliation after a failure",
+    );
+    expect(cellValue(repos, "co-op/jetty", "Reconciliation")).toBe("reconciliation queued");
+    expect(cellValue(repos, "co-op/quay", "Reconciliation")).toBe("reconciliation queued");
+    expect(cellValue(repos, "co-op/seawall", "Reconciliation")).toBeNull();
     // The queue's own vocabulary is an implementation detail the sponsor is never shown.
     expect(screen.queryByText(/FAILED|RUNNING|PENDING|IDLE/)).not.toBeInTheDocument();
   });
@@ -515,9 +531,13 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(
-      /co-op\/harbour.*· unavailable: not found on GitHub or no longer public · reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
-    )).toBeVisible();
+    const repos = "registered-repositories-heading";
+    expect(cellValue(repos, "co-op/harbour", "Status")).toBe(
+      "unavailable: not found on GitHub or no longer public",
+    );
+    expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
+      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+    );
   });
 
   it("keeps a failing repository readable when the queue holds no time for the failure", () => {
@@ -542,7 +562,9 @@ describe("member dashboard", () => {
       />,
     );
 
-    expect(screen.getByText(/co-op\/harbour.*· reconciliation is failing; Overflow keeps retrying$/)).toBeVisible();
+    expect(cellValue("registered-repositories-heading", "co-op/harbour", "Reconciliation")).toBe(
+      "reconciliation is failing; Overflow keeps retrying",
+    );
     expect(screen.queryByText(/last failed/)).not.toBeInTheDocument();
   });
 
@@ -589,18 +611,192 @@ describe("member dashboard", () => {
     );
 
     // Only the sweep revives a FAILED job and it enqueues active repositories only, so promising
-    // a retry here would be a plain untruth on a line that already says "inactive".
-    expect(screen.getByText(
-      /co-op\/harbour.*· reconciliation is failing \(last failed 2026-09-04\); it will not be retried while the repository is inactive$/,
-    )).toBeVisible();
-    expect(screen.getByText(/co-op\/harbour/)).not.toHaveTextContent(/keeps retrying/);
-    expect(screen.getByText(
-      /co-op\/lighthouse.*· reconciliation is failing \(last failed 2026-09-04\); Overflow keeps retrying$/,
-    )).toBeVisible();
-    expect(screen.getByText(/co-op\/breakwater.*· reconciliation queued$/)).toBeVisible();
-    expect(screen.getByText(
-      /co-op\/seawall.*· reconciliation is failing; it will not be retried while the repository is inactive$/,
-    )).toBeVisible();
+    // a retry here would be a plain untruth on a line that already reads "Inactive".
+    const repos = "registered-repositories-heading";
+    expect(cellValue(repos, "co-op/harbour", "Activity")).toBe("Inactive");
+    expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
+      "reconciliation is failing (last failed 2026-09-04); it will not be retried while the repository is inactive",
+    );
+    expect(cellValue(repos, "co-op/lighthouse", "Reconciliation")).toBe(
+      "reconciliation is failing (last failed 2026-09-04); Overflow keeps retrying",
+    );
+    expect(cellValue(repos, "co-op/breakwater", "Reconciliation")).toBe("reconciliation queued");
+    expect(cellValue(repos, "co-op/seawall", "Reconciliation")).toBe(
+      "reconciliation is failing; it will not be retried while the repository is inactive",
+    );
+  });
+
+  it("lays every dashboard list section out as labelled grids of terms above values", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [{
+            id: "claim-1",
+            repositoryName: "co-op/harbour",
+            issueNumber: 17,
+            title: "Close the lock",
+            url: "https://github.com/co-op/harbour/issues/17",
+            assigneeGitHubLogin: "mira",
+            openingName: "Offer band",
+            openingLabel: "shoal",
+            reservePoints: 7,
+          }],
+          registeredRepositories: [registered("repo-1", "co-op/harbour")],
+          enforcementNotices: [{
+            id: "notice-1",
+            priorState: "ACTIVE",
+            newState: "BANNED",
+            reason: "Sustained overestimate pattern.",
+            createdAt: "2026-09-02T00:00:00.000Z",
+          }],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    // Every list in the three sections is a grid: each list item's cells pair
+    // exactly one term above its value — the bordered-grid treatment the
+    // dashboard's other multi-value blocks use.
+    for (const labelledBy of [
+      "open-claims-heading",
+      "registered-repositories-heading",
+      "enforcement-notices-heading",
+    ]) {
+      const section = sectionFor(labelledBy);
+      const items = within(section).getAllByRole("listitem");
+      expect(items).toHaveLength(1);
+      for (const item of items) {
+        const cells = item.querySelectorAll("dl > div");
+        expect(cells.length).toBeGreaterThan(0);
+        for (const cell of cells) {
+          expect(cell.querySelectorAll("dt")).toHaveLength(1);
+          expect(cell.querySelectorAll("dd")).toHaveLength(1);
+          expect(cell.children[0].tagName).toBe("DT");
+          expect(cell.children[1].tagName).toBe("DD");
+        }
+      }
+    }
+    expect(cellValue("open-claims-heading", "co-op/harbour", "Catalog")).toBe("Offer band: shoal");
+    expect(cellValue("open-claims-heading", "co-op/harbour", "Reserve")).toBe("7");
+    expect(cellValue("registered-repositories-heading", "co-op/harbour", "Catalog")).toBe(
+      "Offer band / Delivered band",
+    );
+    expect(cellValue("enforcement-notices-heading", "2026-09-02", "Recorded")).toBe("2026-09-02");
+    expect(cellValue("enforcement-notices-heading", "2026-09-02", "Transition")).toBe(
+      "Active → Banned",
+    );
+  });
+
+  it("shows repository visibility as display text, never the stored form", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [
+            registered("repo-1", "co-op/harbour"),
+            { ...registered("repo-2", "co-op/lighthouse"), visibility: "PRIVATE" },
+          ],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    const repos = "registered-repositories-heading";
+    expect(cellValue(repos, "co-op/harbour", "Visibility")).toBe("Public");
+    expect(cellValue(repos, "co-op/lighthouse", "Visibility")).toBe("Private");
+    expect(screen.queryByText(/PUBLIC|PRIVATE/)).not.toBeInTheDocument();
+  });
+
+  it("renders the Account audit section beside the three list grids when an audit is open", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [{
+            id: "claim-1",
+            repositoryName: "co-op/harbour",
+            issueNumber: 17,
+            title: "Close the lock",
+            url: "https://github.com/co-op/harbour/issues/17",
+            assigneeGitHubLogin: "mira",
+            openingName: "Offer band",
+            openingLabel: "shoal",
+            reservePoints: 7,
+          }],
+          registeredRepositories: [registered("repo-1", "co-op/harbour")],
+          enforcementNotices: [{
+            id: "notice-1",
+            priorState: "RECALIBRATING",
+            newState: "ACTIVE",
+            reason: "Sustained overestimate pattern.",
+            createdAt: "2026-09-02T00:00:00.000Z",
+          }],
+          openAudit: { id: "audit-1", openedAt: "2026-09-06T00:00:00.000Z" },
+        }}
+      />,
+    );
+
+    // The audit section's presence rides the open audit alone; the three
+    // grids render beside it, and the audit keeps its own heading.
+    const section = sectionFor("account-audit-heading");
+    expect(within(section).getByRole("heading", { name: "Account audit" })).toBeVisible();
+  });
+
+  it("keeps the three list sections' empty states rendering without any list item", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    // Structurally: each section still stands, carries its rendered empty
+    // copy, and holds no grid rows.
+    for (const labelledBy of [
+      "open-claims-heading",
+      "registered-repositories-heading",
+      "enforcement-notices-heading",
+    ]) {
+      const section = sectionFor(labelledBy);
+      expect(within(section).queryAllByRole("listitem")).toHaveLength(0);
+      expect(section.querySelectorAll("p").length).toBeGreaterThan(0);
+    }
   });
 
   it("renders positive, negative, and zero balances without inventing a floor", () => {
@@ -675,4 +871,28 @@ function registered(id: string, ownerName: string): RegisteredRepositoryProjecti
     reconciliationState: "IDLE",
     reconciliationLastFailureAt: null,
   };
+}
+
+function sectionFor(labelledBy: string): HTMLElement {
+  const section = document.querySelector(`section[aria-labelledby="${labelledBy}"]`);
+  if (section === null) throw new Error(`no section labelled by ${labelledBy}`);
+  return section as HTMLElement;
+}
+
+function listItem(labelledBy: string, rowKey: string): HTMLElement {
+  const item = Array.from(sectionFor(labelledBy).querySelectorAll("li")).find(
+    (li) => li.textContent?.includes(rowKey),
+  );
+  if (item === undefined) throw new Error(`no list item containing "${rowKey}" in ${labelledBy}`);
+  return item;
+}
+
+/** The value under `term` in the row holding `rowKey`, or null when that row has no such cell. */
+function cellValue(labelledBy: string, rowKey: string, term: string): string | null {
+  for (const cell of listItem(labelledBy, rowKey).querySelectorAll("dl > div")) {
+    if (cell.querySelector("dt")?.textContent === term) {
+      return cell.querySelector("dd")?.textContent ?? "";
+    }
+  }
+  return null;
 }
