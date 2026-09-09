@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { GitHubApiError } from "@/lib/github/errors";
 import type {
   RepositoryRegistrationDependencies,
   RepositoryRegistrationInput,
@@ -21,19 +22,34 @@ const registrationCatalogHeading = "### Registration responses";
 // src/app/api/repositories/route.ts answers a registration error coded CONFLICT with this status.
 const conflictStatus = "409";
 
-// How the registration store can fail an insert, and which published row each failure claims.
-const registrationConflicts: RegistrationConflict[] = [
+// src/app/api/repositories/route.ts answers an error coded GITHUB_CREDENTIALS with this status.
+const githubCredentialsStatus = "401";
+
+// The gateway calls a GitHub 401 can interrupt, and the step text each surfaced message names —
+// the value the published row carries as <step>.
+const githubCredentialSteps = [
+  { step: "getRepository", named: "retrieve the submitted GitHub repository" },
+  { step: "listRepositoryLabels", named: "read the repository difficulty labels" },
+  { step: "createWebhook", named: "create the repository webhook" },
+] as const;
+
+// How a registration conflict can arise, and which published row each conflict claims.
+const registrationConflicts: RegistrationFailure[] = [
   {
     what: "a GitHub repository another registration already holds",
-    async createRepository() {
-      return null;
+    status: conflictStatus,
+    raise(dependencies) {
+      dependencies.store.createRepository = async () => null;
     },
     publishes: (surfaced) => (cell) => cell === surfaced,
   },
   {
     what: "a GitHub path another registration claims",
-    async createRepository(): Promise<never> {
-      throw new RepositoryOwnerNameConflictError(claimedOwnerName);
+    status: conflictStatus,
+    raise(dependencies) {
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new RepositoryOwnerNameConflictError(claimedOwnerName);
+      };
     },
     // The path is substituted into this message at runtime, so only the text on either side of it
     // can be compared with the catalog; the published cell carries <owner/name> in its place.
@@ -46,23 +62,49 @@ const registrationConflicts: RegistrationConflict[] = [
   },
   {
     what: "a GitHub webhook id another registration records",
-    async createRepository(): Promise<never> {
-      throw new RepositoryWebhookIdConflictError(501);
+    status: conflictStatus,
+    raise(dependencies) {
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new RepositoryWebhookIdConflictError(501);
+      };
     },
     publishes: (surfaced) => (cell) => cell === surfaced,
   },
 ];
 
+// A GitHub 401 rejects the stored authorization itself and can interrupt any of the gateway calls
+// registration makes before the store is touched. The catalog publishes one row for all of them,
+// its message carrying <step> where each emission names the step it died on.
+const githubCredentialRejections: RegistrationFailure[] = githubCredentialSteps.map(({ step, named }) => ({
+  what: `a GitHub credential rejection while trying to ${named}`,
+  status: githubCredentialsStatus,
+  raise: (dependencies) => {
+    dependencies.github[step] = async () => {
+      throw new GitHubApiError(401);
+    };
+  },
+  // The step is substituted into this message at runtime, so only the text on either side of it
+  // can be compared with the catalog; the published cell carries <step> in its place.
+  publishes: (surfaced) => {
+    const parts = surfaced.split(named);
+    expect(parts, `The surfaced message names the step ${named} other than once: ${surfaced}`).toHaveLength(2);
+    const [before, after] = parts as [string, string];
+    return (cell) => cell.startsWith(before) && cell.endsWith(after);
+  },
+}));
+
+const registrationFailures = [...registrationConflicts, ...githubCredentialRejections];
+
 // README.md documents the status, code and exact message of every registration failure, and a
 // reader matches on all three. Nothing else notices when a message is reworded and the catalog is
-// not, so these cases raise each conflict for real and look the surfaced string up in the row the
+// not, so these cases raise each failure for real and look the surfaced string up in the row the
 // registration catalog publishes for it. Membership in the corpus is not enough: a string the
-// catalog publishes under a different status, a different code, or for a different conflict is a
+// catalog publishes under a different status, a different code, or for a different failure is a
 // row about something else, and answering with it misdescribes what happened.
 describe("the registration error catalog README.md publishes", () => {
-  for (const conflict of registrationConflicts) {
-    it(`publishes the status, code and message ${conflict.what} surfaces`, async () => {
-      await publishedRow(conflict);
+  for (const failure of registrationFailures) {
+    it(`publishes the status, code and message ${failure.what} surfaces`, async () => {
+      await publishedRow(failure);
     });
   }
 
@@ -79,9 +121,12 @@ describe("the registration error catalog README.md publishes", () => {
   });
 });
 
-type RegistrationConflict = {
+type RegistrationFailure = {
   readonly what: string;
-  readonly createRepository: () => Promise<null>;
+  // The status src/app/api/repositories/route.ts answers this failure's error code with.
+  readonly status: string;
+  // Swaps in the dependency whose failure produces this registration outcome.
+  readonly raise: (dependencies: RepositoryRegistrationDependencies) => void;
   readonly publishes: (surfacedMessage: string) => (publishedCell: string) => boolean;
 };
 
@@ -91,24 +136,24 @@ type CatalogRow = {
   readonly message: string;
 };
 
-// Raises the conflict through the real registerRepository and returns the single catalog row that
+// Raises the failure through the real registerRepository and returns the single catalog row that
 // publishes what it surfaced, having checked that row carries the status and code the reader is
 // told to match first.
-async function publishedRow(conflict: RegistrationConflict): Promise<CatalogRow> {
-  const surfaced = await surfacedFailure(conflict.createRepository);
-  const publishes = conflict.publishes(surfaced.message);
+async function publishedRow(failure: RegistrationFailure): Promise<CatalogRow> {
+  const surfaced = await surfacedFailure(failure);
+  const publishes = failure.publishes(surfaced.message);
   const matched = registrationCatalogRows().filter((row) => publishes(row.message));
 
   expect(
     matched,
-    `The ${registrationCatalogHeading} catalog publishes no single row for ${conflict.what}: ${surfaced.message}`,
+    `The ${registrationCatalogHeading} catalog publishes no single row for ${failure.what}: ${surfaced.message}`,
   ).toHaveLength(1);
   const [row] = matched as [CatalogRow];
 
   expect(
     { status: row.status, code: row.code },
-    `The row published for ${conflict.what} carries a different status or code: ${surfaced.message}`,
-  ).toEqual({ status: conflictStatus, code: surfaced.code });
+    `The row published for ${failure.what} carries a different status or code: ${surfaced.message}`,
+  ).toEqual({ status: failure.status, code: surfaced.code });
 
   return row;
 }
@@ -160,9 +205,7 @@ function withoutCodeSpan(cell: string): string {
   return cell.startsWith("`") && cell.endsWith("`") ? cell.slice(1, -1) : cell;
 }
 
-async function surfacedFailure(
-  createRepository: () => Promise<null>,
-): Promise<{ code: string; message: string }> {
+async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: string; message: string }> {
   const dependencies: RepositoryRegistrationDependencies = {
     actor: { id: "sponsor-id", role: "MODERATOR" },
     github: {
@@ -194,7 +237,11 @@ async function surfacedFailure(
       async findRepositoryByGitHubId() {
         return null;
       },
-      createRepository,
+      // Loud so a failure case that reaches the store without having raised its own failure is a
+      // failed case, not a silently different registration outcome.
+      async createRepository(): Promise<never> {
+        throw new Error("The registration reached the store without an injected failure.");
+      },
       async appendDifficultySchemeVersion() {
         return null;
       },
@@ -204,6 +251,7 @@ async function surfacedFailure(
       secret: "webhook-secret-for-test",
     },
   };
+  failure.raise(dependencies);
 
   try {
     await registerRepository(dependencies, registrationInput());
@@ -213,7 +261,7 @@ async function surfacedFailure(
     }
     throw error;
   }
-  throw new Error("Registration resolved instead of surfacing a registration conflict.");
+  throw new Error("Registration resolved instead of surfacing a registration failure.");
 }
 
 function registrationInput(): RepositoryRegistrationInput {
