@@ -135,8 +135,9 @@ function expectExplanationAboveQueue(section: HTMLElement, queueTag: "P" | "OL")
 /**
  * A fallback alert communicates only what a reader can see: every element
  * inside it that carries text is visible, and the visible text carries at
- * least one non-format character — zero-width and other `Cf` characters do
- * not satisfy this however many of them the alert carries.
+ * least one non-format character once trimmed — whitespace-only text and
+ * zero-width (`Cf`-only) text both fail, so the alert cannot read as blank
+ * to a person while satisfying either shape of "nonblank" check.
  */
 function expectReaderVisibleAlert(alert: HTMLElement): void {
   expect(alert).toBeVisible();
@@ -145,7 +146,7 @@ function expectReaderVisibleAlert(alert: HTMLElement): void {
       expect(element, "a text-bearing element inside the alert renders visibly").toBeVisible();
     }
   }
-  expect(visibleText(alert), "the alert's visible text carries a non-format character").toMatch(/\P{Cf}/u);
+  expect(visibleText(alert).trim(), "the alert's visible text carries a non-format character").toMatch(/\P{Cf}/u);
 }
 
 function hasNonblankText(element: Element): boolean {
