@@ -43,7 +43,7 @@ export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationP
         <section aria-labelledby="calibration-by-repository-heading">
           <h2 id="calibration-by-repository-heading">Calibration by repository</h2>
           {byRepository.map((entry) => (
-            <RepositoryCalibration key={entry.repositoryName} entry={entry} />
+            <RepositoryCalibration key={entry.githubRepositoryId} entry={entry} />
           ))}
         </section>
       )}

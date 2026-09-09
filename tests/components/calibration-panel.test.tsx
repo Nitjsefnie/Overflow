@@ -203,6 +203,7 @@ describe("calibration comparison per repository", () => {
   // figure rendered under the wrong repository.
   const byRepository: RepositoryCalibrationEntry[] = [
     {
+      githubRepositoryId: 2,
       repositoryName: "co-op/harbour",
       comparison: {
         selfWork: { count: 2, meanDelta: -0.5, medianDelta: -1 },
@@ -211,6 +212,7 @@ describe("calibration comparison per repository", () => {
       },
     },
     {
+      githubRepositoryId: 7,
       repositoryName: "co-op/lighthouse",
       comparison: {
         selfWork: { count: 1, meanDelta: 4, medianDelta: 4 },
@@ -279,6 +281,7 @@ describe("calibration comparison per repository", () => {
   it("names an empty self-work cohort as absent too", () => {
     renderBreakdown([
       {
+        githubRepositoryId: 7,
         repositoryName: "co-op/lighthouse",
         comparison: {
           selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },

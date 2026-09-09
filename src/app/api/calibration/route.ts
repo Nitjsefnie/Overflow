@@ -42,8 +42,10 @@ export function createCalibrationGetHandler(dependencies: CalibrationRouteDepend
     let comparison: CalibrationComparison;
     let byRepository: RepositoryCalibrationEntry[];
     try {
-      comparison = await dependencies.getCalibrationComparison(session.user.id);
-      byRepository = await dependencies.getCalibrationComparisonByRepository(session.user.id);
+      [comparison, byRepository] = await Promise.all([
+        dependencies.getCalibrationComparison(session.user.id),
+        dependencies.getCalibrationComparisonByRepository(session.user.id),
+      ]);
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load the calibration comparison.");
     }
