@@ -164,6 +164,193 @@ describe("issue evidence completeness constraints", () => {
     `).rejects.toThrow(/issues_settled_evidence_complete_check/);
   });
 
+  // Per-conjunct isolation: the multi-column cases above null several fields
+  // at once, so a regression dropping ONE arm would survive them -- that arm's
+  // own column is what must refuse the row, and those cases never exercised it
+  // alone. Each case here nulls exactly one evidence field and keeps every
+  // other value valid.
+  it.each(["owner_github_login", "opening_source_event_id", "opening_source_actor_login"] as const)(
+    "refuses opening evidence with only %s null on INSERT",
+    async (column) => {
+      await expect(insertIssueWithOpeningEvidence({
+        ownerLogin: column === "owner_github_login" ? null : "sponsor-login",
+        openingSourceEventId: column === "opening_source_event_id" ? null : "opening-event-1",
+        openingSourceActorLogin: column === "opening_source_actor_login" ? null : "sponsor-login",
+        openingSourceAt: "2026-09-01T09:00:00.000Z",
+      })).rejects.toThrow(/issues_opening_source_complete_check/);
+    },
+  );
+
+  it.each(["owner_github_login", "opening_source_event_id", "opening_source_actor_login"] as const)(
+    "refuses opening evidence with only %s null on UPDATE",
+    async (column) => {
+      const issue = await insertIssue(sql);
+      await expect(sql`
+        update issues
+        set owner_github_login = ${column === "owner_github_login" ? null : "sponsor-login"},
+            opening_source_event_id = ${column === "opening_source_event_id" ? null : "opening-event-1"},
+            opening_source_actor_login = ${column === "opening_source_actor_login" ? null : "sponsor-login"},
+            opening_source_at = ${"2026-09-01T09:00:00.000Z"}
+        where id = ${issue.id}
+      `).rejects.toThrow(/issues_opening_source_complete_check/);
+    },
+  );
+
+  it("refuses opening evidence with only its timestamp null on INSERT", async () => {
+    await expect(insertIssueWithOpeningEvidence({
+      ownerLogin: "sponsor-login",
+      openingSourceEventId: "opening-event-1",
+      openingSourceActorLogin: "sponsor-login",
+      openingSourceAt: null,
+    })).rejects.toThrow(/issues_opening_source_complete_check/);
+  });
+
+  it("refuses opening evidence with only its timestamp null on UPDATE", async () => {
+    const issue = await insertIssue(sql);
+    await expect(sql`
+      update issues
+      set owner_github_login = ${"sponsor-login"},
+          opening_source_event_id = ${"opening-event-1"},
+          opening_source_actor_login = ${"sponsor-login"},
+          opening_source_at = null
+      where id = ${issue.id}
+    `).rejects.toThrow(/issues_opening_source_complete_check/);
+  });
+
+  it.each([
+    "settled_label",
+    "settled_label_event_id",
+    "settled_label_actor_login",
+    "settled_rationale_comment_id",
+    "settled_rationale_actor_login",
+  ] as const)("refuses settled evidence with only %s null on INSERT", async (column) => {
+    const evidence = completeSettledEvidence();
+    await expect(insertIssueWithSettledEvidence({
+      settledLabel: column === "settled_label" ? null : evidence.settledLabel,
+      settledPoints: 6,
+      settledLabelEventId: column === "settled_label_event_id" ? null : evidence.settledLabelEventId,
+      settledLabelActorLogin: column === "settled_label_actor_login" ? null : evidence.settledLabelActorLogin,
+      settledLabelAppliedAt: evidence.settledLabelAppliedAt,
+      settledRationaleCommentId: column === "settled_rationale_comment_id" ? null : evidence.settledRationaleCommentId,
+      settledRationaleActorLogin: column === "settled_rationale_actor_login" ? null : evidence.settledRationaleActorLogin,
+      settledRationaleCommentedAt: evidence.settledRationaleCommentedAt,
+    })).rejects.toThrow(/issues_settled_evidence_complete_check/);
+  });
+
+  it.each([
+    "settled_label",
+    "settled_label_event_id",
+    "settled_label_actor_login",
+    "settled_rationale_comment_id",
+    "settled_rationale_actor_login",
+  ] as const)("refuses settled evidence with only %s null on UPDATE", async (column) => {
+    const issue = await insertIssue(sql);
+    await expect(sql`
+      update issues
+      set settled_label = ${column === "settled_label" ? null : "delivered/6"},
+          settled_points = 6,
+          settled_label_event_id = ${column === "settled_label_event_id" ? null : "settled-event-1"},
+          settled_label_actor_login = ${column === "settled_label_actor_login" ? null : "issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:00:00.000Z"},
+          settled_rationale_comment_id = ${column === "settled_rationale_comment_id" ? null : "comment-1"},
+          settled_rationale_actor_login = ${column === "settled_rationale_actor_login" ? null : "issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${issue.id}
+    `).rejects.toThrow(/issues_settled_evidence_complete_check/);
+  });
+
+  it.each(["settled_label_applied_at", "settled_rationale_commented_at"] as const)(
+    "refuses settled evidence with only %s null on INSERT",
+    async (column) => {
+      const evidence = completeSettledEvidence();
+      await expect(insertIssueWithSettledEvidence({
+        ...evidence,
+        settledLabelAppliedAt: column === "settled_label_applied_at" ? null : evidence.settledLabelAppliedAt,
+        settledRationaleCommentedAt: column === "settled_rationale_commented_at" ? null : evidence.settledRationaleCommentedAt,
+      })).rejects.toThrow(/issues_settled_evidence_complete_check/);
+    },
+  );
+
+  it.each(["settled_label_applied_at", "settled_rationale_commented_at"] as const)(
+    "refuses settled evidence with only %s null on UPDATE",
+    async (column) => {
+      const issue = await insertIssue(sql);
+      await expect(sql`
+        update issues
+        set settled_label = ${"delivered/6"},
+            settled_points = 6,
+            settled_label_event_id = ${"settled-event-1"},
+            settled_label_actor_login = ${"issue-owner"},
+            settled_label_applied_at = ${column === "settled_label_applied_at" ? null : "2026-09-01T11:00:00.000Z"},
+            settled_rationale_comment_id = ${"comment-1"},
+            settled_rationale_actor_login = ${"issue-owner"},
+            settled_rationale_commented_at = ${column === "settled_rationale_commented_at" ? null : "2026-09-01T11:30:00.000Z"}
+        where id = ${issue.id}
+      `).rejects.toThrow(/issues_settled_evidence_complete_check/);
+    },
+  );
+
+  it("refuses settled evidence with only settled_points null on INSERT", async () => {
+    await expect(insertIssueWithSettledEvidence({
+      ...completeSettledEvidence(),
+      settledPoints: null,
+    })).rejects.toThrow(/issues_settled_evidence_complete_check/);
+  });
+
+  it("refuses settled evidence with only settled_points null on UPDATE", async () => {
+    const issue = await insertIssue(sql);
+    await expect(sql`
+      update issues
+      set settled_label = ${"delivered/6"},
+          settled_points = null,
+          settled_label_event_id = ${"settled-event-1"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:00:00.000Z"},
+          settled_rationale_comment_id = ${"comment-1"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${issue.id}
+    `).rejects.toThrow(/issues_settled_evidence_complete_check/);
+  });
+
+  // The fifteen-minute ordering grace from migration 010, pinned at its
+  // boundary with fixed timestamps: a rationale comment may precede its label
+  // by fifteen minutes exactly, and not one second more.
+  it("allows a settled rationale comment exactly fifteen minutes before its label", async () => {
+    const issue = await insertIssue(sql);
+    await sql`
+      update issues
+      set settled_label = ${"delivered/6"},
+          settled_points = 6,
+          settled_label_event_id = ${"settled-event-1"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:45:00.000Z"},
+          settled_rationale_comment_id = ${"comment-1"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${issue.id}
+    `;
+    await expect(sql`
+      select settled_points from issues where id = ${issue.id}
+    `).resolves.toEqual([{ settled_points: 6 }]);
+  });
+
+  it("refuses a settled rationale comment fifteen minutes and one second before its label", async () => {
+    const issue = await insertIssue(sql);
+    await expect(sql`
+      update issues
+      set settled_label = ${"delivered/6"},
+          settled_points = 6,
+          settled_label_event_id = ${"settled-event-1"},
+          settled_label_actor_login = ${"issue-owner"},
+          settled_label_applied_at = ${"2026-09-01T11:45:01.000Z"},
+          settled_rationale_comment_id = ${"comment-1"},
+          settled_rationale_actor_login = ${"issue-owner"},
+          settled_rationale_commented_at = ${"2026-09-01T11:30:00.000Z"}
+      where id = ${issue.id}
+    `).rejects.toThrow(/issues_settled_evidence_complete_check/);
+  });
+
   it("allows an issue whose evidence columns are all absent", async () => {
     const issue = await insertIssue(sql);
     await expect(sql`

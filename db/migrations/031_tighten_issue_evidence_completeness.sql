@@ -11,9 +11,12 @@
 --
 -- Every mandatory text column in each complete branch is now
 -- `col is not null and col ~ '\S'` -- false for null, false for whitespace-only
--- -- and nothing else changes: the absent branches, the settled_points range,
--- the timestamp requirements and the fifteen-minute ordering grace from
--- migration 010 all stand exactly as they were.
+-- -- and settled_points gains an explicit `is not null` beside its range,
+-- because `between` alone is three-valued and a CHECK passes on NULL: full
+-- settled evidence beside null points was accepted, the same hole as the text
+-- columns (issue 19). Nothing else changes: the absent branches, the points
+-- range itself, the timestamp requirements and the fifteen-minute ordering
+-- grace from migration 010 stand exactly as they were.
 --
 -- The UPDATE trigger behind `issues_opening_rating_immutable` (rewritten by
 -- migration 018) refuses whitespace-only logins with the `!~ '\S'` spelling
@@ -61,7 +64,7 @@ add constraint issues_settled_evidence_complete_check check (
   )
   or (
     settled_label is not null and settled_label ~ '\S'
-    and settled_points between 1 and 10
+    and settled_points is not null and settled_points between 1 and 10
     and settled_label_event_id is not null and settled_label_event_id ~ '\S'
     and settled_label_actor_login is not null and settled_label_actor_login ~ '\S'
     and settled_label_applied_at is not null
