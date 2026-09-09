@@ -44,9 +44,10 @@ export interface McpToolDependencies {
 
 // The argument shapes below mirror the wrapped routes' own zod schemas —
 // overrides/route.ts, overrides/[id]/route.ts, moderation/route.ts and
-// moderation/[id]/route.ts. They are restated, not imported, because the
-// routes keep their schemas private; a change to a route schema must be
-// copied here or the MCP client sees the wrong contract.
+// moderation/[id]/route.ts. They are restated, not imported, so the routes
+// stay the single authority for validation; the restatement is pinned to the
+// route schemas by tests/lib/mcp-tools-parity.test.ts, which fails when the
+// two drift apart.
 const issuesBoardSchema = z
   .object({
     repository: z.string().optional(),
