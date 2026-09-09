@@ -362,11 +362,11 @@ describe("explicit repository registration", () => {
   const waitInstruction = "Wait a minute and retry registration before changing anything.";
   const ambiguityClause = "this response carries nothing that separates the two causes";
   it.each([
-    ["listRepositoryLabels", "read the repository difficulty labels", "ORGANIZATION"],
-    ["createWebhook", "create the repository webhook", "ORGANIZATION"],
-    ["listRepositoryLabels", "read the repository difficulty labels", "USER"],
-    ["createWebhook", "create the repository webhook", "USER"],
-  ] as const)("ranks wait-and-retry before the settings remedies for an ambiguous HTTP 403 on %s for %s owners", async (step, description, ownerType) => {
+    { step: "listRepositoryLabels", description: "read the repository difficulty labels", ownerType: "ORGANIZATION" },
+    { step: "createWebhook", description: "create the repository webhook", ownerType: "ORGANIZATION" },
+    { step: "listRepositoryLabels", description: "read the repository difficulty labels", ownerType: "USER" },
+    { step: "createWebhook", description: "create the repository webhook", ownerType: "USER" },
+  ] as const)("ranks wait-and-retry before the settings remedies for an ambiguous HTTP 403 on $step for $ownerType owners", async ({ step, description, ownerType }) => {
     const harness = createHarness({ owner: "Real-Owner", ownerType });
     const body = "Resource not accessible";
     const details = classifyGitHubRateLimit(403, new Headers({ "x-ratelimit-remaining": "4999" }), body);
@@ -459,7 +459,7 @@ describe("explicit repository registration", () => {
     });
 
     it.each([
-      [401, "UPSTREAM_FAILURE"],
+      [401, "GITHUB_CREDENTIALS"],
       [422, "UPSTREAM_FAILURE"],
       [429, "GITHUB_RATE_LIMITED"],
       [500, "UPSTREAM_FAILURE"],
@@ -469,10 +469,26 @@ describe("explicit repository registration", () => {
 
       await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
         code,
-        message: status === 429
-          ? `GitHub rate-limited the request to ${description} (HTTP 429). Please retry registration later.`
-          : upstreamMessage,
+        message: status === 401
+          ? `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to ${description}. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.`
+          : status === 429
+            ? `GitHub rate-limited the request to ${description} (HTTP 429). Please retry registration later.`
+            : upstreamMessage,
       });
+      expect(harness.createdRepositories).toEqual([]);
+    });
+
+    // Issue 93: a 401 says GitHub rejected the stored authorization itself, so the message
+    // must name the failed step and give the remedy that refreshes the credential.
+    it("surfaces an HTTP 401 as GITHUB_CREDENTIALS naming the step and the recovery", async () => {
+      const harness = createHarness();
+      harness.dependencies.github[step] = async () => { throw new GitHubApiError(401); };
+
+      const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+      expect(error).toMatchObject({ code: "GITHUB_CREDENTIALS" });
+      const message = (error as Error).message;
+      expect(message).toContain(`(HTTP 401) while trying to ${description}.`);
+      expect(message).toContain("sign out of Overflow and sign in again with GitHub");
       expect(harness.createdRepositories).toEqual([]);
     });
 

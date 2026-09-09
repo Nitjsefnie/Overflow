@@ -237,6 +237,7 @@ describe("POST /api/repositories", () => {
     ["webhook", "create the repository webhook", "Unable to create the repository webhook on GitHub."],
   ] as const)("%s HTTP failure classification through the real gateway", (step, description, upstreamMessage) => {
     it.each([
+      [401, {}, "GITHUB_CREDENTIALS", 401, ""],
       [503, { "retry-after": "60", "x-ratelimit-remaining": "4999" }, "UPSTREAM_FAILURE", 502, ""],
       [500, { "retry-after": "60" }, "UPSTREAM_FAILURE", 502, ""],
       [500, { "x-ratelimit-remaining": "0" }, "UPSTREAM_FAILURE", 502, ""],
@@ -261,6 +262,11 @@ describe("POST /api/repositories", () => {
         expect(body.error.message).toBe(upstreamMessage);
       } else if (code === "GITHUB_RATE_LIMITED") {
         expect(body.error.message).toBe(`GitHub rate-limited the request to ${description} (HTTP ${status}).${delay} Please retry registration later.`);
+      } else if (code === "GITHUB_CREDENTIALS") {
+        expect(body.error.message).toBe(
+          `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to ${description}. `
+            + "To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.",
+        );
       } else {
         expect(body.error.message).toContain(`GitHub refused to ${description} (HTTP 403).`);
         expect(body.error.message).toContain("https://github.com/settings/applications");
@@ -304,8 +310,8 @@ describe("POST /api/repositories", () => {
     it.each([
       ["Organization", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
       ["User", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
-      ["Organization", 404, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
-      ["User", 404, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
+      ["Organization", 404, {}, "GITHUB_ACCESS", 403],
+      ["User", 404, {}, "GITHUB_ACCESS", 403],
       ["Organization", 403, { "retry-after": "60" }, "GITHUB_RATE_LIMITED", 429],
       ["User", 403, { "retry-after": "60" }, "GITHUB_RATE_LIMITED", 429],
     ] satisfies Array<[string, number, Record<string, string>, string, number]>)("handles %s HTTP %s with %j as %s", async (ownerType, status, headers, code, responseStatus) => {
