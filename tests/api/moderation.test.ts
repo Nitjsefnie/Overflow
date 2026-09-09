@@ -30,6 +30,12 @@ import {
   createModerationCohortGetHandler,
 } from "@/app/api/moderation/cohort/route";
 import {
+  createModerationRecalibrationGetHandler,
+} from "@/app/api/moderation/recalibration/route";
+import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/recalibration/adjustment/route";
+import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
+import { type RecalibrationCreditStore } from "@/lib/moderation/credit-adjustment-store";
+import {
   AccountModerationService,
   ModerationServiceError,
   type AccountAudit,
@@ -37,7 +43,9 @@ import {
   type ModerationStore,
   type ModeratorRoleChange,
   type RecalibrationClosure,
+  type RecalibrationCreditPreview,
 } from "@/lib/moderation/service";
+import type { CreditAdjustmentRecord } from "@/lib/moderation/credit-adjustment-store";
 
 const moderatorSession = { user: { id: "00000000-0000-4000-8000-000000000001", role: "MODERATOR" as const } };
 const memberSession = { user: { id: "00000000-0000-4000-8000-000000000002", role: "MEMBER" as const } };
@@ -500,6 +508,438 @@ describe("calibration cohort preview API", () => {
     expect(memberResponse.status).toBe(403);
     await expect(memberResponse.json()).resolves.toEqual({
       error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+});
+
+describe("recalibration credit preview API", () => {
+  it("answers a moderator's preview request with the figure beside the account's applied adjustments", async () => {
+    const preview = creditPreviewFixture();
+    const previewRecalibration = vi.fn().mockResolvedValue(preview);
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ preview: previewRecalibration }),
+    });
+
+    // No Origin header on the request: the preview read stays deliberately
+    // unorigin-guarded, so the happy path is itself the proof a same-origin
+    // browser fetch() GET is not refused.
+    const response = await handler(recalibrationRequest(recalibrationQuery()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ preview });
+    expect(previewRecalibration).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+    );
+  });
+
+  it("returns a structured 401 for an unauthenticated preview read", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => null,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService,
+    });
+
+    const response = await handler(recalibrationRequest(recalibrationQuery()));
+
+    expect(response.status).toBe(401);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 403 for a non-moderator", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => memberSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      createService,
+    });
+
+    const response = await handler(recalibrationRequest(recalibrationQuery()));
+
+    expect(response.status).toBe(403);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
+  it.each([
+    ["no target account", { targetAccountId: undefined }],
+    ["a target account that is not a uuid", { targetAccountId: "target-account" }],
+    ["an unknown query parameter", { repositoryId: repositoryScopeId }],
+  ] as const)("refuses a preview request with %s before calling the service", async (_label, overrides) => {
+    const previewRecalibration = vi.fn();
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ preview: previewRecalibration }),
+    });
+
+    const response = await handler(recalibrationRequest({ ...recalibrationQuery(), ...overrides }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(previewRecalibration).not.toHaveBeenCalled();
+  });
+
+  it("rejects a repeated targetAccountId preview parameter before calling the service", async () => {
+    const previewRecalibration = vi.fn();
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ preview: previewRecalibration }),
+    });
+    const url = new URL(recalibrationRequest(recalibrationQuery()).url);
+    url.searchParams.append("targetAccountId", "00000000-0000-4000-8000-000000000006");
+
+    const response = await handler(new Request(url));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(previewRecalibration).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["NOT_FOUND", 404],
+    ["INVALID_INPUT", 422],
+  ] as const)("maps a %s preview outcome to structured HTTP %s", async (code, status) => {
+    const handler = createModerationRecalibrationGetHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        creditServiceHarness({
+          preview: async () => {
+            throw new ModerationServiceError(code, "internal detail must not change the route contract");
+          },
+        }),
+    });
+
+    const response = await handler(recalibrationRequest(recalibrationQuery()));
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message: "Unable to process moderation request." },
+    });
+  });
+});
+
+describe("recalibration adjustment apply API", () => {
+  it("applies the adjustment a moderator requests with 201 and the stored adjustment", async () => {
+    const adjustment = adjustmentFixture();
+    const applyRecalibrationCreditAdjustment = vi.fn().mockResolvedValue(adjustment);
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ apply: applyRecalibrationCreditAdjustment }),
+    });
+
+    const response = await handler(jsonRequest(adjustmentPayload()));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ adjustment });
+    expect(applyRecalibrationCreditAdjustment).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+      adjustmentReason,
+    );
+  });
+
+  it("returns a structured 401 for an unauthenticated apply request", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => null,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService,
+    });
+
+    const response = await handler(jsonRequest(adjustmentPayload()));
+
+    expect(response.status).toBe(401);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 403 for a non-moderator", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => memberSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      createService,
+    });
+
+    const response = await handler(jsonRequest(adjustmentPayload()));
+
+    expect(response.status).toBe(403);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
+  it("refuses a foreign-origin apply before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationAdjustmentPostHandler(dependencies)(
+      foreignTextRequest(adjustmentPayload()),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin apply that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationAdjustmentPostHandler(dependencies)(
+      trustedTextRequest(adjustmentPayload()),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it.each([
+    ["no target account", { targetAccountId: undefined }],
+    ["a target account that is not a uuid", { targetAccountId: "target-account" }],
+    ["no reason", { reason: undefined }],
+    ["an unexpected extra field", { correctedCredits: 99 }],
+  ] as const)("refuses an apply request with %s before calling the service", async (_label, overrides) => {
+    const applyRecalibrationCreditAdjustment = vi.fn();
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ apply: applyRecalibrationCreditAdjustment }),
+    });
+
+    const response = await handler(jsonRequest({ ...adjustmentPayload(), ...overrides }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(applyRecalibrationCreditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["NOT_FOUND", 404],
+    ["CONFLICT", 409],
+    ["INVALID_INPUT", 422],
+  ] as const)("maps a %s apply outcome to structured HTTP %s", async (code, status) => {
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        creditServiceHarness({
+          apply: async () => {
+            throw new ModerationServiceError(code, "internal detail must not change the route contract");
+          },
+        }),
+    });
+
+    const response = await handler(jsonRequest(adjustmentPayload()));
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message: "Unable to process moderation request." },
+    });
+  });
+
+  it("returns a sanitized 500 without database or upstream details", async () => {
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        creditServiceHarness({
+          apply: async () => {
+            throw new Error("postgresql://moderator:password@db.example/overflow");
+          },
+        }),
+    });
+
+    const response = await handler(jsonRequest(adjustmentPayload()));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Unable to process moderation request." },
+    });
+    expect(JSON.stringify(body)).not.toContain("postgresql");
+    expect(JSON.stringify(body)).not.toContain("password");
+  });
+
+  // The route schema takes any string so the service's own normalization stays the
+  // single blank-reason authority, exactly as the audit-opening route does for its
+  // ambiguous sample bounds. Both stores are constructed, as the production route
+  // wires them, and neither may be reached for a blank reason.
+  it("hands a blank reason to the service's normalization instead of the route schema", async () => {
+    const { store } = unreachableCohortStore();
+    const creditStore = unreachableCreditStore();
+    const handler = createModerationAdjustmentPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => new AccountModerationService(store, creditStore),
+    });
+
+    const response = await handler(jsonRequest({ ...adjustmentPayload(), reason: "   " }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_INPUT", message: "Unable to process moderation request." },
+    });
+    expect(creditStore.applyRecalibrationCreditAdjustment).not.toHaveBeenCalled();
+  });
+});
+
+describe("recalibration adjustment reversal API", () => {
+  it("records a moderator's reversal with 201 and the mirrored adjustment row", async () => {
+    const reversal = adjustmentFixture({ id: reversalRecordId, reversalOf: appliedAdjustmentId });
+    const reverseModerationCreditAdjustment = vi.fn().mockResolvedValue(reversal);
+    const handler = createModerationReversalPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ reverse: reverseModerationCreditAdjustment }),
+    });
+
+    const response = await handler(jsonRequest(reversalPayload()));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ reversal });
+    expect(reverseModerationCreditAdjustment).toHaveBeenCalledWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      appliedAdjustmentId,
+      reversalReason,
+    );
+  });
+
+  it("returns a structured 401 for an unauthenticated reversal request", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationReversalPostHandler({
+      getSession: async () => null,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService,
+    });
+
+    const response = await handler(jsonRequest(reversalPayload()));
+
+    expect(response.status).toBe(401);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+  });
+
+  it("returns a structured 403 for a non-moderator", async () => {
+    const createService = vi.fn(async () => creditServiceHarness());
+    const handler = createModerationReversalPostHandler({
+      getSession: async () => memberSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
+      createService,
+    });
+
+    const response = await handler(jsonRequest(reversalPayload()));
+
+    expect(response.status).toBe(403);
+    expect(createService).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+  });
+
+  it("refuses a foreign-origin reversal before any session or database work", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationReversalPostHandler(dependencies)(
+      foreignTextRequest(reversalPayload()),
+    );
+
+    await expectRejection(response, ...foreignOriginRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it("refuses a trusted-origin reversal that is not JSON", async () => {
+    const dependencies = unusedDependencies();
+
+    const response = await createModerationReversalPostHandler(dependencies)(
+      trustedTextRequest(reversalPayload()),
+    );
+
+    await expectRejection(response, ...unsupportedMediaTypeRejection);
+    expectNoDependencyCall(dependencies);
+  });
+
+  it.each([
+    ["no adjustment id", { adjustmentId: undefined }],
+    ["an adjustment id that is not a uuid", { adjustmentId: "adjustment-1" }],
+    ["no reason", { reason: undefined }],
+    ["an unexpected extra field", { correctedCredits: 99 }],
+  ] as const)("refuses a reversal request with %s before calling the service", async (_label, overrides) => {
+    const reverseModerationCreditAdjustment = vi.fn();
+    const handler = createModerationReversalPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => creditServiceHarness({ reverse: reverseModerationCreditAdjustment }),
+    });
+
+    const response = await handler(jsonRequest({ ...reversalPayload(), ...overrides }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(reverseModerationCreditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["NOT_FOUND", 404],
+    ["CONFLICT", 409],
+    ["INVALID_INPUT", 422],
+  ] as const)("maps a %s reversal outcome to structured HTTP %s", async (code, status) => {
+    const handler = createModerationReversalPostHandler({
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () =>
+        creditServiceHarness({
+          reverse: async () => {
+            throw new ModerationServiceError(code, "internal detail must not change the route contract");
+          },
+        }),
+    });
+
+    const response = await handler(jsonRequest(reversalPayload()));
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message: "Unable to process moderation request." },
     });
   });
 });
@@ -1048,5 +1488,105 @@ function auditFixture(overrides: Partial<AccountAudit> = {}): AccountAudit {
       },
     },
     ...overrides,
+  };
+}
+
+const adjustmentReason = "Compensating the outsider cohort the substantiated audit sampled.";
+const reversalReason = "The adjustment compensated a cohort the audit no longer supports.";
+const appliedAdjustmentId = "00000000-0000-4000-8000-000000000010";
+const reversalRecordId = "00000000-0000-4000-8000-000000000011";
+
+function recalibrationQuery() {
+  return { targetAccountId };
+}
+
+function recalibrationRequest(query: Record<string, string | undefined>): Request {
+  const url = new URL("/api/moderation/recalibration", requestHost);
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined) {
+      url.searchParams.set(name, value);
+    }
+  }
+  return new Request(url, { method: "GET" });
+}
+
+function adjustmentPayload() {
+  return { targetAccountId, reason: adjustmentReason };
+}
+
+function reversalPayload() {
+  return { adjustmentId: appliedAdjustmentId, reason: reversalReason };
+}
+
+function creditPreviewFixture(
+  overrides: Partial<RecalibrationCreditPreview> = {},
+): RecalibrationCreditPreview {
+  return {
+    audit: { id: auditId, decidedAt: "2026-02-02T00:00:00.000Z" },
+    actionability: { actionable: true, reason: "SELF_WORK_UNDERCREDITED_OUTSIDERS" },
+    totals: { selfSum: 20, selfCount: 10, outSum: 10, outCount: 10 },
+    figure: { gapPerPair: 1, pairCount: 10, totalAmount: 10 },
+    lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: 10 }],
+    adjustments: [],
+    ...overrides,
+  };
+}
+
+function adjustmentFixture(overrides: Partial<CreditAdjustmentRecord> = {}): CreditAdjustmentRecord {
+  return {
+    id: appliedAdjustmentId,
+    moderationEventId: "00000000-0000-4000-8000-000000000012",
+    calibrationAuditId: auditId,
+    targetAccountId,
+    gapPerPair: 1,
+    pairCount: 10,
+    totalAmount: 10,
+    reversalOf: null,
+    reason: adjustmentReason,
+    createdAt: "2026-09-09T00:00:00.000Z",
+    lines: [{ settlementId: "settlement-1", creditorId: "creditor-1", amount: 10 }],
+    ...overrides,
+  };
+}
+
+/**
+ * A fake ModerationRouteService exposing only the recalibration credit methods the
+ * new routes call, with every method a route under test should reach overridable.
+ */
+function creditServiceHarness(
+  overrides: Partial<{
+    preview: (actor: { id: string; role: "MEMBER" | "MODERATOR" }, targetAccountId: string) => Promise<RecalibrationCreditPreview>;
+    apply: (
+      actor: { id: string; role: "MEMBER" | "MODERATOR" },
+      targetAccountId: string,
+      reason: string,
+    ) => Promise<CreditAdjustmentRecord>;
+    reverse: (
+      actor: { id: string; role: "MEMBER" | "MODERATOR" },
+      adjustmentId: string,
+      reason: string,
+    ) => Promise<CreditAdjustmentRecord>;
+  }> = {},
+) {
+  return {
+    previewRecalibration: overrides.preview ?? (async () => creditPreviewFixture()),
+    applyRecalibrationCreditAdjustment: overrides.apply ?? (async () => adjustmentFixture()),
+    reverseModerationCreditAdjustment:
+      overrides.reverse ??
+      (async () => adjustmentFixture({ id: reversalRecordId, reversalOf: appliedAdjustmentId })),
+  };
+}
+
+/** A credit store whose every method fails the test if the service reaches it. */
+function unreachableCreditStore(): RecalibrationCreditStore {
+  const unreachable = (name: string) =>
+    vi.fn(async (): Promise<never> => {
+      throw new Error(`${name} must not be reached for a blank moderation reason`);
+    });
+  return {
+    loadRecalibrationPreview: unreachable("loadRecalibrationPreview"),
+    applyRecalibrationCreditAdjustment: unreachable("applyRecalibrationCreditAdjustment"),
+    reverseModerationCreditAdjustment: unreachable("reverseModerationCreditAdjustment"),
+    listCreditAdjustments: unreachable("listCreditAdjustments"),
   };
 }

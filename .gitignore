@@ -62,6 +62,11 @@ src/app/api/moderation/*
 !src/app/api/moderation/[[]id[]]/
 src/app/api/moderation/[[]id[]]/*
 !src/app/api/moderation/[[]id[]]/*.ts
+!src/app/api/moderation/adjustments/
+src/app/api/moderation/adjustments/*
+!src/app/api/moderation/adjustments/reversal/
+src/app/api/moderation/adjustments/reversal/*
+!src/app/api/moderation/adjustments/reversal/*.ts
 !src/app/api/moderation/audits/
 src/app/api/moderation/audits/*
 !src/app/api/moderation/audits/*.ts
@@ -71,6 +76,12 @@ src/app/api/moderation/cohort/*
 !src/app/api/moderation/moderators/
 src/app/api/moderation/moderators/*
 !src/app/api/moderation/moderators/*.ts
+!src/app/api/moderation/recalibration/
+src/app/api/moderation/recalibration/*
+!src/app/api/moderation/recalibration/*.ts
+!src/app/api/moderation/recalibration/adjustment/
+src/app/api/moderation/recalibration/adjustment/*
+!src/app/api/moderation/recalibration/adjustment/*.ts
 !src/app/api/moderation/rederivation/
 src/app/api/moderation/rederivation/*
 !src/app/api/moderation/rederivation/*.ts
