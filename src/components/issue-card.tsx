@@ -8,13 +8,19 @@ type IssueCardProps = {
 export function IssueCard({ issue }: IssueCardProps) {
   return (
     <article className="issue-card shadow-offset" aria-labelledby={`issue-${issue.id}`}>
-      <div className="issue-card-heading">
-        <p className="mono-meta">
-          {issue.repositoryName} · #{issue.issueNumber}
-        </p>
-        <h2 id={`issue-${issue.id}`}>
-          <a href={issue.url}>{issue.title}</a>
-        </h2>
+      <div className="issue-card-main">
+        <div className="issue-card-heading">
+          <p className="mono-meta">
+            {issue.repositoryName} · #{issue.issueNumber}
+          </p>
+          <h2 id={`issue-${issue.id}`}>
+            <a href={issue.url}>{issue.title}</a>
+          </h2>
+        </div>
+        {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
+        {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
+        {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
+        <p className="mono-meta">Opened {issue.createdAt.slice(0, 10)}</p>
       </div>
       <dl className="issue-facts">
         <div>
@@ -32,10 +38,6 @@ export function IssueCard({ issue }: IssueCardProps) {
           <dd>Reserve {issue.reservePoints}</dd>
         </div>
       </dl>
-      {issue.sponsorLogin !== undefined ? <p>Sponsor: {issue.sponsorLogin}</p> : null}
-      {issue.claimState !== undefined ? <p>Claim: {claimPhrase(issue.claimState, issue.assigneeGitHubLogin)}</p> : null}
-      {issue.availableHeadroom !== undefined ? <p>Headroom: {formatSigned(issue.availableHeadroom)}</p> : null}
-      <p className="mono-meta">Opened {issue.createdAt.slice(0, 10)}</p>
     </article>
   );
 }
