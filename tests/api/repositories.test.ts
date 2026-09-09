@@ -19,6 +19,7 @@ import type { RepositoryRouteSession } from "@/app/api/repositories/route";
 import {
   RepositoryRegistrationEnforcementError,
   RepositorySchemeChangeForbiddenError,
+  RepositorySchemeChangeOrderError,
   type RepositoryCatalogChange,
   type RepositoryRegistrationDependencies,
 } from "@/lib/repositories/register";
@@ -1006,6 +1007,56 @@ describe("PATCH /api/repositories", () => {
       error: {
         code: "FORBIDDEN",
         message: "Only the repository's sponsor can change its difficulty catalog.",
+      },
+    });
+  });
+
+  it("refuses a non-sponsor before any GitHub label write", async () => {
+    const dependencies = successfulDependencies(
+      { id: "outsider-id", role: "MEMBER" },
+      {
+        existingRepository: true,
+        catalogChange: new RepositorySchemeChangeForbiddenError(42),
+      },
+    );
+    let labelWrites = 0;
+    const ensureDifficultyLabels = dependencies.github.ensureDifficultyLabels;
+    dependencies.github = {
+      ...dependencies.github,
+      async ensureDifficultyLabels(repository, labels) {
+        labelWrites += 1;
+        return ensureDifficultyLabels(repository, labels);
+      },
+    };
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    expect(labelWrites).toBe(0);
+  });
+
+  it("answers a conflicting catalog order with an explicit 409, not a generic upstream failure", async () => {
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        existingRepository: true,
+        catalogChange: new RepositorySchemeChangeOrderError(42),
+      }),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "CONFLICT",
+        message: "The catalog change could not be recorded: its effective instant precedes the version before it. Retry the change.",
       },
     });
   });

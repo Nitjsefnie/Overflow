@@ -287,6 +287,12 @@ export async function registerRepository(
  * the submitted catalog becomes the repository's next catalog version and the
  * stored current catalog moves with it in one transaction, so closures already
  * settled keep the catalog their evidence window closed under.
+ *
+ * The registration-time claim-path verdict is deliberately not revisited: it
+ * advises the sponsor's workflow setup and never gated the registration
+ * either, and a catalog change alters no workflow, so re-reading the
+ * repository's workflows would add a GitHub read whose answer changes nothing
+ * about this change.
  */
 export async function changeRepositoryCatalog(
   dependencies: RepositoryRegistrationDependencies,
@@ -341,6 +347,18 @@ export async function changeRepositoryCatalog(
     );
   }
 
+  // The sponsor check precedes every GitHub write: an outsider asking for a
+  // catalog change must not create labels on the repository, and the stored
+  // sponsor is already in hand from the lookup above. The store re-checks
+  // inside its transaction; this check keeps the common refusal free of side
+  // effects.
+  if (registered.sponsorId !== dependencies.actor.id) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only the repository's sponsor can change its difficulty catalog.",
+    );
+  }
+
   const labels = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels].map((label) => label.label);
   try {
     await dependencies.github.ensureDifficultyLabels(submittedRepository, labels);
@@ -364,6 +382,15 @@ export async function changeRepositoryCatalog(
   } catch (error) {
     if (error instanceof RepositorySchemeChangeForbiddenError) {
       throw new RepositoryRegistrationError("FORBIDDEN", error.message);
+    }
+    if (error instanceof RepositorySchemeChangeOrderError) {
+      // Reachable through the API only when the account's clock moves
+      // backwards between changes: the route supplies now(), and a version
+      // recording at the same instant is allowed. A retry is the remedy.
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        "The catalog change could not be recorded: its effective instant precedes the version before it. Retry the change.",
+      );
     }
     if (error instanceof RepositoryRegistrationError) {
       throw error;
