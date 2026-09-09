@@ -62,7 +62,7 @@ it("regenerates a deploy config with source includes and no previous release typ
 
   expect(result.status, result.stderr).toBe(0);
   const generated = JSON.parse(await readFile(path.join(tree, `${release}.tsconfig.json`), "utf8"));
-  expect(generated.include).toEqual(["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "tests/**/*.ts", "*.ts"]);
+  expect(generated.include).toEqual(["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx", "*.ts"]);
   expect(generated.compilerOptions).toEqual(previous.compilerOptions);
   expect(generated.exclude).toEqual(["node_modules"]);
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(input);
