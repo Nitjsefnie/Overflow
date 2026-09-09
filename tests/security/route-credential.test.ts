@@ -69,6 +69,24 @@ describe("guardByCredential", () => {
 
     expect(refusal).toBeNull();
   });
+
+  it("does not exempt a non-bearer Authorization header from the origin guard", async () => {
+    // The exemption's predicate is the BEARER SCHEME, not the header's mere
+    // presence. Behind an HTTP-Basic reverse proxy, every browser request
+    // carries an Authorization header that is no bearer credential; reading
+    // the exemption off the header alone would exempt those requests from the
+    // origin check while still resolving their cookie session — CSRF reopened
+    // on every cookie-authenticated mutation route.
+    const refusal = guardByCredential(
+      tokenRequest({ origin: foreignOrigin, authorization: "Basic abc" }),
+    );
+
+    expect(refusal).not.toBeNull();
+    expect(refusal?.status).toBe(403);
+    await expect(refusal?.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+  });
 });
 
 describe("resolveRouteCredential", () => {
