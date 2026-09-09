@@ -11,6 +11,19 @@ export function isGitHubRateLimitError(error: unknown): error is Error & GitHubR
       && Number.isSafeInteger(error.retryAfterSeconds) && error.retryAfterSeconds >= 0));
 }
 
+// GitHub answers a lookup of a number that names nothing upstream with a
+// NOT_FOUND GraphQL error ("Could not resolve to an Issue/PullRequest ...").
+// The client flattens the structured errors into a bounded summary before the
+// error escapes, so the payload's message text is the durable marker; a rate
+// limit on the same response keeps the failure transient, and a transient
+// failure must never classify as a missing subject.
+export function isGitHubSubjectNotFoundError(error: unknown): boolean {
+  return error instanceof Error
+    && !(isGitHubRateLimitError(error) && error.rateLimited)
+    && (error.message.includes("Could not resolve to an Issue")
+      || error.message.includes("Could not resolve to a PullRequest"));
+}
+
 export class GitHubApiError extends Error implements GitHubRateLimitDetails {
   public readonly body: string | null;
 
