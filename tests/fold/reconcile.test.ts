@@ -158,11 +158,12 @@ describe("reconcileRepository", () => {
     ]);
     // Keep the historical digest comparable without the added provenance fields.
     const legacyFold = JSON.stringify(fold, (key, value) => (
-      key === "authorGitHubUserId" || key === "creditorGitHubUserId" || key === "updatedAt" ? undefined : value
+      key === "authorGitHubUserId" || key === "creditorGitHubUserId"
+        || key === "claimAssigneeGitHubUserId" || key === "updatedAt" ? undefined : value
     ));
     expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("dd3a91cdb71b773778ec969e264fbe26f6c32fe2f260c3e7aaadd0cf5092bcef");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("a7adcd262f7b887f551aa91aa37429e7af438b78ab9ff15e3c3e0d548fcf3dc6");
   });
 
   it("settles from the only merged closing reference on the second continuation", async () => {
@@ -182,7 +183,7 @@ describe("reconcileRepository", () => {
     ]);
     // The 120 unmerged references per issue must not alter any part of the baseline fold.
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("dd3a91cdb71b773778ec969e264fbe26f6c32fe2f260c3e7aaadd0cf5092bcef");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("a7adcd262f7b887f551aa91aa37429e7af438b78ab9ff15e3c3e0d548fcf3dc6");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-last" } },
@@ -885,6 +886,7 @@ function reconciliationDependencies(
         authorGitHubUserId: null,
         labels: ["M", "delivered/6"],
         claimAssigneeGitHubLogin: "contributor",
+        claimAssigneeGitHubUserId: null,
         history: [
           { kind: "LABELED", id: "opening-101", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
           { kind: "ASSIGNED", id: "assigned-101", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
@@ -1018,6 +1020,7 @@ function reconciliationIssue(input: { id: number; number: number }) {
     authorGitHubUserId: null,
     labels: ["M", "delivered/6"],
     claimAssigneeGitHubLogin: "contributor",
+    claimAssigneeGitHubUserId: null,
     history: [
       { kind: "LABELED" as const, id: `opening-${input.id}`, actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
       { kind: "ASSIGNED" as const, id: `assigned-${input.id}`, actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },

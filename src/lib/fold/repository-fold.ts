@@ -68,6 +68,8 @@ export type RepositoryFoldIssue = {
   authorGitHubUserId: number | null;
   labels: string[];
   claimAssigneeGitHubLogin?: string | null;
+  /** GitHub's immutable numeric id of the claim assignee; null when GitHub reported none. */
+  claimAssigneeGitHubUserId?: number | null;
   history: GitHubIssueHistoryEvent[];
   comments: GitHubIssueComment[];
   /** Deliberately ignored: only GraphQL closedByPullRequestsReferences is authoritative. */
@@ -111,6 +113,7 @@ export type FoldIssue = {
   openingSourceActorLogin: string;
   openingSourceAt: string;
   claimAssigneeGitHubLogin: string | null;
+  claimAssigneeGitHubUserId: number | null;
   settledLabel: string | null;
   settledPoints: number | null;
   settledLabelEventId: string | null;
@@ -427,6 +430,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       openingSourceActorLogin: opening.openingSourceActorLogin,
       openingSourceAt: opening.openingSourceAt,
       claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin ?? null,
+      claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId ?? null,
       settledLabel: settledDifficulty?.label ?? null,
       settledPoints: settledDifficulty?.points ?? null,
       settledLabelEventId: settledDifficulty?.labelEventId ?? null,

@@ -195,6 +195,7 @@ function rawIssue(): GitHubIssue {
   return { id: 101, number: 1, title: "Unpriced raw issue", body: "Raw body", url: "https://github.com/octo/repo/issues/1",
     state: "OPEN", stateReason: null, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-08T08:00:00Z", closedAt: null,
     authorLogin: null, authorGitHubUserId: null, labels: [], claimAssigneeGitHubLogin: null,
+    claimAssigneeGitHubUserId: null,
     history: [], comments: [], closingPullRequests: [] };
 }
 

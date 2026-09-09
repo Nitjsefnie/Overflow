@@ -44,6 +44,8 @@ export type GitHubIssue = {
   authorGitHubUserId: number | null;
   labels: string[];
   claimAssigneeGitHubLogin: string | null;
+  /** GraphQL `User.databaseId` of the claim assignee; null when the assignee is absent or not a User (Bot, Mannequin, Organization). */
+  claimAssigneeGitHubUserId: number | null;
   history: GitHubIssueHistoryEvent[];
   comments: GitHubIssueComment[];
   closingPullRequests: GitHubPullRequest[];
