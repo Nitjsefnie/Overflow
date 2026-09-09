@@ -1,9 +1,13 @@
 /** @vitest-environment jsdom */
 
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { OpenSettlementOverrideRequest } from "@/lib/overrides/service";
+
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
 
 function queued(overrides: Partial<OpenSettlementOverrideRequest> = {}): OpenSettlementOverrideRequest {
   return {
