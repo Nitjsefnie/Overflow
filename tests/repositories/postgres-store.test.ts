@@ -346,6 +346,24 @@ describe("changing a registered repository's difficulty catalog", () => {
     expect(Number(versions[0]!.count)).toBe(1);
   });
 
+  it("reads a merely reordered resubmission as the unchanged catalog", async () => {
+    const submission = await registeredViaStore(twoOpeningLabelScheme());
+    const reordered = reorderedScheme();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      scheme: reordered,
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).resolves.toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
+
+    const versions = await sql<{ count: number | string }[]>`
+      select count(*) as count from repository_difficulty_scheme_versions
+      where github_repository_id = ${submission.githubRepositoryId}
+    `;
+    expect(Number(versions[0]!.count)).toBe(1);
+  });
+
   it("refuses a version whose effective instant predates the latest version's", async () => {
     const submission = await registeredViaStore();
 
@@ -376,8 +394,8 @@ describe("changing a registered repository's difficulty catalog", () => {
   // The catalog-change tests register through the store rather than the direct
   // insert above: a registration that never passed through createRepository
   // carries no catalog version history for the append to continue.
-  async function registeredViaStore(): Promise<NewRegisteredRepository> {
-    const submission = newRepository({ sponsorId: await sponsor() });
+  async function registeredViaStore(scheme: DifficultyScheme = difficultyScheme()): Promise<NewRegisteredRepository> {
+    const submission = newRepository({ sponsorId: await sponsor(), difficultyScheme: scheme });
     await expect(store.createRepository(submission)).resolves.toMatchObject({
       githubRepositoryId: submission.githubRepositoryId,
     });
@@ -472,6 +490,29 @@ type VersionRow = {
   scheme: unknown;
   effective_from: Date | string;
 };
+
+// The same catalog as difficultyScheme() with both label orders reversed: a
+// resubmission that reordered its labels changed nothing the validation or the
+// fold reads, so it must read as the unchanged catalog.
+// Two opening labels, so the reordered fixture below genuinely differs from
+// canonical order in BOTH arrays — reversing a one-label array is the identity
+// and would pin nothing about the opening-label comparator.
+function twoOpeningLabelScheme(): DifficultyScheme {
+  const scheme = difficultyScheme();
+  return {
+    ...scheme,
+    openingLabels: [...scheme.openingLabels, { label: "size/XL", comparisonPoints: 9, reservePoints: 9 }],
+  };
+}
+
+function reorderedScheme(): DifficultyScheme {
+  const scheme = twoOpeningLabelScheme();
+  return {
+    ...scheme,
+    openingLabels: [...scheme.openingLabels].reverse(),
+    actualLabels: [...scheme.actualLabels].reverse(),
+  };
+}
 
 function newRepository(
   overrides: Partial<NewRegisteredRepository> & Pick<NewRegisteredRepository, "sponsorId">,
