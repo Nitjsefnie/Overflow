@@ -23,7 +23,9 @@ export default async function ModerationPage() {
     redirect("/dashboard");
   }
 
-  const { ModerationControls, RecalibrationPlanControl } = await import("@/components/moderation-controls");
+  const { ModerationControls, RecalibrationPlanControl, RecalibrationCreditAdjustmentControl } = await import(
+    "@/components/moderation-controls"
+  );
   const { OpenAuditForm } = await import("@/components/open-audit-form");
   const { ModeratorRoster } = await import("@/components/moderator-roster");
   const { GitHubBudgetPanel } = await import("@/components/github-budget-panel");
@@ -177,6 +179,7 @@ export default async function ModerationPage() {
               <li key={account.id}>
                 <p><strong>{account.githubLogin}</strong> · {account.confirmedPatternCount} confirmed patterns</p>
                 <RecalibrationPlanControl targetAccountId={account.id} targetLogin={account.githubLogin} />
+                <RecalibrationCreditAdjustmentControl targetAccountId={account.id} targetLogin={account.githubLogin} />
               </li>
             ))}
           </ol>
