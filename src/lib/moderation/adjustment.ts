@@ -107,6 +107,7 @@ export function computeAdjustmentTotal(totals: CalibrationCohortTotals): Adjustm
   }
 
   const numerator = selfWeighted - outWeighted;
+  assertSafeInteger(numerator, "The calibration gap");
   if (numerator <= 0) {
     throw new ModerationAdjustmentError(
       "A credit adjustment requires a positive calibration gap; non-positive gaps take no action.",
@@ -114,8 +115,8 @@ export function computeAdjustmentTotal(totals: CalibrationCohortTotals): Adjustm
   }
 
   const denominator = totals.selfCount;
-  const quotient = (numerator - (numerator % denominator)) / denominator;
   const remainder = numerator % denominator;
+  const quotient = (numerator - remainder) / denominator;
   const totalAmount = 2 * remainder >= denominator ? quotient + 1 : quotient;
 
   return {
