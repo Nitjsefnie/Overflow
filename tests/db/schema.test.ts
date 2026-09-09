@@ -4395,6 +4395,7 @@ function materializationSnapshot(input: {
       registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },
       difficultyScheme: validDifficultyScheme(),
+      difficultySchemeVersions: [],
     },
     users: [
       { id: input.sponsorId, githubUserId: input.sponsorGitHubUserId, githubLogin: sponsorLogin, enforcementState: "ACTIVE" },

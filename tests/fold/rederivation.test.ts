@@ -119,6 +119,7 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     getRepository: vi.fn<ReconciliationStore["getRepository"]>(async () => ({
       id: "repo-1", githubRepositoryId: 4242, ownerName: "octo/repo", active: true,
       registeredAt: "2026-01-01T00:00:00Z", difficultyScheme: validDifficultyScheme(),
+      difficultySchemeVersions: [],
       sponsor: { id: "sponsor-1", githubUserId: 1, githubLogin: "octo", enforcementState: "ACTIVE" },
     })),
     getReconciliationCooldown: vi.fn<ReconciliationStore["getReconciliationCooldown"]>(async () => null),

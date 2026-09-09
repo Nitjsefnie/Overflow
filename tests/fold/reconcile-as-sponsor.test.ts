@@ -96,6 +96,7 @@ function createHarness(options: {
             enforcementState: "ACTIVE",
           },
           difficultyScheme: validDifficultyScheme(),
+          difficultySchemeVersions: [],
         }
       : options.repository;
 

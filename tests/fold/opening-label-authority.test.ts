@@ -453,6 +453,7 @@ function openingFixture(actors: { opening?: FixtureActor } = {}): RepositoryFold
         enforcementState: "ACTIVE",
         moderationEvents: [],
       },
+      difficultySchemeVersions: [],
       difficultyScheme: {
         openingName: "Size",
         actualName: "Delivered",
