@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { resolveRouteCredential, getCurrentUserRole } = vi.hoisted(() => ({
+const { resolveRouteCredential } = vi.hoisted(() => ({
   resolveRouteCredential: vi.fn(),
-  getCurrentUserRole: vi.fn(),
 }));
 
 vi.mock("@/lib/security/route-credential", () => ({ resolveRouteCredential }));
-vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole }));
 
 import { requiredMemberSession } from "@/lib/security/member-route-auth";
 
@@ -133,7 +131,7 @@ describe("requiredMemberSession", () => {
         result,
         502,
         "UPSTREAM_FAILURE",
-        "Unable to authorize the settlement correction request.",
+        "Unable to authorize the member request.",
       );
       if (arm === "credential resolution") {
         expect(dependencies.getCurrentRole).not.toHaveBeenCalled();
