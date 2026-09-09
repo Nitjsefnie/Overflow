@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { signOutAction } from "@/lib/auth/sign-out-action";
+import { PublicAppShell } from "@/components/app-shell";
 import {
   SESSION_RECOVERY_REASONS,
   toSessionRecoveryReason,
@@ -16,7 +17,7 @@ type SessionPageProps = {
 
 export function SessionRecovery({ reason }: SessionRecoveryProps) {
   return (
-    <main className="landing-page">
+    <main className="landing-page" id="main-content">
       <section className="empty-state" aria-labelledby="session-recovery-title">
         <p className="eyebrow">Session recovery</p>
         {reason === SESSION_RECOVERY_REASONS.unavailable ? (
@@ -51,5 +52,9 @@ export function SessionRecovery({ reason }: SessionRecoveryProps) {
 
 export default async function SessionPage({ searchParams }: SessionPageProps) {
   const query = await searchParams;
-  return <SessionRecovery reason={toSessionRecoveryReason(query.reason)} />;
+  return (
+    <PublicAppShell>
+      <SessionRecovery reason={toSessionRecoveryReason(query.reason)} />
+    </PublicAppShell>
+  );
 }

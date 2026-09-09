@@ -155,12 +155,12 @@ describe("signed-out landing chrome", () => {
     expect(publicFooter).toEqual(memberFooter);
   });
 
-  it("keeps the composed landing main from re-insetting inside the shell", () => {
+  it("keeps the composed shell mains from re-insetting inside the shell", () => {
     const stylesheet = readFileSync("src/app/globals.css", "utf8");
     const block = stylesheet.match(/\.app-shell \.landing-page\s*\{[^}]*\}/);
     expect(
       block,
-      "the nested landing-main override is gone: the landing main would apply the shared width rule a second time inside .app-shell and no longer align with the header and footer edges",
+      "the nested shell-main override is gone: a composed main (landing, session recovery) would apply the shared width rule a second time inside .app-shell and no longer align with the header and footer edges",
     ).not.toBeNull();
     const declarations = block![0].replace(/\s+/g, " ");
     expect(declarations).toContain("width: 100%");
