@@ -974,6 +974,55 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.members-standings-card {
+  padding: 1.4rem 1.6rem 1.6rem;
+}
+
+.standings-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 1.4rem 0 0;
+  list-style: none;
+  border-top: 2px solid var(--line);
+}
+
+.standings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.2rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid #8a8479;
+}
+
+.standings-login {
+  margin: 0;
+  font-weight: 800;
+}
+
+.standings-self {
+  margin-left: 0.55rem;
+  padding: 0.15rem 0.55rem;
+  border: 2px solid var(--line);
+  background: var(--credit);
+  color: var(--credit-ink);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.standings-row-self {
+  background: var(--paper-deep);
+  box-shadow: inset 3px 0 0 var(--credit);
+}
+
+.standings-row .mono-meta {
+  margin: 0;
+}
+
 /*
  * The bare `.surface` class carries no padding, so every card names its own.
  */

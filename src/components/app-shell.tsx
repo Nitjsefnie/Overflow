@@ -31,6 +31,9 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
               <Link href="/settlements">Settlements</Link>
             </li>
             <li>
+              <Link href="/members">Members</Link>
+            </li>
+            <li>
               <Link href="/repositories/new">Register a repository</Link>
             </li>
             <li>
