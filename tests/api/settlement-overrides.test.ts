@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   expectNoDependencyCall,
   guardedRequests,
+  requestHost,
   unusedDependencies,
   useTrustedOrigin,
 } from "../support/trusted-origin";
@@ -50,6 +52,7 @@ function memberPostHandler(): {
   return {
     handler: createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({ requestOverride }),
     }),
@@ -69,6 +72,7 @@ describe("settlement override request API", () => {
     const requestOverride = vi.fn().mockResolvedValue(recorded);
     const handler = createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({ requestOverride }),
     });
@@ -92,6 +96,7 @@ describe("settlement override request API", () => {
     const requestOverride = vi.fn().mockResolvedValue(recorded);
     const handler = createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({ requestOverride }),
     });
@@ -148,6 +153,7 @@ describe("settlement override request API", () => {
     const requestOverride = vi.fn();
     const handler = createSettlementOverridePostHandler({
       getSession: async () => null,
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({ requestOverride }),
     });
@@ -163,6 +169,7 @@ describe("settlement override request API", () => {
     const requestOverride = vi.fn();
     const handler = createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole,
       createService: async () => ({ requestOverride }),
     });
@@ -177,6 +184,7 @@ describe("settlement override request API", () => {
   it("rejects a malformed payload with a structured 422", async () => {
     const handler = createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({ requestOverride: vi.fn() }),
     });
@@ -192,6 +200,7 @@ describe("settlement override request API", () => {
   it("maps a service refusal onto its status code", async () => {
     const handler = createSettlementOverridePostHandler({
       getSession: async () => ({ user: { id: memberId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MEMBER",
       createService: async () => ({
         requestOverride: vi.fn().mockRejectedValue(
@@ -247,6 +256,7 @@ describe("settlement override decision API", () => {
     const decideRequest = vi.fn().mockResolvedValue({ ...recorded, state: "GRANTED", settledPoints: 6 });
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({ decideRequest }),
     });
@@ -268,6 +278,7 @@ describe("settlement override decision API", () => {
     const decideRequest = vi.fn().mockResolvedValue({ ...recorded, state: "DECLINED" });
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({ decideRequest }),
     });
@@ -289,6 +300,7 @@ describe("settlement override decision API", () => {
     const decideRequest = vi.fn();
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId, role: "MODERATOR" } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole,
       createService: async () => ({ decideRequest }),
     });
@@ -310,6 +322,7 @@ describe("settlement override decision API", () => {
     const decideRequest = vi.fn();
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({ decideRequest }),
     });
@@ -330,6 +343,7 @@ describe("settlement override decision API", () => {
     const decideRequest = vi.fn();
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({ decideRequest }),
     });
@@ -346,6 +360,7 @@ describe("settlement override decision API", () => {
   it("maps a missing request onto a 404", async () => {
     const handler = createSettlementOverridePatchHandler({
       getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
       getCurrentRole: async () => "MODERATOR",
       createService: async () => ({
         decideRequest: vi.fn().mockRejectedValue(
@@ -398,5 +413,211 @@ describe("settlement override decision API", () => {
       },
     });
     expectNoDependencyCall(dependencies);
+  });
+});
+
+// The same bearer-credential contract the shared moderator gate describe in
+// tests/api/moderation.test.ts pins for the moderation families, pinned here
+// for both settlement-override verbs: a member-owned token requests a
+// correction, a moderator-owned token decides one, and both answer a demoted
+// owner with the refusal their own gate already gives a demoted session.
+describe("the settlement override gates' bearer credentials", () => {
+  const ownerId = "00000000-0000-4000-8000-000000000007";
+  const apiCredential = `ovf_${"override-gate".padEnd(43, "_")}`;
+  const apiCredentialHash = createHash("sha256").update(apiCredential).digest();
+  const tokenRejectionMessage = "The supplied API token was not accepted.";
+
+  /** The request shape a programmatic token client produces: no Origin header. */
+  function tokenRequest(body: unknown, method = "POST"): Request {
+    return new Request(new URL("/api/overrides", requestHost), {
+      method,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiCredential}`,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function tokenDependencies(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+    return {
+      getSession: vi.fn(),
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: ownerId }),
+      getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
+      ...overrides,
+    };
+  }
+
+  it("records a member-owned token's correction request as its owner", async () => {
+    const deps = tokenDependencies();
+    const requestOverride = vi.fn().mockResolvedValue(recorded);
+    const handler = createSettlementOverridePostHandler({
+      ...deps,
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(tokenRequest({ settlementId, reason: "The rationale comment was late." }));
+
+    expect(response.status).toBe(200);
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(apiCredentialHash);
+    expect(deps.getCurrentRole).toHaveBeenCalledExactlyOnceWith(ownerId);
+    expect(requestOverride).toHaveBeenCalledWith(
+      { id: ownerId },
+      {
+        target: { kind: "settlement", settlementId },
+        reason: "The rationale comment was late.",
+      },
+    );
+  });
+
+  it("answers a demoted member owner's token with the member refusal", async () => {
+    const deps = tokenDependencies({ getCurrentRole: vi.fn().mockResolvedValue(null) });
+    const requestOverride = vi.fn();
+    const handler = createSettlementOverridePostHandler({
+      ...deps,
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(tokenRequest({ settlementId, reason: "Wrong." }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("answers an unknown token with the credential rejection", async () => {
+    const deps = tokenDependencies({ findAccountByTokenHash: vi.fn().mockResolvedValue(null) });
+    const requestOverride = vi.fn();
+    const handler = createSettlementOverridePostHandler({
+      ...deps,
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(tokenRequest({ settlementId, reason: "Wrong." }));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: tokenRejectionMessage },
+    });
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed bearer before any lookup", async () => {
+    const deps = tokenDependencies();
+    const requestOverride = vi.fn();
+    const handler = createSettlementOverridePostHandler({
+      ...deps,
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(
+      new Request(new URL("/api/overrides", requestHost), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer deliberately-malformed-credential",
+        },
+        body: JSON.stringify({ settlementId, reason: "Wrong." }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: tokenRejectionMessage },
+    });
+    expect(deps.findAccountByTokenHash).not.toHaveBeenCalled();
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("answers a token-store outage on the request path with the request path's 502", async () => {
+    const deps = tokenDependencies({
+      findAccountByTokenHash: vi.fn().mockRejectedValue(new Error("token store outage")),
+    });
+    const requestOverride = vi.fn();
+    const handler = createSettlementOverridePostHandler({
+      ...deps,
+      createService: async () => ({ requestOverride }),
+    });
+
+    const response = await handler(tokenRequest({ settlementId, reason: "Wrong." }));
+
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UPSTREAM_FAILURE",
+        message: "Unable to authorize the settlement correction request.",
+      },
+    });
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("decides a moderator-owned token's correction as its owner", async () => {
+    const deps = tokenDependencies({ getCurrentRole: vi.fn().mockResolvedValue("MODERATOR") });
+    const decideRequest = vi.fn().mockResolvedValue({ ...recorded, state: "GRANTED", settledPoints: 6 });
+    const handler = createSettlementOverridePatchHandler({
+      ...deps,
+      createService: async () => ({ decideRequest }),
+    });
+
+    const response = await handler(
+      tokenRequest({ action: "grant", settledPoints: 6, reason: "The work was delivered." }, "PATCH"),
+      { params: Promise.resolve({ id: requestId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(decideRequest).toHaveBeenCalledWith({ id: ownerId, role: "MODERATOR" }, requestId, {
+      decision: "GRANT",
+      settledPoints: 6,
+      reason: "The work was delivered.",
+    });
+  });
+
+  it("answers a demoted moderator owner's token with the moderator refusal", async () => {
+    const deps = tokenDependencies({ getCurrentRole: vi.fn().mockResolvedValue("MEMBER") });
+    const decideRequest = vi.fn();
+    const handler = createSettlementOverridePatchHandler({
+      ...deps,
+      createService: async () => ({ decideRequest }),
+    });
+
+    const response = await handler(
+      tokenRequest({ action: "decline", reason: "No longer allowed." }, "PATCH"),
+      { params: Promise.resolve({ id: requestId }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+
+  it("answers a token-store outage on the decision path with the shared gate's 502", async () => {
+    const deps = tokenDependencies({
+      getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+      findAccountByTokenHash: vi.fn().mockRejectedValue(new Error("token store outage")),
+    });
+    const decideRequest = vi.fn();
+    const handler = createSettlementOverridePatchHandler({
+      ...deps,
+      createService: async () => ({ decideRequest }),
+    });
+
+    const response = await handler(
+      tokenRequest({ action: "decline", reason: "Nope." }, "PATCH"),
+      { params: Promise.resolve({ id: requestId }) },
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "UPSTREAM_FAILURE",
+        message: "Unable to authorize the moderator request.",
+      },
+    });
+    expect(decideRequest).not.toHaveBeenCalled();
   });
 });
