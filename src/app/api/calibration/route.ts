@@ -1,6 +1,10 @@
-import type { CalibrationComparison } from "@/lib/calibration/statistics";
+import type {
+  CalibrationComparison,
+  RepositoryCalibrationEntry,
+} from "@/lib/calibration/statistics";
 import {
   getCalibrationComparison,
+  getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
   type SelfWorkCalibrationProjection,
 } from "@/lib/dashboard/queries";
@@ -15,6 +19,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 export type CalibrationRouteDependencies = MemberRouteDependencies & {
   getCalibrationComparison: (accountId: string) => Promise<CalibrationComparison>;
+  getCalibrationComparisonByRepository: (accountId: string) => Promise<RepositoryCalibrationEntry[]>;
   listSelfWorkCalibrations: (accountId: string) => Promise<SelfWorkCalibrationProjection[]>;
 };
 
@@ -30,10 +35,15 @@ export function createCalibrationGetHandler(dependencies: CalibrationRouteDepend
     }
 
     // The comparison is what the route is for: its failure leaves nothing to
-    // answer with, so it takes the route's 502.
+    // answer with, so it takes the route's 502. The per-repository breakdown is
+    // the same comparison read on each repository's own opening scale, so a
+    // failure there is the same failure: answering without it would hand back a
+    // figure the member cannot place.
     let comparison: CalibrationComparison;
+    let byRepository: RepositoryCalibrationEntry[];
     try {
       comparison = await dependencies.getCalibrationComparison(session.user.id);
+      byRepository = await dependencies.getCalibrationComparisonByRepository(session.user.id);
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load the calibration comparison.");
     }
@@ -47,7 +57,7 @@ export function createCalibrationGetHandler(dependencies: CalibrationRouteDepend
       selfWork = null;
     }
 
-    return Response.json({ comparison, selfWork });
+    return Response.json({ comparison, byRepository, selfWork });
   };
 }
 
@@ -56,5 +66,6 @@ export const GET = createCalibrationGetHandler({
   findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   getCalibrationComparison,
+  getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
 });

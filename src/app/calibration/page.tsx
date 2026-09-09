@@ -7,12 +7,20 @@ import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/se
 export default async function CalibrationPage() {
   const session = await requireMemberPageSession();
   try {
-    const { getCalibrationComparison } = await import("@/lib/dashboard/queries");
-    const comparison = await getCalibrationComparison(session.user.id);
+    const { getCalibrationComparison, getCalibrationComparisonByRepository } = await import(
+      "@/lib/dashboard/queries"
+    );
+    // The breakdown shares the comparison's arm: it is the same measurement read
+    // per repository, so a page that lost it would show a pooled mean over two
+    // opening scales with nothing saying so.
+    const [comparison, byRepository] = await Promise.all([
+      getCalibrationComparison(session.user.id),
+      getCalibrationComparisonByRepository(session.user.id),
+    ]);
     const calibrations = await listCalibrations(session.user.id);
     return (
       <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
-        <CalibrationPanel comparison={comparison} />
+        <CalibrationPanel comparison={comparison} byRepository={byRepository} />
         {calibrations === null ? (
           <p className="mono-meta">Your calibrated closures could not be loaded.</p>
         ) : (

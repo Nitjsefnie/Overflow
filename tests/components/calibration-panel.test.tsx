@@ -6,6 +6,7 @@ import CalibrationProofPage from "@/app/calibration/[id]/page";
 import CalibrationPage from "@/app/calibration/page";
 import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
+import type { RepositoryCalibrationEntry } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
@@ -192,6 +193,131 @@ describe("formatSigned", () => {
   it("renders a negative whose magnitude rounds to zero as a bare zero", () => {
     expect(formatSigned(-0.004)).toBe("0");
     expect(formatSigned(-0.004)).not.toContain("−");
+  });
+});
+
+describe("calibration comparison per repository", () => {
+  // The two registered repositories do not share an opening scale, so the
+  // pooled figure above mixes two measurements. Each entry is read through its
+  // own labelled region: an assertion over the whole panel would pass on a
+  // figure rendered under the wrong repository.
+  const byRepository: RepositoryCalibrationEntry[] = [
+    {
+      repositoryName: "co-op/harbour",
+      comparison: {
+        selfWork: { count: 2, meanDelta: -0.5, medianDelta: -1 },
+        outsider: { count: 3, meanDelta: 1, medianDelta: 1 },
+        differenceBetweenMeans: -1.5,
+      },
+    },
+    {
+      repositoryName: "co-op/lighthouse",
+      comparison: {
+        selfWork: { count: 1, meanDelta: 4, medianDelta: 4 },
+        outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+        differenceBetweenMeans: null,
+      },
+    },
+  ];
+
+  const pooled = {
+    selfWork: { count: 3, meanDelta: 1, medianDelta: 1 },
+    outsider: { count: 3, meanDelta: 1, medianDelta: 1 },
+    differenceBetweenMeans: 0,
+  } as const;
+
+  function renderBreakdown(entries: readonly RepositoryCalibrationEntry[] = byRepository) {
+    render(<CalibrationPanel comparison={pooled} byRepository={entries} />);
+  }
+
+  it("gives every repository its own labelled region, in the order the query returned", () => {
+    renderBreakdown();
+
+    expect(screen.getByRole("heading", { name: "Calibration by repository" })).toBeVisible();
+    expect(
+      screen.getAllByRole("region", { name: /calibration$/ }).map((region) => region.getAttribute("aria-label")),
+    ).toEqual(["co-op/harbour calibration", "co-op/lighthouse calibration"]);
+    expect(screen.getByRole("heading", { name: "co-op/harbour" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "co-op/lighthouse" })).toBeVisible();
+  });
+
+  it("reads each cohort's count, mean and median inside that repository's region", () => {
+    renderBreakdown();
+
+    const harbour = within(screen.getByRole("region", { name: "co-op/harbour calibration" }));
+    const selfWork = within(harbour.getByRole("region", { name: "co-op/harbour self-work sample" }));
+    expect(selfWork.getByRole("heading", { name: "Self-work sample · 2 pairs" })).toBeVisible();
+    expect(selfWork.getByText("Mean delta −0.5")).toBeVisible();
+    expect(selfWork.getByText("Median delta −1")).toBeVisible();
+
+    const outsider = within(harbour.getByRole("region", { name: "co-op/harbour outsider settlement sample" }));
+    expect(outsider.getByRole("heading", { name: "Outsider settlement sample · 3 pairs" })).toBeVisible();
+    expect(outsider.getByText("Mean delta +1")).toBeVisible();
+    expect(outsider.getByText("Median delta +1")).toBeVisible();
+
+    expect(harbour.getByText("Difference between means −1.5")).toBeVisible();
+  });
+
+  // A zero-pair cohort has no mean: printing “Mean delta 0” there reads as a
+  // measured figure of nought rather than as an absent measurement.
+  it("names an empty cohort as absent rather than as a delta of nought", () => {
+    renderBreakdown();
+
+    const lighthouse = within(screen.getByRole("region", { name: "co-op/lighthouse calibration" }));
+    const outsider = within(
+      lighthouse.getByRole("region", { name: "co-op/lighthouse outsider settlement sample" }),
+    );
+    expect(outsider.getByText("No outsider settlements yet")).toBeVisible();
+    expect(outsider.queryByText(/Mean delta/)).toBeNull();
+    expect(outsider.queryByText(/Median delta/)).toBeNull();
+
+    const selfWork = within(lighthouse.getByRole("region", { name: "co-op/lighthouse self-work sample" }));
+    expect(selfWork.getByText("Mean delta +4")).toBeVisible();
+    expect(selfWork.queryByText(/No self-work pairs yet/)).toBeNull();
+  });
+
+  it("names an empty self-work cohort as absent too", () => {
+    renderBreakdown([
+      {
+        repositoryName: "co-op/lighthouse",
+        comparison: {
+          selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 2, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: null,
+        },
+      },
+    ]);
+
+    const selfWork = within(
+      screen.getByRole("region", { name: "co-op/lighthouse self-work sample" }),
+    );
+    expect(selfWork.getByText("No self-work pairs yet")).toBeVisible();
+    expect(selfWork.queryByText(/Mean delta/)).toBeNull();
+    expect(selfWork.queryByText(/Median delta/)).toBeNull();
+  });
+
+  it("refuses a difference between means for a repository with an empty cohort, in the pooled section's words", () => {
+    renderBreakdown();
+
+    const lighthouse = within(screen.getByRole("region", { name: "co-op/lighthouse calibration" }));
+    expect(
+      lighthouse.getByText("A difference between means needs at least one pair in both samples."),
+    ).toBeVisible();
+    expect(lighthouse.queryByText(/Difference between means [+\d−]/)).toBeNull();
+  });
+
+  it("renders no breakdown at all when no repository has a pair", () => {
+    renderBreakdown([]);
+
+    expect(screen.queryByRole("heading", { name: "Calibration by repository" })).toBeNull();
+    expect(screen.queryByRole("region", { name: /calibration$/ })).toBeNull();
+  });
+
+  it("leaves the pooled section reading its own figures beside the breakdown", () => {
+    renderBreakdown();
+
+    expect(screen.getByText("Self-work sample · 3 pairs")).toBeVisible();
+    expect(screen.getByText("Difference between means 0")).toBeVisible();
   });
 });
 
@@ -465,6 +591,41 @@ describe("calibration page", () => {
       "href",
       "/calibration/calibration-1",
     );
+  });
+
+  // The page reads the pooled comparison and the breakdown from separate
+  // selections; this pins that it actually renders the second one rather than
+  // the pooled figure twice.
+  it("breaks the comparison down by repository beneath the pooled figure", async () => {
+    const settledPair = (repositoryId: number, repositoryName: string, issueId: number) => ({
+      github_repository_id: repositoryId,
+      repository_name: repositoryName,
+      github_issue_id: issueId,
+      github_pull_request_id: issueId + 900,
+      merged_at: "2026-09-05T11:00:00.000Z",
+      proof_sha256: proof,
+      offered_difficulty: 5,
+      settled_difficulty: 7,
+    });
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("as offered_difficulty")) {
+        if (!text.includes("as repository_name")) {
+          return [];
+        }
+        return text.includes("from self_work_calibrations")
+          ? [settledPair(2, "co-op/harbour", 10)]
+          : [];
+      }
+      return [];
+    });
+
+    render(await CalibrationPage());
+
+    expect(screen.getByRole("heading", { name: "Calibration by repository" })).toBeVisible();
+    const harbour = within(screen.getByRole("region", { name: "co-op/harbour calibration" }));
+    expect(harbour.getByRole("heading", { name: "Self-work sample · 1 pair" })).toBeVisible();
+    expect(harbour.getByText("No outsider settlements yet")).toBeVisible();
   });
 
   it("keeps the comparison when the calibration list cannot be read", async () => {

@@ -3,7 +3,10 @@ import {
   createCalibrationGetHandler,
   type CalibrationRouteDependencies,
 } from "@/app/api/calibration/route";
-import type { CalibrationComparison } from "@/lib/calibration/statistics";
+import type {
+  CalibrationComparison,
+  RepositoryCalibrationEntry,
+} from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
@@ -13,6 +16,25 @@ const comparison: CalibrationComparison = {
   outsider: { count: 30, meanDelta: -0.25, medianDelta: 0 },
   differenceBetweenMeans: 1,
 };
+
+const byRepository: RepositoryCalibrationEntry[] = [
+  {
+    repositoryName: "Nitjsefnie-Harness-Commons/daedalus",
+    comparison: {
+      selfWork: { count: 8, meanDelta: 0.5, medianDelta: 1 },
+      outsider: { count: 20, meanDelta: -0.5, medianDelta: 0 },
+      differenceBetweenMeans: 1,
+    },
+  },
+  {
+    repositoryName: "Nitjsefnie/Overflow",
+    comparison: {
+      selfWork: { count: 4, meanDelta: 1.25, medianDelta: 1 },
+      outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+      differenceBetweenMeans: null,
+    },
+  },
+];
 
 const selfWorkCalibration: SelfWorkCalibrationProjection = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -43,6 +65,7 @@ function calibrationDependencies(overrides: Partial<CalibrationDependencyMocks> 
     findAccountByTokenHash: vi.fn().mockResolvedValue(null),
     getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
     getCalibrationComparison: vi.fn().mockResolvedValue(comparison),
+    getCalibrationComparisonByRepository: vi.fn().mockResolvedValue(byRepository),
     listSelfWorkCalibrations: vi.fn().mockResolvedValue([selfWorkCalibration]),
     ...overrides,
   };
@@ -65,6 +88,7 @@ describe("GET /api/calibration", () => {
       error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
     });
     expect(dependencies.getCalibrationComparison).not.toHaveBeenCalled();
+    expect(dependencies.getCalibrationComparisonByRepository).not.toHaveBeenCalled();
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
@@ -80,10 +104,11 @@ describe("GET /api/calibration", () => {
       error: { code: "FORBIDDEN", message: "A member account is required." },
     });
     expect(dependencies.getCalibrationComparison).not.toHaveBeenCalled();
+    expect(dependencies.getCalibrationComparisonByRepository).not.toHaveBeenCalled();
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
-  it("answers 200 with the comparison and the self-work calibrations the queries returned", async () => {
+  it("answers 200 with the comparison, the per-repository breakdown, and the self-work calibrations the queries returned", async () => {
     const dependencies = calibrationDependencies();
 
     const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());
@@ -91,10 +116,29 @@ describe("GET /api/calibration", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       comparison,
+      byRepository,
       selfWork: [selfWorkCalibration],
     });
     expect(dependencies.getCalibrationComparison).toHaveBeenCalledExactlyOnceWith(memberId);
+    expect(dependencies.getCalibrationComparisonByRepository).toHaveBeenCalledExactlyOnceWith(memberId);
     expect(dependencies.listSelfWorkCalibrations).toHaveBeenCalledExactlyOnceWith(memberId);
+  });
+
+  // The breakdown is part of the answer, not a decoration on it: a member
+  // reading one repository's figure must never be shown a page that silently
+  // dropped the repository it could not read.
+  it("answers a breakdown query failure with the route's 502, without reading the calibrations", async () => {
+    const dependencies = calibrationDependencies({
+      getCalibrationComparisonByRepository: vi.fn().mockRejectedValue(new Error("ledger outage")),
+    });
+
+    const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to load the calibration comparison." },
+    });
+    expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
   it("answers a comparison query failure with the route's 502, without reading the calibrations", async () => {
@@ -121,6 +165,7 @@ describe("GET /api/calibration", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       comparison,
+      byRepository,
       selfWork: null,
     });
   });

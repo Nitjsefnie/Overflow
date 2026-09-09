@@ -1,4 +1,9 @@
-import { compareCalibration, type CalibrationComparison, type CalibrationPair } from "@/lib/calibration/statistics";
+import {
+  compareCalibration,
+  type CalibrationComparison,
+  type CalibrationPair,
+  type RepositoryCalibrationEntry,
+} from "@/lib/calibration/statistics";
 import { getSql } from "@/lib/db/client";
 import type { ReconciliationJobState } from "@/lib/fold/reconciliation-jobs";
 
@@ -443,6 +448,10 @@ type CalibrationRow = {
   proof_sha256: string;
   offered_difficulty: number | string;
   settled_difficulty: number | string;
+};
+
+type RepositoryCalibrationRow = CalibrationRow & {
+  repository_name: string;
 };
 
 type OpenAuditRow = {
@@ -1106,6 +1115,93 @@ export async function getCalibrationComparison(
   return compareCalibration(selfWorkRows.map(toCalibrationPair), outsiderRows.map(toCalibrationPair));
 }
 
+/**
+ * The same comparison as getCalibrationComparison, split one entry per
+ * repository.
+ *
+ * The registered repositories do not offer the same opening scale — a uniform
+ * 1..10 in one, five rungs in another — so the pooled figure above averages two
+ * different measurements into one mean. Each entry compares a repository's own
+ * two cohorts, so a member reads each scale on its own terms.
+ *
+ * A repository appears whenever either cohort has a pair in it, including the
+ * one whose other cohort is empty: dropping that repository would hide the
+ * cohort the member has, and compareCalibration already declines to report a
+ * difference there.
+ */
+export async function getCalibrationComparisonByRepository(
+  accountId: string,
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<RepositoryCalibrationEntry[]> {
+  const sql = resolveSql(dependencies);
+  const selfWorkRows = await sql<RepositoryCalibrationRow[]>`
+    select
+      repositories.github_repository_id,
+      repositories.owner_name as repository_name,
+      issues.github_issue_id,
+      pull_requests.github_pull_request_id,
+      pull_requests.merged_at,
+      pull_requests.proof_sha256,
+      self_work_calibrations.opening_comparison_points as offered_difficulty,
+      self_work_calibrations.actual_points as settled_difficulty
+    from self_work_calibrations
+    join issues on issues.id = self_work_calibrations.issue_id
+    join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where self_work_calibrations.user_id = ${accountId}
+      and self_work_calibrations.actual_points is not null
+      and pull_requests.proof_sha256 is not null
+    order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
+  `;
+  const outsiderRows = await sql<RepositoryCalibrationRow[]>`
+    select
+      repositories.github_repository_id,
+      repositories.owner_name as repository_name,
+      issues.github_issue_id,
+      pull_requests.github_pull_request_id,
+      pull_requests.merged_at,
+      settlements.proof_sha256,
+      settlements.opening_comparison_points as offered_difficulty,
+      settlements.settled_points as settled_difficulty
+    from settlements
+    join issues on issues.id = settlements.issue_id
+    join pull_requests on pull_requests.id = settlements.pull_request_id
+    join registered_repositories as repositories on repositories.id = issues.repository_id
+    where settlements.debtor_id = ${accountId}
+      and settlements.creditor_id is not null
+      and settlements.creditor_id <> ${accountId}
+      and settlements.status = 'SETTLED'
+      and settlements.settled_points is not null
+    order by repositories.github_repository_id, issues.github_issue_id, pull_requests.github_pull_request_id
+  `;
+
+  const groups = new Map<number, { repositoryName: string; selfWork: CalibrationPair[]; outsider: CalibrationPair[] }>();
+  const collect = (rows: readonly RepositoryCalibrationRow[], cohort: "selfWork" | "outsider") => {
+    for (const row of rows) {
+      const pair = toCalibrationPair(row);
+      const group = groups.get(pair.githubRepositoryId) ?? {
+        repositoryName: readText(row.repository_name, "Repository name"),
+        selfWork: [],
+        outsider: [],
+      };
+      group[cohort].push(pair);
+      groups.set(pair.githubRepositoryId, group);
+    }
+  };
+  collect(selfWorkRows, "selfWork");
+  collect(outsiderRows, "outsider");
+
+  // Sorted here rather than relied on from the two selections: each answers in
+  // repository order on its own, but the second one's repositories are appended
+  // after the first one's, so the merged order is not the query's.
+  return [...groups.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, group]) => ({
+      repositoryName: group.repositoryName,
+      comparison: compareCalibration(group.selfWork, group.outsider),
+    }));
+}
+
 export async function listUnwritableClosures(
   viewerId: string,
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
@@ -1307,8 +1403,9 @@ export async function listAuditCandidates(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<AuditCandidateProjection[]> {
   const sql = resolveSql(dependencies);
-  // These cohort predicates are shared with getCalibrationComparison above and with
-  // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all three together.
+  // These cohort predicates are shared with getCalibrationComparison and
+  // getCalibrationComparisonByRepository above and with
+  // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all four together.
   // Each side aggregates once and joins on the account, rather than re-aggregating per account row:
   // neither self_work_calibrations.user_id nor settlements.debtor_id is indexed. Inside the outsider
   // group the comparison's creditor_id <> account test is spelled against settlements.debtor_id, which

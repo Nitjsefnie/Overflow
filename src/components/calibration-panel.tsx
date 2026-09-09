@@ -1,14 +1,19 @@
 import Link from "next/link";
-import type { CalibrationComparison } from "@/lib/calibration/statistics";
+import type {
+  CalibrationComparison,
+  CalibrationSummary,
+  RepositoryCalibrationEntry,
+} from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
 
 type CalibrationPanelProps = {
   comparison: CalibrationComparison;
+  byRepository?: readonly RepositoryCalibrationEntry[];
 };
 
-export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
+export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationPanelProps) {
   const noSamples = comparison.selfWork.count === 0 && comparison.outsider.count === 0;
   return (
     <section className="calibration-panel surface shadow-offset" aria-labelledby="calibration-heading">
@@ -33,6 +38,83 @@ export function CalibrationPanel({ comparison }: CalibrationPanelProps) {
         <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
       ) : (
         <p className="calibration-difference">Difference between means {formatSigned(comparison.differenceBetweenMeans)}</p>
+      )}
+      {byRepository.length === 0 ? null : (
+        <section aria-labelledby="calibration-by-repository-heading">
+          <h2 id="calibration-by-repository-heading">Calibration by repository</h2>
+          {byRepository.map((entry) => (
+            <RepositoryCalibration key={entry.repositoryName} entry={entry} />
+          ))}
+        </section>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One repository's comparison, on that repository's own opening scale.
+ *
+ * The figure above pools both registered repositories, which do not offer the
+ * same scale, so the pooled mean averages two different measurements. This
+ * section is what lets a member read each one separately.
+ */
+function RepositoryCalibration({ entry }: { entry: RepositoryCalibrationEntry }) {
+  const { repositoryName, comparison } = entry;
+  return (
+    <section aria-label={`${repositoryName} calibration`}>
+      <h3>{repositoryName}</h3>
+      <div className="calibration-grid">
+        <RepositoryCohort
+          label={`${repositoryName} self-work sample`}
+          heading="Self-work sample"
+          summary={comparison.selfWork}
+          emptyCopy="No self-work pairs yet"
+        />
+        <RepositoryCohort
+          label={`${repositoryName} outsider settlement sample`}
+          heading="Outsider settlement sample"
+          summary={comparison.outsider}
+          emptyCopy="No outsider settlements yet"
+        />
+      </div>
+      {comparison.differenceBetweenMeans === null ? (
+        <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
+      ) : (
+        <p className="calibration-difference">
+          Difference between means {formatSigned(comparison.differenceBetweenMeans)}
+        </p>
+      )}
+    </section>
+  );
+}
+
+type RepositoryCohortProps = {
+  label: string;
+  heading: string;
+  summary: CalibrationSummary;
+  emptyCopy: string;
+};
+
+/**
+ * One cohort of one repository's comparison.
+ *
+ * A cohort with no pairs carries a mean of nought only because there is nothing
+ * to average; printing that nought here would read as a measured perfect
+ * calibration, so the absence is named instead.
+ */
+function RepositoryCohort({ label, heading, summary, emptyCopy }: RepositoryCohortProps) {
+  return (
+    <section aria-label={label}>
+      <h4>
+        {heading} · {summary.count} {plural(summary.count, "pair")}
+      </h4>
+      {summary.count === 0 ? (
+        <p>{emptyCopy}</p>
+      ) : (
+        <>
+          <p>Mean delta {formatSigned(summary.meanDelta)}</p>
+          <p>Median delta {formatSigned(summary.medianDelta)}</p>
+        </>
       )}
     </section>
   );
