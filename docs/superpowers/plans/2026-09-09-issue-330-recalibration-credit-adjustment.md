@@ -213,8 +213,7 @@ covering tests bare, obey the .gitignore mechanic for every new file, keep the
 contention files byte-identical, one logical commit per task, commit trailer
 exactly `Co-Authored-By: GLM-5.3-Flash <noreply@z.ai>`.
 
-**Task 1 — pure adjustment domain (`src/lib/moderation/adjustment.ts`,
-`tests/moderation/adjustment.test.ts`).**
+## Task 1: pure adjustment domain — src/lib/moderation/adjustment.ts, tests/moderation/adjustment.test.ts
 Exports (names may be refined, semantics fixed):
 - `describeCalibrationActionability(comparison): { actionable: boolean; reason: string }`
   — the formal trigger, counting floors + positive gap; never reads meanDelta.
@@ -227,7 +226,7 @@ Exports (names may be refined, semantics fixed):
 Mutant-planting targets: a mean-keyed trigger MUST fail the trigger tests
 (this is the issue's named substitution — plant it, watch it fail).
 
-**Task 2 — migration 035 + view extension.**
+## Task 2: migration 035 + view extension.
 `db/migrations/035_moderation_credit_adjustments.sql` per the data model;
 extend `ledger_entries`; update `tests/db/schema.test.ts` migration list.
 Tests: schema/migration coverage via the existing migration-list assertion
@@ -264,7 +263,7 @@ that an inserted adjustment moves `balances` both ways (apply + reversal).
 - Enumerate ModerationStore implementers BEFORE extending the interface
   (grep `implements ModerationStore` + test fakes) and update each.
 
-**Task 5 — API routes (`src/app/api/moderation/`, `tests/api/moderation.test.ts`).**
+## Task 5: API routes (`src/app/api/moderation/`, `tests/api/moderation.test.ts`).
 - PATCH `/api/moderation` accepts optional `applyAdjustment` boolean in the
   close schema (strict schema, so the field is additive).
 - GET `/api/moderation/recalibration?targetAccountId=…` → the preview figure.
