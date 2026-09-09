@@ -274,6 +274,43 @@ describe("member dashboard", () => {
     expect(section).toBeVisible();
     expect(within(section).getByRole("heading")).toBeVisible();
     expect(within(section).getByText(/2026-09-04/)).toBeVisible();
+    // The day only: the raw timestamp form must not reach the page.
+    expect(within(section).queryByText(/2026-09-04T/)).not.toBeInTheDocument();
+  });
+
+  it("announces the open audit with no enforcement state present and notices standing", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [{
+            id: "notice-2",
+            priorState: "ACTIVE",
+            newState: "BANNED",
+            reason: "Sustained overestimate pattern.",
+            createdAt: "2026-09-02T00:00:00.000Z",
+          }],
+          openAudit: { id: "audit-7", openedAt: "2026-09-05T00:00:00.000Z" },
+        }}
+      />,
+    );
+
+    // No enforcementState key at all, and a standing notice: the section's
+    // presence still rides the open audit alone.
+    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
+    expect(section).not.toBeNull();
+    expect(within(section).getByRole("heading")).toBeVisible();
+    expect(within(section).getByText(/2026-09-05/)).toBeVisible();
+    expect(within(section).queryByText(/2026-09-05T/)).not.toBeInTheDocument();
   });
 
   it("renders no audit section when no audit is open on the account", () => {
