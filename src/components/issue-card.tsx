@@ -1,4 +1,5 @@
 import type { EligibleIssueProjection } from "@/lib/dashboard/queries";
+import { formatSigned } from "@/lib/format-signed";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type IssueCardProps = {
@@ -38,10 +39,6 @@ export function IssueCard({ issue }: IssueCardProps) {
       </dl>
     </article>
   );
-}
-
-function formatSigned(value: number): string {
-  return value < 0 ? `−${Math.abs(value)}` : value > 0 ? `+${value}` : "0";
 }
 
 /**

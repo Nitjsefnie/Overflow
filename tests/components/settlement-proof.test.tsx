@@ -165,4 +165,40 @@ describe("settlement proof page", () => {
     expect(within(settled).getByText("Credits moved")).toBeVisible();
     expect(within(settled).queryByText("Credits pending claim")).toBeNull();
   });
+
+  it("rounds the signed balance effect to the digits a reader uses", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{ ...settlementRow, balance_effect: -4 / 7 }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const effect = screen.getByText("Your signed balance effect").nextElementSibling;
+    expect(effect).toHaveTextContent(/^−0\.57$/);
+    expect(effect).not.toHaveTextContent("−0.5714285714285714");
+  });
+
+  it("keeps the shared formatter's en-US grouping for a large negative balance effect", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{ ...settlementRow, balance_effect: -1234.5 }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const effect = screen.getByText("Your signed balance effect").nextElementSibling;
+    expect(effect).toHaveTextContent(/^−1,234\.5$/);
+    expect(effect).not.toHaveTextContent("−1234.5");
+  });
 });

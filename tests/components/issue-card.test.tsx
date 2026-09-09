@@ -183,6 +183,52 @@ describe("eligible issue card", () => {
     expect(screen.getByText("<strong>untrusted GitHub title</strong>")).toBeVisible();
     expect(document.querySelector("strong")).toBeNull();
   });
+
+  it("rounds a fractional headroom to the digits a reader uses", () => {
+    render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "Promise band",
+          openingLabel: "moonlit ridge",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          availableHeadroom: -4 / 7,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Headroom: −0.57")).toBeVisible();
+    expect(screen.queryByText("Headroom: −0.5714285714285714")).not.toBeInTheDocument();
+  });
+
+  it("keeps the shared formatter's en-US grouping for a large positive headroom", () => {
+    render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "Promise band",
+          openingLabel: "moonlit ridge",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          availableHeadroom: 1234.5,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Headroom: +1,234.5")).toBeVisible();
+    expect(screen.queryByText("Headroom: +1234.5")).not.toBeInTheDocument();
+  });
 });
 
 function factTerms(): string[] {

@@ -126,6 +126,36 @@ describe("settlement history page", () => {
     expect(within(rows[2] as HTMLElement).getByText(/−6/)).toBeVisible();
   });
 
+  it("rounds a fractional balance effect to the digits a reader uses", () => {
+    render(
+      <SettlementHistoryContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        settlements={[{ ...settled, credits: 3, balanceEffect: -4 / 7 }]}
+      />,
+    );
+
+    expect(screen.getByText("3 credits · review deduction 3 · balance effect −0.57")).toBeVisible();
+    expect(
+      screen.queryByText("3 credits · review deduction 3 · balance effect −0.5714285714285714"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the shared formatter's en-US grouping for a large positive balance effect", () => {
+    render(
+      <SettlementHistoryContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        settlements={[{ ...settled, credits: 3, balanceEffect: 1234.5 }]}
+      />,
+    );
+
+    expect(screen.getByText("3 credits · review deduction 3 · balance effect +1,234.5")).toBeVisible();
+    expect(
+      screen.queryByText("3 credits · review deduction 3 · balance effect +1234.5"),
+    ).not.toBeInTheDocument();
+  });
+
   it("states the depth the list is capped at", () => {
     render(
       <SettlementHistoryContent memberName="Ada Lovelace" isModerator={false} settlements={[settled]} />,
