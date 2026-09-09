@@ -46,6 +46,14 @@ export function CalibrationPanel({ comparison, byRepository = [] }: CalibrationP
           )}
         </section>
       </div>
+      {!noSamples ? (
+        <p className="calibration-scale-limitation">
+          Deltas are measured on the opening scale of each repository. Where a scale spaces its comparison
+          points wider than one step — for example 1, 3, 5, 8, 10 — even a perfectly judged closure can carry a
+          delta the scale forces: an issue worth 4 can only ever be offered 3 or 5. The reported mean and
+          median delta do not separate that forced amount from judgment error.
+        </p>
+      ) : null}
       {comparison.differenceBetweenMeans === null ? (
         <p className="calibration-difference">A difference between means needs at least one pair in both samples.</p>
       ) : (
