@@ -28,7 +28,7 @@ type CohortSummary = Pick<CalibrationSummary, "count" | "meanDelta">;
 type CohortComparison = {
   selfWork: CohortSummary;
   outsider: CohortSummary;
-  differenceBetweenMeans: number;
+  differenceBetweenMeans: number | null;
 };
 
 type CohortPreview = {
@@ -260,7 +260,11 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
             Outsider settlement sample · {currentPreview.comparison.outsider.count} {plural(currentPreview.comparison.outsider.count, "pair")} · mean delta{" "}
             {formatSigned(currentPreview.comparison.outsider.meanDelta)}
           </p>
-          <p>Difference between means {formatSigned(currentPreview.comparison.differenceBetweenMeans)}</p>
+          {currentPreview.comparison.differenceBetweenMeans === null ? (
+            <p>A difference between means needs at least one pair in both samples.</p>
+          ) : (
+            <p>Difference between means {formatSigned(currentPreview.comparison.differenceBetweenMeans)}</p>
+          )}
           <p>
             {currentPreview.meetsMinimumSampleSize
               ? `Both samples meet the ${MINIMUM_CALIBRATION_SAMPLE_SIZE}-pair minimum.`
@@ -341,7 +345,11 @@ function readCohortPreview(value: unknown): CohortPreview | null {
   const { selfWork, outsider, differenceBetweenMeans } = comparison as Record<string, unknown>;
   const selfWorkSummary = readCohortSummary(selfWork);
   const outsiderSummary = readCohortSummary(outsider);
-  if (selfWorkSummary === null || outsiderSummary === null || typeof differenceBetweenMeans !== "number") {
+  if (
+    selfWorkSummary === null
+    || outsiderSummary === null
+    || (typeof differenceBetweenMeans !== "number" && differenceBetweenMeans !== null)
+  ) {
     return null;
   }
   return {

@@ -97,6 +97,22 @@ describe("calibration comparison", () => {
     expect(screen.queryByText(/churn/i)).not.toBeInTheDocument();
   });
 
+  it("renders no difference-between-means figure when only the self-work sample has pairs", () => {
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 2, meanDelta: 3.5, medianDelta: 3.5 },
+          outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Self-work sample · 2 pairs")).toBeVisible();
+    expect(screen.getByText("Outsider settlement sample · 0 pairs")).toBeVisible();
+    expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
+  });
+
   it("reads each sample's pair count with the plural its count takes", () => {
     render(
       <CalibrationPanel
@@ -133,7 +149,7 @@ describe("calibration comparison", () => {
         comparison={{
           selfWork: { count: 0, meanDelta: 0, medianDelta: 0 },
           outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
-          differenceBetweenMeans: 0,
+          differenceBetweenMeans: null,
         }}
       />,
     );
