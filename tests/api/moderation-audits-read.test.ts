@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   createModerationAuditsGetHandler,
+  GET as productionGet,
   type ModerationAuditsRouteDependencies,
 } from "@/app/api/moderation/audits/route";
 import type { OpenAuditProjection } from "@/lib/dashboard/queries";
+
+vi.mock("@/auth", () => ({ auth: vi.fn().mockResolvedValue(null) }));
 
 const moderatorId = "00000000-0000-4000-8000-000000000004";
 
@@ -111,5 +114,20 @@ describe("GET /api/moderation/audits", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual([plainOpenAudit, detailedOpenAudit]);
     expect(dependencies.listOpenAudits).toHaveBeenCalledExactlyOnceWith();
+  });
+});
+
+describe("the exported production GET", () => {
+  it("answers an unauthenticated request with the 401 refusal through the module's own export", async () => {
+    // getProductionSession resolves no session here, so this arm never
+    // touches the database; the export itself is what the kill pins.
+    const response = await productionGet(
+      new Request("https://overflow.example/api/moderation/audits"),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
   });
 });
