@@ -99,4 +99,22 @@ describe("member standings page", () => {
     expect(screen.getByRole("heading", { name: "The member standings could not be loaded." })).toBeVisible();
     expect(screen.getByRole("link", { name: "Retry the member standings" })).toHaveAttribute("href", "/members");
   });
+
+  it("rounds a fractional net balance to the digits a reader uses", async () => {
+    respondWith({ standings: [standingRow("mira", 0, 4 / 7)] });
+    render(await MembersStandingsPage());
+
+    expect(screen.getByText("earned 0 · given 0.5714285714285714 · net −0.57")).toBeVisible();
+    expect(
+      screen.queryByText("earned 0 · given 0.5714285714285714 · net −0.5714285714285714"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the shared formatter's en-US grouping for a large negative net balance", async () => {
+    respondWith({ standings: [standingRow("mira", 0, 1234.5)] });
+    render(await MembersStandingsPage());
+
+    expect(screen.getByText("earned 0 · given 1234.5 · net −1,234.5")).toBeVisible();
+    expect(screen.queryByText("earned 0 · given 1234.5 · net −1234.5")).not.toBeInTheDocument();
+  });
 });

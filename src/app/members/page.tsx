@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { formatSigned } from "@/lib/format-signed";
 import type { MemberStanding } from "@/lib/members/queries";
 
 type MembersStandingsContentProps = {
@@ -89,8 +90,4 @@ export default async function MembersStandingsPage() {
       </AppShell>
     );
   }
-}
-
-function formatSigned(value: number): string {
-  return value < 0 ? `−${Math.abs(value)}` : value > 0 ? `+${value}` : "0";
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { SETTLEMENT_HISTORY_LIMIT, type SettlementHistoryProjection, type SettlementStatus } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
 
 type SettlementHistoryContentProps = {
@@ -114,8 +115,4 @@ function statusExplanation(status: SettlementStatus): string {
     return "Priced and recorded, waiting for the contributor to claim their GitHub identity before credits move.";
   }
   return "Found and scored zero: the merge was recorded, but the settled label or its rationale comment was missing or landed outside the evidence window, so no credits moved.";
-}
-
-function formatSigned(value: number): string {
-  return value < 0 ? `−${Math.abs(value)}` : value > 0 ? `+${value}` : "0";
 }
