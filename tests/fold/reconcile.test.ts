@@ -6,8 +6,9 @@ import {
   type ReconciliationDependencies,
 } from "@/lib/fold/reconcile";
 import type { FoldResult } from "@/lib/fold/repository-fold";
+import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { GitHubGateway } from "@/lib/github/client";
-import type { GitHubRepository } from "@/lib/github/types";
+import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
 import { runReconciliationCli } from "../../scripts/reconcile";
@@ -605,6 +606,89 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed."]]);
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
       expect(upstream.body).toBe(body);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("completes the run when a dirty subject is gone upstream, discarding only that subject", async () => {
+    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
+    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
+    const notFound = new Error(
+      "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of '42'.",
+    );
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssue: vi.fn(async (_reference: GitHubRepositoryReference, subject: GitHubSubject) => {
+          if (subject.number === poison.number) throw notFound;
+          return { ...reconciliationIssue({ id: subject.id, number: subject.number }), closingPullRequests: [] };
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
+    const discard = vi.fn().mockResolvedValue(undefined);
+    dependencies.store.discardDirtyReconciliationSubject = discard;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(discard).toHaveBeenCalledWith({
+        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: 7,
+      });
+      expect(dependencies.store.failRun).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=NOT_FOUND",
+      );
+      const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+      const foldedIds = materializeInput.fold.issues.map((issue) => issue.githubIssueId);
+      expect(foldedIds).toContain(555);
+      expect(foldedIds).not.toContain(999);
+      expect(materializeInput.synchronization?.dirtySubjects).toEqual([poison, good]);
+      expect(vi.mocked(dependencies.github.getIssue).mock.calls.map(([, subject]) => subject.number)).toEqual([42, 43]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("fails the run without discarding when a dirty subject fails transiently", async () => {
+    const transient = new GitHubApiError(403, true, 60);
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssue: vi.fn(async () => {
+          throw transient;
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
+      { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 },
+    ];
+    dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        message: "Unable to reconcile repository.",
+      });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
     }

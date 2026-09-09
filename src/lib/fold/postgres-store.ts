@@ -1105,6 +1105,20 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       number: row.subject_number, generation: Number(row.generation) }));
   }
 
+  public async discardDirtyReconciliationSubject(input: {
+    repositoryId: string;
+    kind: DirtyReconciliationSubject["kind"];
+    githubSubjectId: number;
+    generation: number;
+  }): Promise<void> {
+    // Keyed with the generation the same way the materialize-time delete is: a
+    // webhook that re-enqueued the subject with a fresh generation mid-run must
+    // keep its row, so the fresh request still reconciles.
+    await this.sql`delete from repository_reconciliation_dirty_subjects
+      where repository_id = ${input.repositoryId} and kind = ${input.kind}
+        and github_subject_id = ${input.githubSubjectId} and generation = ${input.generation}`;
+  }
+
   public async claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim> {
     const leaseToken = randomUUID();
     const rows = await this.sql<WebhookDeliveryLeaseRow[]>`

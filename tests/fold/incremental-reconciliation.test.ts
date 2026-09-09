@@ -370,6 +370,30 @@ describe("incremental reconciliation", () => {
       { kind: "ISSUE", id: f.issues[0]!.id, number: f.issues[0]!.number, generation: expect.any(Number) },
     ]);
   });
+
+  // Mutants: DISCARD_IGNORING_GENERATION.
+  it("discards a dirty subject only at its generation and lets a fresh generation re-enqueue", async () => {
+    const f = await fixture();
+    await f.dirty("ISSUE", f.issues[0]!);
+    const [subject] = await f.store.getDirtyReconciliationSubjects(f.id);
+    await f.store.discardDirtyReconciliationSubject({
+      repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation,
+    });
+    expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
+    await f.dirty("ISSUE", f.issues[0]!);
+    const [fresh] = await f.store.getDirtyReconciliationSubjects(f.id);
+    expect(fresh).toMatchObject({ kind: "ISSUE", id: subject!.id, number: subject!.number });
+    expect(fresh!.generation).toBeGreaterThan(subject!.generation);
+    // A stale generation must not delete a row a webhook re-enqueued meanwhile.
+    await f.store.discardDirtyReconciliationSubject({
+      repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation,
+    });
+    expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([fresh]);
+    await f.store.discardDirtyReconciliationSubject({
+      repositoryId: f.id, kind: fresh!.kind, githubSubjectId: fresh!.id, generation: fresh!.generation,
+    });
+    expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
+  });
 });
 
 async function fixture() {

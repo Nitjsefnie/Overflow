@@ -2,7 +2,7 @@ import { reconciliationBudgetHoldUntil, type ReconciliationBudgetDependencies } 
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
-import { isGitHubRateLimitError } from "@/lib/github/errors";
+import { isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -71,6 +71,15 @@ export type ReconciliationStore = {
   }): Promise<ReconciliationFairnessAssessment>;
   getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null>;
   getDirtyReconciliationSubjects(repositoryId: string): Promise<DirtyReconciliationSubject[]>;
+  // Optional so a store may decline the discard and keep the row for the
+  // materialize-time delete; the run completes either way. Production stores
+  // discard eagerly so an unresolvable subject is journaled once, not per run.
+  discardDirtyReconciliationSubject?(input: {
+    repositoryId: string;
+    kind: DirtyReconciliationSubject["kind"];
+    githubSubjectId: number;
+    generation: number;
+  }): Promise<void>;
   getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
   setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void>;
   getGitHubAccessToken(userId: string): Promise<string | null>;
@@ -125,6 +134,33 @@ async function reconcileRepositoryWhileCoordinated(
   if (repository === null) {
     throw new Error("Repository was not found.");
   }
+
+  // One unresolvable subject must not stall the repository's fold: a deleted
+  // issue or pull request can never resolve, and the retry machinery (the sweep
+  // revives FAILED jobs with attempts reset) would retry it forever. A NOT_FOUND
+  // for the subject is definitive, so its dirty row is discarded and the
+  // remaining subjects keep the run alive; any other per-subject failure keeps
+  // whole-run retry semantics. The journal line names the subject's identity and
+  // the failure class only, matching the reconciliation queue's rule against
+  // storing upstream error text.
+  const discardUnresolvableSubject = async (
+    failure: unknown,
+    kind: DirtyReconciliationSubject["kind"],
+    subject: GitHubSubject,
+    dirty: DirtyReconciliationSubject | undefined,
+  ): Promise<boolean> => {
+    if (!isGitHubSubjectNotFoundError(failure)) return false;
+    if (dirty !== undefined) {
+      await dependencies.store.discardDirtyReconciliationSubject?.({
+        repositoryId,
+        kind: dirty.kind,
+        githubSubjectId: dirty.id,
+        generation: dirty.generation,
+      });
+    }
+    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=NOT_FOUND`);
+    return true;
+  };
 
   const now = dependencies.now ?? (() => new Date());
   const notBefore = await dependencies.store.getReconciliationCooldown(repositoryId);
@@ -242,15 +278,30 @@ async function reconcileRepositoryWhileCoordinated(
                     affected.set(issue.id, issue);
                   }
                 }
-                const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
-                for (const issue of references) {
-                  if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
+                try {
+                  const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
+                  for (const issue of references) {
+                    if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
+                  }
+                } catch (error) {
+                  if (!(await discardUnresolvableSubject(error, subject.kind, subject, subject))) throw error;
                 }
               }
             }
+            const dirtyIssueSubjects = new Map(dirtySubjects
+              .filter(({ kind }) => kind === "ISSUE")
+              .map((subject) => [subject.id, subject]));
             for (const subject of affected.values()) {
               if (changed.has(subject.id)) continue;
-              const issue = await dependencies.github.getIssue(reference, subject);
+              let issue: GitHubIssue | null;
+              try {
+                issue = await dependencies.github.getIssue(reference, subject);
+              } catch (error) {
+                if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id)))) {
+                  throw error;
+                }
+                continue;
+              }
               if (issue !== null) changed.set(issue.id, issue);
             }
           }
