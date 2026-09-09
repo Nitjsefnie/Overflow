@@ -378,3 +378,34 @@ describe("defineMcpTools", () => {
     });
   });
 });
+
+describe("path id encoding", () => {
+  it("encodes a non-uuid id into the synthesized url at the three dynamic sites", async () => {
+    const deps = dependencies();
+    const tools = defineMcpTools(deps, new Headers());
+    const hostile = "not/a uuid";
+
+    await toolNamed(tools, "settlement_get").call({ id: hostile });
+    await toolNamed(tools, "audit_decide").call({ id: hostile, action: "dismiss", reason: "x" });
+    await toolNamed(tools, "correction_decide").call({
+      id: hostile,
+      action: "grant",
+      settledPoints: 5,
+      reason: "x",
+    });
+
+    const [settlementRequest] = calledOnce(deps.settlementGet) as [Request];
+    const [auditRequest] = calledOnce(deps.auditDecide) as [Request];
+    const [correctionRequest] = calledOnce(deps.correctionDecide) as [Request];
+
+    // Encoded, the id stays one path segment; raw, the slash would silently
+    // retarget the request at a different route.
+    expect(new URL(settlementRequest.url).pathname).toBe("/api/settlements/not%2Fa%20uuid");
+    expect(new URL(auditRequest.url).pathname).toBe("/api/moderation/not%2Fa%20uuid");
+    expect(new URL(correctionRequest.url).pathname).toBe("/api/overrides/not%2Fa%20uuid");
+
+    // The params context keeps the raw value: the wrapped route validates it.
+    const [, settlementContext] = calledOnce(deps.settlementGet) as [Request, RouteContext];
+    expect(await settlementContext.params).toEqual({ id: hostile });
+  });
+});
