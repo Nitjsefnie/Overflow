@@ -18,6 +18,10 @@ describe("stripNamePrefix", () => {
     expect(stripNamePrefix("perceived difficulty: 3", "difficulty")).toBe("perceived difficulty: 3");
   });
 
+  it("strips nothing when the prefix differs from the name only by case", () => {
+    expect(stripNamePrefix("perceived difficulty: 3", "Perceived difficulty")).toBe("perceived difficulty: 3");
+  });
+
   it("leaves a bare name without the colon separator alone", () => {
     expect(stripNamePrefix("perceived difficulty", "perceived difficulty")).toBe("perceived difficulty");
   });
