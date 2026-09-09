@@ -9,8 +9,9 @@ import { SettlementOverrideQueue } from "@/components/settlement-override-queue"
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 
-const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
+const { redirect, refresh, sql } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn(), sql: vi.fn() }));
 
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => sql }));
 vi.mock("@/lib/dashboard/session", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/dashboard/session")>(),
