@@ -394,8 +394,15 @@ dd {
   padding: 1.4rem;
 }
 
+/*
+ * Post-321 the heading block and the supporting lines share .issue-card-main,
+ * so the card's 1.25rem grid gap no longer separates them and this margin is
+ * the heading-to-content edge — the same value .ledger-card h2 uses. It
+ * collapses through the heading div's unbordered bottom edge onto the gap to
+ * the first supporting line.
+ */
 .issue-card-heading h2 {
-  margin-bottom: 0;
+  margin-bottom: 0.65rem;
 }
 
 .issue-card-heading a {
