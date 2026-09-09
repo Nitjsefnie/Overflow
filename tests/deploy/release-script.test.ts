@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readlink, realpath, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readlink, realpath, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,33 @@ async function release(name: string) {
   await mkdir(path.join(directory, "cache"), { recursive: true });
   await writeFile(path.join(directory, "BUILD_ID"), name);
   return directory;
+}
+
+// The suite runs as root, so read-only parents and permission bits cannot force
+// a deletion failure; the ext4 immutable flag can. Probe the ability once, on
+// the same filesystem the fixtures live on, and skip when it is unavailable.
+let immutableFlagProbe: Promise<boolean> | undefined;
+
+function supportsImmutableFlag() {
+  immutableFlagProbe ??= (async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "overflow-release-immutable-"));
+    const probe = path.join(directory, "probe");
+    try {
+      await writeFile(probe, "probe");
+      if (spawnSync("chattr", ["+i", probe], { encoding: "utf8" }).status !== 0) return false;
+      let enforced = false;
+      try {
+        await unlink(probe);
+      } catch {
+        enforced = true;
+      }
+      return enforced;
+    } finally {
+      spawnSync("chattr", ["-i", probe], { encoding: "utf8" });
+      await rm(directory, { recursive: true, force: true });
+    }
+  })();
+  return immutableFlagProbe;
 }
 
 describe("release switch", () => {
@@ -832,6 +859,27 @@ describe("release prune", () => {
       "payload",
     ].sort());
     expect(result.stdout.trim().split("\n").sort()).toEqual(swept.map((name) => path.join(tree, name)).sort());
+  });
+
+  it("fails loudly when an orphan sidecar cannot be deleted", async (ctx) => {
+    if (!(await supportsImmutableFlag())) ctx.skip("the ext4 immutable flag is unavailable, so no deletion failure can be forced");
+
+    const retained = await release("20260907T101500Z-abc1234");
+    await symlink(path.basename(retained), path.join(tree, ".next"));
+    const orphan = path.join(tree, ".next-release-20260901T101500Z-abc1234.tsconfig.json");
+    await writeFile(orphan, "{}");
+    ctx.skip(spawnSync("chattr", ["+i", orphan], { encoding: "utf8" }).status !== 0, "could not make the orphan sidecar immutable");
+
+    try {
+      const result = run("prune", tree, "--keep", "1");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(orphan);
+      expect(await readFile(orphan, "utf8")).toBe("{}");
+    } finally {
+      // Clear the flag so the suite's afterEach rm -rf can remove the tree.
+      spawnSync("chattr", ["-i", orphan], { encoding: "utf8" });
+    }
   });
 
   it("ends a prune with exactly one sidecar per retained release", async () => {
