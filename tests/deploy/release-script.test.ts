@@ -410,6 +410,128 @@ describe("release switch", () => {
   });
 });
 
+describe("release switch --expect-current", () => {
+  it("switches when the serving release is the one the deploy started from", async () => {
+    const started = await release("20260906T101500Z-abc1234");
+    const directory = await release("20260907T101500Z-abc1234");
+    await symlink(started, path.join(tree, ".next"));
+
+    const result = run("switch", tree, directory, "--expect-current", started);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(directory);
+  });
+
+  it("refuses to switch when another deploy has moved the serving release", async () => {
+    const started = await release("20260905T101500Z-abc1234");
+    const serving = await release("20260906T101500Z-abc1234");
+    const directory = await release("20260907T101500Z-abc1234");
+    await symlink(serving, path.join(tree, ".next"));
+    const entries = await readdir(tree);
+
+    const result = run("switch", tree, directory, "--expect-current", started);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(started);
+    expect(result.stderr).toContain(serving);
+    expect(result.stderr).toMatch(/git pull/);
+    expect(await realpath(path.join(tree, ".next"))).toBe(serving);
+    expect(await readdir(tree)).toEqual(entries);
+  });
+
+  it("treats a missing .next as absent and switches onto the expected-absent state", async () => {
+    const directory = await release("20260907T101500Z-abc1234");
+
+    const result = run("switch", tree, directory, "--expect-current", "absent");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(directory);
+  });
+
+  it("treats a dangling .next as absent and replaces it", async () => {
+    const directory = await release("20260907T101500Z-abc1234");
+    await symlink(".next-release-gone", path.join(tree, ".next"));
+
+    const result = run("switch", tree, directory, "--expect-current", "absent");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(directory);
+  });
+
+  it("refuses an expected-absent deploy when a release is already serving", async () => {
+    const serving = await release("20260906T101500Z-abc1234");
+    const directory = await release("20260907T101500Z-abc1234");
+    await symlink(serving, path.join(tree, ".next"));
+    const entries = await readdir(tree);
+
+    const result = run("switch", tree, directory, "--expect-current", "absent");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("absent");
+    expect(result.stderr).toContain(serving);
+    expect(await realpath(path.join(tree, ".next"))).toBe(serving);
+    expect(await readdir(tree)).toEqual(entries);
+  });
+
+  it("refuses an expected release when .next is missing", async () => {
+    const started = await release("20260906T101500Z-abc1234");
+    const directory = await release("20260907T101500Z-abc1234");
+    const entries = await readdir(tree);
+
+    const result = run("switch", tree, directory, "--expect-current", started);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(started);
+    expect(result.stderr).toContain("absent");
+    expect(await readdir(tree)).toEqual(entries);
+  });
+
+  it("keeps the omitted-flag behavior unconditional for a dangling .next", async () => {
+    const directory = await release("20260907T101500Z-abc1234");
+    await symlink(".next-release-gone", path.join(tree, ".next"));
+
+    const result = run("switch", tree, directory);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await realpath(path.join(tree, ".next"))).toBe(directory);
+  });
+
+  it("reports the one-time migration before the compare-and-swap", async () => {
+    const directory = await release("20260907T101500Z-abc1234");
+    const current = path.join(tree, ".next");
+    await mkdir(current);
+
+    const result = run("switch", tree, directory, "--expect-current", "absent");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(current);
+    expect(result.stderr.toLowerCase()).toContain("migration");
+    expect(await readdir(current)).toEqual([]);
+  });
+
+  it("documents --expect-current in the usage message", () => {
+    const result = run();
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/--expect-current/);
+  });
+
+  it.each([
+    ["--expect-current"],
+    ["--expect-current", "absent", "extra"],
+    ["--wrong", "absent"],
+  ])("rejects malformed expect-current arguments %j", async (...flag) => {
+    const directory = await release("20260907T101500Z-abc1234");
+    const entries = await readdir(tree);
+
+    const result = run("switch", tree, directory, ...flag);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Usage:");
+    expect(await readdir(tree)).toEqual(entries);
+  });
+});
+
 describe("release prune", () => {
   it.each([".next-release-000-human-notes", ".next-release-zzz-human-notes"])(
     "ignores malformed directory %s without consuming a retention slot",
