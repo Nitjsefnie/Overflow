@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import type { ClaimPathVerdict } from "@/lib/domain/claim-path";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
 
@@ -20,6 +20,8 @@ type RepositoryFormState = Omit<RepositoryFormValues, "openingLabels"> & {
   openingLabels: OpeningLabelRow[];
 };
 
+type LabelsStatus = "idle" | "loading" | "ready" | "error";
+
 type RepositoryFormProps = {
   initialValues?: RepositoryFormValues;
   /**
@@ -31,17 +33,20 @@ type RepositoryFormProps = {
   variant?: "registration" | "catalog-change";
 };
 
+// Labels start empty: issue 258 removed label creation from registration, so a
+// catalog may only pick labels the repository already has. The selectboxes are
+// fed from the labels route once the repository reference is complete.
 const defaultValues: RepositoryFormValues = {
   repositoryUrl: "",
   openingName: "Opening catalog",
   actualName: "Result catalog",
   openingLabels: [
-    { label: "Opening label A", comparisonPoints: 3, reservePoints: 3 },
-    { label: "Opening label B", comparisonPoints: 6, reservePoints: 6 },
-    { label: "Opening label C", comparisonPoints: 9, reservePoints: 9 },
+    { label: "", comparisonPoints: 3, reservePoints: 3 },
+    { label: "", comparisonPoints: 6, reservePoints: 6 },
+    { label: "", comparisonPoints: 9, reservePoints: 9 },
   ],
   actualLabels: Array.from({ length: 10 }, (_, index) => ({
-    label: `Result label ${index + 1}`,
+    label: "",
     points: index + 1,
   })),
 };
@@ -76,11 +81,69 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isCatalogChange = variant === "catalog-change";
   const text = isCatalogChange ? copy["catalog-change"] : copy.registration;
+  const reference = parseSingleRepository(values.repositoryUrl);
+  const referenceKey = reference === null ? null : `${reference.owner}/${reference.name}`;
+  const referenceOwner = reference?.owner;
+  const referenceName = reference?.name;
+  const [catalogLabels, setCatalogLabels] = useState<string[]>([]);
+  const [labelsStatus, setLabelsStatus] = useState<LabelsStatus>("idle");
+  const labelsSequence = useRef(0);
+  const lastReferenceKey = useRef<string | null | undefined>(undefined);
+
+  // The selectboxes can only offer labels the referenced repository has, so
+  // they read them from the labels route once the reference is complete. A
+  // changed reference changes the vocabulary: earlier selections are cleared
+  // and the labels are read again, with the sequence counter discarding any
+  // stale response from a reference that has since been edited. The selections
+  // survive the initial mount, so initialValues keeps working.
+  useEffect(() => {
+    if (lastReferenceKey.current !== undefined && lastReferenceKey.current !== referenceKey) {
+      setValues(clearLabelSelections);
+      setCatalogLabels([]);
+    }
+    lastReferenceKey.current = referenceKey;
+
+    const sequence = ++labelsSequence.current;
+    if (referenceOwner === undefined || referenceName === undefined) {
+      setCatalogLabels([]);
+      setLabelsStatus("idle");
+      return;
+    }
+
+    setLabelsStatus("loading");
+    fetch(`/api/repositories/labels?owner=${encodeURIComponent(referenceOwner)}&name=${encodeURIComponent(referenceName)}`, {
+      credentials: "same-origin",
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`The labels request failed with HTTP ${response.status}.`);
+        }
+        const body = (await response.json().catch(() => null)) as { labels?: unknown } | null;
+        if (body === null || !Array.isArray(body.labels) || body.labels.some((label) => typeof label !== "string")) {
+          throw new Error("The labels response was not understood.");
+        }
+        return body.labels as string[];
+      })
+      .then((labels) => {
+        if (labelsSequence.current !== sequence) {
+          return;
+        }
+        setCatalogLabels(labels);
+        setLabelsStatus("ready");
+      })
+      .catch(() => {
+        if (labelsSequence.current !== sequence) {
+          return;
+        }
+        setCatalogLabels([]);
+        setLabelsStatus("error");
+      });
+  }, [referenceKey, referenceOwner, referenceName]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFeedback(null);
-    if (!isSingleRepository(values.repositoryUrl)) {
+    if (reference === null) {
       setFeedback({ kind: "error", message: "Enter one owner/name or one GitHub repository URL." });
       return;
     }
@@ -164,6 +227,13 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
         </label>
       </div>
 
+      {labelsStatus === "error" && reference !== null ? (
+        <p className="labels-fetch-error">
+          Overflow could not read the labels of {reference.owner}/{reference.name}. Check that the repository is
+          public and that the owner and name are correct, then edit the GitHub repository field to try again.
+        </p>
+      ) : null}
+
       <fieldset className="catalog-fieldset">
         <legend>Opening catalog</legend>
         <p className="field-help">Set any labels and their comparison and reservation points.</p>
@@ -172,11 +242,17 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
             <div className="catalog-row" key={openingLabel.rowId}>
               <label className="field">
                 <span>Opening label {index + 1}</span>
-                <input
+                <select
                   value={openingLabel.label}
                   onChange={(event) => updateOpeningLabel(setValues, index, "label", event.target.value)}
+                  disabled={labelsStatus !== "ready"}
                   required
-                />
+                >
+                  <option value="" disabled>Select a label</option>
+                  {labelOptions(catalogLabels, values.openingLabels, index).map((label) => (
+                    <option key={label} value={label}>{label}</option>
+                  ))}
+                </select>
               </label>
               <label className="field compact-field">
                 <span>Comparison points for opening label {index + 1}</span>
@@ -222,15 +298,21 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
         <legend>Actual catalog</legend>
         <p className="field-help">Every point from 1 through 10 must have exactly one editable label.</p>
         <div className="catalog-rows actual-catalog">
-          {values.actualLabels.map((actualLabel) => (
+          {values.actualLabels.map((actualLabel, index) => (
             <div className="catalog-row actual-row" key={actualLabel.points}>
               <label className="field">
                 <span>Actual label for {actualLabel.points} point{actualLabel.points === 1 ? "" : "s"}</span>
-                <input
+                <select
                   value={actualLabel.label}
                   onChange={(event) => updateActualLabel(setValues, actualLabel.points, event.target.value)}
+                  disabled={labelsStatus !== "ready"}
                   required
-                />
+                >
+                  <option value="" disabled>Select a label</option>
+                  {labelOptions(catalogLabels, values.actualLabels, index).map((label) => (
+                    <option key={label} value={label}>{label}</option>
+                  ))}
+                </select>
               </label>
               <p className="points-stamp">{actualLabel.points} points</p>
             </div>
@@ -367,7 +449,7 @@ function addOpeningLabel(
       ...current.openingLabels,
       {
         rowId: `opening-label-${nextOpeningRowId.current++}`,
-        label: `Opening label ${current.openingLabels.length + 1}`,
+        label: "",
         comparisonPoints: 1,
         reservePoints: 1,
       },
@@ -385,11 +467,16 @@ function removeOpeningLabel(
   }));
 }
 
-function isSingleRepository(value: string): boolean {
+/**
+ * The single repository a submission or a labels read is about, or null. The
+ * same rules the server's parseGitHubRepository applies, so the labels the
+ * form reads are read from exactly the repository a registration would verify.
+ */
+function parseSingleRepository(value: string): { owner: string; name: string } | null {
   const submitted = value.trim();
   const shorthand = submitted.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (shorthand !== null) {
-    return isRepositoryReference(shorthand[1]!, shorthand[2]!);
+    return toRepositoryReference(shorthand[1]!, shorthand[2]!);
   }
   try {
     const url = new URL(submitted);
@@ -402,20 +489,41 @@ function isSingleRepository(value: string): boolean {
       url.port.length === 0 &&
       url.search.length === 0 &&
       url.hash.length === 0 &&
-      path.length === 2 &&
-      isRepositoryReference(path[0]!, path[1]!)
-    );
+      path.length === 2
+    ) ? toRepositoryReference(path[0]!, path[1]!) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function isRepositoryReference(owner: string, repositoryName: string): boolean {
-  return isGitHubRepositorySegment(owner) && isGitHubRepositorySegment(repositoryName.replace(/\.git$/i, ""));
+function toRepositoryReference(owner: string, repositoryName: string): { owner: string; name: string } | null {
+  const name = repositoryName.replace(/\.git$/i, "");
+  if (!isGitHubRepositorySegment(owner) || !isGitHubRepositorySegment(name)) {
+    return null;
+  }
+  return { owner, name };
 }
 
 function isGitHubRepositorySegment(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+}
+
+/**
+ * The labels one catalog row may offer: the fetched labels minus the ones the
+ * row's siblings in the SAME catalog have already picked, so a catalog cannot
+ * bind one label twice. The row's own selection always stays available.
+ */
+function labelOptions(labels: string[], rows: Array<{ label: string }>, ownRow: number): string[] {
+  const picked = new Set(rows.flatMap((row, index): string[] => (index === ownRow ? [] : [row.label])));
+  return labels.filter((label) => !picked.has(label));
+}
+
+function clearLabelSelections(current: RepositoryFormState): RepositoryFormState {
+  return {
+    ...current,
+    openingLabels: current.openingLabels.map((label) => ({ ...label, label: "" })),
+    actualLabels: current.actualLabels.map((label) => ({ ...label, label: "" })),
+  };
 }
 
 function hasCompleteCatalog(values: RepositoryFormState): boolean {
