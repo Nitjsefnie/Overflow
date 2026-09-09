@@ -5,7 +5,7 @@ const canonicalInstall = "npm_config_package_import_method=copy pnpm install --f
 const otherPnpmShapes = [
   /^pnpm (?:--version|db:migrate|build|test|lint|typecheck)$/,
   /^NEXT_DIST_DIR="\$release" pnpm build$/,
-  /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)"$/,
+  /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)" --expect-current (?:absent|"\$expected_serving")$/,
   /^pnpm release:prune \/srv\/overflow --keep [1-9][0-9]*$/,
 ];
 
@@ -82,6 +82,9 @@ const otherShellLines = new Set([
   "chown -R overflow:overflow \"$previous_release/cache\"",
   "chmod -R u=rwX,g=rX,o= \"$previous_release/cache\"",
   "git pull --ff-only origin main",
+  "exec 9>/run/overflow-deploy.lock",
+  "flock -w 900 9 || { echo \"Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes.\" >&2; exit 1; }",
+  "expected_serving=$(readlink -f /srv/overflow/.next || printf absent)",
   "previous_release=$(readlink -f /srv/overflow/.next)",
   "serving_cache=\"$previous_release/cache\"",
   "test -d \"$serving_cache\"",
