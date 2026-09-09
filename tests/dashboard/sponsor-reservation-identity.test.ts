@@ -65,7 +65,11 @@ describe("sponsor reservations against PostgreSQL", () => {
     const eligible = await listEligibleIssues(seeded.viewerId, { claimState: "ALL" });
     expect(eligible).toHaveLength(1);
     expect(dashboard.settledBalance).toBe(0);
-    const expected = assignee.id === null || assignee.id !== SPONSOR_GITHUB_USER_ID ? 5 : 0;
+    // The rule under test: only a CLAIMED issue reserves, and a claimed issue
+    // whose id is absent or is not the sponsor's account reserves in full.
+    const claimed = assignee.login !== null;
+    const reservedByIdentity = claimed && (assignee.id === null || assignee.id !== SPONSOR_GITHUB_USER_ID);
+    const expected = reservedByIdentity ? 5 : 0;
     expect(dashboard.reservedPoints).toBe(expected);
     // The same reservation prices the eligible list's headroom: what a new claim can still spend.
     return {
