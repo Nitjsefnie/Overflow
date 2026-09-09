@@ -827,21 +827,56 @@ function resolveSettledDifficulty(
       events.push(event);
     }
   }
-  // A label stands at the window close only where its latest actual-catalog
-  // events at-or-before the close leave it unambiguously applied: GitHub's
+  // A label stands at the window close only where replaying its actual-catalog
+  // events at-or-before the close from absent leaves it standing: GitHub's
   // timeline carries no sub-second sequence signal (node ids are opaque), so
-  // events sharing one instant have no defensible intra-instant order. Reducing
-  // each label by INSTANT rather than by replay keeps the outcome independent
-  // of the arrival order GitHub returned: the latest instant must hold exactly
-  // one LABELED event of that label and no UNLABELED event sharing it — a
-  // removal or a duplicate application at that instant leaves it not standing.
+  // events sharing one instant have no defensible intra-instant order, and the
+  // outcome must stay independent of the arrival order GitHub returned. The
+  // replay therefore groups by instant and decides each instant from the state
+  // carried into it. Exactly one event at an instant decides: a LABELED
+  // applies the label and becomes the standing source, an UNLABELED removes
+  // it. A LABELED/UNLABELED pair at one instant is order-ambiguous in
+  // isolation but its outcome is not: GitHub never records a `labeled` event
+  // for a label already present, so from standing the pair can only be a
+  // removal followed by the re-application (net standing, and the pair's
+  // LABELED event becomes the source), and from absent an application followed
+  // by the removal (net absent) — the outcome equals the prior state. Three or
+  // more events at one instant, or a same-kind pair, is genuinely undecidable
+  // and leaves the label not standing. The source of a standing label is the
+  // LABELED event at the final instant — deterministic, never arrival order.
   const activeLabels = new Map<string, Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }>>();
   for (const [label, events] of eventsByLabel) {
-    const latestInstant = Math.max(...events.map((event) => Date.parse(event.createdAt)));
-    const atLatestInstant = events.filter((event) => Date.parse(event.createdAt) === latestInstant);
-    const [latest] = atLatestInstant;
-    if (atLatestInstant.length === 1 && latest?.kind === "LABELED") {
-      activeLabels.set(label, latest);
+    // compareHistoryItems is createdAt-only with a stable sort, so arrival
+    // order survives the ties: group by instant explicitly and let the
+    // replay decide each instant from the state carried in.
+    const byInstant = new Map<number, ActualCatalogLabelEvent[]>();
+    for (const event of events) {
+      const instant = Date.parse(event.createdAt);
+      const group = byInstant.get(instant);
+      if (group === undefined) {
+        byInstant.set(instant, [event]);
+      } else {
+        group.push(event);
+      }
+    }
+    const instants = [...byInstant.keys()].sort((left, right) => left - right);
+    let standing: Extract<GitHubIssueHistoryEvent, { kind: "LABELED" }> | undefined;
+    for (const instant of instants) {
+      const atInstant = byInstant.get(instant) ?? [];
+      const applied = atInstant.filter((event) => event.kind === "LABELED");
+      if (atInstant.length === 1) {
+        const [sole] = atInstant;
+        standing = sole?.kind === "LABELED" ? sole : undefined;
+      } else if (atInstant.length === 2 && applied.length === 1) {
+        // One LABELED and one UNLABELED at one instant: the state carried in
+        // decides (see the replay rule above).
+        standing = standing !== undefined ? applied[0] : undefined;
+      } else {
+        standing = undefined;
+      }
+    }
+    if (standing !== undefined) {
+      activeLabels.set(label, standing);
     }
   }
   // Built once for every refusal below. All five describe the same shut window,
