@@ -9,8 +9,8 @@ import { BalanceCard } from "@/components/balance-card";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 // The registered-repositories rows carry a client unregister control whose
-// router is provided by the app shell in production; these tests render the
-// server component directly, so the router is stubbed here.
+// router comes from the app-root provider in production; these tests render
+// the server component directly, so the router is stubbed here.
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn(), useRouter: () => ({ refresh }) }));
 
