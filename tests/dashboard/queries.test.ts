@@ -3,6 +3,7 @@ import { startPostgresContainer, type StartedPostgres } from "../support/postgre
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   getCalibrationComparison,
+  getCalibrationComparisonByRepository,
   getDashboard,
   getSelfWorkCalibrationProof,
   getSettlementProof,
@@ -1190,6 +1191,186 @@ describe("dashboard projections", () => {
     });
     expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
       /encrypted_oauth_token|access_token|webhook_secret|credential/,
+    );
+  });
+});
+
+describe("calibration comparison per repository", () => {
+  // The two registered repositories do not share an opening scale, so a pooled
+  // mean mixes two measurements. These fixtures keep every repository's rows
+  // distinguishable so a mis-grouped row lands in the wrong entry loudly.
+  function selfWorkRow(
+    repositoryId: number,
+    repositoryName: string,
+    issueId: number,
+    offered: number,
+    settled: number,
+  ) {
+    return {
+      github_repository_id: repositoryId,
+      repository_name: repositoryName,
+      github_issue_id: issueId,
+      github_pull_request_id: issueId + 900,
+      merged_at: "2026-01-03T00:00:00.000Z",
+      proof_sha256: proof,
+      offered_difficulty: offered,
+      settled_difficulty: settled,
+    };
+  }
+
+  const harbour = "co-op/harbour";
+  const lighthouse = "co-op/lighthouse";
+
+  it("returns one entry per repository, ordered by GitHub repository identifier", async () => {
+    const { sql } = sqlHarness([
+      [
+        selfWorkRow(7, lighthouse, 20, 4, 8),
+        selfWorkRow(2, harbour, 10, 5, 6),
+      ],
+      [selfWorkRow(2, harbour, 12, 4, 7)],
+    ]);
+
+    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+
+    expect(entries.map((entry) => entry.repositoryName)).toEqual([harbour, lighthouse]);
+  });
+
+  it("counts each repository's pairs against that repository's rows alone", async () => {
+    const { sql } = sqlHarness([
+      [
+        selfWorkRow(2, harbour, 10, 5, 6),
+        selfWorkRow(2, harbour, 11, 7, 5),
+        selfWorkRow(7, lighthouse, 20, 4, 8),
+      ],
+      [
+        selfWorkRow(2, harbour, 12, 4, 7),
+        selfWorkRow(2, harbour, 13, 8, 7),
+      ],
+    ]);
+
+    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+
+    expect(entries).toEqual([
+      {
+        repositoryName: harbour,
+        comparison: {
+          selfWork: { count: 2, meanDelta: -0.5, medianDelta: -0.5 },
+          outsider: { count: 2, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: -1.5,
+        },
+      },
+      {
+        repositoryName: lighthouse,
+        comparison: {
+          selfWork: { count: 1, meanDelta: 4, medianDelta: 4 },
+          outsider: { count: 0, meanDelta: 0, medianDelta: 0 },
+          differenceBetweenMeans: null,
+        },
+      },
+    ]);
+  });
+
+  it("keeps a repository whose outsider cohort is empty, with no difference between means", async () => {
+    const { sql } = sqlHarness([
+      [
+        selfWorkRow(2, harbour, 10, 5, 6),
+        selfWorkRow(7, lighthouse, 20, 4, 8),
+      ],
+      [selfWorkRow(2, harbour, 12, 4, 7)],
+    ]);
+
+    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+
+    const lighthouseEntry = entries.find((entry) => entry.repositoryName === lighthouse);
+    expect(lighthouseEntry?.comparison.outsider.count).toBe(0);
+    expect(lighthouseEntry?.comparison.differenceBetweenMeans).toBeNull();
+    expect(lighthouseEntry?.comparison.selfWork.count).toBe(1);
+  });
+
+  it("keeps a repository the account has only outsider settlements in", async () => {
+    const { sql } = sqlHarness([
+      [selfWorkRow(2, harbour, 10, 5, 6)],
+      [selfWorkRow(7, lighthouse, 20, 4, 7)],
+    ]);
+
+    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+
+    const lighthouseEntry = entries.find((entry) => entry.repositoryName === lighthouse);
+    expect(lighthouseEntry?.comparison.selfWork.count).toBe(0);
+    expect(lighthouseEntry?.comparison.outsider.count).toBe(1);
+    expect(lighthouseEntry?.comparison.differenceBetweenMeans).toBeNull();
+  });
+
+  // The breakdown is a partition of the pooled comparison, not a second
+  // selection: every pooled pair belongs to exactly one repository entry, and
+  // the pooled mean is the per-repository means weighted by their counts. Both
+  // hold only while the two functions read the same rows under the same
+  // predicates, which is what these two properties pin.
+  describe("as a partition of the pooled comparison", () => {
+    const selfWorkRows = [
+      selfWorkRow(2, harbour, 10, 5, 6),
+      selfWorkRow(2, harbour, 11, 7, 5),
+      selfWorkRow(7, lighthouse, 20, 4, 8),
+    ];
+    const outsiderRows = [
+      selfWorkRow(2, harbour, 12, 4, 7),
+      selfWorkRow(2, harbour, 13, 8, 7),
+      selfWorkRow(7, lighthouse, 21, 4, 6),
+      selfWorkRow(7, lighthouse, 22, 4, 6),
+    ];
+
+    async function bothViews() {
+      const pooled = await getCalibrationComparison("member-1", {
+        sql: sqlHarness([selfWorkRows, outsiderRows]).sql,
+      });
+      const entries = await getCalibrationComparisonByRepository("member-1", {
+        sql: sqlHarness([selfWorkRows, outsiderRows]).sql,
+      });
+      return { pooled, entries };
+    }
+
+    it("sums each cohort's per-repository counts back to the pooled count", async () => {
+      const { pooled, entries } = await bothViews();
+
+      const summed = (cohort: "selfWork" | "outsider") =>
+        entries.reduce((total, entry) => total + entry.comparison[cohort].count, 0);
+      expect(summed("selfWork")).toBe(pooled.selfWork.count);
+      expect(summed("outsider")).toBe(pooled.outsider.count);
+    });
+
+    it("recovers the pooled mean as the count-weighted mean of the per-repository means", async () => {
+      const { pooled, entries } = await bothViews();
+
+      for (const cohort of ["selfWork", "outsider"] as const) {
+        const counts = entries.map((entry) => entry.comparison[cohort].count);
+        expect(counts.every((count) => count > 0)).toBe(true);
+        const weighted =
+          entries.reduce(
+            (total, entry) => total + entry.comparison[cohort].count * entry.comparison[cohort].meanDelta,
+            0,
+          ) / counts.reduce((total, count) => total + count, 0);
+        expect(weighted).toBeCloseTo(pooled[cohort].meanDelta, 12);
+      }
+    });
+  });
+
+  // The breakdown must select the same cohorts the pooled comparison does: a
+  // drifted predicate would show a member two populations under one heading.
+  it("selects both cohorts under the pooled comparison's own predicates", async () => {
+    const whereClauses = async (
+      run: (accountId: string, dependencies: { sql: DashboardSql }) => Promise<unknown>,
+    ) => {
+      const { sql, captures } = sqlHarness([[], []]);
+      await run("member-1", { sql });
+      return captures.map((capture) =>
+        capture.text.slice(capture.text.indexOf("where"), capture.text.indexOf("order by"))
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+    };
+
+    expect(await whereClauses(getCalibrationComparisonByRepository)).toEqual(
+      await whereClauses(getCalibrationComparison),
     );
   });
 });

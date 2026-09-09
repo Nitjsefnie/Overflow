@@ -24,6 +24,18 @@ export type CalibrationComparison = {
   differenceBetweenMeans: number | null;
 };
 
+/**
+ * One repository's comparison, named by the repository it measures.
+ *
+ * The registered repositories do not share an opening scale, so a pooled mean
+ * over all of them averages two different measurements. Keeping the comparison
+ * per repository is what makes each figure readable on its own scale.
+ */
+export type RepositoryCalibrationEntry = {
+  repositoryName: string;
+  comparison: CalibrationComparison;
+};
+
 export class CalibrationStatisticsError extends Error {
   public constructor(message: string) {
     super(message);
