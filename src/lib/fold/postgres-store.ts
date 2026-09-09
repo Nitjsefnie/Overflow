@@ -1820,6 +1820,21 @@ async function updateSettlement(
   `;
 }
 
+async function updateSelfWorkCalibration(
+  sql: TransactionClient,
+  calibration: SelfWorkCalibration,
+  issueId: string,
+  pullRequestId: string,
+): Promise<void> {
+  await sql`
+    update self_work_calibrations
+    set pull_request_id = ${pullRequestId}, issue_id = ${issueId}, user_id = ${calibration.userId},
+        opening_comparison_points = ${calibration.openingComparisonPoints},
+        actual_points = ${calibration.actualPoints}, fold_revision = ${FOLD_REVISION}
+    where issue_id = ${issueId}
+  `;
+}
+
 async function materializeSelfWorkCalibrations(
   sql: TransactionClient,
   input: { repositoryId: string; runId: string; fold: FoldResult },
@@ -1828,8 +1843,8 @@ async function materializeSelfWorkCalibrations(
   existingRows: readonly SelfWorkCalibrationRow[],
   grantedOverrides: ReadonlyMap<number, number>,
 ): Promise<ReconciliationDeltas> {
-  const existingByKey = new Map(
-    existingRows.map((row) => [selfWorkCalibrationKeyFromRow(row), row]),
+  const existingByIssue = new Map(
+    existingRows.map((row) => [toSafeInteger(row.github_issue_id), row]),
   );
   let adds = 0;
   let changes = 0;
@@ -1841,8 +1856,7 @@ async function materializeSelfWorkCalibrations(
     const calibration = applyGrantedCalibrationOverride(folded, grantedOverrides);
     const pullRequestId = requiredId(pullRequestIds, calibration.githubPullRequestId, "Pull request");
     const issueId = requiredId(issueIds, calibration.githubIssueId, "Issue");
-    const key = selfWorkCalibrationKey(calibration.githubPullRequestId, calibration.githubIssueId);
-    const current = existingByKey.get(key);
+    const current = existingByIssue.get(calibration.githubIssueId);
     const desired = selfWorkCalibrationState(calibration);
     if (current === undefined) {
       await sql`
@@ -1867,16 +1881,10 @@ async function materializeSelfWorkCalibrations(
       continue;
     }
 
-    existingByKey.delete(key);
+    existingByIssue.delete(calibration.githubIssueId);
     const before = selfWorkCalibrationStateFromRow(current);
     if (JSON.stringify(before) !== JSON.stringify(desired)) {
-      await sql`
-        update self_work_calibrations
-        set user_id = ${calibration.userId},
-            opening_comparison_points = ${calibration.openingComparisonPoints},
-            actual_points = ${calibration.actualPoints}, fold_revision = ${FOLD_REVISION}
-        where id = ${current.id}
-      `;
+      await updateSelfWorkCalibration(sql, calibration, issueId, pullRequestId);
       await recordChange(
         sql,
         input.runId,
@@ -1892,7 +1900,7 @@ async function materializeSelfWorkCalibrations(
     }
   }
 
-  for (const row of existingByKey.values()) {
+  for (const row of existingByIssue.values()) {
     await sql`delete from self_work_calibrations where id = ${row.id}`;
     await recordChange(
       sql,
@@ -2291,17 +2299,6 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     proofSha256: row.proof_sha256,
     status: row.status,
   };
-}
-
-function selfWorkCalibrationKey(githubPullRequestId: number, githubIssueId: number): string {
-  return `${githubPullRequestId}:${githubIssueId}`;
-}
-
-function selfWorkCalibrationKeyFromRow(row: SelfWorkCalibrationRow): string {
-  return selfWorkCalibrationKey(
-    toSafeInteger(row.github_pull_request_id),
-    toSafeInteger(row.github_issue_id),
-  );
 }
 
 function selfWorkCalibrationState(calibration: SelfWorkCalibration): JSONValue {

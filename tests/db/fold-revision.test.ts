@@ -124,6 +124,59 @@ describe("fold revision stamps", () => {
     expect(await rowsFor(table, repositoryId)).toEqual([{ ...row, fold_revision: FOLD_REVISION }]);
   });
 
+  it("rewrites a calibration whose issue's closing pull request changed, in place", async () => {
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    const [existingRow] = await rowsFor("self_work_calibrations", repositoryId);
+    // The issue closes again through a different merged pull request, so the
+    // refold selects that one and the old closing pull request leaves the fold
+    // with it. The calibration's merge proof follows its pull request, exactly
+    // as the fold computes it.
+    const transitionFold = structuredClone(fold);
+    const [replacedPullRequest] = transitionFold.pullRequests.splice(1, 1);
+    const transitionPullRequest = {
+      ...replacedPullRequest,
+      githubPullRequestId: 20_000_001,
+      number: 21,
+      mergeCommitOid: "b".repeat(40),
+      mergedAt: "2026-09-03T12:00:00.000Z",
+    };
+    transitionFold.pullRequests.push(transitionPullRequest);
+    transitionFold.selfWorkCalibrations = [{
+      ...transitionFold.selfWorkCalibrations[0]!,
+      githubPullRequestId: transitionPullRequest.githubPullRequestId,
+      mergeCommitOid: transitionPullRequest.mergeCommitOid,
+      mergedAt: transitionPullRequest.mergedAt,
+    }];
+
+    const runId = await store.beginRun(repositoryId);
+    expect(await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold: transitionFold })))
+      .toEqual({ adds: 0, changes: 1, removals: 1 });
+    // The replaced closing pull request leaves the fold with the transition, and
+    // the removal loop says so; the recorded order is write order, so the
+    // calibration's in-place rewrite is recorded first.
+    expect(await changesFor(runId)).toEqual([
+      {
+        entity_kind: "SELF_WORK_CALIBRATION", change_kind: "CHANGE",
+        before_state: expect.objectContaining({ githubPullRequestId: replacedPullRequest.githubPullRequestId }),
+        after_state: expect.objectContaining({ githubPullRequestId: transitionPullRequest.githubPullRequestId }),
+      },
+      {
+        entity_kind: "PULL_REQUEST", change_kind: "REMOVE",
+        before_state: expect.objectContaining({ githubPullRequestId: replacedPullRequest.githubPullRequestId }),
+        after_state: null,
+      },
+    ]);
+
+    const [transitionedPullRequest] = await sql<{ id: string }[]>`
+      select id from pull_requests where github_pull_request_id = ${transitionPullRequest.githubPullRequestId}
+    `;
+    await expect(rowsFor("self_work_calibrations", repositoryId)).resolves.toEqual([{
+      ...existingRow,
+      pull_request_id: transitionedPullRequest.id,
+      fold_revision: FOLD_REVISION,
+    }]);
+  });
+
   it("preserves the revision and values of a settlement updated by an identity claim", async () => {
     const { repositoryId, fold } = await materializeRepositoryFixture(sql);
     const [row] = await rowsFor("settlements", repositoryId);
