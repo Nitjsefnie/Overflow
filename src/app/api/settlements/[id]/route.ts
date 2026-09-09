@@ -40,7 +40,7 @@ type SettlementProofRouteContext = {
 };
 
 export function createSettlementProofGetHandler(dependencies: SettlementProofRouteDependencies) {
-  return async function getSettlementProof(request: Request, context: SettlementProofRouteContext): Promise<Response> {
+  return async function getSettlementProofHandler(request: Request, context: SettlementProofRouteContext): Promise<Response> {
     // This read stays deliberately unorigin-guarded, like the issues board: a
     // programmatic GET sends no Origin header at all, so guarding it would
     // reject every script client. The member gate still resolves a bearer

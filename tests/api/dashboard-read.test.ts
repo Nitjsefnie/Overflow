@@ -125,5 +125,6 @@ describe("GET /api/dashboard", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UPSTREAM_FAILURE", message: "Unable to load the dashboard." },
     });
+    expect(dependencies.getDashboard).toHaveBeenCalledExactlyOnceWith(memberId);
   });
 });

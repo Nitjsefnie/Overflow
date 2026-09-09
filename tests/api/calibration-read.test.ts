@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCalibrationGetHandler } from "@/app/api/calibration/route";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  createCalibrationGetHandler,
+  type CalibrationRouteDependencies,
+} from "@/app/api/calibration/route";
 import type { CalibrationComparison } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 
@@ -30,7 +33,11 @@ beforeEach(() => {
  * dependencies, so each case drives one arm of the route against the member
  * gate.
  */
-function calibrationDependencies(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+type CalibrationDependencyMocks = {
+  [K in keyof CalibrationRouteDependencies]: Mock;
+};
+
+function calibrationDependencies(overrides: Partial<CalibrationDependencyMocks> = {}) {
   return {
     getSession: vi.fn().mockResolvedValue({ user: { id: memberId, role: "MEMBER" } }),
     findAccountByTokenHash: vi.fn().mockResolvedValue(null),
