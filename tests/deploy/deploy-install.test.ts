@@ -311,6 +311,43 @@ it("requires the closed shell grammar and copy imports throughout the deployment
   validateDeploymentGuide(await readFile("deploy/README.md", "utf8"));
 });
 
+it("requires the deploy serialization lines in their blocks, in order", async () => {
+  const markdown = await readFile("deploy/README.md", "utf8");
+  const blocks = codeRegions(markdown)
+    .filter((region) => /^(?:bash|sh|shell)(?:\s|$)/.test(region.info))
+    .map((region) => tokenizeLines(region.lines.join("\n"))
+      .filter((tokens) => tokens.length)
+      .map((tokens) => tokens.join(" ")));
+  const exec = tokenizeLines("exec 9>/run/overflow-deploy.lock")[0].join(" ");
+  const flock = tokenizeLines(
+    'flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. '
+    + 'Re-run this procedure when the other deploy finishes." >&2; exit 1; }',
+  )[0].join(" ");
+  const anchor = tokenizeLines("expected_serving=$(readlink -f /srv/overflow/.next || printf absent)")[0].join(" ");
+  const deploy = blocks.find((lines) => lines.includes("git pull --ff-only origin main"));
+  const rollback = blocks.find((lines) => lines.includes("previous_release='.next-release-REPLACE-WITH-RECORDED-ID'"));
+  const prune = blocks.find((lines) => lines.some((line) => line.startsWith("pnpm release:prune")));
+  expect(deploy, "section 10 deploy block").toBeDefined();
+  expect(rollback, "section 9 rollback block").toBeDefined();
+  expect(prune, "prune fence").toBeDefined();
+  for (const [name, block, switchLine] of [
+    ["deploy", deploy!, 'pnpm release:switch /srv/overflow "$release" --expect-current "$expected_serving"'],
+    ["rollback", rollback!, 'pnpm release:switch /srv/overflow "$previous_release" --expect-current "$expected_serving"'],
+  ] as const) {
+    const [execAt, flockAt, anchorAt, switchAt] = [exec, flock, anchor, switchLine].map((line) => block.indexOf(line));
+    expect(execAt, `${name} block must hold fd 9 open on the deploy lock`).toBeGreaterThanOrEqual(0);
+    expect(flockAt, `${name} block must acquire the lock after opening fd 9`).toBeGreaterThan(execAt);
+    expect(anchorAt, `${name} block must record expected_serving under the lock`).toBeGreaterThan(flockAt);
+    expect(switchAt, `${name} block must switch only after the anchor exists`).toBeGreaterThan(anchorAt);
+  }
+  expect(prune!, "prune fence must re-lock fd 9 before pruning").toContain(flock);
+  expect(prune!, "prune fence must not re-open fd 9, which releases the held lock").not.toContain(exec);
+  const lines = blocks.flat();
+  expect(lines.filter((line) => line === exec), "exactly the deploy and rollback blocks open fd 9").toHaveLength(2);
+  expect(lines.filter((line) => line === flock), "deploy, rollback and prune fences lock fd 9").toHaveLength(3);
+  expect(lines.filter((line) => line === anchor), "exactly the deploy and rollback blocks anchor expected_serving").toHaveLength(2);
+});
+
 it.each(["initial install", "routine deploy", "one-time migration"].flatMap((name, index) =>
   [false, true].map((removePrefix) => ({ name, index, removePrefix }))))(
   "rejects an unfenced $name (remove copy prefix: $removePrefix)", ({ index, removePrefix }) => {
