@@ -37,7 +37,7 @@ export type NewRegisteredRepository = Omit<RegisteredRepository, "id"> & {
 
 export type RepositoryRegistrationGateway = {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
-  ensureDifficultyLabels(repository: GitHubRepositoryReference, labels: readonly string[]): Promise<void>;
+  listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>>;
   createWebhook(
     repository: GitHubRepositoryReference,
     configuration: GitHubWebhookConfiguration,
@@ -179,12 +179,7 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
-  const labels = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels].map((label) => label.label);
-  try {
-    await dependencies.github.ensureDifficultyLabels(submittedRepository, labels);
-  } catch (error) {
-    throw githubSetupError(error, repository, "configure difficulty labels");
-  }
+  await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
 
   let webhook: GitHubWebhook;
   try {
@@ -347,8 +342,8 @@ export async function changeRepositoryCatalog(
     );
   }
 
-  // The sponsor check precedes every GitHub write: an outsider asking for a
-  // catalog change must not create labels on the repository, and the stored
+  // The sponsor check precedes every GitHub request: an outsider asking for a
+  // catalog change must not move anything on the repository, and the stored
   // sponsor is already in hand from the lookup above. The store re-checks
   // inside its transaction; this check keeps the common refusal free of side
   // effects.
@@ -359,12 +354,7 @@ export async function changeRepositoryCatalog(
     );
   }
 
-  const labels = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels].map((label) => label.label);
-  try {
-    await dependencies.github.ensureDifficultyLabels(submittedRepository, labels);
-  } catch (error) {
-    throw githubSetupError(error, repository, "configure difficulty labels");
-  }
+  await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "retry the catalog change");
 
   try {
     const change = await dependencies.store.appendDifficultySchemeVersion({
@@ -415,10 +405,42 @@ async function findRegisteredRepository(
   }
 }
 
+/**
+ * Label verification replaces label creation: the repository must already
+ * carry every label the submitted scheme names, and registration refuses to
+ * name what is missing rather than creating it. Removing the label write is
+ * what makes the narrow `admin:repo_hook` OAuth scope sufficient — the only
+ * user-token writes left are webhook create/patch/delete.
+ */
+async function verifySchemeLabelsExist(
+  github: RepositoryRegistrationGateway,
+  submittedRepository: GitHubRepositoryReference,
+  repository: GitHubRepository | null,
+  scheme: DifficultyScheme,
+  remedy: string,
+): Promise<void> {
+  let existingLabels: Set<string>;
+  try {
+    existingLabels = await github.listRepositoryLabels(submittedRepository);
+  } catch (error) {
+    throw githubSetupError(error, repository, "read the repository difficulty labels");
+  }
+
+  const schemeLabels = [...new Set([...scheme.openingLabels, ...scheme.actualLabels].map((label) => label.label))];
+  const missing = schemeLabels.filter((label) => !existingLabels.has(label));
+  if (missing.length > 0) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      `The repository is missing the difficulty labels ${missing.map((label) => `\`${label}\``).join(", ")}. `
+        + `Create them on GitHub, then ${remedy}.`,
+    );
+  }
+}
+
 function githubSetupError(
   error: unknown,
   repository: GitHubRepository | null,
-  step: "retrieve the submitted GitHub repository" | "configure difficulty labels" | "create the repository webhook",
+  step: "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook",
 ): RepositoryRegistrationError {
   if (error instanceof GitHubApiError && !error.rateLimited && (error.status === 403 || error.status === 404)) {
     const observation = error.status === 403

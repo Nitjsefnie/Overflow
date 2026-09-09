@@ -18,7 +18,7 @@ const reads = [
   { name: "getRepositoryById", run: (gateway: GitHubGateway) => gateway.getRepositoryById(42), body: JSON.stringify(repositoryBody), result: repositoryResult },
   { name: "createWebhook", run: (gateway: GitHubGateway) => gateway.createWebhook(repository, configuration), body: '{"id":42}', result: { id: 42 } },
   { name: "getPullRequestDiff", run: (gateway: GitHubGateway) => gateway.getPullRequestDiff(repository, 42), body: "diff --git a/é b/é\n", result: "diff --git a/é b/é\n" },
-  { name: "listLabelNames via ensureDifficultyLabels", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, []), body: "[]", result: undefined },
+  { name: "listRepositoryLabels", run: (gateway: GitHubGateway) => gateway.listRepositoryLabels(repository), body: "[]", result: new Set<string>() },
 ];
 
 const servers = new Set<Server>();
@@ -90,15 +90,10 @@ describe("GitHubGateway REST request deadline", () => {
   it.each([
     ...reads,
     { name: "deleteWebhook", run: (gateway: GitHubGateway) => gateway.deleteWebhook(repository, 42) },
-    { name: "label creation POST", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, ["easy"]) },
-  ])("aborts $name when headers arrive but no body bytes follow", async ({ name, run }) => {
+  ])("aborts $name when headers arrive but no body bytes follow", async ({ run }) => {
     const socketClosed = deferred<void>();
     let stalledSocket: Socket | undefined;
     const apiUrl = await serve((request, response) => {
-      if (name === "label creation POST" && request.method === "GET") {
-        response.end("[]");
-        return;
-      }
       stalledSocket = request.socket;
       request.socket.once("close", () => socketClosed.resolve());
       response.writeHead(200, { "Content-Type": "application/json" });
@@ -145,25 +140,22 @@ describe("GitHubGateway REST request deadline", () => {
     expect(stalledSocket?.destroyed).toBe(true);
   }, 3000);
 
-  it("preserves label pagination headers before creating missing labels", async () => {
+  it("preserves label pagination headers when listing repository labels", async () => {
     const requests: string[] = [];
     const apiUrl = await serve((request, response) => {
       requests.push(`${request.method} ${request.url}`);
       if (request.url?.endsWith("page=1")) {
         response.setHeader("link", '</labels?page=2>; rel="next"');
         response.end('[{"name":"easy"}]');
-      } else if (request.method === "GET") {
-        response.end('[{"name":"hard"}]');
       } else {
-        response.end('{"name":"medium"}');
+        response.end('[{"name":"hard"}]');
       }
     });
     const gateway = new GitHubGateway({ accessToken: "test-token", apiUrl });
-    await expect(gateway.ensureDifficultyLabels(repository, ["easy", "hard", "medium"])).resolves.toBeUndefined();
+    await expect(gateway.listRepositoryLabels(repository)).resolves.toEqual(new Set(["easy", "hard"]));
     expect(requests).toEqual([
       "GET /repos/octo/overflow/labels?per_page=100&page=1",
       "GET /repos/octo/overflow/labels?per_page=100&page=2",
-      "POST /repos/octo/overflow/labels",
     ]);
   });
 
@@ -271,18 +263,14 @@ describe("GitHubGateway REST request deadline", () => {
 
   describe.each([
     ...reads,
-    { name: "first label page via ensureDifficultyLabels", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, []), body: "[]", result: undefined },
+    { name: "first label page via listRepositoryLabels", run: (gateway: GitHubGateway) => gateway.listRepositoryLabels(repository), body: "[]", result: new Set<string>() },
     { name: "deleteWebhook", run: (gateway: GitHubGateway) => gateway.deleteWebhook(repository, 42), body: "", result: undefined },
-    { name: "label creation POST", run: (gateway: GitHubGateway) => gateway.ensureDifficultyLabels(repository, ["easy"]), body: '{"name":"easy"}', result: undefined },
   ])("configured deadline for $name", ({ name, run, body, result }) => {
     function afterLabelPrerequisite(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
       return (input, init) => {
-        if (name === "listLabelNames via ensureDifficultyLabels" && String(input).endsWith("page=1")) {
+        if (name === "listRepositoryLabels" && String(input).endsWith("page=1")) {
           // Finish page one so the timed response exercises pagination's next request.
           return Promise.resolve(new Response("[]", { headers: { link: '</labels?page=2>; rel="next"' } }));
-        }
-        if (name === "label creation POST" && init?.method !== "POST") {
-          return Promise.resolve(new Response("[]"));
         }
         return fetch(input, init);
       };

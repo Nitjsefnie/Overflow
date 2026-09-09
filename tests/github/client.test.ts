@@ -189,34 +189,53 @@ describe("GitHubGateway REST transport", () => {
     );
   });
 
-  it("creates only configured labels that are absent and never enumerates accessible repositories", async () => {
-    const createdLabels: string[] = [];
-    const requestedUrls: string[] = [];
+  it("lists repository labels from a single page without sending any label write", async () => {
+    const requests: Request[] = [];
     const gateway = new GitHubGateway({
       accessToken: "test-access-token",
       fetch: async (input, init) => {
-        requestedUrls.push(String(input));
-        if (init?.method === "POST") {
-          const payload = JSON.parse(String(init.body)) as { name: string };
-          createdLabels.push(payload.name);
-          return Response.json({ name: payload.name }, { status: 201 });
-        }
-
+        const request = new Request(input, init);
+        requests.push(request);
         return Response.json([{ name: "size/S" }, { name: "bug" }]);
       },
     });
 
-    await gateway.ensureDifficultyLabels(
-      { owner: "octo", name: "overflow" },
-      ["size/S", "size/M"],
+    await expect(gateway.listRepositoryLabels({ owner: "octo", name: "overflow" })).resolves.toEqual(
+      new Set(["size/S", "bug"]),
     );
 
-    expect(createdLabels).toEqual(["size/M"]);
-    expect(requestedUrls).toEqual([
-      "https://api.github.com/repos/octo/overflow/labels?per_page=100&page=1",
-      "https://api.github.com/repos/octo/overflow/labels",
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+      "GET https://api.github.com/repos/octo/overflow/labels?per_page=100&page=1",
     ]);
-    expect(requestedUrls.some((url) => url.includes("/user/repos"))).toBe(false);
+    expect(requests.some((request) => request.method === "POST")).toBe(false);
+  });
+
+  it("lists repository labels across every page the Link header announces and never sends a POST to /labels", async () => {
+    const requests: Request[] = [];
+    const gateway = new GitHubGateway({
+      accessToken: "test-access-token",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.endsWith("page=1")) {
+          return new Response(JSON.stringify([{ name: "size/S" }, { name: "bug" }]), {
+            headers: { link: '</repos/octo/overflow/labels?page=2&per_page=100>; rel="next"' },
+          });
+        }
+        return Response.json([{ name: "size/M" }, { name: "size/S" }]);
+      },
+    });
+
+    await expect(gateway.listRepositoryLabels({ owner: "octo", name: "overflow" })).resolves.toEqual(
+      new Set(["size/S", "bug", "size/M"]),
+    );
+
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+      "GET https://api.github.com/repos/octo/overflow/labels?per_page=100&page=1",
+      "GET https://api.github.com/repos/octo/overflow/labels?per_page=100&page=2",
+    ]);
+    expect(requests.filter((request) => request.method === "POST" && request.url.includes("/labels")))
+      .toEqual([]);
   });
 
   it("creates and removes a repository webhook with the configured callback secret", async () => {

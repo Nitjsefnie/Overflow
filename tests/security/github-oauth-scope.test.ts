@@ -78,22 +78,23 @@ describe("GitHub OAuth scope", () => {
     }
   });
 
-  it("asks the GitHub provider for exactly the public repository scope", async () => {
+  it("asks the GitHub provider for exactly the webhook administration scope", async () => {
     const { githubOAuthScope } = await import("@/auth");
 
-    expect(githubOAuthScope).toBe("public_repo");
+    expect(githubOAuthScope).toBe("admin:repo_hook");
     expect(mocks.github).toHaveBeenCalledWith({
-      authorization: { params: { scope: "public_repo" } },
+      authorization: { params: { scope: "admin:repo_hook" } },
     });
   });
 
-  it("never requests private profile, email, private repository, or hook administration access", async () => {
+  it("never requests public repository write, full repository, hook write, email, or profile access", async () => {
     const { githubOAuthScope } = await import("@/auth");
 
     const requestedScopes = githubOAuthScope.split(" ");
-    expect(requestedScopes).not.toContain("read:user");
-    expect(requestedScopes).not.toContain("user:email");
+    expect(requestedScopes).not.toContain("public_repo");
     expect(requestedScopes).not.toContain("repo");
-    expect(requestedScopes).not.toContain("admin:repo_hook");
+    expect(requestedScopes).not.toContain("write:repo_hook");
+    expect(requestedScopes).not.toContain("user:email");
+    expect(requestedScopes).not.toContain("read:user");
   });
 });

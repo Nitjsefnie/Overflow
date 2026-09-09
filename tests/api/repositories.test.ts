@@ -229,7 +229,7 @@ describe("POST /api/repositories", () => {
 
   describe.each([
     ["lookup", "retrieve the submitted GitHub repository", "Unable to retrieve the submitted GitHub repository."],
-    ["labels", "configure difficulty labels", "Unable to configure difficulty labels on GitHub."],
+    ["labels", "read the repository difficulty labels", "Unable to read the repository difficulty labels on GitHub."],
     ["webhook", "create the repository webhook", "Unable to create the repository webhook on GitHub."],
   ] as const)("%s HTTP failure classification through the real gateway", (step, description, upstreamMessage) => {
     it.each([
@@ -1011,7 +1011,7 @@ describe("PATCH /api/repositories", () => {
     });
   });
 
-  it("refuses a non-sponsor before any GitHub label write", async () => {
+  it("refuses a non-sponsor before any GitHub label read", async () => {
     const dependencies = successfulDependencies(
       { id: "outsider-id", role: "MEMBER" },
       {
@@ -1019,13 +1019,13 @@ describe("PATCH /api/repositories", () => {
         catalogChange: new RepositorySchemeChangeForbiddenError(42),
       },
     );
-    let labelWrites = 0;
-    const ensureDifficultyLabels = dependencies.github.ensureDifficultyLabels;
+    let labelReads = 0;
+    const listRepositoryLabels = dependencies.github.listRepositoryLabels;
     dependencies.github = {
       ...dependencies.github,
-      async ensureDifficultyLabels(repository, labels) {
-        labelWrites += 1;
-        return ensureDifficultyLabels(repository, labels);
+      async listRepositoryLabels(repository) {
+        labelReads += 1;
+        return listRepositoryLabels(repository);
       },
     };
     const handler = createRepositoryPatchHandler({
@@ -1037,7 +1037,7 @@ describe("PATCH /api/repositories", () => {
     const response = await handler(jsonRequest(validInput()));
 
     expect(response.status).toBe(403);
-    expect(labelWrites).toBe(0);
+    expect(labelReads).toBe(0);
   });
 
   it("answers a conflicting catalog order with an explicit 409, not a generic upstream failure", async () => {
@@ -1136,7 +1136,9 @@ function successfulDependencies(
           canAdminister: options.canAdminister ?? true,
         };
       },
-      async ensureDifficultyLabels() {},
+      async listRepositoryLabels() {
+        return new Set([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => label));
+      },
       async listWorkflowFiles() { return []; },
       async createWebhook() {
         if (options.webhookFailure) {

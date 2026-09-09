@@ -7,7 +7,7 @@ import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { encryptToken } from "@/lib/security/token-cipher";
 
-export const githubOAuthScope = "public_repo";
+export const githubOAuthScope = "admin:repo_hook";
 
 type PersistedGitHubUser = {
   id: string;
