@@ -23,8 +23,26 @@ export type MemberRouteDependencies = {
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
 
-function errorResponse(status: number, code: string, message: string): Response {
+/**
+ * The one error envelope every member-gated route answers with, so a client
+ * meets a single error shape across the API.
+ */
+export function errorResponse(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });
+}
+
+/**
+ * The NextAuth session a production route wiring reads, narrowed to the user
+ * fields the routes consume; a session without a string user id is no session.
+ */
+export async function getProductionSession(): Promise<MemberRouteSession | null> {
+  const { auth } = await import("@/auth");
+  const session = await auth();
+  const user = session?.user as { id?: unknown; role?: unknown } | undefined;
+  if (typeof user?.id !== "string") {
+    return null;
+  }
+  return { user: { id: user.id, role: user.role as UserRole | undefined } };
 }
 
 /**
