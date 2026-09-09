@@ -660,6 +660,47 @@ describe("reconcileRepository", () => {
     }
   });
 
+  it("completes the run when a dirty pull request is gone upstream, discarding only that subject", async () => {
+    const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: 9 };
+    const notFound = new Error(
+      "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '44'.",
+    );
+    const dependencies = reconciliationDependencies({
+      github: {
+        getPullRequestClosingIssues: vi.fn(async () => {
+          throw notFound;
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [subject];
+    const discard = vi.fn().mockResolvedValue(undefined);
+    dependencies.store.discardDirtyReconciliationSubject = discard;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(discard).toHaveBeenCalledWith({
+        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 777, generation: 9,
+      });
+      expect(dependencies.store.failRun).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=44 reason=NOT_FOUND",
+      );
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("fails the run without discarding when a dirty subject fails transiently", async () => {
     const transient = new GitHubApiError(403, true, 60);
     const dependencies = reconciliationDependencies({
@@ -999,6 +1040,7 @@ function reconciliationDependencies(
     })),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
+    discardDirtyReconciliationSubject: vi.fn().mockResolvedValue(undefined),
     getReconciliationCooldown: vi.fn().mockResolvedValue(null),
     setReconciliationCooldown: vi.fn().mockResolvedValue(undefined),
     withRepositoryReconciliation: vi.fn(async <T>(_repositoryId: string, work: () => Promise<T>) => work()),

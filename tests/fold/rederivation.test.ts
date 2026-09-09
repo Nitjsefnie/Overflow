@@ -115,6 +115,7 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     })),
     getReconciliationEvidence: async () => null,
     getDirtyReconciliationSubjects: async () => [],
+    discardDirtyReconciliationSubject: async () => {},
     withRepositoryReconciliation: async <T>(_id: string, work: () => Promise<T>) => work(),
     getRepository: vi.fn<ReconciliationStore["getRepository"]>(async () => ({
       id: "repo-1", githubRepositoryId: 4242, ownerName: "octo/repo", active: true,

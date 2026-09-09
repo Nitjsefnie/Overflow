@@ -19,7 +19,7 @@ export function isGitHubRateLimitError(error: unknown): error is Error & GitHubR
 // failure must never classify as a missing subject.
 export function isGitHubSubjectNotFoundError(error: unknown): boolean {
   return error instanceof Error
-    && !(isGitHubRateLimitError(error) && error.rateLimited)
+    && !isGitHubRateLimitError(error)
     && (error.message.includes("Could not resolve to an Issue")
       || error.message.includes("Could not resolve to a PullRequest"));
 }

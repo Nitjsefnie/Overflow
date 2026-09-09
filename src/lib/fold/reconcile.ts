@@ -71,10 +71,9 @@ export type ReconciliationStore = {
   }): Promise<ReconciliationFairnessAssessment>;
   getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null>;
   getDirtyReconciliationSubjects(repositoryId: string): Promise<DirtyReconciliationSubject[]>;
-  // Optional so a store may decline the discard and keep the row for the
-  // materialize-time delete; the run completes either way. Production stores
-  // discard eagerly so an unresolvable subject is journaled once, not per run.
-  discardDirtyReconciliationSubject?(input: {
+  // Required: an undiscarded dirty row would re-journal the unresolvable
+  // subject on every run. Production stores discard eagerly for that reason.
+  discardDirtyReconciliationSubject(input: {
     repositoryId: string;
     kind: DirtyReconciliationSubject["kind"];
     githubSubjectId: number;
@@ -151,7 +150,7 @@ async function reconcileRepositoryWhileCoordinated(
   ): Promise<boolean> => {
     if (!isGitHubSubjectNotFoundError(failure)) return false;
     if (dirty !== undefined) {
-      await dependencies.store.discardDirtyReconciliationSubject?.({
+      await dependencies.store.discardDirtyReconciliationSubject({
         repositoryId,
         kind: dirty.kind,
         githubSubjectId: dirty.id,
