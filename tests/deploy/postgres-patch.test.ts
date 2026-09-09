@@ -37,6 +37,11 @@ import { describe, expect, it } from "vitest";
  * The patch only ever named `src/` (ESM), and the file set here is derived
  * from the patch itself, so the guard reads only files the patch names — never
  * the unpatched `cjs/` and `cf/` copies that ship in the same package.
+ *
+ * The reverse is deliberate too: drift in the between-hunks regions of those
+ * files — text the patch never touches, such as `terminate()`'s stock copy of
+ * the settled line — is unpinned, because the guard pins patch fidelity of the
+ * hunks' post-image surface, not whole-file fidelity.
  */
 
 const PACKAGE = "postgres@3.4.9";
