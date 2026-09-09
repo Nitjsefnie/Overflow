@@ -170,8 +170,37 @@ describe("requestGitHubPublicIdentity", () => {
     const logged = errorSpy.mock.calls.flat().map(String).join("\n");
     expect(logged).toContain("SIGNIN_UPSTREAM_UNAVAILABLE");
     expect(logged).toContain("502");
+    // The non-JSON fallback still yields a bounded snippet: the collapsed
+    // body head survives the 200-char truncation even though the whole body
+    // does not reach the log.
+    expect(logged).toContain("<!DOCTYPE html>");
     expect(logged).not.toContain(htmlBody);
     expect(logged).not.toContain("END_OF_LONG_BODY_MARKER");
+  });
+
+  it("reports a non-2xx response with an empty body as the bare typed error, with no message segment in the diagnostic", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } }).then(
+      () => expect.fail("expected requestGitHubPublicIdentity to reject on a 503 /user response"),
+      (rejection: unknown) => rejection,
+    );
+
+    // Bare message form: an empty upstream snippet adds no colon or space.
+    expect(error).toMatchObject({
+      name: "GitHubUserinfoStatusError",
+      status: 503,
+      message: "GitHub /user responded 503",
+    });
+    expect(error).not.toBeInstanceOf(SyntaxError);
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(logged).toContain("SIGNIN_UPSTREAM_UNAVAILABLE");
+    expect(logged).toContain("503");
+    expect(logged).not.toContain("message=");
   });
 });
 
