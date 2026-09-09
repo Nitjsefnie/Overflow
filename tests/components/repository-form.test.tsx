@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RepositoryForm, type RepositoryFormValues } from "@/components/repository-form";
 
@@ -445,6 +445,47 @@ describe("repository form catalog label selectboxes", () => {
     const opening = screen.getByLabelText("Opening label 1");
     expect(within(opening).getByRole("option", { name: "pier" })).toBeInTheDocument();
     expect(within(opening).queryByRole("option", { name: "harbour label" })).toBeNull();
+  });
+
+  it("discards a stale labels response that resolves after a newer reference's", async () => {
+    let resolveStale: (response: Response) => void = () => {};
+    let labelsCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (!String(input).includes("/api/repositories/labels")) {
+        return Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 });
+      }
+      labelsCalls += 1;
+      if (labelsCalls === 1) {
+        // Hold the first repository's response until the second one has won.
+        return new Promise<Response>((resolve) => {
+          resolveStale = resolve;
+        });
+      }
+      return Response.json({ labels: ["pier", "mast"] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(<RepositoryForm initialValues={{ ...initialValues, repositoryUrl: "co-op/harbour" }} />);
+
+    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "octo/other" } });
+
+    const opening = screen.getByLabelText("Opening label 1");
+    await waitFor(() => expect(opening).toBeEnabled());
+    expect(within(opening).getByRole("option", { name: "pier" })).toBeInTheDocument();
+    await selectLoadedOption("Opening label 1", "pier");
+    expect(opening).toHaveValue("pier");
+
+    await act(async () => {
+      resolveStale(Response.json({ labels: ["harbour label", "extra"] }));
+    });
+
+    expect(opening).toBeEnabled();
+    expect(opening).toHaveValue("pier");
+    expect(within(opening).getByRole("option", { name: "pier" })).toBeInTheDocument();
+    expect(within(opening).queryByRole("option", { name: "harbour label" })).toBeNull();
+    const actual = screen.getByLabelText("Actual label for 1 point");
+    expect(within(actual).getByRole("option", { name: "mast" })).toBeInTheDocument();
+    expect(within(actual).queryByRole("option", { name: "harbour label" })).toBeNull();
+    expect(container.querySelector(".labels-fetch-error")).toBeNull();
   });
 
   it("shows an inline message and blocks submit when the labels fetch fails", async () => {
