@@ -452,9 +452,10 @@ dd {
  * between a label and its own input: the boundary between two unrelated
  * fields has to read as wider than the one inside a single field, or the two
  * fields are seen as one. Sections that separate by more than the generic gap
- * — the intro, a catalog fieldset, the feedback line, the submit button — tie
- * with this rule on specificity, so each keeps its own spacing only while this
- * rule stays above it.
+ * — the intro, a catalog fieldset, the submit button — tie with this rule on
+ * specificity, so each keeps its own spacing only while this rule stays above
+ * it. The feedback line separates by the generic gap itself, so where it sits
+ * relative to this rule does not matter.
  */
 .repository-form > * + * {
   margin-top: 1.25rem;
