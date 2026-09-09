@@ -130,7 +130,7 @@ describe("same-instant rationale evidence determinism", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
       }]);
       // Re-folds compare reason bytes, so the sentence must not vary with the
       // arrival order either.
@@ -154,7 +154,7 @@ describe("same-instant rationale evidence determinism", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
       }]);
       expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, settledRationaleCommentId: null });
       expect(result.policyViolations).toEqual([]);
@@ -176,7 +176,7 @@ describe("same-instant rationale evidence determinism", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) share the instant 2026-09-01T11:30:00.000Z without GitHub database ids, so no evidence-backed rule can order them.",
       }]);
       expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, settledRationaleCommentId: null });
       expect(result.policyViolations).toEqual([]);
@@ -199,7 +199,7 @@ describe("same-instant rationale evidence determinism", () => {
         githubIssueId: 101,
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: 201,
-        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
+        reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
       }]);
       // The sentence's id is data-determined at the call site: the tie group
       // inherits the comparator's ascending order, so the first duplicated id
@@ -224,7 +224,7 @@ describe("same-instant rationale evidence determinism", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) naming `delivered/6` share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
+      reason: "Several qualifying rationale comments by the repository sponsor's account (login `sponsor`) share the instant 2026-09-01T11:30:00.000Z, and more than one carries the GitHub database id 402, so the ids cannot order them.",
     }]);
     expect(result.policyViolations).toEqual([]);
   });

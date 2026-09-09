@@ -994,8 +994,8 @@ function resolveSettledDifficulty(
       kind: "rejected",
       reach: windowReach,
       reason: duplicatedDatabaseId === undefined
-        ? `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()} without GitHub database ids, so no evidence-backed rule can order them.`
-        : `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} naming \`${label}\` share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()}, and more than one carries the GitHub database id ${duplicatedDatabaseId}, so the ids cannot order them.`,
+        ? `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()} without GitHub database ids, so no evidence-backed rule can order them.`
+        : `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()}, and more than one carries the GitHub database id ${duplicatedDatabaseId}, so the ids cannot order them.`,
     };
   }
   const configured = actualByLabel.get(label)!;
