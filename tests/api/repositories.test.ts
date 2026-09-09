@@ -50,7 +50,11 @@ afterEach(() => {
   }
 });
 
-const temporaryLimitingAdvice = "GitHub also answers 403 when it is temporarily limiting requests, so if those settings look right, wait a minute and retry before changing anything.";
+// Issue 97: the ambiguous 403 message states the ambiguity explicitly and ranks the
+// wait-and-retry remedy before the authorization settings remedies.
+const ambiguitySentence = "GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes.";
+const waitInstruction = "Wait a minute and retry registration before changing anything.";
+const ambiguous403Advice = `${ambiguitySentence} ${waitInstruction}`;
 
 describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
@@ -197,7 +201,7 @@ describe("POST /api/repositories", () => {
     const body = await response.json();
     expect(body).toEqual({ error: {
       code: "GITHUB_ACCESS",
-      message: `GitHub refused to create the repository webhook (HTTP 403). This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/Actual-Org/settings/oauth_application_policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration. ${temporaryLimitingAdvice}`,
+      message: `GitHub refused to create the repository webhook (HTTP 403). ${ambiguous403Advice} This can happen when the Overflow OAuth application is not approved for that organization. Ask an organization owner to approve it at https://github.com/organizations/Actual-Org/settings/oauth_application_policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
     } });
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
     expect(requests).toEqual([
@@ -223,7 +227,7 @@ describe("POST /api/repositories", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: {
       code: "GITHUB_ACCESS",
-      message: `${observation} This may be caused by missing authorization for the Overflow OAuth application. For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.${status === 403 ? ` ${temporaryLimitingAdvice}` : ""}`,
+      message: `${observation} ${status === 403 ? `${ambiguous403Advice} ` : ""}This may be caused by missing authorization for the Overflow OAuth application. For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy. Review Overflow's authorization at https://github.com/settings/applications, then retry registration.`,
     } });
   });
 
@@ -268,7 +272,35 @@ describe("POST /api/repositories", () => {
     });
   });
 
-  describe.each(["lookup", "labels", "webhook"] as const)("%s temporary-limiting advice", (step) => {
+  // Issue 97's repro shape at the route: a 403 secondary rate limit arrives with nonzero
+  // remaining budget, no Retry-After, and the marker in the body, so only the body separates
+  // it from an authorization refusal — the route must answer it as HTTP 429 either way.
+  const secondaryRateLimitBody = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.";
+  describe.each([
+    ["lookup", "retrieve the submitted GitHub repository"],
+    ["labels", "read the repository difficulty labels"],
+    ["webhook", "create the repository webhook"],
+  ] as const)("%s secondary rate limit with remaining budget through the real gateway", (step, description) => {
+    it.each(["Organization", "User"] as const)("answers a %s-owned HTTP 403 marker body as GITHUB_RATE_LIMITED and HTTP 429", async (ownerType) => {
+      const dependencies = successfulDependencies();
+      dependencies.github = failingGitHubGateway(step, 403, { "x-ratelimit-remaining": "4999" }, ownerType, secondaryRateLimitBody);
+      const handler = createRepositoryPostHandler({
+        findAccountByTokenHash: async () => null,
+        getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+        createRegistrationDependencies: async () => dependencies,
+      });
+
+      const response = await handler(jsonRequest(validInput()));
+      expect(response.status).toBe(429);
+      const body = await response.json();
+      expect(body.error.code).toBe("GITHUB_RATE_LIMITED");
+      expect(body.error.message).toBe(`GitHub rate-limited the request to ${description} (HTTP 403). Please retry registration later.`);
+      expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
+      expect(JSON.stringify(body)).not.toMatch(/settings\/applications|oauth_application_policy/);
+    });
+  });
+
+  describe.each(["lookup", "labels", "webhook"] as const)("%s ambiguous 403 ordering", (step) => {
     it.each([
       ["Organization", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
       ["User", 403, { "x-ratelimit-remaining": "4999" }, "GITHUB_ACCESS", 403],
@@ -289,11 +321,26 @@ describe("POST /api/repositories", () => {
       expect(response.status).toBe(responseStatus);
       const body = await response.json();
       expect(body.error.code).toBe(code);
+      const message = body.error.message as string;
       if (status === 403 && code === "GITHUB_ACCESS") {
-        expect(body.error.message).toContain(`then retry registration. ${temporaryLimitingAdvice}`);
-        expect(body.error.message.endsWith(temporaryLimitingAdvice)).toBe(true);
+        // The ambiguous 403 names the ambiguity and puts wait-and-retry before every
+        // settings URL instead of ranking authorization first (issue 97).
+        expect(message).toContain(ambiguitySentence);
+        expect(message).toContain(waitInstruction);
+        expect(message.indexOf(waitInstruction)).toBeLessThan(message.indexOf("https://github.com/settings/applications"));
+        // The org policy URL is only in the message once the repository — and its owner —
+        // was resolved; the lookup step fails before that, so guard on its presence.
+        if (message.includes("oauth_application_policy")) {
+          expect(message.indexOf(waitInstruction)).toBeLessThan(message.indexOf("oauth_application_policy"));
+        }
       } else {
-        expect(body.error.message).not.toContain(temporaryLimitingAdvice);
+        // The 404 branch keeps its message unchanged, and a classified throttle carries
+        // none of the ambiguous-403 framing.
+        expect(message).not.toContain(ambiguitySentence);
+        expect(message).not.toContain(waitInstruction);
+        if (status === 404) {
+          expect(message.endsWith("Review Overflow's authorization at https://github.com/settings/applications, then retry registration.")).toBe(true);
+        }
       }
       expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
     });
@@ -1193,6 +1240,7 @@ function failingGitHubGateway(
   status: number,
   headers: Record<string, string> = {},
   ownerType = "Organization",
+  body = "private-body access-token-should-not-leak",
 ): GitHubGateway {
   return new GitHubGateway({
     accessToken: "access-token-should-not-leak",
@@ -1200,7 +1248,7 @@ function failingGitHubGateway(
       const pathname = new URL(String(input)).pathname;
       const requestedStep = pathname.endsWith("/hooks") ? "webhook" : pathname.endsWith("/labels") ? "labels" : "lookup";
       if (requestedStep === step) {
-        return new Response("private-body access-token-should-not-leak", {
+        return new Response(body, {
           status,
           headers: { ...headers, "x-private": "private-header" },
         });

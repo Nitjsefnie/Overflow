@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubApiError } from "@/lib/github/errors";
+import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
@@ -356,6 +356,59 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
+  // Issue 97: an ambiguous 403 — remaining budget, no Retry-After, marker-free body — cannot
+  // separate a missing authorization from a secondary rate limit, so the message must say so
+  // and put wait-and-retry before the settings remedies instead of ranking authorization first.
+  const waitInstruction = "Wait a minute and retry registration before changing anything.";
+  const ambiguityClause = "this response carries nothing that separates the two causes";
+  it.each([
+    ["listRepositoryLabels", "read the repository difficulty labels", "ORGANIZATION"],
+    ["createWebhook", "create the repository webhook", "ORGANIZATION"],
+    ["listRepositoryLabels", "read the repository difficulty labels", "USER"],
+    ["createWebhook", "create the repository webhook", "USER"],
+  ] as const)("ranks wait-and-retry before the settings remedies for an ambiguous HTTP 403 on %s for %s owners", async (step, description, ownerType) => {
+    const harness = createHarness({ owner: "Real-Owner", ownerType });
+    const body = "Resource not accessible";
+    const details = classifyGitHubRateLimit(403, new Headers({ "x-ratelimit-remaining": "4999" }), body);
+    harness.dependencies.github[step] = async () => {
+      throw new GitHubApiError(403, details.rateLimited, details.retryAfterSeconds, body);
+    };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "GITHUB_ACCESS" });
+    const message = (error as Error).message;
+    expect(message).toContain(`GitHub refused to ${description} (HTTP 403).`);
+    expect(message).toContain(waitInstruction);
+    expect(message).toContain(ambiguityClause);
+    expect(message.indexOf(waitInstruction)).toBeLessThan(message.indexOf("https://github.com/settings/applications"));
+    if (ownerType === "ORGANIZATION") {
+      expect(message.indexOf(waitInstruction))
+        .toBeLessThan(message.indexOf("https://github.com/organizations/Real-Owner/settings/oauth_application_policy"));
+    }
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
+  it("ranks wait-and-retry before the settings remedies for an ambiguous lookup HTTP 403", async () => {
+    const harness = createHarness();
+    const body = "Resource not accessible";
+    const details = classifyGitHubRateLimit(403, new Headers({ "x-ratelimit-remaining": "4999" }), body);
+    harness.dependencies.github.getRepository = async () => {
+      throw new GitHubApiError(403, details.rateLimited, details.retryAfterSeconds, body);
+    };
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "GITHUB_ACCESS" });
+    const message = (error as Error).message;
+    expect(message).toContain("retrieve the submitted GitHub repository");
+    expect(message).toContain(waitInstruction);
+    expect(message).toContain(ambiguityClause);
+    expect(message.indexOf(waitInstruction))
+      .toBeLessThan(message.indexOf("https://github.com/settings/applications"));
+    expect(message).toContain("For an organization-owned repository, an organization owner may additionally need to approve the Overflow application under the organization's third-party application access policy.");
+    expect(message).not.toContain("https://github.com/organizations/");
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
   it.each([
     ["listRepositoryLabels", new Error("network secret"), "Unable to read the repository difficulty labels on GitHub."],
     ["createWebhook", new Error("network secret"), "Unable to create the repository webhook on GitHub."],
@@ -437,6 +490,31 @@ describe("explicit repository registration", () => {
         code: "GITHUB_RATE_LIMITED",
         message: `GitHub rate-limited the request to ${description} (HTTP ${status}).${delay} Please retry registration later.`,
       });
+      expect(harness.createdRepositories).toEqual([]);
+    });
+
+    // Issue 97's repro shape: a 403 secondary rate limit can carry nonzero remaining budget and
+    // no Retry-After, so the body marker is what separates it from an authorization refusal.
+    // The error is built the way the transport builds it — the real classifyGitHubRateLimit
+    // answer feeds the GitHubApiError the fake gateway throws — rather than hand-crafted.
+    it("answers a secondary rate limit carried on a 403 with remaining budget as throttling", async () => {
+      const harness = createHarness();
+      const body = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.";
+      const details = classifyGitHubRateLimit(403, new Headers({ "x-ratelimit-remaining": "4999" }), body);
+      expect(details).toEqual({ rateLimited: true, retryAfterSeconds: null });
+      harness.dependencies.github[step] = async () => {
+        throw new GitHubApiError(403, details.rateLimited, details.retryAfterSeconds, body);
+      };
+
+      const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+      expect(error).toMatchObject({
+        code: "GITHUB_RATE_LIMITED",
+        message: `GitHub rate-limited the request to ${description} (HTTP 403). Please retry registration later.`,
+      });
+      const message = (error as Error).message;
+      expect(message).toContain("Please retry registration later.");
+      expect(message).not.toContain("github.com/settings/applications");
+      expect(message).not.toContain("oauth_application_policy");
       expect(harness.createdRepositories).toEqual([]);
     });
   });
