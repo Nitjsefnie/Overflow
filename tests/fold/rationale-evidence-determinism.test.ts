@@ -101,7 +101,7 @@ describe("same-instant rationale evidence determinism", () => {
         status: "UNSETTLED",
         settledPoints: null,
         credits: 0,
-        settledLabelEventId: "actual-1",
+        settledLabelEventId: null,
         settledRationaleCommentId: null,
       });
       expect(result.unwritableClosures).toEqual([{
