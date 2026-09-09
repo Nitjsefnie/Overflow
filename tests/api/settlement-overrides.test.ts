@@ -587,7 +587,7 @@ describe("the settlement override gates' bearer credentials", () => {
     await expect(response.json()).resolves.toEqual({
       error: {
         code: "UPSTREAM_FAILURE",
-        message: "Unable to authorize the settlement correction request.",
+        message: "Unable to authorize the member request.",
       },
     });
     expect(requestOverride).not.toHaveBeenCalled();

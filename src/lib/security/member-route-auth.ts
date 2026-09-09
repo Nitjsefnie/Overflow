@@ -28,11 +28,11 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 /**
- * Confirms the resolved credential's account still exists, by reading its role
- * back from the database rather than trusting the credential. A session
- * outlives the account it was issued for, and a token's account row is only as
- * fresh as the moment it was read; membership of a settlement is checked again
- * in the store.
+ * The member credential gate a route runs before its own work: the resolved
+ * credential's account must still exist, confirmed by reading its role back
+ * from the database rather than trusting the credential. A session outlives
+ * the account it was issued for, and a token's account row is only as fresh
+ * as the moment it was read.
  */
 export async function requiredMemberSession(
   request: Request,
@@ -42,7 +42,7 @@ export async function requiredMemberSession(
   try {
     credential = await resolveRouteCredential(request, dependencies);
   } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
+    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the member request.");
   }
   if (credential instanceof Response) {
     return credential;
@@ -55,7 +55,7 @@ export async function requiredMemberSession(
   try {
     role = await dependencies.getCurrentRole(credential.user.id);
   } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
+    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the member request.");
   }
   if (role === null) {
     return errorResponse(403, "FORBIDDEN", "A member account is required.");
