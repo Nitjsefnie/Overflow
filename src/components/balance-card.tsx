@@ -1,5 +1,5 @@
 import type { DashboardProjection } from "@/lib/dashboard/queries";
-import { formatSigned } from "@/lib/format-signed";
+import { formatSigned, formatUnsigned } from "@/lib/format-signed";
 
 type BalanceCardProps = {
   dashboard: Pick<
@@ -32,7 +32,7 @@ export function BalanceCard({ dashboard }: BalanceCardProps) {
         </div>
         <div>
           <dt>Available headroom</dt>
-          <dd>{formatUnsignedPositive(dashboard.availableHeadroom)}</dd>
+          <dd>{formatUnsigned(dashboard.availableHeadroom)}</dd>
         </div>
       </dl>
     </section>
@@ -41,8 +41,4 @@ export function BalanceCard({ dashboard }: BalanceCardProps) {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
-}
-
-function formatUnsignedPositive(value: number): string {
-  return value < 0 ? `−${formatNumber(Math.abs(value))}` : formatNumber(value);
 }
