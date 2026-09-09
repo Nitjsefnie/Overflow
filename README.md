@@ -9,7 +9,7 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 ## Join the running instance
 
 1. **Sign in.** Open <https://overflow.nitjsefni.eu> and choose *Sign in with GitHub*. That is the whole account setup — there is nothing to install and nothing to configure.
-2. **Register a repository, catalogs and all, on one form.** *Register a repository* takes the repository and both of its catalogs and submits them together; there is no separate catalog-editing page afterwards, so decide the labels and their points before you start. Bring a public repository you administer. Registration writes to it: Overflow creates the catalog labels there and installs its webhook. [What the ledger records](#what-the-ledger-records) is the reference for what a catalog has to contain.
+2. **Register a repository, catalogs and all, on one form.** *Register a repository* takes the repository and both of its catalogs and submits them together. Bring a public repository you administer. Registration writes to it: Overflow creates the catalog labels there and installs its webhook. [What the ledger records](#what-the-ledger-records) is the reference for what a catalog has to contain. Catalogs can be changed later — on the same page, or over the API — and a change never re-prices work that has already settled.
 3. **Offer work, then settle it.** Apply an opening label when you file an issue. After the closing pull request's final commit and before you merge it, apply an actual-catalog label and post a comment naming that label — as the sponsor; nobody else's labels or comments price your repository's work, and a comment edited after the merge window closes no longer counts. Those are the labels Overflow created for you in step 2. [What the ledger records](#what-the-ledger-records) states the evidence each label has to satisfy, and [Scoring and calibration](#scoring-and-calibration) says what it is worth.
 4. **Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Register a repository*, *Calibration* and *Rules*.
 
@@ -188,6 +188,25 @@ Authentication runs before body validation. A recognized bearer credential takes
 precedence over the browser cookie: a rejected token is not rescued by a valid
 session. An absent or malformed bearer header falls back to cookie authentication,
 which continues to serve the web form.
+
+### Changing a registered catalog
+
+A repository's difficulty catalog is a versioned series, not a fixed choice.
+`PATCH /api/repositories` accepts the same body a registration takes and appends
+the submitted catalog as the repository's next catalog version; the browser form
+on the *Register a repository* page does the same. The version begins governing
+at the moment of the change, so:
+
+- closures whose evidence window closed before the change keep resolving at
+  their recorded figures, and
+- closures whose evidence window closes after the change are priced by the new
+  catalog.
+
+A submission identical to the current catalog changes nothing and reports it.
+Errors have the same shape as the registration errors above; the change path
+answers `CONFLICT` for an unregistered repository, and `FORBIDDEN` for anyone
+but the repository's sponsor or an account that is not eligible to change
+repository catalogs.
 
 ## What the ledger records
 

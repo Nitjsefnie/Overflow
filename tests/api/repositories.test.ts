@@ -22,7 +22,7 @@ import {
   type RepositoryCatalogChange,
   type RepositoryRegistrationDependencies,
 } from "@/lib/repositories/register";
-import { POST, PATCH, createRepositoryPostHandler, createRepositoryPatchHandler } from "@/app/api/repositories/route";
+import { POST, createRepositoryPostHandler, createRepositoryPatchHandler } from "@/app/api/repositories/route";
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
@@ -946,6 +946,26 @@ describe("PATCH /api/repositories", () => {
     const body = await response.json();
     expect(body).toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
     expect(body.repository).toMatchObject({ githubRepositoryId: 42 });
+  });
+
+  it("returns a structured 403 when the account is not eligible to hold repositories", async () => {
+    const dependencies = successfulDependencies({ id: "moderator-id", role: "MODERATOR" });
+    dependencies.actor = { ...dependencies.actor, enforcementState: "BANNED" };
+    const handler = createRepositoryPatchHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => dependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN",
+        message: "The account is not eligible to change repository catalogs.",
+      },
+    });
   });
 
   it("returns a structured 409 when the submitted repository is not registered", async () => {
