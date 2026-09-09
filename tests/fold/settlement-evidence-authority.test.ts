@@ -194,7 +194,7 @@ describe("same-instant settlement evidence ordering", () => {
     expect(result.policyViolations).toEqual([]);
   });
 
-  it("rejects a same-instant removal and reapplication regardless of adversarial opaque ids", () => {
+  it("resolves a same-instant removal and reapplication regardless of adversarial opaque ids", () => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history.push(
@@ -212,12 +212,10 @@ describe("same-instant settlement evidence ordering", () => {
 
     expect(issue.labels).toContain("delivered/6");
     expect(result.settlements[0]).toMatchObject({
-      status: "UNSETTLED", credits: 0, settledLabelEventId: null,
+      status: "SETTLED", credits: 6, settledLabelEventId: "LE_example",
+      settledLabelAppliedAt: "2026-09-01T11:15:00.000Z",
     });
-    expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
-      reason: "No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
-    }]);
+    expect(result.unwritableClosures).toEqual([]);
     expect(result.policyViolations).toEqual([]);
   });
 });
@@ -240,7 +238,7 @@ describe("same-instant settled label standing", () => {
   }
 
   it.each(["removal first", "application first"] as const)(
-    "rejects a same-instant removal and application pair in either arrival order (%s)",
+    "settles a same-instant removal and reapplication pair in either arrival order (%s)",
     (arrival) => {
       const snapshot = evidenceFixture();
       pushSameInstantPair(snapshot, arrival === "removal first" ? "UNLABELED" : "LABELED");
@@ -248,14 +246,11 @@ describe("same-instant settled label standing", () => {
       const result = foldRepository(snapshot);
 
       expect(result.settlements[0]).toMatchObject({
-        status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
+        status: "SETTLED", settledPoints: 6, credits: 6,
+        settledLabelEventId: "actual-pair-apply",
+        settledLabelAppliedAt: "2026-09-01T11:15:00.000Z",
       });
-      expect(result.unwritableClosures).toEqual([{
-        githubIssueId: 101,
-        kind: "SETTLEMENT_EVIDENCE_REJECTED",
-        githubPullRequestId: 201,
-        reason: NO_STANDING_REASON,
-      }]);
+      expect(result.unwritableClosures).toEqual([]);
       expect(result.policyViolations).toEqual([]);
     },
   );
@@ -327,15 +322,98 @@ describe("same-instant settled label standing", () => {
     // Kind, reason, evidence ids and every other field must match exactly; only
     // the arrival order of the same-instant events differs between the two runs.
     expect(JSON.stringify(fromScrambled)).toBe(JSON.stringify(fromChronological));
-    expect(fromChronological.unwritableClosures).toEqual([{
+    expect(fromChronological.unwritableClosures).toEqual([]);
+    expect(fromChronological.settlements[0]).toMatchObject({
+      status: "SETTLED", credits: 6, settledLabelEventId: "actual-pair-apply",
+    });
+  });
+
+  it.each(["removal first", "application first"] as const)(
+    "rejects a same-instant pair on an absent label in either arrival order (%s)",
+    (arrival) => {
+      const snapshot = evidenceFixture();
+      snapshot.issues[0]!.history.push({
+        kind: "UNLABELED" as const, id: "actual-drop", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:05:00.000Z",
+      });
+      pushSameInstantPair(snapshot, arrival === "removal first" ? "UNLABELED" : "LABELED");
+
+      const result = foldRepository(snapshot);
+
+      expect(result.settlements[0]).toMatchObject({
+        status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
+      });
+      expect(result.unwritableClosures).toEqual([{
+        githubIssueId: 101,
+        kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201,
+        reason: NO_STANDING_REASON,
+      }]);
+      expect(result.policyViolations).toEqual([]);
+    },
+  );
+
+  it("rejects three same-instant events on a standing label as undecidable", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.history.push(
+      {
+        kind: "UNLABELED" as const, id: "actual-triple-remove", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+      {
+        kind: "LABELED" as const, id: "actual-triple-apply", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+      {
+        kind: "UNLABELED" as const, id: "actual-triple-remove-2", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+    );
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
+    });
+    expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
       reason: NO_STANDING_REASON,
     }]);
-    expect(fromChronological.settlements[0]).toMatchObject({
-      status: "UNSETTLED", credits: 0, settledLabelEventId: null,
+    expect(result.policyViolations).toEqual([]);
+  });
+
+  it("carries a mid-history pair resolution into later instants", () => {
+    const snapshot = evidenceFixture();
+    snapshot.issues[0]!.history.push(
+      {
+        kind: "UNLABELED", id: "actual-drop", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:05:00.000Z",
+      },
+      {
+        kind: "UNLABELED", id: "actual-mid-remove", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:10:00.000Z",
+      },
+      {
+        kind: "LABELED", id: "actual-mid-apply", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:10:00.000Z",
+      },
+      {
+        kind: "LABELED", id: "actual-reapply", actorLogin: "sponsor", actorGitHubUserId: 1001,
+        label: "delivered/6", createdAt: "2026-09-01T11:15:00.000Z",
+      },
+    );
+
+    const result = foldRepository(snapshot);
+
+    expect(result.settlements[0]).toMatchObject({
+      status: "SETTLED", settledPoints: 6, credits: 6,
+      settledLabelEventId: "actual-reapply",
+      settledLabelAppliedAt: "2026-09-01T11:15:00.000Z",
     });
+    expect(result.unwritableClosures).toEqual([]);
+    expect(result.policyViolations).toEqual([]);
   });
 });
 
