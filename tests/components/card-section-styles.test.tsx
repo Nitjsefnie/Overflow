@@ -126,6 +126,14 @@ describe("card section styles", () => {
     expect(gapRule?.atRules, "the column gap applies at every viewport").toEqual([]);
   });
 
+  it("renders no floating pseudo-element strip on the next-move card", () => {
+    const decoration = rules.find((rule) =>
+      rule.selector.split(",").some((part) => part.replace(/\s+/g, " ") === ".ledger-note::before"),
+    );
+
+    expect(decoration).toBeUndefined();
+  });
+
   it("lets a card's own margin-top win over the column gap", () => {
     // The gap rule ties with the per-card margin rules on specificity, so the
     // later per-card declarations only keep their own value while the gap rule
