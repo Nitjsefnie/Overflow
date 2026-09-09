@@ -2407,41 +2407,53 @@ describe("GitHubGateway issue timeline query shape", () => {
     );
   });
 
+  it("pins the per-issue fixture wire shape: event rows carry no issue key", async () => {
+    const events = await perIssueManifestResponse(
+      "https://api.github.com/repos/octo/overflow/issues/1/events", { 1: [openingEvent(1), rationale] },
+    )!.json();
+    expect(events).toEqual([{ node_id: "opening-event-1", event: "labeled" }]);
+    const comments = await perIssueManifestResponse(
+      "https://api.github.com/repos/octo/overflow/issues/1/comments", { 1: [openingEvent(1), rationale] },
+    )!.json();
+    expect(comments).toEqual([{ node_id: "rationale-node", issue_url: "https://api.github.com/repos/octo/overflow/issues/1" }]);
+  });
+
   it("binds per-issue event rows to the issue the request path names", async () => {
     const restPaths: string[] = [];
+    const closedEvent = { __typename: "ClosedEvent", id: "closed-event-2" };
     const gateway = new GitHubGateway({ accessToken: "test-access-token", fetch: async (input, init) => {
-      const url = new URL(String(input));
-      const perIssue = /\/repos\/octo\/overflow\/issues\/([1-9]\d*)\/(events|comments)$/.exec(url.pathname);
+      const perIssue = perIssueManifestResponse(input, { 1: [openingEvent(1), rationale], 2: [closedEvent] });
       if (perIssue !== null) {
-        restPaths.push(url.pathname);
-        if (Number(perIssue[1]) === 1) {
-          return perIssue[2] === "events"
-            ? Response.json([{ node_id: "opening-event-1", event: "labeled" }])
-            : Response.json([{ node_id: "rationale-node", issue_url: "https://api.github.com/repos/octo/overflow/issues/1" }]);
-        }
-        return Response.json([]);
+        restPaths.push(new URL(String(input)).pathname);
+        return perIssue;
       }
+      const url = new URL(String(input));
       if (url.pathname.endsWith("/issues/events")) {
         return Response.json([], { headers: { link: `<${url.origin}${url.pathname}?page=2>; rel="next"` } });
       }
       if (url.pathname.endsWith("/issues/comments")) return Response.json([]);
       const { query, variables } = JSON.parse(String(init?.body));
       if (query.includes("query RepositoryIssues")) return Response.json({ data: { repository: { issues: {
-        nodes: [issueNode(101, 1, "Path bound", { nodes: [], pageInfo }),
-          issueNode(102, 2, "Second scanned", { nodes: [], pageInfo })], pageInfo,
+        nodes: [issueNode(102, 2, "Scanned first", { nodes: [], pageInfo }),
+          issueNode(101, 1, "Row bearing", { nodes: [], pageInfo })], pageInfo,
       } } } });
       if (query.includes("query IssueTimelineCounts")) return countsResponse(variables, (number) => number === 1 ? 2 : 0);
       return timelineResponse(variables.issueNumber === 1 ? [openingEvent(1), rationale] : []);
     } });
     const issues = await gateway.listIssues({ owner: "octo", name: "overflow" }, timelineOptions);
+    expect(issues.map((issue) => issue.number)).toEqual([2, 1]);
     expect(restPaths).toEqual([
-      "/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments",
       "/repos/octo/overflow/issues/2/events", "/repos/octo/overflow/issues/2/comments",
+      "/repos/octo/overflow/issues/1/events", "/repos/octo/overflow/issues/1/comments",
     ]);
-    expect(issues[0]?.history.map(({ id }) => id)).toEqual(["opening-event-1"]);
-    expect(issues[0]?.comments.map(({ id }) => id)).toEqual(["rationale-node"]);
-    expect(issues[1]?.history).toEqual([]);
-    expect(issues[1]?.comments).toEqual([]);
+    // Issue 2 is scanned first and carries only an unwatched "closed" REST
+    // event: its manifest ids must be exactly empty (watched-only filter,
+    // nothing leaked from issue 1's rows). Issue 1, scanned second, must hold
+    // exactly its own row ids.
+    expect(issues[0]?.history).toEqual([]);
+    expect(issues[0]?.comments).toEqual([]);
+    expect(issues[1]?.history.map(({ id }) => id)).toEqual(["opening-event-1"]);
+    expect(issues[1]?.comments.map(({ id }) => id)).toEqual(["rationale-node"]);
   });
 
   it("rejects a per-issue comment row naming another issue", async () => {
@@ -2575,14 +2587,19 @@ describe("GitHubGateway issue timeline query shape", () => {
    * Per-issue REST answers; `/repos/octo/overflow/issues/1/events` does not
    * match the repo-wide suffix checks. The per-issue events endpoint's rows
    * carry no `issue` field — the issue is implied by the request path — while
-   * comment rows still carry `issue_url`.
+   * comment rows still carry `issue_url`. Unwatched event types map through
+   * (ClosedEvent → "closed") so tests can pin the manifest's watched-only
+   * filter.
    */
   function perIssueManifestResponse(input: RequestInfo | URL, timelines: Record<number, Array<{ __typename: string; id: string }>>) {
     const url = new URL(String(input));
     const match = /\/repos\/octo\/overflow\/issues\/([1-9]\d*)\/(events|comments)$/.exec(url.pathname);
     if (match === null) return null;
     const number = Number(match[1]);
-    const eventNames: Record<string, string> = { LabeledEvent: "labeled", UnlabeledEvent: "unlabeled", AssignedEvent: "assigned", UnassignedEvent: "unassigned" };
+    const eventNames: Record<string, string> = {
+      LabeledEvent: "labeled", UnlabeledEvent: "unlabeled", AssignedEvent: "assigned", UnassignedEvent: "unassigned",
+      ClosedEvent: "closed",
+    };
     const nodes = timelines[number] ?? [];
     if (match[2] === "comments") {
       return Response.json(nodes.filter((node) => node.__typename === "IssueComment").map((node) => ({
