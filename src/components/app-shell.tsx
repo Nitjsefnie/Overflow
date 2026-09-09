@@ -66,3 +66,41 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
     </div>
   );
 }
+
+type PublicAppShellProps = {
+  children: ReactNode;
+};
+
+/**
+ * The site chrome for the signed-out entry point: the same header, navigation
+ * and footer skeleton AppShell renders, without the session controls, and with
+ * the wordmark linking the public entry instead of the dashboard. The page
+ * supplies its own main element (the landing view renders main.landing-page),
+ * so this shell adds no main of its own — the skip link targets the page's.
+ */
+export function PublicAppShell({ children }: PublicAppShellProps) {
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
+      <header className="site-header">
+        <Link className="wordmark" href="/" aria-label="Overflow home">
+          <span className="mark" aria-hidden="true" />
+          <span>Overflow</span>
+        </Link>
+        <nav aria-label="Site navigation">
+          {/* Every link here must point at a route that renders for a
+              signed-out visitor. Only / does today (/session is a recovery
+              surface, not a destination) and the wordmark already carries it,
+              so the list stays empty until another route is proven public. */}
+          <ul className="site-nav" />
+        </nav>
+      </header>
+      {children}
+      <footer className="site-footer">
+        <p>Overflow keeps cooperative promises legible.</p>
+      </footer>
+    </div>
+  );
+}

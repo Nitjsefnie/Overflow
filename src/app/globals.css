@@ -672,6 +672,15 @@ button:disabled {
   padding: clamp(2rem, 7vw, 2.5rem) 0;
 }
 
+/* The landing route wraps main.landing-page in the public shell, which already
+   carries the shared width and centering above; without this the nested main
+   insets itself a second time and its content no longer aligns with the header
+   and footer edges. Standalone (session recovery) keeps the full rule. */
+.app-shell .landing-page {
+  width: 100%;
+  margin: 0;
+}
+
 .landing-hero {
   position: relative;
   max-width: 58rem;
