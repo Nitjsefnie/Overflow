@@ -295,6 +295,60 @@ describe("initial PostgreSQL materialization", () => {
     }
   });
 
+  it("refuses the self-work calibration upgrade while an issue holds a second calibration", async () => {
+    const databaseUrl = process.env.DATABASE_URL!;
+    const upgradeDatabaseUrl = new URL(databaseUrl);
+    const databaseName = `calibration_issue_unique_upgrade_${nextExternalId()}`;
+    upgradeDatabaseUrl.pathname = `/${databaseName}`;
+    await sql`create database ${sql(databaseName)}`;
+    await closeSql();
+
+    try {
+      process.env.DATABASE_URL = upgradeDatabaseUrl.toString();
+      const upgradeSql = getSql();
+      await runMigrations({ upTo: "032_immutable_claim_assignee_identity.sql" });
+      const issue = await insertIssue(upgradeSql);
+      const firstPullRequest = await insertMergedSelfWorkPullRequest(upgradeSql, issue);
+      const secondPullRequest = await insertMergedSelfWorkPullRequest(upgradeSql, issue);
+      await upgradeSql`
+        insert into self_work_calibrations (
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
+        )
+        values
+          (${firstPullRequest.id}, ${issue.id}, ${issue.sponsorId}, 5, 6),
+          (${secondPullRequest.id}, ${issue.id}, ${issue.sponsorId}, 7, 4)
+      `;
+
+      await expect(runMigrations()).rejects.toThrow(
+        `Self-work calibration precondition failed: 1 issue(s) hold more than one ` +
+        `self-work calibration. Issue ids: ${issue.id}. Delete the surplus calibration ` +
+        `rows for the offending issues, keeping one per issue, before upgrading.`,
+      );
+      // Each migration commits on its own, so a raised precondition rolls back only
+      // the migration that raised it: 032 stays applied and the constraint is absent.
+      await expect(upgradeSql`
+        select max(name) as latest from schema_migrations
+      `).resolves.toEqual([{ latest: "032_immutable_claim_assignee_identity.sql" }]);
+      await expect(upgradeSql`
+        select 1 from pg_constraint where conname = 'self_work_calibrations_issue_unique'
+      `).resolves.toEqual([]);
+
+      // Resolving the duplicates lets the upgrade resume and install the constraint.
+      await upgradeSql`delete from self_work_calibrations where pull_request_id = ${secondPullRequest.id}`;
+      await expect(runMigrations()).resolves.toBeUndefined();
+      await expect(upgradeSql`
+        select name from schema_migrations where name = '033_self_work_calibrations_issue_unique.sql'
+      `).resolves.toEqual([{ name: "033_self_work_calibrations_issue_unique.sql" }]);
+      await expect(upgradeSql`
+        select conname from pg_constraint where conname = 'self_work_calibrations_issue_unique'
+      `).resolves.toEqual([{ conname: "self_work_calibrations_issue_unique" }]);
+    } finally {
+      await closeSql();
+      process.env.DATABASE_URL = databaseUrl;
+      sql = getSql();
+    }
+  });
+
   it("backfills legacy unwritable closures before enforcing the kind/pull-request constraint", async () => {
     const databaseUrl = process.env.DATABASE_URL!;
     const upgradeDatabaseUrl = new URL(databaseUrl);
@@ -1261,41 +1315,8 @@ describe("initial PostgreSQL materialization", () => {
 
   it("rejects a second self-work calibration for an issue already holding one", async () => {
     const issue = await insertIssue(sql);
-    const insertMergedSelfWorkPullRequest = (githubPullRequestId: number) => sql`
-      insert into pull_requests (
-        github_pull_request_id,
-        repository_id,
-        issue_id,
-        pull_request_number,
-        url,
-        title,
-        body,
-        author_id,
-        state,
-        merged_at
-      )
-      values (
-        ${githubPullRequestId},
-        ${issue.repositoryId},
-        ${issue.id},
-        ${nextExternalId()},
-        ${`https://github.com/example/repository/pull/${githubPullRequestId}`},
-        ${"A merged self-work contribution"},
-        ${"Pull request evidence"},
-        ${issue.sponsorId},
-        ${"MERGED"},
-        now()
-      )
-      returning id
-    `;
-    const [firstPullRequest] = await insertMergedSelfWorkPullRequest(nextExternalId());
-    const [secondPullRequest] = await insertMergedSelfWorkPullRequest(nextExternalId());
-    for (const pullRequest of [firstPullRequest, secondPullRequest]) {
-      await sql`
-        insert into pull_request_issues (pull_request_id, issue_id, repository_id)
-        values (${pullRequest.id}, ${issue.id}, ${issue.repositoryId})
-      `;
-    }
+    const firstPullRequest = await insertMergedSelfWorkPullRequest(sql, issue);
+    const secondPullRequest = await insertMergedSelfWorkPullRequest(sql, issue);
 
     await sql`
       insert into self_work_calibrations (
@@ -4367,6 +4388,46 @@ async function insertPullRequest(
     sponsorId: issue.sponsorId,
     repositoryId: issue.repositoryId,
   };
+}
+
+/** A merged self-work pull request: authored by the issue's sponsor and paired in pull_request_issues. */
+async function insertMergedSelfWorkPullRequest(
+  client: QueryableSql,
+  issue: { id: string; sponsorId: string; repositoryId: string },
+): Promise<{ id: string }> {
+  const githubPullRequestId = nextExternalId();
+  const [pullRequest] = await client<{ id: string }[]>`
+    insert into pull_requests (
+      github_pull_request_id,
+      repository_id,
+      issue_id,
+      pull_request_number,
+      url,
+      title,
+      body,
+      author_id,
+      state,
+      merged_at
+    )
+    values (
+      ${githubPullRequestId},
+      ${issue.repositoryId},
+      ${issue.id},
+      ${nextExternalId()},
+      ${`https://github.com/example/repository/pull/${githubPullRequestId}`},
+      ${"A merged self-work contribution"},
+      ${"Pull request evidence"},
+      ${issue.sponsorId},
+      ${"MERGED"},
+      now()
+    )
+    returning id
+  `;
+  await client`
+    insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+    values (${pullRequest.id}, ${issue.id}, ${issue.repositoryId})
+  `;
+  return pullRequest;
 }
 
 async function insertSiblingIssue(client: QueryableSql, issueId: string): Promise<string> {

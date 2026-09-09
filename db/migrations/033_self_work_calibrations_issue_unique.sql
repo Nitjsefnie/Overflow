@@ -2,9 +2,11 @@
 -- has carried `settlements_issue_unique` since 003, while `self_work_calibrations`
 -- kept only the (pull_request_id, issue_id) pair, so an issue closed by more than
 -- one pull request over its life could hold a second calibration row and silently
--- weight one issue twice in the calibration statistics. Existing duplicates would
--- trip the new constraint on the next reconciliation. Resolve them by deleting the
--- surplus rows for the offending issues, keeping one per issue, before upgrading.
+-- weight one issue twice in the calibration statistics. Nothing else refuses a
+-- duplicate: the fold's materializer removal loop deletes surplus calibrations
+-- silently on the next reconciliation, so this precondition is the only guard.
+-- Resolve duplicates by deleting the surplus rows for the offending issues, keeping
+-- one per issue, before upgrading.
 do $$
 declare
   affected_count bigint;
