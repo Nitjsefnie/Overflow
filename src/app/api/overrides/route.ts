@@ -8,11 +8,8 @@ import {
   type SettlementOverrideRequest,
   type SettlementOverrideTarget,
 } from "@/lib/overrides/service";
-import {
-  guardByCredential,
-  resolveRouteCredential,
-  type RouteCredentialSession,
-} from "@/lib/security/route-credential";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { requiredMemberSession } from "@/lib/security/member-route-auth";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 // Strict on both sides of the union, so a body naming a settlement and a
@@ -75,46 +72,6 @@ export function createSettlementOverridePostHandler(dependencies: SettlementOver
       return settlementOverrideErrorResponse(error);
     }
   };
-}
-
-/**
- * Confirms the resolved credential's account still exists, by reading its role
- * back from the database rather than trusting the credential. A session
- * outlives the account it was issued for, and a token's account row is only as
- * fresh as the moment it was read; membership of a settlement is checked again
- * in the store.
- */
-export async function requiredMemberSession(
-  request: Request,
-  dependencies: Pick<
-    SettlementOverrideRouteDependencies,
-    "getSession" | "findAccountByTokenHash" | "getCurrentRole"
-  >,
-): Promise<{ user: { id: string; role: UserRole } } | Response> {
-  let credential: RouteCredentialSession | Response | null;
-  try {
-    credential = await resolveRouteCredential(request, dependencies);
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
-  }
-  if (credential instanceof Response) {
-    return credential;
-  }
-  if (credential === null) {
-    return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-  }
-
-  let role: UserRole | null;
-  try {
-    role = await dependencies.getCurrentRole(credential.user.id);
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
-  }
-  if (role === null) {
-    return errorResponse(403, "FORBIDDEN", "A member account is required.");
-  }
-
-  return { user: { id: credential.user.id, role } };
 }
 
 export function settlementOverrideErrorResponse(error: unknown): Response {
