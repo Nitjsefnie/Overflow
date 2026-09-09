@@ -59,6 +59,9 @@ src/app/api/moderation/*
 !src/app/api/moderation/[[]id[]]/
 src/app/api/moderation/[[]id[]]/*
 !src/app/api/moderation/[[]id[]]/*.ts
+!src/app/api/moderation/audits/
+src/app/api/moderation/audits/*
+!src/app/api/moderation/audits/*.ts
 !src/app/api/moderation/cohort/
 src/app/api/moderation/cohort/*
 !src/app/api/moderation/cohort/*.ts
