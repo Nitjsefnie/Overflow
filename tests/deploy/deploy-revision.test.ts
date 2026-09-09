@@ -85,12 +85,16 @@ async function makeRelease(tree: string, name: string): Promise<string> {
 async function makeFixture(options: {
   prevRelease?: string;
   extraReleases?: string[];
+  servingCache?: boolean;
 } = {}): Promise<Fixture> {
   const dir = await mkdtemp(path.join(tmpdir(), "overflow-deploy-revision-"));
   const tree = path.join(dir, "tree");
   await mkdir(tree);
   const prevName = options.prevRelease ?? ".next-release-20260908T000000Z-abc1234";
   const prevDir = await makeRelease(tree, prevName);
+  if (options.servingCache === false) {
+    await rm(path.join(prevDir, "cache"), { recursive: true });
+  }
   for (const name of options.extraReleases ?? [
     ".next-release-20260907T000000Z-def5678",
     ".next-release-20260906T000000Z-abc1234",
@@ -151,7 +155,10 @@ exit 0
     envKeys: ["NEXT_DIST_DIR", "npm_config_package_import_method", "OVERFLOW_FIXTURE_ENV_MARKER"],
     dispatch: `
 if [ "$1" = "--silent" ]; then shift; fi
-if [ "$1" = webhooks:upgrade ]; then exit "\${UPGRADE_STATUS:-0}"; fi
+if [ "$1" = webhooks:upgrade ]; then
+  printf '{"upgradeFixture":true}\\n'
+  exit "\${UPGRADE_STATUS:-0}"
+fi
 exit 0
 `,
   },
@@ -335,7 +342,51 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain(`New build: ${release}`);
     expect(result.stdout).toContain("Webhook upgrade exit status: 0");
     const upgradeLog = path.join(fixture.logDir, `webhook-upgrade-${release}.jsonl`);
-    await expect(readFile(upgradeLog, "utf8")).resolves.toBe("");
+    await expect(readFile(upgradeLog, "utf8")).resolves.toContain('{"upgradeFixture":true}');
+  });
+
+  it("aborts when the serving release has no cache directory, before touching ownership", async () => {
+    const fixture = await makeFixture({ servingCache: false });
+    const result = await runDeploy(fixture);
+
+    expect(result.status).not.toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "find")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "systemctl")).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
+    expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
+  });
+
+  it("prints the webhook upgrade's output to the transcript through its log", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture);
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    const upgradeLog = path.join(fixture.logDir, `webhook-upgrade-${release}.jsonl`);
+    await expect(readFile(upgradeLog, "utf8")).resolves.toContain('{"upgradeFixture":true}');
+    expect(result.stdout).toContain('{"upgradeFixture":true}');
+  });
+
+  it("prints the retention listing to the deploy record", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture);
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    // The captured listing is printed as one contiguous block, descending, so
+    // the deploy record shows exactly what the prune guard decided from.
+    const listing = [
+      release,
+      ".next-release-20260908T000000Z-abc1234",
+      ".next-release-20260907T000000Z-def5678",
+      ".next-release-20260906T000000Z-abc1234",
+      ".next-release-20260801T000000Z-def5678",
+    ].join("\n");
+    expect(result.stdout).toContain(listing);
   });
 
   it("passes --expect-current the pre-pull anchor, not a value re-read after the pull", async () => {
