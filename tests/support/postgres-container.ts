@@ -1,7 +1,6 @@
 import { GenericContainer, Wait, type StartedTestContainer, type WaitStrategy } from "testcontainers";
 
 export interface PostgresContainerOptions {
-  name?: string;
   database: string;
   user: string;
   password: string;
@@ -41,8 +40,6 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
     })
     .withExposedPorts(5432)
     .withWaitStrategy(postgresWaitStrategy({ database, user }));
-
-  if (options.name) container = container.withName(options.name);
 
   for (const { name, content } of initScripts) {
     container = container.withCopyContentToContainer([
