@@ -63,7 +63,7 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
               <dd>{settlement.reviewRounds}</dd>
             </div>
             <div>
-              <dt>Credits moved</dt>
+              <dt>{settlement.status === "UNCLAIMED" ? "Credits pending claim" : "Credits moved"}</dt>
               <dd>{settlement.credits}</dd>
             </div>
             <div>

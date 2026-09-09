@@ -195,6 +195,22 @@ describe("moderator settlement correction queue", () => {
     expect(entry).toHaveTextContent("Credits moved");
   });
 
+  it("keeps an unclaimed settlement's credits pending rather than moved", () => {
+    render(
+      <SettlementOverrideQueue
+        requests={[
+          queued({
+            settlement: { ...queued().settlement!, status: "UNCLAIMED", credits: 6 },
+          }),
+        ]}
+      />,
+    );
+
+    const entry = screen.getByRole("listitem");
+    expect(evidenceValue(entry, "Credits pending claim")).toBe("6");
+    expect(entry).not.toHaveTextContent("Credits moved");
+  });
+
   it("offers a decision for every queued request", () => {
     render(
       <SettlementOverrideQueue

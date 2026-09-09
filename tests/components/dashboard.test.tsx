@@ -50,6 +50,7 @@ describe("member dashboard", () => {
           recentSettlements: [
             {
               id: "settlement-9",
+              status: "SETTLED",
               repositoryName: "co-op/harbour",
               issueNumber: 9,
               issueTitle: "Close the lock",
@@ -84,6 +85,48 @@ describe("member dashboard", () => {
       "/settlements/settlement-9",
     );
     expect(screen.getByText("4 credits · review deduction 3")).toBeVisible();
+  });
+
+  it("does not present an unclaimed settlement's credits as moved", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 12,
+          earnedTotal: 19,
+          givenTotal: 7,
+          reservedPoints: 4,
+          availableHeadroom: 8,
+          recentSettlements: [
+            {
+              id: "settlement-7",
+              status: "UNCLAIMED",
+              repositoryName: "co-op/harbour",
+              issueNumber: 7,
+              issueTitle: "Dredge the channel",
+              issueUrl: "https://github.com/co-op/harbour/issues/7",
+              pullRequestNumber: 8,
+              pullRequestTitle: "Dredge it yourself",
+              pullRequestUrl: "https://github.com/co-op/harbour/pull/8",
+              proofSha256: "a".repeat(64),
+              credits: 6,
+              reviewRounds: 0,
+              settledAt: "2026-09-01T00:00:00.000Z",
+            },
+          ],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/Awaiting a claim/)).toBeVisible();
+    expect(screen.getByText(/credits pending claim/)).toBeVisible();
+    // The figure stays in the projection for the proof page link, but the widget
+    // must not read it as a balance that already moved.
+    expect(screen.queryByText("6 credits · review deduction 0")).not.toBeInTheDocument();
   });
 
   it("shows the dashboard operational queues and renders external text as text", () => {
