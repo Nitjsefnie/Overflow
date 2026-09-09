@@ -93,14 +93,26 @@ existing `openAccountAudit` floor) keeps one number on the board.
    the evidence the gap was measured on, N-row blast radius, and shifts every
    downstream consumer at once).
 
-5. **closeRecalibration gains an optional `applyAdjustment` decision.**
-   Absent/false keeps today's behavior byte-identical (plan as prose). True
-   requires the trigger to pass on the stored snapshot, then applies the
-   adjustment in the SAME transaction that reactivates the sponsor: adjustment
-   row + lines + moderation event. Refusal surfaces as
-   `ModerationServiceError("INVALID_INPUT")` when the stored comparison does
-   not support an adjustment. Rejected: a separate endpoint for apply — one
-   decision moment, one transaction, one audit record.
+5. **Applying an adjustment is its own moderator action, in its own store
+   module.** `applyRecalibrationCreditAdjustment({ actorId, targetAccountId,
+   reason })` runs in ONE transaction: lock the target, load the latest
+   SUBSTANTIATED audit, verify every stored pair still matches its live
+   settlement/self-work row, require the trigger, compute total + lines, and
+   insert the adjustment + lines + a moderation event. Uniqueness is
+   DB-enforced: a partial unique index allows exactly one non-reversal
+   adjustment per audit, and one reversal per original — a second apply or a
+   double reversal is a CONFLICT by constraint, not by read-then-write.
+   RULING (2026-09-09, PR 345 contention): this does NOT ride
+   `closeRecalibration` — PR 345 (issue 48) owns that function's reactivation
+   UPDATE and its test, so this branch leaves `postgres-store.ts` and the
+   close path byte-identical and takes its own module
+   (`credit-adjustment-store.ts`). Cost accepted: close and apply are two
+   transactions; a crash between them leaves an applied adjustment on a
+   still-RECALIBRATING account, recoverable by closing or reversing. The
+   apply is not gated on enforcement state — a late compensation after a
+   close-without-adjustment remains possible, which is the conservative
+   direction. Rejected: apply-inside-close (one transaction, one decision —
+   preferred on the merits, ruled out by the live file contention).
 
 6. **Reversibility: a mirrored reversal, never a delete.**
    `reverseModerationCreditAdjustment(adjustmentId, reason)` is a moderator
@@ -175,6 +187,14 @@ create table moderation_credit_adjustment_lines (
   amount integer not null check (amount <> 0),
   primary key (adjustment_id, settlement_id)
 );
+
+create unique index one_adjustment_per_audit
+  on moderation_credit_adjustments (calibration_audit_id)
+  where reversal_of is null;
+
+create unique index one_reversal_per_adjustment
+  on moderation_credit_adjustments (reversal_of)
+  where reversal_of is not null;
 ```
 
 (Exact DDL — enum-before-table ordering, CHECK shapes, and whether the
@@ -237,49 +257,69 @@ Tests: schema/migration coverage via the existing migration-list assertion
 plus a container test asserting the view carries an adjustment's entries and
 that an inserted adjustment moves `balances` both ways (apply + reversal).
 
-## Task 3: store layer — src/lib/moderation/postgres-store.ts, tests/moderation/postgres-store.test.ts (container)
+## Task 3: store layer — src/lib/moderation/credit-adjustment-store.ts (NEW module), tests/moderation/credit-adjustment-store.test.ts (container)
+
+**PR 345 contention ruling: `src/lib/moderation/postgres-store.ts` and
+`tests/moderation/postgres-store.test.ts` are NOT this task's files — neither
+is edited, not even the existing closeRecalibration tests.** Everything below
+lives in the new module, which owns its own `RecalibrationCreditStore`
+interface + Postgres implementation (constructor takes the sql client, same
+pattern as PostgresModerationStore).
 - `loadRecalibrationPreview(targetAccountId)` → latest SUBSTANTIATED audit +
   stored snapshot + live-resolution verification of every stored pair (decision
   3), or a structured drift/unresolvable result the service maps to CONFLICT.
-- `closeRecalibration({…, applyAdjustment?: boolean})` — same transaction:
-  lock, resolve pairs, compute total+lines via Task 1 functions, verify no
-  drift, insert adjustment + lines + moderation event (reason records the
-  plan and that an adjustment was applied), return closure with adjustment
-  summary or null.
+- `applyRecalibrationCreditAdjustment({ actorId, targetAccountId, reason })` —
+  decision 5's transaction; computes total+lines via the Task 1 functions
+  over the resolved stored pairs (creditor identity resolved per line from
+  the live settlement row).
 - `reverseModerationCreditAdjustment({ actorId, adjustmentId, reason })` —
   mirrored negative lines, `reversal_of`, moderation event, one transaction;
-  refuses an already-reversed original (invalid_state).
-- Existing closeRecalibration behavior with no `applyAdjustment` stays
-  byte-identical; existing tests must pass unchanged.
+  a second reversal loses to the partial unique index (CONFLICT).
+- `listCreditAdjustments(targetAccountId)` — applied + reversed rows for the
+  preview surface.
 
 ## Task 4: service layer — src/lib/moderation/service.ts, tests/moderation/service.test.ts
+
+**The `ModerationStore` interface is NOT extended** (its only Postgres
+implementation is PR 345's file). The service constructor gains an OPTIONAL
+second dependency (the Task 3 credit store); enumerate every
+`new AccountModerationService(` construction site first (src + tests) and
+keep existing one-arg constructions compiling and behaving identically.
 - `previewRecalibration(actor, targetAccountId)` — moderator-gated; maps store
   results to the preview figure (decision 7) or NOT_FOUND/CONFLICT errors.
-- `closeRecalibration(actor, targetAccountId, plan, applyAdjustment?)` —
-  extends the existing signature; validates the trigger is satisfiable only
-  via the store's stored-snapshot check (no parallel computation in the
-  service); INVALID_INPUT mapping decided at review against the store's
-  structured refusals.
+- `applyRecalibrationCreditAdjustment(actor, targetAccountId, reason)` —
+  moderator-gated pass-through to the credit store; maps the store's
+  structured drift/unresolvable results to CONFLICT and a failed trigger to
+  INVALID_INPUT.
 - `reverseModerationCreditAdjustment(actor, adjustmentId, reason)` —
   moderator-gated pass-through with the store's conflict/not-found mapping.
-- Enumerate ModerationStore implementers BEFORE extending the interface
-  (grep `implements ModerationStore` + test fakes) and update each.
+- `previewRecalibration(actor, targetAccountId)` — moderator-gated; composes
+  the credit store's preview + list of applied adjustments into decision 7's
+  figure.
 
-## Task 5: API routes (`src/app/api/moderation/`, `tests/api/moderation.test.ts`).
-- PATCH `/api/moderation` accepts optional `applyAdjustment` boolean in the
-  close schema (strict schema, so the field is additive).
+## Task 5: API routes — src/app/api/moderation/, tests/api/moderation.test.ts
+
+**The existing PATCH `/api/moderation` close handler is NOT edited** (it
+wraps the PR 345-owned service method; leave the close schema and handler
+byte-identical). New routes:
 - GET `/api/moderation/recalibration?targetAccountId=…` → the preview figure.
+- POST `/api/moderation/recalibration/adjustment` `{ targetAccountId, reason }`
+  → the apply action.
 - POST `/api/moderation/adjustments/reversal` `{ adjustmentId, reason }` →
   the reversal; same error mapping as the rest of the moderation API.
-- Enumerate every creator of the route dependencies object (the exported
-  `ModerationRouteService` Pick grows by two method names — grep it).
+- Route dependency objects grow to construct the credit store alongside the
+  moderation service — enumerate every dependency-object literal (grep the
+  exported dependency types) and update each.
+
 
 ## Task 6: moderator UI — src/components/moderation-controls.tsx, src/app/moderation/page.tsx, tests/components/moderation-controls.test.tsx
 - The recalibration area shows the stored-snapshot figure: both counts, the
   gap, the actionable verdict (with the reason when not actionable), the
   proposed integer total, and the per-creditor line preview.
-- The close control gains the apply-adjustment opt-in (default OFF) whose
-  disabled state and label reflect the preview verdict.
+- The close control itself is unchanged; the apply is a SEPARATE control
+  (default-off opt-in button) whose disabled state and label reflect the
+  preview verdict, issuing POST to the apply endpoint rather than riding the
+  close PATCH.
 - An applied-adjustments list for the target with a reversal control (reason
   input, POST to the reversal endpoint).
 - Contentions stay byte-identical.
