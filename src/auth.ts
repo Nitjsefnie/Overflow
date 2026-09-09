@@ -11,6 +11,7 @@ import {
   type GitHubIdentity,
   type PersistedGitHubUser,
 } from "@/lib/auth/sign-in-decision";
+import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
 
 export const githubOAuthScope = "admin:repo_hook";
 
@@ -18,6 +19,13 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   providers: [
     GitHub({
       authorization: { params: { scope: githubOAuthScope } },
+      // GitHub's default userinfo request also hits /user/emails whenever the
+      // profile has no public email. Overflow reads no email anywhere, so the
+      // override fetches only the public identity fields.
+      userinfo: {
+        url: "https://api.github.com/user",
+        request: requestGitHubPublicIdentity,
+      },
     }),
   ],
   session: { strategy: "jwt" },
