@@ -1,6 +1,7 @@
 import type { UserRole } from "@/lib/db/types";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitHubApiError } from "@/lib/github/errors";
+import { plural } from "@/lib/plural";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 
 /**
@@ -35,7 +36,7 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ labels: [...labels] });
   } catch (error) {
     if (error instanceof GitHubApiError && (error.rateLimited || error.status === 429)) {
-      const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} seconds.`;
+      const delay = error.retryAfterSeconds === null ? "" : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
       return errorResponse(
         429,
         "GITHUB_RATE_LIMITED",
