@@ -8,6 +8,7 @@ import {
 import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { AccountModerationService, type OpenAccountAuditInput } from "@/lib/moderation/service";
 
 const cohortQuerySchema = z
@@ -21,9 +22,11 @@ const cohortQuerySchema = z
 
 export function createModerationCohortGetHandler(dependencies: ModerationRouteDependencies) {
   return async function getModerationCohort(request: Request): Promise<Response> {
-    // rejectUntrustedRequest rejects a missing Origin header, but same-origin browser
-    // fetch() GETs send none, so applying it here would reject every moderation-page preview.
-    const session = await requiredModeratorSession(dependencies);
+    // This read stays deliberately unorigin-guarded: rejectUntrustedRequest
+    // rejects a missing Origin header, but same-origin browser fetch() GETs
+    // send none, so applying it here would reject every moderation-page
+    // preview. The gate still resolves a bearer credential from the headers.
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -44,6 +47,7 @@ export function createModerationCohortGetHandler(dependencies: ModerationRouteDe
 
 export const GET = createModerationCohortGetHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());

@@ -71,11 +71,16 @@ export function guardedRequests(path: string) {
 }
 
 /**
- * The three dependencies every moderator-authorized route factory takes, as
+ * The four dependencies every moderator-authorized route factory takes, as
  * mocks a refused request must never reach.
  */
 export function unusedDependencies() {
-  return { getSession: vi.fn(), getCurrentRole: vi.fn(), createService: vi.fn() };
+  return {
+    getSession: vi.fn(),
+    findAccountByTokenHash: vi.fn(),
+    getCurrentRole: vi.fn(),
+    createService: vi.fn(),
+  };
 }
 
 /**

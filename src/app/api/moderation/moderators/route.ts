@@ -9,7 +9,8 @@ import {
   type ModeratorRoleChange,
   type ModeratorSummary,
 } from "@/lib/moderation/service";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const roleChangeSchema = z
   .object({
@@ -33,13 +34,14 @@ export type ModeratorRouteService = {
 
 export type ModeratorRouteDependencies = {
   getSession: () => Promise<ModeratorRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModeratorRouteService>;
 };
 
 export function createModeratorGetHandler(dependencies: ModeratorRouteDependencies) {
-  return async function getModerators(): Promise<Response> {
-    const session = await requiredModeratorSession(dependencies);
+  return async function getModerators(request: Request): Promise<Response> {
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -55,12 +57,12 @@ export function createModeratorGetHandler(dependencies: ModeratorRouteDependenci
 
 export function createModeratorPostHandler(dependencies: ModeratorRouteDependencies) {
   return async function postModerator(request: Request): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -121,6 +123,7 @@ async function getProductionSession(): Promise<ModeratorRouteSession | null> {
 
 const productionDependencies: ModeratorRouteDependencies = {
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new AccountModerationService(new PostgresModerationStore());
