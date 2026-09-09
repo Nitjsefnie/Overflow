@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   signIn: vi.fn(),
+  signOutAction: vi.fn(),
   redirect: vi.fn((target: string) => {
     throw new Error(`the landing route must not redirect, but it redirected to ${target}`);
   }),
@@ -13,7 +14,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/auth", () => ({ auth: mocks.auth, signIn: mocks.signIn }));
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("@/lib/auth/sign-out-action", () => ({ signOutAction: mocks.signOutAction }));
 
+import { readFileSync } from "node:fs";
+import { AppShell, PublicAppShell } from "@/components/app-shell";
 import HomePage from "@/app/page";
 
 // Issue 38: the signed-out entry route rendered a bare main.landing-page with no
@@ -34,6 +38,10 @@ describe("signed-out landing chrome", () => {
     const wordmark = within(header).getByRole("link", { name: "Overflow home" });
     expect(wordmark).toHaveAttribute("href", "/");
     expect(wordmark.querySelector(".mark")).not.toBeNull();
+    // The visible text is the product's name — what the issue asks a
+    // first-time visitor to see in the chrome. The aria-label above only
+    // governs the accessible name, so pin the rendered span itself.
+    expect(within(wordmark).getByText("Overflow")).toBeVisible();
 
     within(header).getByRole("navigation", { name: "Site navigation" });
 
@@ -48,6 +56,11 @@ describe("signed-out landing chrome", () => {
     expect(main).toHaveAttribute("id", "main-content");
     expect(main?.closest(".app-shell")).not.toBeNull();
     expect(document.querySelector("a.skip-link")?.getAttribute("href")).toBe("#main-content");
+    // ... and the shell adds no main of its own: a second main would nest one
+    // inside another, duplicate the skip link's target id, and silently
+    // retarget the skip link at the shell's wrapper instead of the content.
+    expect(document.querySelectorAll("main")).toHaveLength(1);
+    expect(document.querySelectorAll("#main-content")).toHaveLength(1);
 
     expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
     const signInButton = screen.getByRole("button", { name: "Sign in with GitHub" });
@@ -118,4 +131,39 @@ describe("signed-out landing chrome", () => {
       expect(mocks.redirect).toHaveBeenCalledWith("/dashboard");
     },
   );
+
+  it("renders the same footer as the member shell", () => {
+    const member = render(
+      <AppShell memberName="Lin" isModerator={false}>
+        <p>content</p>
+      </AppShell>,
+    );
+    const memberFooter = screen.getByRole("contentinfo").textContent;
+    member.unmount();
+
+    render(
+      <PublicAppShell>
+        <p>content</p>
+      </PublicAppShell>,
+    );
+    const publicFooter = screen.getByRole("contentinfo").textContent;
+
+    expect(memberFooter?.length ?? 0).toBeGreaterThan(0);
+    // The two shells carry the same footer, asserted as equality between the
+    // rendered shells — never as a literal sentence, so either side can reword
+    // as long as both move together.
+    expect(publicFooter).toEqual(memberFooter);
+  });
+
+  it("keeps the composed landing main from re-insetting inside the shell", () => {
+    const stylesheet = readFileSync("src/app/globals.css", "utf8");
+    const block = stylesheet.match(/\.app-shell \.landing-page\s*\{[^}]*\}/);
+    expect(
+      block,
+      "the nested landing-main override is gone: the landing main would apply the shared width rule a second time inside .app-shell and no longer align with the header and footer edges",
+    ).not.toBeNull();
+    const declarations = block![0].replace(/\s+/g, " ");
+    expect(declarations).toContain("width: 100%");
+    expect(declarations).toContain("margin: 0");
+  });
 });
