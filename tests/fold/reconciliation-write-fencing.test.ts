@@ -534,6 +534,52 @@ describe("repository publication fencing", () => {
       await coordination.end({ timeout: 0 });
     }
   });
+
+  // The unlock must be gated on the session identity, not merely annotated with it: a dead
+  // coordinator's scope-exit unlock executes on whatever session the pool re-handed the
+  // connection to, and for the same repository that session now holds the very same key.
+  // An ungated pg_advisory_unlock answers released: true from the foreign session and silently
+  // releases the successor's lock — no warning, no reclaim-skip, nothing.
+  it("does not let a dead coordinator's unlock release a successor's lock on the same repository", async () => {
+    const { repositoryId } = await fixture();
+    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const store = new PostgresFoldStore(sql, key, coordination);
+    const olderEntered = signal();
+    const olderRelease = signal();
+    const successorEntered = signal();
+    const successorRelease = signal();
+    let older: Promise<unknown> | undefined;
+    let newer: Promise<unknown> | undefined;
+    try {
+      older = store.withRepositoryReconciliation(repositoryId, async () => {
+        olderEntered.resolve();
+        await olderRelease.promise;
+      });
+      await olderEntered.promise;
+      await loseSession(repositoryId);
+      newer = store.withRepositoryReconciliation(repositoryId, async () => {
+        successorEntered.resolve();
+        await successorRelease.promise;
+        await store.recordVerifiedRepositoryIdentity({
+          repositoryId, ownerName: `same-key ${repositoryId}`, visibility: "PUBLIC",
+        });
+      });
+      await successorEntered.promise;
+      olderRelease.resolve();
+      // The dead coordinator's scope-exit unlock executes on the re-handed session, where the
+      // successor now holds the very same key. The ungated release answers released: true from
+      // that session and the old scope resolves as if it had released its own lock.
+      await expect(older).rejects.toThrow();
+      successorRelease.resolve();
+      await newer;
+      expect((await repositoryState(repositoryId)).owner_name).toBe(`same-key ${repositoryId}`);
+    } finally {
+      olderRelease.resolve();
+      successorRelease.resolve();
+      await Promise.allSettled([older, newer]);
+      await coordination.end({ timeout: 0 });
+    }
+  });
 });
 
 function signal() {

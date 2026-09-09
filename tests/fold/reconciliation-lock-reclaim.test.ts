@@ -10,7 +10,9 @@ const tryLockStatement = "select pg_try_advisory_lock( hashtextextended(?, ?) ) 
   + "(select backend_start::text from pg_stat_activity where pid = pg_backend_pid()) as backend_start, "
   + "(select oid::text from pg_database where datname = current_database()) as database_oid, "
   + "hashtextextended(?, ?)::text as lock_key";
-const targetedUnlockStatement = "select pg_advisory_unlock( hashtextextended(?, ?) ) as released, "
+const targetedUnlockStatement = "select case when pg_backend_pid() = ? and (select backend_start from "
+  + "pg_stat_activity where pid = pg_backend_pid()) = ?::text::timestamptz "
+  + "then pg_advisory_unlock( hashtextextended(?, ?) ) else false end as released, "
   + "pg_backend_pid() = ? and (select backend_start from pg_stat_activity where pid = pg_backend_pid()) "
   + "= ?::text::timestamptz as same_session";
 const unlockAllStatement = "select pg_advisory_unlock_all() as unlocked "

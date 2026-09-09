@@ -500,15 +500,24 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
             // Whether the session answering the unlock is still the one that took the lock. A
             // reservation never outlives its backend: when the backend dies, the pool takes the
             // connection back and may hand it to the next reservation, so a foreign identity
-            // here means the owning backend is gone and its lock went with it.
+            // here means the owning backend is gone. For the same repository that next session
+            // can hold the very same key, and an ungated pg_advisory_unlock would release it and
+            // answer true — so the release itself is gated on the identity, not merely annotated
+            // beside it.
             let sessionChanged = false;
             try {
               const [unlock] = await connection<{
                 released: boolean; same_session: boolean;
               }[]>`
-                select pg_advisory_unlock(
-                  hashtextextended(${repositoryId}, ${repositoryLockNamespace})
-                ) as released,
+                select case
+                    when pg_backend_pid() = ${ownership.pid}
+                      and (select backend_start from pg_stat_activity where pid = pg_backend_pid())
+                        = ${ownership.backendStart}::text::timestamptz
+                    then pg_advisory_unlock(
+                      hashtextextended(${repositoryId}, ${repositoryLockNamespace})
+                    )
+                    else false
+                  end as released,
                   pg_backend_pid() = ${ownership.pid}
                     and (select backend_start from pg_stat_activity where pid = pg_backend_pid())
                       = ${ownership.backendStart}::text::timestamptz as same_session
