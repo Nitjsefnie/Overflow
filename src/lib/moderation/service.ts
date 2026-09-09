@@ -16,6 +16,7 @@ import type {
   RecalibrationCreditConflict,
   RecalibrationCreditFailure,
   RecalibrationCreditStore,
+  RecalibrationPreviewFailure,
 } from "@/lib/moderation/credit-adjustment-store";
 import type { EnforcementState, UserRole } from "@/lib/db/types";
 import { normalizeRecalibrationPlan } from "@/lib/moderation/transitions";
@@ -335,7 +336,7 @@ export class AccountModerationService {
     requireModerator(actor);
     const creditStore = this.requireCreditStore();
     const target = normalizeIdentifier(targetAccountId, "Target account identifier");
-    const preview = unwrapCreditResult(await creditStore.loadRecalibrationPreview(target));
+    const preview = unwrapPreviewResult(await creditStore.loadRecalibrationPreview(target));
 
     return {
       audit: preview.audit,
@@ -373,8 +374,11 @@ export class AccountModerationService {
   /**
    * Reverses an applied adjustment by mirroring it — negative lines, its own
    * moderation event, the original row untouched — in the credit store's
-   * single transaction. Reversing a reversal is refused: a fresh adjustment
-   * from the audit is the way to re-compensate.
+   * single transaction. Reversing a reversal is refused, and re-applying on
+   * the same audit cannot re-compensate either: the `one_adjustment_per_audit`
+   * partial unique index (`where reversal_of is null`) stays satisfied by the
+   * original row forever, so a second apply loses to ALREADY_APPLIED even
+   * after its reversal — re-compensation requires a newer SUBSTANTIATED audit.
    */
   public async reverseModerationCreditAdjustment(
     actor: ModerationActor,
@@ -539,10 +543,11 @@ function unwrapStoreResult<T>(result: ModerationStoreResult<T>): T {
 }
 
 /**
- * Maps the credit store's structured results onto the service's error codes:
+ * Maps the credit actions' structured results onto the service's error codes:
  * a missing record to NOT_FOUND, drifted or already-decided evidence to
- * CONFLICT, and a failed trigger to INVALID_INPUT — the caller asked for an
- * action the audit's own comparison does not support.
+ * CONFLICT, and a failed trigger on apply to INVALID_INPUT — the caller asked
+ * for an action the audit's own comparison does not support. The preview maps
+ * through `unwrapPreviewResult` instead: a read never refuses on actionability.
  */
 function unwrapCreditResult<T>(result: { kind: "ok"; value: T } | RecalibrationCreditFailure): T {
   if (result.kind === "ok") {
@@ -558,6 +563,23 @@ function unwrapCreditResult<T>(result: { kind: "ok"; value: T } | RecalibrationC
         "INVALID_INPUT",
         "The audit's calibration gap does not support a compensating adjustment.",
       );
+  }
+}
+
+/**
+ * Maps the preview's structured results onto the service's error codes: a
+ * missing audit to NOT_FOUND and drifted evidence to CONFLICT. There is no
+ * actionability arm — the preview result union carries no `not_actionable`
+ * variant, so a read can never surface the 422 a failed trigger maps to.
+ */
+function unwrapPreviewResult<T>(result: { kind: "ok"; value: T } | RecalibrationPreviewFailure): T {
+  switch (result.kind) {
+    case "ok":
+      return result.value;
+    case "not_found":
+      throw new ModerationServiceError("NOT_FOUND", "The requested moderation record was not found.");
+    case "conflict":
+      throw new ModerationServiceError("CONFLICT", creditConflictMessage(result.detail));
   }
 }
 

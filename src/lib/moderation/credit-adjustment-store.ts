@@ -33,17 +33,29 @@ export type RecalibrationCreditConflict =
   | { cause: "ALREADY_REVERSED" };
 
 /**
- * The structured refusals the service maps: `not_found` to NOT_FOUND,
- * `conflict` to CONFLICT, `not_actionable` to INVALID_INPUT.
+ * The structured refusals the credit actions map: `not_found` to NOT_FOUND,
+ * `conflict` to CONFLICT, `not_actionable` to INVALID_INPUT. `not_actionable`
+ * exists only on the action results — apply is where a failed trigger
+ * surfaces.
  */
 export type RecalibrationCreditFailure =
   | { kind: "not_found" }
   | { kind: "conflict"; detail: RecalibrationCreditConflict }
   | { kind: "not_actionable"; actionability: CalibrationActionability };
 
+/**
+ * The preview's refusals: a missing audit or drifted evidence only. A read
+ * never refuses on actionability — a failed trigger rides the ok shape with
+ * `figure: null` — so this union carries no `not_actionable` variant and a
+ * preview can never be refused as non-actionable.
+ */
+export type RecalibrationPreviewFailure =
+  | { kind: "not_found" }
+  | { kind: "conflict"; detail: RecalibrationCreditConflict };
+
 export type RecalibrationPreviewResult =
   | { kind: "ok"; value: RecalibrationPreview }
-  | RecalibrationCreditFailure;
+  | RecalibrationPreviewFailure;
 
 export type CreditAdjustmentResult =
   | { kind: "ok"; value: CreditAdjustmentRecord }
