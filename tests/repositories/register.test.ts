@@ -426,6 +426,8 @@ describe("explicit repository registration", () => {
     it.each([
       [403, 60, " Retry after 60 seconds."],
       [404, null, ""],
+      [429, 1, " Retry after 1 second."],
+      [429, 2, " Retry after 2 seconds."],
       [500, 0, " Retry after 0 seconds."],
     ] as const)("prioritizes throttling for HTTP %s with retry delay %s", async (status, retryAfterSeconds, delay) => {
       const harness = createHarness({ owner: "Real-Owner", ownerType: "ORGANIZATION" });
