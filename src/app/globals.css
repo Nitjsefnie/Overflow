@@ -607,6 +607,7 @@ button:disabled {
 
 .calibration-grid {
   margin-top: 1.5rem;
+  /* The three shared rows assume each panel section has exactly three children (heading, mean, median); a fourth child would land in an implicit track outside the shared span. */
   grid-template-rows: repeat(3, auto);
   border-top: 2px solid var(--line);
   border-left: 2px solid var(--line);
