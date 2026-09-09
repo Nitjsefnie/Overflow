@@ -474,7 +474,7 @@ describe("PostgreSQL account moderation transitions", () => {
     // The second substantiation is the transition whose deactivation this test pins.
     expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
 
-    const [row] = await sql<{ active: boolean; unregistered_at: Date | string | null }[]>`
+    const [row] = await sql<{ active: boolean; unregistered_at: Date }[]>`
       select active, unregistered_at from registered_repositories where id = ${repositoryId}
     `;
     expect(row.active).toBe(false);
