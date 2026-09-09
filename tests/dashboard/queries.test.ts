@@ -666,6 +666,7 @@ describe("dashboard projections", () => {
       [
         {
           id: "settlement-9",
+          status: "SETTLED",
           repository_name: "co-op/harbour",
           issue_number: 9,
           issue_title: "Close the lock",
@@ -689,6 +690,7 @@ describe("dashboard projections", () => {
     expect(dashboard.recentSettlements).toEqual([
       {
         id: "settlement-9",
+        status: "SETTLED",
         repositoryName: "co-op/harbour",
         issueNumber: 9,
         issueTitle: "Close the lock",
@@ -706,6 +708,84 @@ describe("dashboard projections", () => {
     expect(projectionSql).toMatch(/from settlements/);
     expect(projectionSql).toMatch(/order by settlements\.created_at desc/);
     expect(projectionSql).not.toMatch(/encrypted_oauth_token|access_token|auth_secret|webhook_secret|credential|churn/);
+  });
+
+  it("carries the ledger status into the recent settlement projection, unclaimed included", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: 12, earned_total: 19, given_total: 7, reserved_points: 4 }],
+      [
+        {
+          id: "settlement-9",
+          status: "SETTLED",
+          repository_name: "co-op/harbour",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          pull_request_number: 12,
+          pull_request_title: "Seal the lock",
+          pull_request_url: "https://github.com/co-op/harbour/pull/12",
+          proof_sha256: proof,
+          credits: 4,
+          review_rounds: 3,
+          settled_at: "2026-09-03T00:00:00.000Z",
+        },
+        {
+          id: "settlement-7",
+          status: "UNCLAIMED",
+          repository_name: "co-op/harbour",
+          issue_number: 7,
+          issue_title: "Dredge the channel",
+          issue_url: "https://github.com/co-op/harbour/issues/7",
+          pull_request_number: 8,
+          pull_request_title: "Dredge it yourself",
+          pull_request_url: "https://github.com/co-op/harbour/pull/8",
+          proof_sha256: proof,
+          credits: 6,
+          review_rounds: 0,
+          settled_at: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+      [],
+      [],
+      [],
+    ]);
+
+    const dashboard = await getDashboard("member-1", { sql });
+
+    expect(dashboard.recentSettlements).toEqual([
+      expect.objectContaining({ id: "settlement-9", status: "SETTLED", credits: 4 }),
+      expect.objectContaining({ id: "settlement-7", status: "UNCLAIMED", credits: 6 }),
+    ]);
+    const projection = (captures[1]?.text ?? "").match(/^\s*select\s+([\s\S]*?)\s+from\s+settlements\b/i)?.[1] ?? "";
+    expect(projection).toMatch(/(?:^|,)\s*settlements\.status::text\s+as\s+status\s*(?:,|$)/i);
+  });
+
+  it("rejects a recent settlement row whose status is not a ledger status", async () => {
+    const { sql } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [
+        {
+          id: "settlement-9",
+          status: "MYSTERY",
+          repository_name: "co-op/harbour",
+          issue_number: 9,
+          issue_title: "Close the lock",
+          issue_url: "https://github.com/co-op/harbour/issues/9",
+          pull_request_number: 12,
+          pull_request_title: "Seal the lock",
+          pull_request_url: "https://github.com/co-op/harbour/pull/12",
+          proof_sha256: proof,
+          credits: 4,
+          review_rounds: 3,
+          settled_at: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+      [],
+      [],
+      [],
+    ]);
+
+    await expect(getDashboard("member-1", { sql })).rejects.toThrow("Settlement status was invalid.");
   });
 
   it("uses repository reserve order first and oldest issues second for eligible work", async () => {

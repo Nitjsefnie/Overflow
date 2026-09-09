@@ -59,6 +59,7 @@ export type EnforcementNoticeProjection = {
 /** A dashboard-safe settlement summary that links a member to the complete proof page. */
 export type RecentSettlementProjection = {
   id: string;
+  status: SettlementStatus;
   repositoryName: string;
   issueNumber: number;
   issueTitle: string;
@@ -313,6 +314,7 @@ type EnforcementNoticeRow = {
 
 type RecentSettlementRow = {
   id: string;
+  status: string;
   repository_name: string;
   issue_number: number | string;
   issue_title: string;
@@ -536,6 +538,7 @@ export async function getDashboard(
   const recentSettlementRows = await sql<RecentSettlementRow[]>`
     select
       settlements.id,
+      settlements.status::text as status,
       repositories.owner_name as repository_name,
       issues.issue_number,
       issues.title as issue_title,
@@ -1328,6 +1331,7 @@ function toCalibrationPair(row: CalibrationRow): CalibrationPair {
 function toRecentSettlementProjection(row: RecentSettlementRow): RecentSettlementProjection {
   return {
     id: readText(row.id, "Settlement identifier"),
+    status: readSettlementStatus(row.status),
     repositoryName: readText(row.repository_name, "Repository name"),
     issueNumber: readNumber(row.issue_number, "Issue number"),
     issueTitle: readText(row.issue_title, "Issue title"),

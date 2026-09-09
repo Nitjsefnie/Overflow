@@ -232,6 +232,21 @@ describe("audit targeting against PostgreSQL", () => {
       { ownerName: "example/slip", reconciliationState: "RUNNING", reconciliationLastFailureAt: null },
     ]);
   });
+
+  it("carries each recent settlement's ledger status into the member dashboard", async () => {
+    const dashboard = await getDashboard(seeded.carolId);
+
+    // The seeded world gives carol three settlements — SETTLED, UNSETTLED, UNCLAIMED, in that
+    // insertion order — so this asserts the UNCLAIMED one arrives with its own status rather than
+    // reading like the settled row beside it, and that the UNSETTLED one stays filtered out.
+    expect(dashboard.recentSettlements.map((settlement) => ({
+      status: settlement.status,
+      credits: settlement.credits,
+    }))).toEqual([
+      { status: "UNCLAIMED", credits: 6 },
+      { status: "SETTLED", credits: 6 },
+    ]);
+  });
 });
 
 /** The lease columns travel with RUNNING to satisfy repository_reconciliation_jobs_lease_check. */

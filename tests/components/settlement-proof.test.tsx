@@ -126,4 +126,41 @@ describe("settlement proof page", () => {
     expect(queries).toEqual([expect.stringContaining("from settlements")]);
     expect(queries.some((query) => query.includes("from settlement_override_requests"))).toBe(false);
   });
+
+  it("names an unclaimed proof's credits pending and keeps a settled proof's credits moved", async () => {
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [{ ...settlementRow, status: "UNCLAIMED" }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const unclaimed = screen.getByRole("article", { name: "co-op/harbour settlement" });
+    expect(within(unclaimed).queryByText("Credits moved")).toBeNull();
+    expect(within(unclaimed).getByText("Credits pending claim")).toBeVisible();
+    // The figure itself is unchanged; only what the ledger calls it is.
+    expect(within(unclaimed).getByText("Credits pending claim").nextElementSibling).toHaveTextContent("3");
+
+    cleanup();
+    sql.mockImplementation(async (strings: TemplateStringsArray) => {
+      const text = strings.join("?");
+      if (text.includes("from settlement_override_requests")) {
+        return [];
+      }
+      if (text.includes("from settlements")) {
+        return [settlementRow];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    render(await SettlementProofPage(settlementParams));
+
+    const settled = screen.getByRole("article", { name: "co-op/harbour settlement" });
+    expect(within(settled).getByText("Credits moved")).toBeVisible();
+    expect(within(settled).queryByText("Credits pending claim")).toBeNull();
+  });
 });
