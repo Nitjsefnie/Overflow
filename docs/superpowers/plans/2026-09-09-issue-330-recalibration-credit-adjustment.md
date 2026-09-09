@@ -233,8 +233,7 @@ Tests: schema/migration coverage via the existing migration-list assertion
 plus a container test asserting the view carries an adjustment's entries and
 that an inserted adjustment moves `balances` both ways (apply + reversal).
 
-**Task 3 — store layer (`src/lib/moderation/postgres-store.ts`,
-`tests/moderation/postgres-store.test.ts`, container).**
+## Task 3: store layer — src/lib/moderation/postgres-store.ts, tests/moderation/postgres-store.test.ts (container)
 - `loadRecalibrationPreview(targetAccountId)` → latest SUBSTANTIATED audit +
   stored snapshot + live-resolution verification of every stored pair (decision
   3), or a structured drift/unresolvable result the service maps to CONFLICT.
@@ -249,8 +248,7 @@ that an inserted adjustment moves `balances` both ways (apply + reversal).
 - Existing closeRecalibration behavior with no `applyAdjustment` stays
   byte-identical; existing tests must pass unchanged.
 
-**Task 4 — service layer (`src/lib/moderation/service.ts`,
-`tests/moderation/service.test.ts`).**
+## Task 4: service layer — src/lib/moderation/service.ts, tests/moderation/service.test.ts
 - `previewRecalibration(actor, targetAccountId)` — moderator-gated; maps store
   results to the preview figure (decision 7) or NOT_FOUND/CONFLICT errors.
 - `closeRecalibration(actor, targetAccountId, plan, applyAdjustment?)` —
@@ -272,8 +270,7 @@ that an inserted adjustment moves `balances` both ways (apply + reversal).
 - Enumerate every creator of the route dependencies object (the exported
   `ModerationRouteService` Pick grows by two method names — grep it).
 
-**Task 6 — moderator UI (`src/components/moderation-controls.tsx`,
-`src/app/moderation/page.tsx`, `tests/components/moderation-controls.test.tsx`).**
+## Task 6: moderator UI — src/components/moderation-controls.tsx, src/app/moderation/page.tsx, tests/components/moderation-controls.test.tsx
 - The recalibration area shows the stored-snapshot figure: both counts, the
   gap, the actionable verdict (with the reason when not actionable), the
   proposed integer total, and the per-creditor line preview.
