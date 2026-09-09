@@ -1,11 +1,20 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface Source {
   path: string;
+  source: string;
   stripped: string;
 }
+
+/**
+ * This file, as the scan names it. The raw withName pass skips it: its own
+ * fixture below carries the pattern text, and a guard that arrests itself is
+ * no guard.
+ */
+const selfPath = relative(resolve("tests"), fileURLToPath(import.meta.url));
 
 /**
  * One Docker daemon serves every suite on this box, so a container started
@@ -21,46 +30,64 @@ describe("no suite pins a fixed testcontainer name", () => {
   let sources: Source[] = [];
 
   beforeAll(async () => {
-    sources = await strippedTestSources(resolve("tests"));
+    sources = await scannedSources(resolve("tests"));
+  });
+
+  it("scans a non-empty set of test sources", () => {
+    expect(sources.length).toBeGreaterThan(0);
   });
 
   it("chains withName nowhere under tests/", () => {
-    const offenders = sources
-      .filter(({ stripped }) => /\bwithName\s*\(/.test(stripped))
-      .map(({ path }) => path);
-
     expect(
-      offenders,
+      withNameOffenders(sources),
       "withName fixes the container's name, and a fixed name collides with any concurrent run of the same suite on the shared Docker daemon; keep testcontainers' random name",
     ).toEqual([]);
   });
 
   it("passes no name option to startPostgresContainer at any call site", () => {
-    const offenders = sources.flatMap(({ path, stripped }) =>
-      optionObjectKeys(stripped, "startPostgresContainer").some((keys) => keys.has("name")) ? [path] : [],
-    );
-
     expect(
-      offenders,
+      nameOptionOffenders(sources),
       "startPostgresContainer takes no name: the option was removed for issue 372, and a fixed name collides with any concurrent run of the same suite on the shared Docker daemon",
     ).toEqual([]);
   });
 });
 
-/** Every .ts and .tsx file under root, recursively, with strings and comments stripped. */
-async function strippedTestSources(root: string): Promise<Source[]> {
+/**
+ * The strip is not a parser, and its one blind spot is pinned here rather than
+ * trusted away: a regex literal holding a quote character desyncs the strip —
+ * it opens a "string" at the quote and swallows code until the next quote,
+ * which is exactly where an offender must not be allowed to hide.
+ * deploy-install.test.ts ships such regexes today, so a withName offender
+ * appended after them is invisible to the stripped pass. The guard must still
+ * see it: the verdict reads the raw, unstripped source, which no scan-shape
+ * quirk can blind. The fixture reproduces that shape — quote-bearing regex
+ * first, offender after — and pins the direction permanently.
+ */
+describe("the name guard's raw pass", () => {
+  const desyncedFixture = 'const re = /["\'\\\\]/g;\nwithName("issue226-pg");\n';
+
+  it("catches a withName offender where a quote-bearing regex literal desyncs the strip", () => {
+    const fixture: Source[] = [
+      { path: "deploy/desynced-fixture.test.ts", source: desyncedFixture, stripped: stripStringsAndComments(desyncedFixture) },
+    ];
+
+    expect(withNameOffenders(fixture)).toEqual(["deploy/desynced-fixture.test.ts"]);
+  });
+});
+
+/** Every .ts and .tsx file under root, recursively, raw and stripped. */
+async function scannedSources(root: string): Promise<Source[]> {
   const sources: Source[] = [];
 
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const full = join(root, entry.name);
 
     if (entry.isDirectory()) {
-      sources.push(...(await strippedTestSources(full)));
+      sources.push(...(await scannedSources(full)));
     } else if (/\.[jt]sx?$/.test(entry.name)) {
-      sources.push({
-        path: relative(root, full),
-        stripped: stripStringsAndComments(await readFile(full, "utf8")),
-      });
+      const source = await readFile(full, "utf8");
+
+      sources.push({ path: relative(root, full), source, stripped: stripStringsAndComments(source) });
     }
   }
 
@@ -68,11 +95,37 @@ async function strippedTestSources(root: string): Promise<Source[]> {
 }
 
 /**
+ * The files whose text hands a container a fixed name through withName — read
+ * on the RAW source, because the strip can miss (see stripStringsAndComments),
+ * and a miss here is silent. A prose or fixture mention of the pattern fails
+ * this limb too, by design: the message tells the writer what they have put in
+ * the tree.
+ */
+function withNameOffenders(sources: ReadonlyArray<Source>): string[] {
+  return sources
+    .filter(({ path, source }) => path !== selfPath && /\bwithName\s*\(/.test(source))
+    .map(({ path }) => path);
+}
+
+/** The files passing a top-level name option to startPostgresContainer. */
+function nameOptionOffenders(sources: ReadonlyArray<Source>): string[] {
+  return sources.flatMap(({ path, stripped }) =>
+    optionObjectKeys(stripped, "startPostgresContainer").some((keys) => keys.has("name")) ? [path] : [],
+  );
+}
+
+/**
  * The source with every string literal, template literal and comment replaced
  * by a single space, so key and identifier scans see code structure only. Not
  * a parser: regex literals stay in place, and a literal holding a quote or a
- * comment opener desyncs the strip the way any source-shape guard can be
- * desynced — visibly, in a failure naming the file.
+ * comment opener desyncs the strip — it opens a "string" at that quote and
+ * swallows code to the next quote. The failure direction is a SILENT MISS, not
+ * a visible one: an offender swallowed this way is simply never seen. That is
+ * why the withName limb reads raw source instead of this text, and why the
+ * raw-pass fixture below pins the direction; the name-option limb still walks
+ * stripped text (a raw pass for `name:` cannot tell option keys from the
+ * helper's legitimate nested script names) and stands on typecheck behind it,
+ * the option no longer existing on the helper.
  */
 function stripStringsAndComments(source: string): string {
   let stripped = "";
