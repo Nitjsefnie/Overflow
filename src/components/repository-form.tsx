@@ -51,6 +51,11 @@ const defaultValues: RepositoryFormValues = {
   })),
 };
 
+// One labels read per settled reference: the quiet period the repository
+// reference must stay unchanged before the form reads its labels, so typing a
+// reference does not fire one request per keystroke.
+const labelsFetchDebounceMs = 300;
+
 const copy = {
   registration: {
     formLabel: "Register one repository",
@@ -91,10 +96,12 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
   const lastReferenceKey = useRef<string | null | undefined>(undefined);
 
   // The selectboxes can only offer labels the referenced repository has, so
-  // they read them from the labels route once the reference is complete. A
+  // they read them from the labels route once the reference is complete — one
+  // read for the reference that has settled, never one per keystroke. A
   // changed reference changes the vocabulary: earlier selections are cleared
-  // and the labels are read again, with the sequence counter discarding any
-  // stale response from a reference that has since been edited. The selections
+  // immediately and the pending read is cancelled, so only the newest
+  // reference is ever requested. The sequence counter discards any stale
+  // response from a reference that has since been edited. The selections
   // survive the initial mount, so initialValues keeps working.
   useEffect(() => {
     if (lastReferenceKey.current !== undefined && lastReferenceKey.current !== referenceKey) {
@@ -111,33 +118,36 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
     }
 
     setLabelsStatus("loading");
-    fetch(`/api/repositories/labels?owner=${encodeURIComponent(referenceOwner)}&name=${encodeURIComponent(referenceName)}`, {
-      credentials: "same-origin",
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`The labels request failed with HTTP ${response.status}.`);
-        }
-        const body = (await response.json().catch(() => null)) as { labels?: unknown } | null;
-        if (body === null || !Array.isArray(body.labels) || body.labels.some((label) => typeof label !== "string")) {
-          throw new Error("The labels response was not understood.");
-        }
-        return body.labels as string[];
+    const timer = setTimeout(() => {
+      fetch(`/api/repositories/labels?owner=${encodeURIComponent(referenceOwner)}&name=${encodeURIComponent(referenceName)}`, {
+        credentials: "same-origin",
       })
-      .then((labels) => {
-        if (labelsSequence.current !== sequence) {
-          return;
-        }
-        setCatalogLabels(labels);
-        setLabelsStatus("ready");
-      })
-      .catch(() => {
-        if (labelsSequence.current !== sequence) {
-          return;
-        }
-        setCatalogLabels([]);
-        setLabelsStatus("error");
-      });
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`The labels request failed with HTTP ${response.status}.`);
+          }
+          const body = (await response.json().catch(() => null)) as { labels?: unknown } | null;
+          if (body === null || !Array.isArray(body.labels) || body.labels.some((label) => typeof label !== "string")) {
+            throw new Error("The labels response was not understood.");
+          }
+          return body.labels as string[];
+        })
+        .then((labels) => {
+          if (labelsSequence.current !== sequence) {
+            return;
+          }
+          setCatalogLabels(labels);
+          setLabelsStatus("ready");
+        })
+        .catch(() => {
+          if (labelsSequence.current !== sequence) {
+            return;
+          }
+          setCatalogLabels([]);
+          setLabelsStatus("error");
+        });
+    }, labelsFetchDebounceMs);
+    return () => clearTimeout(timer);
   }, [referenceKey, referenceOwner, referenceName]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
