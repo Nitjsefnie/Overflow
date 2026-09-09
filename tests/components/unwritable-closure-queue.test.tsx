@@ -132,6 +132,54 @@ function expectExplanationAboveQueue(section: HTMLElement, queueTag: "P" | "OL")
   expect(queue!).not.toBeEmptyDOMElement();
 }
 
+/**
+ * A fallback alert communicates only what a reader can see: every element
+ * inside it that carries text is visible, and the visible text carries at
+ * least one non-format character — zero-width and other `Cf` characters do
+ * not satisfy this however many of them the alert carries.
+ */
+function expectReaderVisibleAlert(alert: HTMLElement): void {
+  expect(alert).toBeVisible();
+  for (const element of alert.querySelectorAll<HTMLElement>("*")) {
+    if (hasNonblankText(element)) {
+      expect(element, "a text-bearing element inside the alert renders visibly").toBeVisible();
+    }
+  }
+  expect(visibleText(alert), "the alert's visible text carries a non-format character").toMatch(/\P{Cf}/u);
+}
+
+function hasNonblankText(element: Element): boolean {
+  return Array.from(element.childNodes).some(
+    (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? "").trim() !== "",
+  );
+}
+
+/**
+ * The text a reader sees: every text node whose element chain is visible.
+ * Descends only into elements jest-dom's own predicate would call visible
+ * (display, visibility, opacity, `hidden`, `aria-hidden`, each level checked
+ * on the way down), so what this returns is exactly the visible text.
+ */
+function visibleText(element: Element): string {
+  let text = "";
+  for (const node of element.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? "";
+    } else if (node.nodeType === Node.ELEMENT_NODE && isShown(node as HTMLElement)) {
+      text += visibleText(node as HTMLElement);
+    }
+  }
+  return text;
+}
+
+function isShown(element: HTMLElement): boolean {
+  const style = window.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+    return false;
+  }
+  return !(element.hidden || element.getAttribute("aria-hidden") === "true");
+}
+
 describe("unwritable closure queue", () => {
   it("explains when no closures are waiting on evidence", () => {
     render(<UnwritableClosureQueue closures={[]} />);
@@ -166,12 +214,42 @@ describe("unwritable closure queue", () => {
   });
 
   it("offers the settlement correction path when no correction has been requested", () => {
-    render(<UnwritableClosureQueue closures={[closure()]} />);
+    const { container } = render(<UnwritableClosureQueue closures={[closure()]} />);
 
-    expect(screen.getByRole("listitem").querySelector('a[href="/settlements/settlement-1"]')).toHaveAttribute("href", "/settlements/settlement-1");
     const entry = screen.getByRole("listitem");
+    const list = screen.getByRole("list");
+    const repository = within(entry).getByText("co-op/harbour");
+    const issue = within(entry).getByRole("link", { name: "#" + "17 Repair the tide gate" });
+    const pullRequest = within(entry).getByRole("link", { name: "#" + "18 Repair the gate" });
+    const reason = entry.querySelector("p.override-reason");
+    const correctionPath = entry.querySelector('a[href="/settlements/settlement-1"]');
+    const parties = entry.querySelector("p.mono-meta");
+    expect(list.tagName).toBe("OL");
+    expect(repository).toBeVisible();
+    expect(issue).toHaveAttribute("href", "https://github.com/co-op/harbour/issues/17");
+    expect(pullRequest).toHaveAttribute("href", "https://github.com/co-op/harbour/pull/18");
+    expect(reason).toBeVisible();
+    expect(correctionPath).toBeVisible();
+    expect(correctionPath).toHaveAttribute("href", "/settlements/settlement-1");
+    expect(parties).toBeVisible();
+    expect(Array.from(parties!.querySelectorAll("code"), (code) => code.textContent)).toEqual(["mira", "quinn"]);
     expect(entry.querySelector("data")).toBeNull();
     expect(entry.querySelector("time")).toBeNull();
+    // Whatever markup a correction is written with, the entry renders exactly
+    // these six paragraphs: an added correction line fails here regardless of
+    // its markup, and a correction rendered anywhere outside the entry fails
+    // one of the containment levels beneath it.
+    expect(Array.from(entry.children)).toEqual([
+      repository.closest("p"),
+      issue.closest("p"),
+      pullRequest.closest("p"),
+      reason,
+      correctionPath!.closest("p"),
+      parties,
+    ]);
+    expect(Array.from(list.children)).toEqual([entry]);
+    expect(Array.from(container.children)).toEqual([list]);
+    expect(Array.from(document.body.children)).toEqual([container]);
   });
 
   it.each([
@@ -466,9 +544,7 @@ describe("moderation closure section", () => {
     const queue = screen.getAllByRole("region").find(
       (region) => region.getAttribute("aria-labelledby") === "unwritable-closures-heading",
     )!;
-    expect(within(queue).getByRole("alert")).toBeVisible();
-    expect(within(queue).getByRole("alert")).not.toBeEmptyDOMElement();
-    expect(within(queue).getByRole("alert").textContent?.trim()).toBeTruthy();
+    expectReaderVisibleAlert(within(queue).getByRole("alert"));
     expect(screen.getByText("No settlement corrections are waiting.")).toBeVisible();
     expect(screen.getByText("No account audits are open.")).toBeVisible();
     expect(screen.getByText("No accounts are recalibrating.")).toBeVisible();
@@ -478,9 +554,7 @@ describe("moderation closure section", () => {
     )!;
     expect(history).toBeVisible();
     expect(within(history).getByRole("heading", { level: 2 })).toHaveAttribute("id", "unwritable-closure-history-heading");
-    expect(within(history).getByRole("alert")).toBeVisible();
-    expect(within(history).getByRole("alert")).not.toBeEmptyDOMElement();
-    expect(within(history).getByRole("alert").textContent?.trim()).toBeTruthy();
+    expectReaderVisibleAlert(within(history).getByRole("alert"));
     expect(within(history).queryByRole("list")).toBeNull();
   });
 });
