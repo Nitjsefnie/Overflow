@@ -8,7 +8,12 @@ import {
   type SettlementOverrideRequest,
   type SettlementOverrideTarget,
 } from "@/lib/overrides/service";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import {
+  guardByCredential,
+  resolveRouteCredential,
+  type RouteCredentialSession,
+} from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 // Strict on both sides of the union, so a body naming a settlement and a
 // calibration at once matches neither: one request corrects one priced outcome.
@@ -40,18 +45,19 @@ export type SettlementOverrideRequestService = {
 
 export type SettlementOverrideRouteDependencies = {
   getSession: () => Promise<SettlementOverrideRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideRequestService>;
 };
 
 export function createSettlementOverridePostHandler(dependencies: SettlementOverrideRouteDependencies) {
   return async function postSettlementOverride(request: Request): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredMemberSession(dependencies);
+    const session = await requiredMemberSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -72,26 +78,35 @@ export function createSettlementOverridePostHandler(dependencies: SettlementOver
 }
 
 /**
- * Confirms the signed-in account still exists, by reading it back from the
- * database rather than trusting the session. A session outlives the account it
- * was issued for; membership of a settlement is checked again in the store.
+ * Confirms the resolved credential's account still exists, by reading its role
+ * back from the database rather than trusting the credential. A session
+ * outlives the account it was issued for, and a token's account row is only as
+ * fresh as the moment it was read; membership of a settlement is checked again
+ * in the store.
  */
 export async function requiredMemberSession(
-  dependencies: Pick<SettlementOverrideRouteDependencies, "getSession" | "getCurrentRole">,
+  request: Request,
+  dependencies: Pick<
+    SettlementOverrideRouteDependencies,
+    "getSession" | "findAccountByTokenHash" | "getCurrentRole"
+  >,
 ): Promise<{ user: { id: string; role: UserRole } } | Response> {
-  let session: SettlementOverrideRouteSession | null;
+  let credential: RouteCredentialSession | Response | null;
   try {
-    session = await dependencies.getSession();
+    credential = await resolveRouteCredential(request, dependencies);
   } catch {
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
   }
-  if (session === null) {
+  if (credential instanceof Response) {
+    return credential;
+  }
+  if (credential === null) {
     return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
   }
 
   let role: UserRole | null;
   try {
-    role = await dependencies.getCurrentRole(session.user.id);
+    role = await dependencies.getCurrentRole(credential.user.id);
   } catch {
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction request.");
   }
@@ -99,7 +114,7 @@ export async function requiredMemberSession(
     return errorResponse(403, "FORBIDDEN", "A member account is required.");
   }
 
-  return { user: { id: session.user.id, role } };
+  return { user: { id: credential.user.id, role } };
 }
 
 export function settlementOverrideErrorResponse(error: unknown): Response {
@@ -153,6 +168,7 @@ export async function getProductionSession(): Promise<SettlementOverrideRouteSes
 
 export const POST = createSettlementOverridePostHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new SettlementOverrideService(new PostgresSettlementOverrideStore());

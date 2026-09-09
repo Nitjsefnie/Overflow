@@ -5,6 +5,7 @@ import {
   settlementOverrideErrorResponse,
   type SettlementOverrideRouteSession,
 } from "@/app/api/overrides/route";
+import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
@@ -13,7 +14,8 @@ import {
   type SettlementOverrideDecisionInput,
   type SettlementOverrideRequest,
 } from "@/lib/overrides/service";
-import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { guardByCredential } from "@/lib/security/route-credential";
+import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const decisionSchema = z.discriminatedUnion("action", [
   z
@@ -40,6 +42,7 @@ export type SettlementOverrideDecisionService = {
 
 export type SettlementOverrideDecisionDependencies = {
   getSession: () => Promise<SettlementOverrideRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideDecisionService>;
 };
@@ -51,12 +54,12 @@ export function createSettlementOverridePatchHandler(
     request: Request,
     context: SettlementOverrideDecisionContext,
   ): Promise<Response> {
-    const untrusted = rejectUntrustedRequest(request);
-    if (untrusted !== null) {
-      return untrusted;
+    const refusal = guardByCredential(request);
+    if (refusal !== null) {
+      return refusal;
     }
 
-    const session = await requiredModeratorSession(dependencies);
+    const session = await requiredModeratorSession(request, dependencies);
     if (session instanceof Response) {
       return session;
     }
@@ -78,34 +81,6 @@ export function createSettlementOverridePatchHandler(
       return settlementOverrideErrorResponse(error);
     }
   };
-}
-
-// The role is re-read from the database rather than trusted from the session,
-// because a session issued before a revocation still carries MODERATOR.
-async function requiredModeratorSession(
-  dependencies: SettlementOverrideDecisionDependencies,
-): Promise<{ user: { id: string; role: "MODERATOR" } } | Response> {
-  let session: SettlementOverrideRouteSession | null;
-  try {
-    session = await dependencies.getSession();
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction decision.");
-  }
-  if (session === null) {
-    return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-  }
-
-  let role: UserRole | null;
-  try {
-    role = await dependencies.getCurrentRole(session.user.id);
-  } catch {
-    return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the settlement correction decision.");
-  }
-  if (role !== "MODERATOR") {
-    return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
-  }
-
-  return { user: { id: session.user.id, role: "MODERATOR" } };
 }
 
 async function readRequestId(context: SettlementOverrideDecisionContext): Promise<string | null> {
@@ -133,6 +108,7 @@ async function parseDecision(request: Request): Promise<SettlementOverrideDecisi
 
 export const PATCH = createSettlementOverridePatchHandler({
   getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
   getCurrentRole: getCurrentUserRole,
   async createService() {
     return new SettlementOverrideService(new PostgresSettlementOverrideStore());
