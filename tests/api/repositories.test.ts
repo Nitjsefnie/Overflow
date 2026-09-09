@@ -1214,6 +1214,27 @@ function successfulDependencies(
             }
           : null;
       },
+      async findRepositoryRegistrationStateByOwnerName() {
+        return null;
+      },
+      async findRepositoryRegistrationState() {
+        return options.existingRepository
+          ? {
+              repository: {
+                id: "repository-id",
+                githubRepositoryId: 42,
+                ownerName: "octo/overflow",
+                sponsorId: "moderator-id",
+                visibility: "PUBLIC" as const,
+                githubWebhookId: 501,
+              },
+              unregisteredAt: null,
+            }
+          : null;
+      },
+      async unregisterRepository(): Promise<never> {
+        throw new Error("The route reached the unregister write without an injected outcome.");
+      },
       async appendDifficultySchemeVersion() {
         if (options.catalogChange instanceof Error) {
           throw options.catalogChange;

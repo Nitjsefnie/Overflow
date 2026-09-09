@@ -36,6 +36,25 @@ export type NewRegisteredRepository = Omit<RegisteredRepository, "id"> & {
   difficultyScheme: DifficultyScheme;
 };
 
+/**
+ * A registration row together with the instant its sponsor unregistered it —
+ * null while the registration stands. The register path reads the state
+ * rather than the row alone so an unregistered row can proceed to
+ * reactivation where an active one is a conflict, and the unregister path
+ * reads it to resolve the row an owner/name submission names.
+ */
+export type RepositoryRegistrationState = {
+  repository: RegisteredRepository;
+  /** ISO-8601 instant of sponsor unregistration; null while registered. */
+  unregisteredAt: string | null;
+};
+
+export type RepositoryUnregisterOutcome =
+  | { kind: "UNREGISTERED"; repository: RegisteredRepository }
+  | { kind: "ALREADY_UNREGISTERED"; repository: RegisteredRepository }
+  | { kind: "NOT_REGISTERED" }
+  | { kind: "FORBIDDEN" };
+
 export type RepositoryRegistrationGateway = {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
   listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>>;
@@ -62,6 +81,21 @@ export type RepositoryRegistrationStore = {
     scheme: DifficultyScheme;
     effectiveFrom: Date;
   }): Promise<RepositoryCatalogChange | null>;
+  /**
+   * The registration holding the GitHub owner/name path, with the instant its
+   * sponsor unregistered it, or null when no row holds the path.
+   */
+  findRepositoryRegistrationStateByOwnerName(ownerName: string): Promise<RepositoryRegistrationState | null>;
+  /** The registration holding the GitHub identity, or null when no row holds it. */
+  findRepositoryRegistrationState(githubRepositoryId: number): Promise<RepositoryRegistrationState | null>;
+  /**
+   * Deactivates the registration holding the owner/name path on its sponsor's
+   * behalf: active = false with unregistered_at = now() in one statement, so
+   * the invariant the check constraint pins — an active row was never
+   * unregistered — holds after every path. The row is locked by owner_name
+   * for the whole decision, so a concurrent reactivation cannot interleave.
+   */
+  unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome>;
 };
 
 export type RepositoryCatalogChange = {
