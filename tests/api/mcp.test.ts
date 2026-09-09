@@ -170,7 +170,7 @@ describe("POST /api/mcp", () => {
         isError: true,
       },
     });
-    const [synthesized] = moderationQueue.mock.calls[0] as unknown[] as [Request][];
+    const [synthesized] = moderationQueue.mock.calls[0] as unknown as [Request];
     expect(synthesized.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
   });
 
@@ -209,7 +209,7 @@ describe("POST /api/mcp", () => {
 
 describe("the route module's surface", () => {
   it("exports no GET handler, leaving Next to answer other methods with 405", async () => {
-    const route = await import("@/app/api/mcp/route");
+    const route: Record<string, unknown> = await import("@/app/api/mcp/route");
     expect(route.GET).toBeUndefined();
     expect(route.POST).toBeTypeOf("function");
   });

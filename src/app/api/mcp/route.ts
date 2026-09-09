@@ -1,5 +1,9 @@
 import { dispatchJsonRpc } from "@/lib/mcp/protocol";
-import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
+import {
+  defineMcpTools,
+  type McpToolDependencies,
+  type WrappedRouteHandler,
+} from "@/lib/mcp/tools";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { AccountModerationService } from "@/lib/moderation/service";
@@ -34,6 +38,24 @@ import {
 } from "@/lib/dashboard/queries";
 
 /**
+ * The registry hands a wrapped handler an optional generic params context;
+ * the three path-segment routes require their own `{ id }` one. The registry
+ * always supplies it for an id-taking tool, so the narrowing is by
+ * construction and a missing context is a tool failure, not a silent read of
+ * an undefined path.
+ */
+type PathIdContext = { params: Promise<{ id: string }> };
+
+function withPathId(handler: (request: Request, context: PathIdContext) => Promise<Response>): WrappedRouteHandler {
+  return async (request, context) => {
+    if (context === undefined) {
+      throw new Error("This tool requires a path parameter the registry did not supply.");
+    }
+    return handler(request, context as PathIdContext);
+  };
+}
+
+/**
  * The ten wrapped route handlers, wired from the same factories and stores the
  * route files wire their own exports from. One deliberate exception the whole
  * record shares: every handler takes the member gate's production session
@@ -54,7 +76,7 @@ const productionToolDependencies: McpToolDependencies = {
     getCurrentRole: getCurrentUserRole,
     listSettlementHistory,
   }),
-  settlementGet: createSettlementProofGetHandler({
+  settlementGet: withPathId(createSettlementProofGetHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
     getCurrentRole: getCurrentUserRole,
@@ -62,7 +84,7 @@ const productionToolDependencies: McpToolDependencies = {
     async createCorrectionsService() {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
-  }),
+  })),
   calibrationCompare: createCalibrationGetHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
@@ -90,14 +112,14 @@ const productionToolDependencies: McpToolDependencies = {
       return new AccountModerationService(new PostgresModerationStore());
     },
   }),
-  auditDecide: createModerationAuditPatchHandler({
+  auditDecide: withPathId(createModerationAuditPatchHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
     getCurrentRole: getCurrentUserRole,
     async createService() {
       return new AccountModerationService(new PostgresModerationStore());
     },
-  }),
+  })),
   correctionOpen: createSettlementOverridePostHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
@@ -106,14 +128,14 @@ const productionToolDependencies: McpToolDependencies = {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
   }),
-  correctionDecide: createSettlementOverridePatchHandler({
+  correctionDecide: withPathId(createSettlementOverridePatchHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
     getCurrentRole: getCurrentUserRole,
     async createService() {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
-  }),
+  })),
 };
 
 export type McpRouteDependencies = MemberRouteDependencies & {
@@ -149,7 +171,7 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
     }
 
     const outcome = await dispatchJsonRpc(raw, dependencies.defineTools(request.headers));
-    if (outcome === null) {
+    if (outcome === null || outcome.status === 202) {
       return new Response(null, { status: 202 });
     }
     return Response.json(outcome.body);
