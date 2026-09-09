@@ -437,6 +437,50 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(toIso(unregisteredRow.unregistered_at)).toBe(unregisteredAt);
   });
 
+  // Moderation owns `active` and unregistration owns `unregistered_at`: the deactivation
+  // a substantiation triggers must leave an instant the sponsor already recorded exactly
+  // as it stands, not start rewriting the sponsor's departure.
+  it("deactivating a sponsor's repositories leaves the recorded unregistration instant alone", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const repositoryId = await insertRepository(targetId);
+    // The sponsor left before the moderation: one statement moves both fields, so the
+    // check constraint's invariant — an active row was never unregistered — holds.
+    const unregisteredAt = "2031-05-06T07:08:09.000Z";
+    await sql`
+      update registered_repositories
+      set active = false, unregistered_at = ${unregisteredAt}
+      where id = ${repositoryId}
+    `;
+
+    const pairs = await insertCalibrationPairs({ targetId, repositoryId, count: 10 });
+    const store = new PostgresModerationStore(sql);
+    const input = auditInput({
+      actorId: moderatorId,
+      targetAccountId: targetId,
+      repositoryId,
+      sampleStartedAt: "2020-01-01T00:00:00.000Z",
+      sampleEndedAt: "2030-01-01T00:00:00.000Z",
+      ...pairs,
+    });
+    for (const count of [1, 2]) {
+      const audit = await openAudit(store, input);
+      await expect(store.substantiateAccountAudit({
+        actorId: moderatorId,
+        auditId: audit.id,
+        reason: `Independent review confirms pattern ${count}.`,
+      })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
+    }
+    // The second substantiation is the transition whose deactivation this test pins.
+    expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
+
+    const [row] = await sql<{ active: boolean; unregistered_at: Date | string | null }[]>`
+      select active, unregistered_at from registered_repositories where id = ${repositoryId}
+    `;
+    expect(row.active).toBe(false);
+    expect(toIso(row.unregistered_at)).toBe(unregisteredAt);
+  });
+
   it("uses immutable merge time for identical account-wide and repository-scoped cohorts across rebuild timestamps", async () => {
     const targetId = await insertUser("MEMBER");
     const primaryRepositoryId = await insertRepository(targetId);
