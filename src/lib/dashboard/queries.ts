@@ -671,6 +671,9 @@ export async function listEligibleIssues(
   const claimState = filters.claimState ?? "OPEN";
   const rows = await sql<EligibleIssueRow[]>`
     select
+      ranked.*
+    from (
+    select
       issues.id,
       repositories.owner_name as repository_name,
       sponsors.github_login as sponsor_login,
@@ -713,9 +716,24 @@ export async function listEligibleIssues(
         or (${claimState}::text = 'OPEN' and issues.claim_assignee_github_login is null)
         or (${claimState}::text = 'CLAIMED' and issues.claim_assignee_github_login is not null)
       )
+    ) as ranked
     order by
-      issues.opening_reserve_points desc,
-      issues.created_at asc
+      -- Sponsor headroom tiers lead the ordering so a sponsor who has drawn
+      -- far more work than they have returned surfaces below one who has
+      -- not: positive headroom first (returned more than drawn), then
+      -- balance (the band down to minus ten absorbs the zero cliff, where a
+      -- first outsider claim would otherwise bury the sponsor the moment
+      -- their first issue is claimed), then everything deeper. The threshold
+      -- of minus ten is a design choice: roughly one full opening of reserve
+      -- beyond balance, so ranking past it takes more than a single unredeemed
+      -- opening's worth of drawing. The tier orders but never filters.
+      case
+        when ranked.available_headroom > 0 then 0
+        when ranked.available_headroom >= -10 then 1
+        else 2
+      end,
+      ranked.opening_reserve_points desc,
+      ranked.created_at asc
   `;
 
   return rows.map((row) => {
