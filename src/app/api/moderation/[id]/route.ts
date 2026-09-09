@@ -3,13 +3,12 @@ import {
   errorResponse,
   moderationErrorResponse,
   type ModerationRouteDependencies,
-  type ModerationRouteSession,
 } from "@/app/api/moderation/route";
+import { requiredModeratorSession, type ModerationRouteSession } from "@/lib/moderation/route-auth";
 import { AccountModerationService } from "@/lib/moderation/service";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
-import type { UserRole } from "@/lib/db/types";
 
 const auditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dismiss"), reason: z.string() }).strict(),
@@ -73,24 +72,6 @@ async function getProductionSession(): Promise<ModerationRouteSession | null> {
     return null;
   }
   return { user: { id: user.id } };
-}
-
-async function requiredModeratorSession(
-  dependencies: ModerationRouteDependencies,
-): Promise<{ user: { id: string; role: "MODERATOR" } } | Response> {
-  try {
-    const session = await dependencies.getSession();
-    if (session === null) {
-      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-    }
-    const currentRole: UserRole | null = await dependencies.getCurrentRole(session.user.id);
-    if (currentRole !== "MODERATOR") {
-      return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
-    }
-    return { user: { id: session.user.id, role: currentRole } };
-  } catch {
-    return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
-  }
 }
 
 async function readAuditId(context: ModerationAuditRouteContext): Promise<string | null> {

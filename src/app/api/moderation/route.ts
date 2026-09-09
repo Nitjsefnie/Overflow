@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import { requiredModeratorSession, type ModerationRouteSession } from "@/lib/moderation/route-auth";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -27,14 +28,6 @@ const closeRecalibrationSchema = z
   })
   .strict();
 
-export type ModerationRouteSession = {
-  user: { id: string; role?: UserRole };
-};
-
-export type AuthorizedModerationRouteSession = {
-  user: { id: string; role: "MODERATOR" };
-};
-
 export type ModerationRouteService = Pick<
   AccountModerationService,
   | "previewCalibrationCohort"
@@ -49,15 +42,6 @@ export type ModerationRouteDependencies = {
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModerationRouteService>;
 };
-
-/**
- * What the moderator gate itself reads. A route with its own service type
- * satisfies this without having to describe its service as this file's one.
- */
-export type ModerationSessionDependencies = Pick<
-  ModerationRouteDependencies,
-  "getSession" | "getCurrentRole"
->;
 
 export function createModerationPostHandler(dependencies: ModerationRouteDependencies) {
   return async function postModeration(request: Request): Promise<Response> {
@@ -139,32 +123,6 @@ export async function getProductionSession(): Promise<ModerationRouteSession | n
     return null;
   }
   return { user: { id: user.id } };
-}
-
-// The role is re-read from the database rather than trusted from the session,
-// because a session issued before a revocation still carries MODERATOR.
-export async function requiredModeratorSession(
-  dependencies: ModerationSessionDependencies,
-): Promise<AuthorizedModerationRouteSession | Response> {
-  let session: ModerationRouteSession | null;
-  try {
-    session = await dependencies.getSession();
-  } catch {
-    return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
-  }
-  if (session === null) {
-    return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
-  }
-  let currentRole: UserRole | null;
-  try {
-    currentRole = await dependencies.getCurrentRole(session.user.id);
-  } catch {
-    return errorResponse(500, "INTERNAL_ERROR", "Unable to process moderation request.");
-  }
-  if (currentRole !== "MODERATOR") {
-    return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
-  }
-  return { user: { id: session.user.id, role: currentRole } };
 }
 
 async function parseOpenAccountAuditInput(request: Request): Promise<OpenAccountAuditInput | null> {

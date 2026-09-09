@@ -3,9 +3,8 @@ import {
   errorResponse,
   getProductionSession,
   moderationErrorResponse,
-  requiredModeratorSession,
-  type ModerationRouteSession,
 } from "@/app/api/moderation/route";
+import { requiredModeratorSession, type ModerationRouteSession } from "@/lib/moderation/route-auth";
 import type { UserRole } from "@/lib/db/types";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { wasStartupRecoverySkipped } from "@/lib/fold/sweep";

@@ -3,9 +3,9 @@ import {
   errorResponse,
   getProductionSession,
   moderationErrorResponse,
-  requiredModeratorSession,
   type ModerationRouteDependencies,
 } from "@/app/api/moderation/route";
+import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { AccountModerationService, type OpenAccountAuditInput } from "@/lib/moderation/service";
