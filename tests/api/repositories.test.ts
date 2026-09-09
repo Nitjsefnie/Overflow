@@ -1218,6 +1218,25 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
+  it("returns a structured 400 when the body carries an unknown extra key beside the reference", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    // A registration-shaped body is the plausible accident here: the extra
+    // key must refuse the whole submission, not be trimmed off silently.
+    const response = await handler(
+      jsonRequest({ ...validUnregisterInput(), openingName: "Scope" }, "DELETE"),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid repository unregistration request." },
+    });
+  });
+
   it("returns a structured 404 when no registration holds the submitted path", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
