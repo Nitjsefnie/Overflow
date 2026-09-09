@@ -229,12 +229,15 @@ by the service account.
 mkdir -p "$release/cache"
 chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
-pnpm release:switch /srv/overflow "$release"
+pnpm release:switch /srv/overflow "$release" --expect-current absent
 ```
 
 The `release:switch` package script takes `<tree> <releaseDir>` and runs
 `node scripts/release.ts switch <tree> <releaseDir>`; a relative release argument
-is relative to the tree. The resolved directory must be a direct child of the
+is relative to the tree. Passing `--expect-current <absent|path>` makes the
+switch conditional: it refuses unless `.next` still resolves to `<path>` at
+switch time, or to nothing at all when the value is `absent`; the deploy
+procedure always passes it. The resolved directory must be a direct child of the
 canonical tree, whether the argument is relative, absolute or a symlink alias.
 A symlink to a nested or outside build is refused; an alias resolving to a
 valid direct child is accepted.
@@ -286,7 +289,7 @@ test -d /srv/overflow/.next
 test ! -L /srv/overflow/.next
 node scripts/release.ts check /srv/overflow "${release:?}"
 rm -rf -- /srv/overflow/.next
-pnpm release:switch /srv/overflow "$release"
+pnpm release:switch /srv/overflow "$release" --expect-current absent
 systemctl restart overflow.service
 ```
 
@@ -478,17 +481,22 @@ switching; record it with the deploy. Replace the value below with that recorded
 path, and confirm the directory still exists. The ownership reset on a later
 deploy also resets retained caches other than the serving cache, so hand the
 previous cache back before the restart, even if it was writable when that
-release last ran.
+release last ran. The block takes the same deploy lock as section 10, so a
+rollback cannot interleave with a deploy, and its switch is conditional on
+`.next` still resolving to the release the rollback started from.
 
 ```bash
 set -e
 cd /srv/overflow
+exec 9>/run/overflow-deploy.lock
+flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
+expected_serving=$(readlink -f /srv/overflow/.next || printf absent)
 previous_release='.next-release-REPLACE-WITH-RECORDED-ID'
 test -f "$previous_release/BUILD_ID"
 test -d "$previous_release/cache"
 chown -R overflow:overflow "$previous_release/cache"
 chmod -R u=rwX,g=rX,o= "$previous_release/cache"
-pnpm release:switch /srv/overflow "$previous_release"
+pnpm release:switch /srv/overflow "$previous_release" --expect-current "$expected_serving"
 systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
@@ -576,6 +584,28 @@ generation, switches or prunes share the same tree.
 On a host whose `.next` is still a real directory, use section 5's one-time
 migration block at the switch step.
 
+The block is serialized with an exclusive `flock` on `/run/overflow-deploy.lock`
+(`command -v flock`: `/usr/bin/flock`, util-linux), held for the whole
+procedure: pull, install, migrate, build, ownership reset, switch, restart,
+verification, webhook upgrade and prune all run under one lock, so two deploys
+started together run one after the other instead of interleaving, and prune
+runs under the same protection. A concurrent deploy waits up to 900 seconds for
+the lock and then refuses; refusing is the fail-safe behavior, and a deploy
+must never proceed without it. The lock is kernel-owned and disappears when the
+holding process dies, so a crashed deploy cannot deadlock the next one.
+
+The switch inside the block is conditional as the second defense, against
+actors that skipped the lock: the block records the release `.next` resolves to
+before touching anything and passes it as `--expect-current`, and
+`release:switch` refuses unless `.next` still resolves there at switch time. An
+off-procedure actor — an old copy of this document, a hand-run switch —
+therefore cannot silently supersede an in-flight deploy: production never moves
+backward and an already-verified release is never silently discarded. When the
+switch reports the mismatch, re-run the whole procedure from `git pull`
+onwards. A missing or dangling `.next` at anchor time is a host that needs
+repair or the one-time migration, not a routine deploy; the conditional switch
+refuses that state rather than building on it.
+
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
 section 5's copy import do not need that migration.
@@ -583,6 +613,9 @@ section 5's copy import do not need that migration.
 ```bash
 set -e
 cd /srv/overflow
+exec 9>/run/overflow-deploy.lock
+flock -w 900 9 || { echo "Another deploy holds /run/overflow-deploy.lock; refusing to deploy concurrently. Re-run this procedure when the other deploy finishes." >&2; exit 1; }
+expected_serving=$(readlink -f /srv/overflow/.next || printf absent)
 git pull --ff-only origin main
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
@@ -602,7 +635,7 @@ mkdir -p "$release/cache"
 chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
-pnpm release:switch /srv/overflow "$release"
+pnpm release:switch /srv/overflow "$release" --expect-current "$expected_serving"
 systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
