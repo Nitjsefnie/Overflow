@@ -32,6 +32,7 @@ import {
   listSettlementHistory,
   getSettlementProof,
   getCalibrationComparison,
+  getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
   getDashboard,
   listOpenAudits,
@@ -90,6 +91,7 @@ const productionToolDependencies: McpToolDependencies = {
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
     getCurrentRole: getCurrentUserRole,
     getCalibrationComparison,
+    getCalibrationComparisonByRepository,
     listSelfWorkCalibrations,
   }),
   dashboardSummary: createDashboardGetHandler({
