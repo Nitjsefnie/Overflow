@@ -5,7 +5,7 @@ import path from "node:path";
 const releaseNamePattern = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 
 const usage =
-  "Usage: node scripts/release.ts switch <tree> <releaseDir>\n" +
+  "Usage: node scripts/release.ts switch <tree> <releaseDir> [--expect-current <absent|path>]\n" +
   "       node scripts/release.ts check <tree> <releaseDir>\n" +
   "       node scripts/release.ts prepare <tree> <releaseDir>\n" +
   "       node scripts/release.ts prune <tree> [--keep N]";
@@ -28,14 +28,26 @@ async function main(): Promise<void> {
     await pruneReleases(tree, Number(keep));
     return;
   }
-  if ((command !== "switch" && command !== "check") || !tree || !releaseDir || args.length !== 1) {
+  if ((command !== "switch" && command !== "check") || !tree || !releaseDir) {
     throw new Error(usage);
   }
   if (command === "check") {
+    if (args.length !== 1) {
+      throw new Error(usage);
+    }
     console.log((await checkRelease(tree, releaseDir)).directory);
     return;
   }
-  await switchRelease(tree, releaseDir);
+  let expectedCurrent: string | undefined;
+  if (args.length === 3) {
+    if (args[1] !== "--expect-current") {
+      throw new Error(usage);
+    }
+    expectedCurrent = args[2];
+  } else if (args.length !== 1) {
+    throw new Error(usage);
+  }
+  await switchRelease(tree, releaseDir, expectedCurrent);
 }
 
 async function prepareTypeScript(tree: string, releaseDir: string): Promise<void> {
@@ -107,7 +119,7 @@ async function checkRelease(tree: string, releaseDir: string) {
   return { tree, directory, relative };
 }
 
-async function switchRelease(tree: string, releaseDir: string): Promise<void> {
+async function switchRelease(tree: string, releaseDir: string, expectedCurrent?: string): Promise<void> {
   const { tree: canonicalTree, directory, relative } = await checkRelease(tree, releaseDir);
   const current = path.join(canonicalTree, ".next");
   const existing = await lstat(current).catch((error: NodeJS.ErrnoException) => {
@@ -119,6 +131,17 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
       `One-time migration: remove the existing ${current} directory by hand before switching.`,
     );
   }
+  if (expectedCurrent !== undefined) {
+    const actual = await actualCurrentRelease(current);
+    if (actual !== expectedCurrent) {
+      throw new Error(
+        `The serving release changed during this deploy: expected ${expectedCurrent}, found ${actual}. ` +
+        "Another deploy has switched .next since this deploy started, so switching would move " +
+        "production backward or discard an already-verified release. " +
+        "Re-run the deploy procedure from the beginning, starting with git pull.",
+      );
+    }
+  }
   const temporary = path.join(canonicalTree, `.next-switch-${process.pid}-${randomUUID()}`);
   await symlink(relative, temporary, "dir");
   try {
@@ -128,6 +151,21 @@ async function switchRelease(tree: string, releaseDir: string): Promise<void> {
     throw error;
   }
   console.log(directory);
+}
+
+/** The value the compare-and-swap compares against: where .next resolves, or "absent" when it does not. */
+async function actualCurrentRelease(current: string): Promise<string> {
+  const resolved = await realpath(current).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+  if (resolved !== undefined) return resolved;
+  const existing = await lstat(current).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+  if (existing === undefined || existing.isSymbolicLink()) return "absent";
+  return current;
 }
 
 async function pruneReleases(tree: string, keep: number): Promise<void> {
