@@ -2,10 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 import {
   createMcpPostHandler,
+  POST as productionPost,
   type McpRouteDependencies,
 } from "@/app/api/mcp/route";
+import {
+  createModerationPostHandler,
+  type ModerationRouteDependencies,
+} from "@/app/api/moderation/route";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 import type { ToolDefinition } from "@/lib/mcp/protocol";
+
+// The production POST export reads the session through @/auth; the mock keeps
+// its unauthenticated arm DB-free so the export itself can be driven.
+vi.mock("@/auth", () => ({ auth: vi.fn().mockResolvedValue(null) }));
 
 const memberId = "00000000-0000-4000-8000-000000000004";
 
@@ -69,6 +78,57 @@ function mcpRequest(raw: string, headers: Record<string, string> = {}): Request 
     headers: { origin: trustedOrigin, "content-type": "application/json", ...headers },
     body: raw,
   });
+}
+
+const targetAccountId = "00000000-0000-4000-8000-00000000000a";
+
+const auditOpenArguments = {
+  targetAccountId,
+  sampleStartedAt: "2026-09-01T00:00:00.000Z",
+  sampleEndedAt: "2026-09-09T00:00:00.000Z",
+  reason: "A settle-to-claim pattern worth a moderator's review.",
+};
+
+// The minimal audit the service stub resolves to; the wrapped route wraps it
+// in `{ audit }` verbatim, so the text assertion below pins the whole body.
+const openedAudit = {
+  id: "00000000-0000-4000-8000-00000000000b",
+  targetAccountId,
+  state: "OPEN",
+};
+
+/**
+ * The full composition against one real wrapped route: the endpoint's
+ * defineTools wires real defineMcpTools with auditOpen bound to a real
+ * createModerationPostHandler, stubbing only the gate dependencies and the
+ * moderation service. Everything else in the chain is production code.
+ */
+function auditOpenComposition(
+  overrides: {
+    endpoint?: Partial<McpRouteDependencies>;
+    moderation?: Partial<ModerationRouteDependencies>;
+  } = {},
+): { endpoint: McpRouteDependencies; openAccountAudit: ReturnType<typeof vi.fn> } {
+  const openAccountAudit = vi.fn().mockResolvedValue(openedAudit);
+  const moderation: ModerationRouteDependencies = {
+    getSession: vi.fn().mockResolvedValue(null),
+    findAccountByTokenHash: vi.fn().mockResolvedValue(null),
+    getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
+    createService: vi.fn().mockResolvedValue({ openAccountAudit }),
+    ...overrides.moderation,
+  };
+  const endpoint: McpRouteDependencies = {
+    getSession: vi.fn().mockResolvedValue({ user: { id: memberId } }),
+    findAccountByTokenHash: vi.fn().mockResolvedValue(null),
+    getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
+    defineTools: (headers: Headers) =>
+      defineMcpTools(
+        { ...backendDependencies(), auditOpen: createModerationPostHandler(moderation) },
+        headers,
+      ),
+    ...overrides.endpoint,
+  };
+  return { endpoint, openAccountAudit };
 }
 
 describe("POST /api/mcp", () => {
@@ -207,10 +267,89 @@ describe("POST /api/mcp", () => {
   });
 });
 
+describe("transport-to-wrapped-route composition", () => {
+  it("surfaces the wrapped moderation route's origin refusal as a failed tool result for a cookie-authenticated write", async () => {
+    const { endpoint } = auditOpenComposition();
+
+    const response = await createMcpPostHandler(endpoint)(
+      mcpRequest(rpc(8, "tools/call", { name: "audit_open", arguments: auditOpenArguments })),
+    );
+    const body = await response.json();
+
+    // The MCP request itself is origin-trusted and cookie-authenticated, so it
+    // passes the transport guard and the member gate; the wrapped route then
+    // re-runs its own guard on the synthesized request, which carries no Origin
+    // header from http://mcp.internal, and its origin refusal is what the
+    // client reads as a failed tool result.
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      jsonrpc: "2.0",
+      id: 8,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+            }),
+          },
+        ],
+        isError: true,
+      },
+    });
+  });
+
+  it("carries the bearer credential through both gates to the wrapped moderation service", async () => {
+    const { endpoint, openAccountAudit } = auditOpenComposition({
+      endpoint: {
+        getSession: vi.fn().mockResolvedValue(null),
+        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId }),
+        getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+      },
+      moderation: {
+        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId }),
+        getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+      },
+    });
+
+    const response = await createMcpPostHandler(endpoint)(
+      mcpRequest(rpc(9, "tools/call", { name: "audit_open", arguments: auditOpenArguments }), {
+        authorization: `Bearer ${TOKEN}`,
+      }),
+    );
+    const body = await response.json();
+
+    // The bearer credential authenticates the MCP request and is forwarded on
+    // the synthesized request, so the wrapped route authenticates the same
+    // account through its own gate and the write reaches the service in band.
+    expect(response.status).toBe(200);
+    expect(body.result.isError).toBeUndefined();
+    expect(body.result.content).toEqual([
+      { type: "text", text: JSON.stringify({ audit: openedAudit }) },
+    ]);
+    expect(openAccountAudit).toHaveBeenCalledExactlyOnceWith(
+      { id: memberId, role: "MODERATOR" },
+      auditOpenArguments,
+    );
+  });
+});
+
 describe("the route module's surface", () => {
   it("exports no GET handler, leaving Next to answer other methods with 405", async () => {
     const route: Record<string, unknown> = await import("@/app/api/mcp/route");
     expect(route.GET).toBeUndefined();
     expect(route.POST).toBeTypeOf("function");
+  });
+
+  it("answers an unauthenticated POST with the 401 envelope through the module's own export", async () => {
+    // getProductionSession resolves no session here (@/auth is mocked), so the
+    // gate refuses before any store is constructed; the export itself is what
+    // the kill pins.
+    const response = await productionPost(mcpRequest(rpc(1, "ping")));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
   });
 });
