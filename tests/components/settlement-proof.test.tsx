@@ -4,7 +4,9 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import SettlementProofPage from "@/app/settlements/[id]/page";
 
-const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
+const { sql, redirect, refresh } = vi.hoisted(() => ({ sql: vi.fn(), redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
 
 vi.mock("@/lib/db/client", () => ({ getSql: () => sql }));
 vi.mock("@/lib/dashboard/session", async (importOriginal) => ({

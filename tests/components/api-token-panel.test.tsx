@@ -1,16 +1,20 @@
 /** @vitest-environment jsdom */
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { ApiTokenPanel } from "@/components/api-token-panel";
 import NewRepositoryPage from "@/app/repositories/new/page";
 
-const { getTokenSummary, requireMemberPageSession } = vi.hoisted(() => ({
+const { getTokenSummary, requireMemberPageSession, redirect, refresh } = vi.hoisted(() => ({
   getTokenSummary: vi.fn(),
   requireMemberPageSession: vi.fn(),
+  redirect: vi.fn(),
+  refresh: vi.fn(),
 }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
 
 vi.mock("@/lib/tokens/postgres-store", () => ({
   PostgresApiTokenStore: class { getTokenSummary = getTokenSummary; },
@@ -33,6 +37,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  refresh.mockClear();
   try {
     expectNoConsoleOutput();
   } finally {
@@ -182,6 +187,38 @@ describe("API token panel", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent(token);
     expect(screen.getByText(token)).toBeVisible();
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
+  });
+
+  it("refreshes the server projection once after the token is minted and keeps the shown-once warning", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mintedToken());
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiTokenPanel summary={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(/will not be shown again/i);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh the server projection when minting is refused", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      Response.json({ error: { code: "UPSTREAM_FAILURE", message: "Unable to issue an API token." } }, { status: 502 }),
+    ));
+    render(<ApiTokenPanel summary={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to issue an API token.");
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh the server projection when the request cannot reach Overflow", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<ApiTokenPanel summary={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach Overflow/i);
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it.each([
