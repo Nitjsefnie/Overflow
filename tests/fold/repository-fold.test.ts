@@ -734,7 +734,7 @@ describe("rejected settlement closure records", () => {
     }]);
   });
 
-  it("records several standing labels in active-map order", () => {
+  it("records several standing labels in sorted order", () => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.history.unshift({
       kind: "LABELED", id: "another-actual", actorLogin: "sponsor", actorGitHubUserId: null,
@@ -745,7 +745,7 @@ describe("rejected settlement closure records", () => {
       githubIssueId: 101,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
       githubPullRequestId: 201,
-      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: `delivered/6`, `delivered/3`. Exactly one is required.",
+      reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: `delivered/3`, `delivered/6`. Exactly one is required.",
     }]);
   });
 

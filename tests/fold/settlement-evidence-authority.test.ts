@@ -139,7 +139,7 @@ describe("same-instant settlement evidence ordering", () => {
     }]);
   });
 
-  it.each([false, true])("names tied ambiguous settled labels in input order (reversed: %s)", (reverse) => {
+  it.each([false, true])("names tied ambiguous settled labels identically regardless of arrival order (reversed: %s)", (reverse) => {
     const snapshot = evidenceFixture();
     const issue = snapshot.issues[0]!;
     issue.history.push({
@@ -152,8 +152,10 @@ describe("same-instant settlement evidence ordering", () => {
 
     expect(result.unwritableClosures).toEqual([{
       githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
+      // Both arrival orders must yield the same bytes: the label list is
+      // derived from the standing labels themselves, not from their arrival.
       reason: "Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at 2026-09-01T12:00:00.000Z: "
-        + (reverse ? "`delivered/7`, `delivered/6`" : "`delivered/6`, `delivered/7`")
+        + "`delivered/6`, `delivered/7`"
         + ". Exactly one is required.",
     }]);
   });
