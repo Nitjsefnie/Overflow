@@ -755,6 +755,49 @@ describe("reconcileRepository", () => {
     },
   );
 
+  it("completes the run when an untracked merged closing pull request's evidence is gone upstream, journaling and omitting without a discard", async () => {
+    const notFound = new Error(
+      "GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '12'.",
+    );
+    const dependencies = reconciliationDependencies({
+      github: {
+        listIssues: vi.fn().mockResolvedValue([{
+          ...reconciliationIssue({ id: 101, number: 1 }),
+          closingPullRequests: [
+            reconciliationPullRequest({ id: 201, number: 11 }),
+            reconciliationPullRequest({ id: 202, number: 12 }),
+          ],
+        }]),
+        getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
+          if (number === 12) throw notFound;
+          return [];
+        }),
+        getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => `diff ${number}`),
+      },
+    });
+    // Pull request 12 fails while carrying no dirty row at all: nothing is
+    // discarded, and pull request 11's healthy row is not touched either.
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+    ];
+    const discard = vi.fn().mockResolvedValue(undefined);
+    dependencies.store.discardDirtyReconciliationSubject = discard;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect(discard).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=12 reason=NOT_FOUND",
+      );
+      const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+      expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 201, reviews: [], rawDiff: "diff 11" }]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("fails the run without discarding when a merged closing pull request's evidence fetch fails transiently", async () => {
     const transient = new GitHubApiError(403, true, 60);
     const dependencies = reconciliationDependencies({
