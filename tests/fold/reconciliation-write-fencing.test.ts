@@ -464,6 +464,76 @@ describe("repository publication fencing", () => {
       await coordination.end({ timeout: 0 });
     }
   });
+
+  // A failed unlock must not lower the guard: when the unlock cannot answer at all, the scope
+  // still exits into the reclaim, and the reclaim runs on whatever session the pool has since
+  // handed the connection to. The identity predicate has to ride in the statement that releases.
+  it("does not let a failed unlock's reclaim release a successor's lock", async () => {
+    const { repositoryId } = await fixture();
+    const { repositoryId: successorId } = await fixture();
+    const coordination = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const reserve = coordination.reserve.bind(coordination);
+    // Refusal is scoped to the dead coordinator: its scope-exit unlock is the statement that
+    // must not answer. The successor's own unlock has to reach the database, or the case could
+    // not tell a stolen lock from a refused one.
+    let refuseUnlocks = true;
+    coordination.reserve = async () => {
+      const reserved = await reserve();
+      const passthrough = reserved as unknown as (
+        strings: TemplateStringsArray,
+        ...values: unknown[]
+      ) => Promise<unknown>;
+      const refused = new Error("refused by the fixture in front of the connection");
+      const wrapper = ((strings: TemplateStringsArray, ...values: unknown[]) => (
+        refuseUnlocks && Array.from(strings).join("?").includes("pg_advisory_unlock(")
+          ? Promise.reject(refused)
+          : passthrough(strings, ...values)
+      )) as unknown as Awaited<ReturnType<Sql["reserve"]>>;
+      wrapper.unsafe = ((statement: string) => (
+        refuseUnlocks && statement.includes("pg_advisory_unlock(")
+          ? Promise.reject(refused)
+          : reserved.unsafe(statement)
+      )) as typeof wrapper.unsafe;
+      wrapper.release = () => { reserved.release(); };
+      return wrapper;
+    };
+    const store = new PostgresFoldStore(sql, key, coordination);
+    const olderEntered = signal();
+    const olderRelease = signal();
+    const successorEntered = signal();
+    const successorRelease = signal();
+    let older: Promise<unknown> | undefined;
+    let newer: Promise<unknown> | undefined;
+    try {
+      older = store.withRepositoryReconciliation(repositoryId, async () => {
+        olderEntered.resolve();
+        await olderRelease.promise;
+      });
+      await olderEntered.promise;
+      await loseSession(repositoryId);
+      newer = store.withRepositoryReconciliation(successorId, async () => {
+        successorEntered.resolve();
+        await successorRelease.promise;
+        await store.recordVerifiedRepositoryIdentity({
+          repositoryId: successorId, ownerName: `refused ${successorId}`, visibility: "PUBLIC",
+        });
+      });
+      await successorEntered.promise;
+      olderRelease.resolve();
+      // The unlock is refused in front of the connection, so the scope exits through the catch
+      // arm into the reclaim while the successor holds its own lock on the re-handed session.
+      await expect(older).rejects.toThrow();
+      refuseUnlocks = false;
+      successorRelease.resolve();
+      await newer;
+      expect((await repositoryState(successorId)).owner_name).toBe(`refused ${successorId}`);
+    } finally {
+      olderRelease.resolve();
+      successorRelease.resolve();
+      await Promise.allSettled([older, newer]);
+      await coordination.end({ timeout: 0 });
+    }
+  });
 });
 
 function signal() {

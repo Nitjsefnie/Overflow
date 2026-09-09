@@ -13,7 +13,9 @@ const tryLockStatement = "select pg_try_advisory_lock( hashtextextended(?, ?) ) 
 const targetedUnlockStatement = "select pg_advisory_unlock( hashtextextended(?, ?) ) as released, "
   + "pg_backend_pid() = ? and (select backend_start from pg_stat_activity where pid = pg_backend_pid()) "
   + "= ?::text::timestamptz as same_session";
-const unlockAllStatement = "select pg_advisory_unlock_all()";
+const unlockAllStatement = "select pg_advisory_unlock_all() as unlocked "
+  + "where pg_backend_pid() = ? and (select backend_start from pg_stat_activity where pid = pg_backend_pid()) "
+  + "= ?::text::timestamptz";
 const discardAllStatement = "discard all";
 const terminateStatement = "select pg_terminate_backend(pg_backend_pid())";
 
@@ -34,6 +36,8 @@ interface CoordinationOptions {
   denied?: readonly string[];
   /** What the targeted unlock resolves with when it is not denied. */
   unlockRows?: unknown[];
+  /** What the guarded unlock_all resolves with when it is not denied. */
+  unlockAllRows?: unknown[];
 }
 
 /**
@@ -42,7 +46,7 @@ interface CoordinationOptions {
  * statements the store reaches for, in what order, whether it hands the connection back, and what
  * it reports having swallowed.
  */
-function coordinationPool({ denied = [], unlockRows }: CoordinationOptions): {
+function coordinationPool({ denied = [], unlockRows, unlockAllRows }: CoordinationOptions): {
   coordinationSql: SqlClient;
   record: ReclaimRecord;
 } {
@@ -54,6 +58,9 @@ function coordinationPool({ denied = [], unlockRows }: CoordinationOptions): {
     }
     if (unlockRows !== undefined && statement.includes(targetedUnlock)) {
       return Promise.resolve(unlockRows);
+    }
+    if (unlockAllRows !== undefined && statement.includes(unlockAll)) {
+      return Promise.resolve(unlockAllRows);
     }
 
     return Promise.resolve([{
@@ -120,6 +127,11 @@ function reportedReleaseValue(warning: unknown[]): unknown {
   return (warning[1] as { released?: unknown }).released;
 }
 
+/** The `sameSession` value a warning reported for the session that answered the unlock. */
+function reportedSameSessionValue(warning: unknown[]): unknown {
+  return (warning[1] as { sameSession?: unknown }).sameSession;
+}
+
 describe("reclaiming a coordination connection whose unlock did not confirm", () => {
   it("stops at pg_advisory_unlock_all() and hands the connection back", async () => {
     const { record, rejection, workRan } = await reconcileWithDeniedUnlock([]);
@@ -180,6 +192,22 @@ describe("reclaiming a coordination connection whose unlock did not confirm", ()
     expect(messageOf(warnings[0])).toContain("pg_advisory_unlock");
   });
 
+  // An unlock that cannot answer at all leaves the session unknown, so the reclaim's own
+  // identity guard has to decide. A row filtered by the guard is a session the pool has handed
+  // to somebody else: nothing further runs on it and it is never handed back.
+  it("keeps its hands off a session the reclaim's identity guard does not recognise", async () => {
+    const { record, rejection, warnings } = await reconcileOver({
+      denied: [targetedUnlock],
+      unlockAllRows: [],
+    });
+
+    expect(rejection).toBe(coordinationFailure);
+    expect(record.statements).toEqual([tryLockStatement, targetedUnlockStatement, unlockAllStatement]);
+    expect(record.releases).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(messageOf(warnings[0])).toContain("pg_advisory_unlock");
+  });
+
   // An unlock that answers is not an unlock that released anything. These three say so without
   // ever throwing, which is the path a rejection cannot stand in for.
   describe("an unlock that resolves without confirming", () => {
@@ -192,6 +220,7 @@ describe("reclaiming a coordination connection whose unlock did not confirm", ()
       expect(warnings).toHaveLength(1);
       expect(messageOf(warnings[0])).toContain("pg_advisory_unlock");
       expect(reportedReleaseValue(warnings[0])).toBe(false);
+      expect(reportedSameSessionValue(warnings[0])).toBeUndefined();
     });
 
     it("treats no row at all as unreleased, reclaims, and reports the absence", async () => {
