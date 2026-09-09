@@ -229,6 +229,7 @@ public/*
 
 !scripts/
 scripts/*
+!scripts/deploy-revision.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
