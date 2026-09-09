@@ -499,6 +499,7 @@ function unsettledIssue(input: {
     authorGitHubUserId: null,
     labels: ["M"],
     claimAssigneeGitHubLogin: input.assigneeLogin,
+    claimAssigneeGitHubUserId: null,
     history: [
       {
         kind: "LABELED",

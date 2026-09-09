@@ -293,6 +293,7 @@ async function reconcileRepositoryWhileCoordinated(
         issues: githubIssues.map((issue) => ({
           ...issue,
           claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
+          claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
           closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
             ...pullRequest,
             reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],

@@ -444,6 +444,7 @@ function openIssue(input: {
     authorGitHubUserId: input.author.githubUserId,
     labels: ["M"],
     claimAssigneeGitHubLogin: null,
+    claimAssigneeGitHubUserId: null,
     history: [
       {
         kind: "LABELED",

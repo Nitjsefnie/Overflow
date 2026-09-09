@@ -371,6 +371,7 @@ async function fixture() {
       updatedAt: number === 1 ? "2026-09-08T09:59:30Z" : "2026-09-01T12:00:00Z",
       closedAt: number === 3 ? null : "2026-09-01T12:00:00Z", authorLogin: sponsor.github_login,
       authorGitHubUserId: sponsorGitHubId, labels: [label], claimAssigneeGitHubLogin: null,
+      claimAssigneeGitHubUserId: null,
       history: [{ kind: "LABELED", id: `opening-${id}`, actorLogin: sponsor.github_login,
         actorGitHubUserId: sponsorGitHubId, createdAt: "2026-09-01T08:00:00Z", label }],
       comments: [], closingPullRequests: number === 3 ? [] : [pr] };

@@ -1524,7 +1524,7 @@ async function upsertIssues(
         opening_source_event_id, opening_source_actor_login, opening_source_at,
         settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
         settled_label_applied_at, settled_rationale_comment_id, settled_rationale_actor_login,
-        settled_rationale_commented_at, claim_assignee_github_login
+        settled_rationale_commented_at, claim_assignee_github_login, claim_assignee_github_user_id
       )
       values (
         ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state}, ${issue.updatedAt},
@@ -1532,7 +1532,7 @@ async function upsertIssues(
         ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt},
         ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
         ${issue.settledLabelAppliedAt}, ${issue.settledRationaleCommentId}, ${issue.settledRationaleActorLogin},
-        ${issue.settledRationaleCommentedAt}, ${issue.claimAssigneeGitHubLogin}
+        ${issue.settledRationaleCommentedAt}, ${issue.claimAssigneeGitHubLogin}, ${issue.claimAssigneeGitHubUserId}
       )
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,
@@ -1566,6 +1566,7 @@ async function upsertIssues(
           settled_rationale_actor_login = excluded.settled_rationale_actor_login,
           settled_rationale_commented_at = excluded.settled_rationale_commented_at,
           claim_assignee_github_login = excluded.claim_assignee_github_login,
+          claim_assignee_github_user_id = excluded.claim_assignee_github_user_id,
           updated_at = now()
       returning
         id, github_issue_id, opening_label, opening_comparison_points, opening_reserve_points,

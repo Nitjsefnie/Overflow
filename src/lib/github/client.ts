@@ -821,7 +821,7 @@ type GitHubGraphqlIssueNode = {
   closedByPullRequestsReferences: GitHubGraphqlPage<GitHubGraphqlPullRequestNode>;
 };
 
-type GitHubGraphqlAssignee = { login: string };
+type GitHubGraphqlAssignee = { login: string; databaseId?: number | null };
 
 type GitHubGraphqlPullRequestNode = {
   databaseId: number | null;
@@ -914,7 +914,7 @@ const issueFields = `
             pageInfo { hasNextPage endCursor }
           }
           assignees(first: 2) {
-            nodes { login }
+            nodes { login ... on User { databaseId } }
           }
           timelineItems(
             first: 50
@@ -1132,6 +1132,7 @@ function toGitHubIssue(
     authorGitHubUserId: accountGitHubUserId(node.author),
     labels,
     claimAssigneeGitHubLogin: claimAssigneeLogin(node.assignees.nodes),
+    claimAssigneeGitHubUserId: claimAssigneeGitHubUserId(node.assignees.nodes),
     history: timeline.history,
     comments: timeline.comments,
     closingPullRequests,
@@ -1154,6 +1155,19 @@ function claimAssigneeLogin(assignees: readonly GitHubGraphqlAssignee[]): string
   }
   const login = assignees[0]?.login.trim();
   return login === undefined || login.length === 0 ? null : login;
+}
+
+/**
+ * The claim assignee's immutable numeric identity, read from the SAME single
+ * unambiguous assignee node the login comes from, so the two can never describe
+ * different accounts. Null whenever GitHub reported no usable one — no
+ * assignee, several, or one that is not a User (Bot, Mannequin, Organization).
+ */
+function claimAssigneeGitHubUserId(assignees: readonly GitHubGraphqlAssignee[]): number | null {
+  if (assignees.length !== 1) {
+    return null;
+  }
+  return accountGitHubUserId(assignees[0] ?? null);
 }
 
 function toGitHubPullRequest(node: GitHubGraphqlPullRequestNode): GitHubPullRequest {

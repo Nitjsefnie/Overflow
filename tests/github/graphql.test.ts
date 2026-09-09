@@ -942,6 +942,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         authorGitHubUserId: null,
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
+        claimAssigneeGitHubUserId: null,
         history: [],
         comments: [],
         closingPullRequests: [],
@@ -961,6 +962,7 @@ describe("GitHubGateway GraphQL source adapter", () => {
         authorGitHubUserId: null,
         labels: ["size/M"],
         claimAssigneeGitHubLogin: null,
+        claimAssigneeGitHubUserId: null,
         history: [],
         comments: [],
         closingPullRequests: [],
@@ -1020,11 +1022,16 @@ describe("GitHubGateway GraphQL source adapter", () => {
             repository: {
               issues: {
                 nodes: [
-                  issueNode(101, 1, "One assignee", undefined, [{ login: "claim-holder" }]),
+                  issueNode(101, 1, "One User assignee", undefined, [
+                    { login: "claim-holder", databaseId: 3001 },
+                  ]),
                   issueNode(102, 2, "No assignee", undefined, []),
                   issueNode(103, 3, "Several assignees", undefined, [
-                    { login: "first" },
-                    { login: "second" },
+                    { login: "first", databaseId: 3002 },
+                    { login: "second", databaseId: 3003 },
+                  ]),
+                  issueNode(104, 4, "A non-User assignee", undefined, [
+                    { login: "dependabot[bot]" },
                   ]),
                 ],
                 pageInfo: { hasNextPage: false, endCursor: null },
@@ -1041,8 +1048,19 @@ describe("GitHubGateway GraphQL source adapter", () => {
       "claim-holder",
       null,
       AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+      "dependabot[bot]",
+    ]);
+    // The id comes from the SAME single unambiguous assignee node the login
+    // comes from, and a non-User assignee has none to take. An ambiguous many
+    // is claimed (sentinel login) but has no single unambiguous User id.
+    expect(issues.map((issue) => issue.claimAssigneeGitHubUserId)).toEqual([
+      3001,
+      null,
+      null,
+      null,
     ]);
     expect(query).toMatch(/assignees\(first:\s*2\)/);
+    expect(query).toMatch(/nodes\s*\{\s*login\s*\.\.\.\s*on\s+User\s*\{\s*databaseId\s*\}\s*\}/);
   });
 
   it("collects labels after the first one hundred nodes for every returned issue", async () => {
@@ -2441,7 +2459,7 @@ function issueNode(
     nodes: [{ name: "size/M" }],
     pageInfo: { hasNextPage: false, endCursor: null },
   },
-  assignees: Array<{ login: string }> = [],
+  assignees: Array<{ login: string; databaseId?: number | null }> = [],
 ) {
   return {
     databaseId: id,

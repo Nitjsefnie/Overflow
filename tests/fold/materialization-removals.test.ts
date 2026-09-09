@@ -431,6 +431,7 @@ function openIssue(input: {
     authorGitHubUserId: null,
     labels: [openingLabel],
     claimAssigneeGitHubLogin: null,
+    claimAssigneeGitHubUserId: null,
     history: [
       {
         kind: "LABELED",

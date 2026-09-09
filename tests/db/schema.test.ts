@@ -222,6 +222,7 @@ describe("initial PostgreSQL materialization", () => {
       "028_repository_reconciliation_cost.sql",
       "029_reconciliation_changes_recorded_seq.sql",
       "030_repository_difficulty_scheme_versions.sql",
+      "032_immutable_claim_assignee_identity.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -269,7 +270,9 @@ describe("initial PostgreSQL materialization", () => {
         );
       }
       await expect(readIssue()).resolves.toEqual(sponsorAuthored
-        ? before.map((row) => ({ ...row, github_updated_at: null }))
+        // The completed upgrade applies 032 too, which adds the assignee id
+        // column; a row read before the upgrade predates it.
+        ? before.map((row) => ({ ...row, github_updated_at: null, claim_assignee_github_user_id: null }))
         : before);
       // Each migration commits on its own, so a raised precondition rolls back only the migration
       // that raised it: 013 stays applied and a re-run resumes at 014 instead of replaying it.
@@ -1836,6 +1839,50 @@ describe("initial PostgreSQL materialization", () => {
       where account_id = ${unsettled.debtorId}
     `;
     expect(unsettledStatistics).toEqual([]);
+  });
+
+  it("persists the claim assignee's account id beside its login on every fold", async () => {
+    const sponsorLogin = `assignee-identity-sponsor-${nextExternalId()}`;
+    const contributorLogin = `assignee-identity-contributor-${nextExternalId()}`;
+    const sponsorId = await insertUserWithLogin(sql, sponsorLogin);
+    const contributorId = await insertUserWithLogin(sql, contributorLogin);
+    const repositoryId = await insertRepository(sql, sponsorId);
+    const [repository] = await sql<{ owner_name: string; github_repository_id: number | string }[]>`
+      select owner_name, github_repository_id from registered_repositories where id = ${repositoryId}
+    `;
+    // Deliberately distinct from the contributor account's own id: the column
+    // must carry the fold's value verbatim, not derive it from a user row.
+    const assigneeGitHubUserId = 9_150_001;
+    const snapshot = materializationSnapshot({
+      repositoryId,
+      ownerName: repository.owner_name,
+      githubRepositoryId: Number(repository.github_repository_id),
+      sponsorId,
+      contributorId,
+      sponsorGitHubUserId: await githubUserIdOf(sql, sponsorId),
+      contributorGitHubUserId: await githubUserIdOf(sql, contributorId),
+      sponsorLogin,
+      contributorLogin,
+      issueLabels: ["M"],
+      actualLabel: "delivered/6",
+      githubIssueId: nextExternalId(),
+      githubPullRequestId: nextExternalId(),
+    });
+    const issue = snapshot.issues[0]!;
+    issue.claimAssigneeGitHubUserId = assigneeGitHubUserId;
+
+    const fold = foldRepository(snapshot);
+    const store = new PostgresFoldStore(sql);
+    const runId = await store.beginRun(repositoryId);
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold }));
+
+    await expect(sql`
+      select claim_assignee_github_login, claim_assignee_github_user_id::text as claim_assignee_github_user_id
+      from issues where github_issue_id = ${issue.id}
+    `).resolves.toEqual([{
+      claim_assignee_github_login: contributorLogin,
+      claim_assignee_github_user_id: String(assigneeGitHubUserId),
+    }]);
   });
 
   it("rejects direct writes to every derived view", async () => {
@@ -3532,6 +3579,12 @@ describe("initial PostgreSQL materialization", () => {
       // Everything before the recorded sequence: the rows this run writes are
       // existing rows from the upgrade's point of view.
       await runMigrations({ upTo: "028_repository_reconciliation_cost.sql" });
+      // The materializer at HEAD writes every column the current migrations
+      // provide, and this fixture stops at 028 to keep 029's backfill doing
+      // real work, so the column 032 adds is created here out of band. 032's
+      // own `add column if not exists` makes its later application a no-op for
+      // the column; the check constraint is left to it.
+      await upgradeSql.unsafe("alter table issues add column if not exists claim_assignee_github_user_id bigint");
       const sponsorLogin = `recorded-seq-upgrade-sponsor-${nextExternalId()}`;
       const contributorLogin = `recorded-seq-upgrade-contributor-${nextExternalId()}`;
       const sponsorId = await insertUserWithLogin(upgradeSql, sponsorLogin);
@@ -4543,6 +4596,7 @@ function authoritativeIssue(input: { id: number; number: number; ownerLogin: str
     authorGitHubUserId: null,
     labels: ["M", "delivered/6"],
     claimAssigneeGitHubLogin: null,
+    claimAssigneeGitHubUserId: null,
     closingPullRequests: [],
     history: [
       {
@@ -4712,6 +4766,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     authorGitHubUserId: null,
     labels: issue.labels,
     claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin ?? null,
+    claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId ?? null,
     history: issue.history,
     comments: issue.comments,
     closingPullRequests: issue.closingPullRequests.map((pullRequest): GitHubPullRequest => ({
