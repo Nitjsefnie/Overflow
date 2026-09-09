@@ -788,7 +788,7 @@ describe("dashboard projections", () => {
     await expect(getDashboard("member-1", { sql })).rejects.toThrow("Settlement status was invalid.");
   });
 
-  it("uses repository reserve order first and oldest issues second for eligible work", async () => {
+  it("orders eligible work by sponsor headroom tier first, then repository reserve order, oldest issues second", async () => {
     const { sql, captures } = sqlHarness([
       [
         {
@@ -833,7 +833,13 @@ describe("dashboard projections", () => {
     const issues = await listEligibleIssues("member-1", {}, { sql });
 
     expect(issues.map((issue) => issue.id)).toEqual(["issue-old-high", "issue-new-high", "issue-low"]);
-    expect(captures[0]?.text).toMatch(/order by\s+issues\.opening_reserve_points desc,\s+issues\.created_at asc/i);
+    // The headroom tier leads (returned more than drawn, then balance down to
+    // minus ten, then deeper), and the reserve-then-age keys stand inside a
+    // tier. The comment block between `order by` and the tier is part of the
+    // captured text, so the pin spans it explicitly.
+    expect(captures[0]?.text).toMatch(
+      /order by\s+(?:--[^\n]*\s+)*case\s+when ranked\.available_headroom > 0 then 0\s+when ranked\.available_headroom >= -10 then 1\s+else 2\s+end,\s+ranked\.opening_reserve_points desc,\s+ranked\.created_at asc/i,
+    );
   });
 
   it("applies repository, offered-label, and claim-state filters server side and projects operational context", async () => {
