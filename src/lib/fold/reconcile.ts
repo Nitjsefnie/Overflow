@@ -208,7 +208,7 @@ async function reconcileRepositoryWhileCoordinated(
       }
       // Only public repositories can be registered, and one that stopped being public
       // stops being crawled. This is nearly unobservable in production: the sponsor's
-      // token carries only `public_repo`, so a repository that went private answers 404
+      // token carries only `admin:repo_hook`, so a repository that went private answers 404
       // and lands in NOT_FOUND above. The branch is kept for a broader-scoped token,
       // where materializing a private repository would be worse than declining.
       if (verified.visibility !== "PUBLIC") {
