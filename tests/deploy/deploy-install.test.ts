@@ -183,6 +183,13 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
   const regions: { info: string; lines: string[] }[] = [];
   for (const token of md.parse(markdown, {})) {
     if (token.type === "fence" || token.type === "code_block") {
+      // validateBlock's shell test only reads the info prefix, so a shell
+      // name followed by arbitrary info would smuggle the install command
+      // past the grammar. The old parser rejected that at the boundary and
+      // the structural front end keeps the rejection.
+      if (token.type === "fence" && mentionsPnpm(token.info)) {
+        throw new Error(`Unsupported fence info: ${token.info.trim()}`);
+      }
       const [start, end] = token.map ?? [0, 0];
       const content = token.content.replace(/\n$/, "");
       const contentLines = content === "" ? 0 : content.split("\n").length;
@@ -499,6 +506,14 @@ it("rejects a fence whose closing line leaves its blockquote container", () => {
   // the blockquote around an unclosed fence; the guard names the unclosed
   // fence instead of a container mismatch.
   expect(() => validateDocument(`> \`\`\`bash\n${canonicalInstall}\n> \`\`\``)).toThrow("Unsupported unclosed code fence");
+});
+
+it("rejects a shell-prefixed fence info carrying the install command", () => {
+  // The info prefix satisfies validateBlock's shell test, so the pnpm-bearing
+  // junk must be rejected in the structural front end, where the old parser
+  // threw before the grammar ran.
+  expect(() => validateDocument("```bash pnpm install --frozen-lockfile\n" + canonicalInstall + "\n```"))
+    .toThrow("Unsupported fence info");
 });
 
 it("rejects a command substitution hidden in a familiar command's arguments", () => {
