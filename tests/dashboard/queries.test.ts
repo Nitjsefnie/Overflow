@@ -1200,8 +1200,11 @@ describe("ambiguous claim assignee sentinel", () => {
     // cannot see.
     const reservedSql = captures[0]?.text.toLowerCase() ?? "";
     expect(reservedSql).toContain("issues.claim_assignee_github_login is not null");
+    // WHO claims is the immutable account id: the sentinel is a non-null login
+    // whose id is null, and null is distinct from the sponsor's id, so an
+    // ambiguous claim reserves without the SQL ever naming the sentinel.
     expect(reservedSql).toContain(
-      "lower(issues.claim_assignee_github_login) <> lower(sponsors.github_login)",
+      "issues.claim_assignee_github_user_id is distinct from sponsors.github_user_id",
     );
     expect(reservedSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
     expect(captures[0]?.values).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
@@ -1235,8 +1238,10 @@ describe("ambiguous claim assignee sentinel", () => {
     // and in the captured bound values.
     const headroomSql = captures[0]?.text.toLowerCase() ?? "";
     expect(headroomSql).toContain("reserved.claim_assignee_github_login is not null");
+    // Same identity pricing as the dashboard reservation: the sentinel login's
+    // null id is distinct from the sponsor's id, so it reserves.
     expect(headroomSql).toContain(
-      "lower(reserved.claim_assignee_github_login) <> lower(sponsors.github_login)",
+      "reserved.claim_assignee_github_user_id is distinct from sponsors.github_user_id",
     );
     expect(headroomSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
     expect(captures[0]?.values).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
@@ -1252,7 +1257,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
     sql = postgres(database.databaseUrl, { max: 1 });
     // Minimal relations let the production queries run with independently chosen parties.
     await sql.unsafe(`
-      create table users (id text primary key, github_login text, enforcement_state text);
+      create table users (id text primary key, github_login text, github_user_id bigint, enforcement_state text);
       create table registered_repositories (
         id text primary key,
         owner_name text,
@@ -1273,6 +1278,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         opening_comparison_points integer,
         opening_reserve_points integer,
         claim_assignee_github_login text,
+        claim_assignee_github_user_id bigint,
         created_at timestamptz
       );
       create table balances (account_id text, balance integer);
@@ -1311,14 +1317,14 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         recalibration_plan jsonb,
         created_at timestamptz
       );
-      insert into users values ('sponsor', 'grace', 'ACTIVE'), ('member', 'ada', 'ACTIVE');
+      insert into users values ('sponsor', 'grace', 901, 'ACTIVE'), ('member', 'ada', 902, 'ACTIVE');
       insert into registered_repositories (id, owner_name, sponsor_id, active, visibility, difficulty_scheme) values
         ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band"}');
       insert into issues values
-        ('open', 'repo', 1, 'Open work', 'https://github.com/co-op/harbour/issues/1', 'OPEN', 'delta', 3, 5, null, '2026-09-01T00:00:00Z'),
-        ('claimed', 'repo', 2, 'Outsider work', 'https://github.com/co-op/harbour/issues/2', 'OPEN', 'delta', 3, 6, 'outsider', '2026-09-01T00:00:00Z'),
-        ('ambiguous', 'repo', 3, 'Ambiguous work', 'https://github.com/co-op/harbour/issues/3', 'OPEN', 'delta', 3, 9, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', '2026-09-01T00:00:00Z'),
-        ('closed-ambiguous', 'repo', 4, 'Closed ambiguous work', 'https://github.com/co-op/harbour/issues/4', 'CLOSED', 'delta', 3, 99, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', '2026-09-01T00:00:00Z');
+        ('open', 'repo', 1, 'Open work', 'https://github.com/co-op/harbour/issues/1', 'OPEN', 'delta', 3, 5, null, null, '2026-09-01T00:00:00Z'),
+        ('claimed', 'repo', 2, 'Outsider work', 'https://github.com/co-op/harbour/issues/2', 'OPEN', 'delta', 3, 6, 'outsider', 202, '2026-09-01T00:00:00Z'),
+        ('ambiguous', 'repo', 3, 'Ambiguous work', 'https://github.com/co-op/harbour/issues/3', 'OPEN', 'delta', 3, 9, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', null, '2026-09-01T00:00:00Z'),
+        ('closed-ambiguous', 'repo', 4, 'Closed ambiguous work', 'https://github.com/co-op/harbour/issues/4', 'CLOSED', 'delta', 3, 99, '${AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN}', null, '2026-09-01T00:00:00Z');
       insert into balances values ('sponsor', 100);
     `);
   });

@@ -307,6 +307,7 @@ function closureIssue(
     authorGitHubUserId: null,
     labels: [timeline.openingLabel, "delivered/6"],
     claimAssigneeGitHubLogin: contributorLogin,
+    claimAssigneeGitHubUserId: null,
     history: [
       {
         kind: "LABELED",
