@@ -21,7 +21,9 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       authorization: { params: { scope: githubOAuthScope } },
       // GitHub's default userinfo request also hits /user/emails whenever the
       // profile has no public email. Overflow reads no email anywhere, so the
-      // override fetches only the public identity fields.
+      // override fetches only the public identity fields. Reverting it
+      // re-activates the stock fallback — see "Why `@auth/core` is not
+      // patched" in patches/README.md.
       userinfo: {
         url: "https://api.github.com/user",
         request: requestGitHubPublicIdentity,
