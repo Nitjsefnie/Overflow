@@ -1,5 +1,5 @@
 import {
-  parseGitHubWebhookDelivery,
+  parseGitHubWebhookDeliveryDetailed,
   type GitHubWebhookDelivery,
 } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
@@ -34,10 +34,18 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     } catch {
       return new Response(null, { status: 400 });
     }
-    const delivery = parseGitHubWebhookDelivery(event, deliveryId, payload);
-    if (delivery === null) {
+    const result = parseGitHubWebhookDeliveryDetailed(event, deliveryId, payload);
+    if (result.status === "ignored") {
+      // Deliberately ignored (a PR-carrying issue envelope) is a success to
+      // GitHub — any 2xx counts as delivered — so it must not read as a
+      // rejection, or the delivery log turns red on ignored traffic and hides
+      // real failures. 202 stays reserved for accepted-for-processing.
+      return new Response(null, { status: 204 });
+    }
+    if (result.status !== "ok") {
       return new Response(null, { status: 400 });
     }
+    const delivery = result.delivery;
 
     try {
       await dependencies.processWebhook(delivery);

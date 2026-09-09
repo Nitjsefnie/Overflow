@@ -22,6 +22,11 @@ export type GitHubWebhookDelivery = {
   issue?: GitHubWebhookIssue;
 };
 
+export type GitHubWebhookParseResult =
+  | { status: "ok"; delivery: GitHubWebhookDelivery }
+  | { status: "ignored" }
+  | { status: "invalid" };
+
 const subjectSchema = z.object({ id: z.number().int().positive(), number: z.number().int().positive() });
 const issueEnvelopeSchema = subjectSchema.extend({ pull_request: z.object({}).optional() });
 const issueViewSchema = z.object({
@@ -51,53 +56,65 @@ const supportedActions = {
 
 export const githubWebhookEvents = Object.keys(supportedActions) as SupportedGitHubWebhookEvent[];
 
-export function parseGitHubWebhookDelivery(
+export function parseGitHubWebhookDeliveryDetailed(
   eventName: string | null,
   deliveryId: string | null,
   payload: unknown,
-): GitHubWebhookDelivery | null {
+): GitHubWebhookParseResult {
   if (
     eventName === null ||
     deliveryId === null ||
     deliveryId.trim().length === 0 ||
     !isSupportedEvent(eventName)
   ) {
-    return null;
+    return { status: "invalid" };
   }
 
   const parsed = payloadSchema.safeParse(payload);
   if (!parsed.success || !supportedActions[eventName].has(parsed.data.action)) {
-    return null;
+    return { status: "invalid" };
   }
   const isIssueEvent = eventName === "issues" || eventName === "issue_comment";
   const subject = subjectSchema.safeParse(isIssueEvent ? parsed.data.issue : parsed.data.pull_request);
-  if (!subject.success) return null;
+  if (!subject.success) return { status: "invalid" };
   let issue: GitHubWebhookIssue | undefined;
   const kind = isIssueEvent ? "ISSUE" : "PULL_REQUEST";
   if (isIssueEvent) {
     const envelope = issueEnvelopeSchema.safeParse(parsed.data.issue);
-    if (!envelope.success) return null;
+    if (!envelope.success) return { status: "invalid" };
     // A PR-carrying envelope's id is the issue surface's, not the PR database
     // id, and repository.issue(number:) cannot resolve a PR back. Enqueueing
     // it would poison reconciliation's evidence delete-key with an unresolvable
     // ISSUE row; the PR's true PULL_REQUEST row arrives from its lifecycle
     // events instead.
-    if (envelope.data.pull_request !== undefined) return null;
+    if (envelope.data.pull_request !== undefined) return { status: "ignored" };
     const view = issueViewSchema.safeParse(parsed.data.issue);
-    if (!view.success) return null;
+    if (!view.success) return { status: "invalid" };
     issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
       title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
   }
 
   return {
-    deliveryId,
-    event: eventName,
-    action: parsed.data.action,
-    repositoryGitHubId: parsed.data.repository.id,
-    repositoryFullName: parsed.data.repository.full_name,
-    subject: { kind, ...subject.data },
-    ...(issue === undefined ? {} : { issue }),
+    status: "ok",
+    delivery: {
+      deliveryId,
+      event: eventName,
+      action: parsed.data.action,
+      repositoryGitHubId: parsed.data.repository.id,
+      repositoryFullName: parsed.data.repository.full_name,
+      subject: { kind, ...subject.data },
+      ...(issue === undefined ? {} : { issue }),
+    },
   };
+}
+
+export function parseGitHubWebhookDelivery(
+  eventName: string | null,
+  deliveryId: string | null,
+  payload: unknown,
+): GitHubWebhookDelivery | null {
+  const result = parseGitHubWebhookDeliveryDetailed(eventName, deliveryId, payload);
+  return result.status === "ok" ? result.delivery : null;
 }
 
 function isSupportedEvent(value: string): value is SupportedGitHubWebhookEvent {
