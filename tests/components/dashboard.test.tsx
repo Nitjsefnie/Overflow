@@ -386,6 +386,61 @@ describe("member dashboard", () => {
     expect(screen.queryByText(/__overflow_ambiguous_claim__/)).not.toBeInTheDocument();
   });
 
+  it("prints a perception catalog's name once in the claim row and still prefixes a numeric label", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [
+            {
+              id: "claim-3",
+              repositoryName: "co-op/harbour",
+              issueNumber: 23,
+              title: "Chart the perceived catalog",
+              url: "https://github.com/co-op/harbour/issues/23",
+              assigneeGitHubLogin: "mira",
+              openingName: "perceived difficulty",
+              openingLabel: "perceived difficulty: 3",
+              reservePoints: 5,
+            },
+            {
+              id: "claim-4",
+              repositoryName: "co-op/harbour",
+              issueNumber: 24,
+              title: "Chart the numeric catalog",
+              url: "https://github.com/co-op/harbour/issues/24",
+              assigneeGitHubLogin: "mira",
+              openingName: "Offer band",
+              openingLabel: "3",
+              reservePoints: 4,
+            },
+          ],
+          registeredRepositories: [],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    // A perception catalog's stored label already carries the name prefix, so
+    // the cell must not concatenate it a second time.
+    const perceived = cellValue("open-claims-heading", "Chart the perceived catalog", "Catalog");
+    expect(perceived).toBe("perceived difficulty: 3");
+    expect(perceived?.match(/perceived difficulty/g)?.length).toBe(1);
+
+    // A numeric catalog's label is the bare value, so the name is still owed.
+    expect(cellValue("open-claims-heading", "Chart the numeric catalog", "Catalog")).toBe(
+      "Offer band: 3",
+    );
+  });
+
   it("names why each unavailable repository went dark and says nothing extra for an available one", () => {
     render(
       <DashboardContent
