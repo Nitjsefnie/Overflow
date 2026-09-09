@@ -104,6 +104,12 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
           </ul>
         )}
       </section>
+      {dashboard.openAudit ? (
+        <section className="surface" aria-labelledby="account-audit-heading">
+          <h2 id="account-audit-heading">Account audit</h2>
+          <p>{dashboard.openAudit.openedAt.slice(0, 10)} · an audit is open on this account</p>
+        </section>
+      ) : null}
       <section className="surface" aria-labelledby="enforcement-notices-heading">
         <h2 id="enforcement-notices-heading">Enforcement notices</h2>
         {dashboard.enforcementNotices.length === 0 ? <p>No enforcement notices are recorded.</p> : (

@@ -1375,6 +1375,12 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         recalibration_plan jsonb,
         created_at timestamptz
       );
+      create table calibration_audits (
+        id text primary key,
+        account_id text,
+        state text,
+        opened_at timestamptz
+      );
       insert into users values ('sponsor', 'grace', 901, 'ACTIVE'), ('member', 'ada', 902, 'ACTIVE');
       insert into registered_repositories (id, owner_name, sponsor_id, active, visibility, difficulty_scheme) values
         ('repo', 'co-op/harbour', 'sponsor', true, 'PUBLIC', '{"openingName":"Promise band","actualName":"Delivered band"}');

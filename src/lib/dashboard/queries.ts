@@ -21,6 +21,7 @@ export type DashboardProjection = {
   openClaims: OpenClaimProjection[];
   registeredRepositories: RegisteredRepositoryProjection[];
   enforcementNotices: EnforcementNoticeProjection[];
+  openAudit: MemberOpenAuditProjection | null;
 };
 
 export type OpenClaimProjection = {
@@ -54,6 +55,17 @@ export type EnforcementNoticeProjection = {
   newState: string;
   reason: string;
   createdAt: string;
+};
+
+/**
+ * The member's own notice that a calibration audit is open on their account: its
+ * identity and the day it opened. The audit's rationale, cohort definition and
+ * statistics stay moderator-facing, so the notice exists independently of
+ * anything a moderator typed.
+ */
+export type MemberOpenAuditProjection = {
+  id: string;
+  openedAt: string;
 };
 
 /** A dashboard-safe settlement summary that links a member to the complete proof page. */
@@ -310,6 +322,11 @@ type EnforcementNoticeRow = {
   new_state: string;
   reason: string;
   created_at: string | Date;
+};
+
+type MemberOpenAuditRow = {
+  id: string;
+  opened_at: string | Date;
 };
 
 type RecentSettlementRow = {
@@ -606,6 +623,18 @@ export async function getDashboard(
     order by created_at desc, id desc
     limit 10
   `;
+  // At most one OPEN audit can exist per account — the partial unique index
+  // calibration_audits_one_open_account (migration 006) covers (account_id) where
+  // state = 'OPEN' — so this read cannot multiply rows and needs no precedence
+  // ordering to pick one. The notice is the audit's identity and opening time
+  // alone: nothing here consults the enforcement state or a moderator's text, so
+  // the member's dashboard shows it whatever the account's state happens to be.
+  const [openAuditRow] = await sql<MemberOpenAuditRow[]>`
+    select id, opened_at
+    from calibration_audits
+    where calibration_audits.account_id = ${accountId}
+      and calibration_audits.state = 'OPEN'
+  `;
 
   const settledBalance = readNumber(row?.settled_balance ?? 0, "Settled balance");
   const reservedPoints = readNumber(row?.reserved_points ?? 0, "Reserved points");
@@ -653,6 +682,10 @@ export async function getDashboard(
       reason: readText(notice.reason, "Enforcement reason"),
       createdAt: readTimestamp(notice.created_at, "Enforcement time"),
     })),
+    openAudit: openAuditRow === undefined ? null : {
+      id: readText(openAuditRow.id, "Open audit identifier"),
+      openedAt: readTimestamp(openAuditRow.opened_at, "Open audit opening time"),
+    },
   };
   if (row?.enforcement_state !== undefined) {
     projection.enforcementState = readText(row.enforcement_state, "Enforcement state");
