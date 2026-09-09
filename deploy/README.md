@@ -131,8 +131,9 @@ serve against the new schema — so the check is not part of this flow. A host
 being hardened by sections 1 and 6 is the exception: its old deployment still
 serves from the previous checkout while this section runs, so section 10's
 migration check applies on that path too. Carry the check out before this
-section's migrate step, and treat whatever is serving at migrate time as the
-previous release for the test.
+section's migrate step, treat whatever is serving at migrate time as the
+previous release for the test, and stop to split the change across deploys
+instead of running the block below if a migration fails it.
 
 ```bash
 set -e
@@ -633,24 +634,28 @@ serving only at the switch.** Between those points the previous release serves
 every request against the new schema, for the whole build duration. A migration
 is safe to apply in that position exactly when the previous release's write
 path cannot violate it: purely additive statements (a new table, a nullable
-column, a plain index) are safe, and so is an enforcing statement the previous
-release already satisfies on every write path — `settlements` has carried
-`settlements_issue_unique` since migration 003 alongside the writer that
-maintains it.
+column, a plain index; a plain index built without `CONCURRENTLY` blocks the
+previous release's writes for the scan's duration) are safe, and so is an
+enforcing statement the previous release already satisfies on every write
+path — `settlements` has carried `settlements_issue_unique` since migration
+003 alongside the writer that maintains it.
 
-Before running the block, read every migration the run will apply for the
-first time — anything `schema_migrations` does not yet record — and apply that
-test to each. If one fails, stop: do not run the block. Land the writer
-correction in this release and the enforcing statement in the next deploy, or
-shape the constraint so the previous release cannot violate it (for example, a
-partial constraint excluding the shape the old writer can produce). Shipping
-the constraint and its writer correction in the same release does not close
-the window — that is precisely what PR 312 and migration
-`033_self_work_calibrations_issue_unique.sql` did, and the build duration
-reopened the gap the branch had closed. `ADD CONSTRAINT ... NOT VALID` does
-not rescue a failing constraint: it defers only the scan of existing rows and
-enforces new-row writes immediately, so it does not make a constraint safe to
-apply before the corrected writer is serving.
+Before running the standing block below, read every migration the run will
+apply for the first time — anything `schema_migrations` does not yet record —
+and apply that test to each. If one fails, stop: do not run it. Land the
+writer correction in this release and the enforcing statement in the next
+deploy, or shape the constraint so the previous release cannot violate it
+(for example, a partial constraint excluding the shape the old writer can
+produce). Shipping the constraint and its writer correction in the same
+release does not close the window — that is precisely what PR 312 and
+migration `033_self_work_calibrations_issue_unique.sql` did, and the build
+duration reopened the gap the branch had closed.
+`ADD CONSTRAINT ... NOT VALID` does not rescue a failing constraint. A unique
+constraint — the form of both examples above — cannot be marked NOT VALID at
+all, and where the mark exists (a `CHECK` or `FOREIGN KEY` constraint) it
+defers only the scan of existing rows while still enforcing new-row writes
+immediately, so it does not make a constraint safe to apply before the
+corrected writer is serving.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
