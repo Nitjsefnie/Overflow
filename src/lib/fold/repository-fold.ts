@@ -35,8 +35,8 @@ export type RepositoryFoldSnapshot = {
     ownerName: string;
     /**
      * The repository's owner/name path as observed fresh on this run. reconcile.ts
-     * sets it from the identity verify it performs every run; a consumer folding
-     * without a fresh verify (overrides) leaves it unset.
+     * sets it from the identity verify it performs every run; a fold consumer
+     * with no fresh identity verify leaves it unset.
      */
     observedOwnerName?: string;
     active: boolean;
@@ -786,10 +786,11 @@ function crossRepositoryReason(
   registered: RepositoryFoldSnapshot["repository"],
 ): string {
   if (pullRequest.repositoryNameWithOwner.toLowerCase() !== registered.ownerName.toLowerCase()) {
-    // First run after a rename: the stored path is the one this very run
-    // refreshes afterwards, so when the fresh verify saw a different path the
-    // reason names both — a reason naming only the stale path sends the sponsor
-    // to a path GitHub no longer answers for.
+    // First run after a rename: the snapshot's ownerName was read from the
+    // store before this run's identity verify refreshed the row, so the
+    // in-memory value still carries the pre-rename path. When the fresh verify
+    // saw a different path, the reason names both — a reason naming only the
+    // stale path sends the sponsor to a path GitHub no longer answers for.
     if (registered.observedOwnerName !== undefined
       && registered.observedOwnerName.toLowerCase() !== registered.ownerName.toLowerCase()) {
       return `Closing pull request ${pullRequest.number} belongs to ${pullRequest.repositoryNameWithOwner}, `
