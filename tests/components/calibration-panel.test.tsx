@@ -102,7 +102,7 @@ describe("calibration comparison", () => {
       <CalibrationPanel
         comparison={{
           selfWork: { count: 1, meanDelta: 0, medianDelta: 0 },
-          outsider: { count: 2, meanDelta: 1, medianDelta: 1 },
+          outsider: { count: 1, meanDelta: 1, medianDelta: 1 },
           differenceBetweenMeans: 1,
         }}
       />,
@@ -110,6 +110,20 @@ describe("calibration comparison", () => {
 
     expect(screen.queryByText("Self-work sample · 1 pairs")).toBeNull();
     expect(screen.getByText("Self-work sample · 1 pair")).toBeVisible();
+    expect(screen.queryByText("Outsider settlement sample · 1 pairs")).toBeNull();
+    expect(screen.getByText("Outsider settlement sample · 1 pair")).toBeVisible();
+
+    cleanup();
+    render(
+      <CalibrationPanel
+        comparison={{
+          selfWork: { count: 2, meanDelta: 0, medianDelta: 0 },
+          outsider: { count: 2, meanDelta: 1, medianDelta: 1 },
+          differenceBetweenMeans: 1,
+        }}
+      />,
+    );
+    expect(screen.getByText("Self-work sample · 2 pairs")).toBeVisible();
     expect(screen.getByText("Outsider settlement sample · 2 pairs")).toBeVisible();
   });
 

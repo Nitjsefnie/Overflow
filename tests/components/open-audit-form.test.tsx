@@ -167,7 +167,7 @@ describe("open audit form", () => {
       sampleEndedAt: endedAtInstant,
       comparison: {
         selfWork: { count: 1, meanDelta: 2, medianDelta: 2 },
-        outsider: { count: 2, meanDelta: -1, medianDelta: -1 },
+        outsider: { count: 1, meanDelta: -1, medianDelta: -1 },
         differenceBetweenMeans: 3,
       },
       meetsMinimumSampleSize: false,
@@ -183,7 +183,8 @@ describe("open audit form", () => {
       expect(screen.getByText("Self-work sample · 1 pair · mean delta +2")).toBeInTheDocument();
     });
     expect(screen.queryByText("Self-work sample · 1 pairs · mean delta +2")).not.toBeInTheDocument();
-    expect(screen.getByText("Outsider settlement sample · 2 pairs · mean delta −1")).toBeInTheDocument();
+    expect(screen.getByText("Outsider settlement sample · 1 pair · mean delta −1")).toBeInTheDocument();
+    expect(screen.queryByText("Outsider settlement sample · 1 pairs · mean delta −1")).not.toBeInTheDocument();
   });
 
   it("refuses a blank reason before any request is sent", () => {
