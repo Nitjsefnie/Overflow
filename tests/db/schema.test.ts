@@ -226,6 +226,7 @@ describe("initial PostgreSQL materialization", () => {
       "032_immutable_claim_assignee_identity.sql",
       "033_self_work_calibrations_issue_unique.sql",
       "034_repository_unregistration.sql",
+      "035_moderation_credit_adjustments.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
