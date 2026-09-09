@@ -20,18 +20,46 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+const USAGE = `usage: node scripts/measure-header-geometry.mjs [--css PATH] [--out PATH] [--help]
+
+Sweeps the real header (member, moderator and signed-out variants) across
+viewport widths in headless chromium and prints, per width: nav row count,
+wordmark / stamp / session-controls centres, header height, and a
+pass/DEFECT verdict. Around the header breakpoint the stylesheet declares
+it dense-samples every 5px across [breakpoint-100, breakpoint+200] so a
+wrong breakpoint cannot hide between coarse steps; the rest of the band is
+swept at 30px with 1280px as the desktop reference.
+
+  --css PATH   stylesheet to measure (default: src/app/globals.css)
+  --out PATH   also write every raw row as JSON
+  --help       this text
+`;
+
+/** A flag's value, failing cleanly when the flag is present but valueless. */
+function flaggedValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index === -1) return null;
+  const value = process.argv[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    console.error(`${flag} needs a value\n\n${USAGE}`);
+    process.exit(2);
+  }
+  return value;
+}
+
+if (process.argv.includes("--help")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 const repoRoot = resolve(import.meta.dirname, "..");
-const cssArg = process.argv.indexOf("--css");
-const cssPath = cssArg === -1
-  ? join(repoRoot, "src/app/globals.css")
-  : resolve(process.argv[cssArg + 1]);
-const outArg = process.argv.indexOf("--out");
-const outPath = outArg === -1 ? null : resolve(process.argv[outArg + 1]);
+const cssPath = resolve(flaggedValue("--css") ?? join(repoRoot, "src/app/globals.css"));
+const outPath = flaggedValue("--out");
 
 if (!existsSync(cssPath)) {
   console.error(`stylesheet not found: ${cssPath}`);
@@ -308,9 +336,47 @@ async function pollFor(client, sessionId, expression, timeoutMs) {
   }
 }
 
+/**
+ * The header wrap breakpoint the stylesheet under test declares, so the sweep
+ * can dense-sample the band where a wrong breakpoint hides: just above the
+ * declared value the three-column layout returns, and the widest navigation
+ * must fit on one row there. Found by the same shape the guard test pins — a
+ * media block carrying a .site-header grid-template-columns decision — so the
+ * dense band follows whatever stylesheet this run measures, mutants included.
+ */
+function declaredHeaderBreakpoint(cssText) {
+  const text = cssText.replaceAll(/\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\//g, "");
+  let index = text.indexOf("@media");
+  while (index !== -1) {
+    const open = text.indexOf("{", index);
+    let depth = 1;
+    let cursor = open + 1;
+    while (depth > 0 && cursor < text.length) {
+      if (text[cursor] === "{") depth++;
+      if (text[cursor] === "}") depth--;
+      cursor++;
+    }
+    if (/\.site-header\s*\{[^}]*grid-template-columns/.test(text.slice(open + 1, cursor - 1))) {
+      const width = text.slice(index, open).match(/max-width:\s*(\d+(?:\.\d+)?)px/);
+      if (width) return Number(width[1]);
+    }
+    index = text.indexOf("@media", cursor);
+  }
+  return null;
+}
+
 async function main() {
   const workDir = await mkdtemp(join(tmpdir(), "header-geometry-"));
   const results = [];
+
+  const declared = declaredHeaderBreakpoint(readFileSync(cssPath, "utf8"));
+  const sweep = new Set(WIDTHS);
+  if (declared === null) {
+    console.log("no declared header breakpoint found in the stylesheet; coarse sweep only");
+  } else {
+    for (let width = declared - 100; width <= declared + 200; width += 5) sweep.add(width);
+  }
+  const widths = [...sweep].sort((a, b) => a - b);
 
   const child = spawn(CHROMIUM, [
     "--headless=new",
@@ -341,7 +407,7 @@ async function main() {
         "document.readyState === 'complete' && getComputedStyle(document.querySelector('.site-header')).display === 'grid'",
         10000);
 
-      for (const width of WIDTHS) {
+      for (const width of widths) {
         await client.send("Emulation.setDeviceMetricsOverride", {
           width,
           height: 900,
@@ -362,7 +428,15 @@ async function main() {
   }
 
   console.log("Header geometry sweep — real markup, real stylesheet, headless chromium");
-  console.log(`stamp text: "Signed in as ${MEMBER_NAME}"; band 700-1300 step 30 plus the 1280 reference\n`);
+  if (declared === null) {
+    console.log("no declared header breakpoint found in the stylesheet; coarse sweep only");
+  } else {
+    console.log(
+      `declared header breakpoint ${declared}px; dense 5px sweep ` +
+        `${declared - 100}-${declared + 200}, coarse 30px elsewhere`,
+    );
+  }
+  console.log(`stamp text: "Signed in as ${MEMBER_NAME}"; ${widths.length} widths per variant\n`);
 
   for (const variant of VARIANTS) {
     const reference = results.find((r) => r.variant === variant.id && r.viewport === 1280);
