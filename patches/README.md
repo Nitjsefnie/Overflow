@@ -716,3 +716,48 @@ above closes.
   one and not the others passes a check that names only its own and reinstates
   the hang unnoticed. A release that carries only some of the fixes keeps the
   patch, minus the hunks it made redundant.
+
+## Why `@auth/core` is not patched
+
+`@auth/core` 0.41.3, the transitive pin under the `next-auth` 5.0.0-beta.32
+dependency, ships a GitHub provider whose `userinfo.request` calls GitHub's
+`/user/emails` endpoint whenever the `/user` profile carries no public email,
+and then reads `(emails.find((e) => e.primary) ?? emails[0]).email` unguarded.
+GitHub answers that call with `200` and an empty list for an account with no
+email on file, `find` returns `undefined`, and the sign-in throws
+`TypeError: Cannot read properties of undefined (reading 'email')` instead of
+refusing with a named reason. Runtime-reproduced against both the installed
+build and the published `@auth/core@0.41.3` from npm; the repro script and its
+output are posted on Overflow issue 308, and the same defect is reported
+upstream, still carried on upstream `main` as of 2026-09-09, at
+https://github.com/nextauthjs/next-auth/issues/13494.
+
+The stock branch is dead in production. Overflow PR 307 overrides the
+provider's `userinfo` request with `requestGitHubPublicIdentity` in
+`src/lib/auth/github-userinfo.ts`, which fetches only `/user` and never the
+email endpoint, and the override is pinned by tests in `tests/auth/` and
+`tests/security/github-oauth-scope.test.ts` — removing the override fails
+those tests. A local patch would buy protection for a code path production
+does not execute, so it is rejected, and the costs are recorded because they
+are what the rejection stands on:
+
+- A second `patchedDependencies` entry carries its own lockfile content hash,
+  and the patch file and `pnpm-lock.yaml` move together, so both serialize
+  across branches: every other in-flight branch would rebase onto a moved
+  lockfile.
+- `next-auth` is a beta pin (5.0.0-beta.32) that churns between betas, so
+  every future bump becomes a genuine patch merge against moved provider
+  source rather than a version bump.
+- The deploy guard `tests/deploy/postgres-patch.test.ts` is hardcoded to
+  `postgres@3.4.9` and derives its expected hunks from the patch file, so a
+  second patch means extending the guard to enumerate `patchedDependencies`
+  generally.
+- Production never executes the stock branches while the override stands, so
+  a patch protects nothing the pinning tests do not already pin.
+
+The upstream repair is one line — guard the found-or-first email before
+reading `.email` from it, per the report — and no repair is carried here on
+purpose. If a future release is adopted, the adoption means bumping the
+`next-auth` beta pin, which is a separate decision; until then production
+never runs the stock branch, and the override it runs instead asks GitHub for
+no email at all.

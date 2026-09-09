@@ -11,6 +11,17 @@
  * profile, so an outage or rate limit is distinguishable in the sign-in
  * diagnostics from a client-side cause (invalid identity, missing token).
  *
+ * The stock fallback this override routes around is defective as installed.
+ * When the profile has no public email, `@auth/core` 0.41.3
+ * (`providers/github.js`) reads `(emails.find((e) => e.primary) ?? emails[0]).email`
+ * unguarded, so a `200` with an empty list throws
+ * `TypeError: Cannot read properties of undefined (reading 'email')` and the sign-in dies mid-handshake. Runtime-reproduced against both
+ * this installed build and the published package; reported upstream at
+ * https://github.com/nextauthjs/next-auth/issues/13494. Removing this
+ * override re-opens the stock fallback for email-less accounts, so the
+ * replacement is pinned by tests (tests/auth/,
+ * tests/security/github-oauth-scope.test.ts) rather than by this comment.
+ *
  * The object the provider passes in and the raw profile returned match the
  * `userinfo.request` shape in `@auth/core`'s `providers/oauth.ts`
  * (`UserinfoEndpointHandler`); the result is consumed unchanged by the
