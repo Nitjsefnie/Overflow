@@ -240,19 +240,26 @@ function warnCoordinationStatementFailed(
  * Three stages, each reached only because the one before it did not answer:
  *
  * 1. `pg_advisory_unlock_all()`, a different function from the targeted unlock that just failed,
- *    so whatever stopped that one need not stop this one.
+ *    so whatever stopped that one need not stop this one. The release is guarded by the owning
+ *    session's identity in the same statement: a row answers only for the session that took the
+ *    lock, so a connection the pool has since handed to another reservation cannot be made to
+ *    drop locks it now holds for somebody else — and an unknown session (no identity to compare,
+ *    e.g. when the unlock itself never answered) is filtered out the same way.
  * 2. `DISCARD ALL`, which releases every session-level advisory lock as part of its definition.
  *    It is a utility statement rather than a function call, so `REVOKE EXECUTE` cannot reach it.
  *    It also resets the session's prepared statements; postgres.js re-prepares on
- *    `FetchPreparedStatement`, so the connection keeps answering afterwards.
+ *    `FetchPreparedStatement`, so the connection keeps answering afterwards. Reached only when
+ *    stage 1 threw, which is the denied-on-our-own-session path.
  * 3. `pg_terminate_backend(pg_backend_pid())`, which drops the locks along with the session.
  *    Terminating the session a statement runs on makes that statement fail — the server sends a
  *    FATAL and closes the socket — so the rejection is the expected shape of success.
  *
  * A session that answers stage 1 or stage 2 holds no advisory lock and still works, so it is fit
- * to release. After stage 3 it is not, and the caller must never release it: postgres.js returns a
- * closed connection to the pool on its own and reconnects it on next use, whereas `release()`
- * would push a session that may still hold the lock onto the pool's open queue.
+ * to release. A session the stage-1 guard filtered out is not ours: `false` without a warning,
+ * and the caller must never release it. After stage 3 it is not ours either, and the caller must
+ * never release it: postgres.js returns a closed connection to the pool on its own and reconnects
+ * it on next use, whereas `release()` would push a session that may still hold the lock onto the
+ * pool's open queue.
  *
  * `EXECUTE` on `pg_terminate_backend` is revocable like any other function's, so stage 3 can be
  * denied as well. Nothing is left to try then: the lock stays granted on a live session and the
@@ -262,10 +269,27 @@ function warnCoordinationStatementFailed(
 async function reclaimCoordinationConnection(
   connection: Awaited<ReturnType<SqlClient["reserve"]>>,
   repositoryId: string,
+  owningSession: { pid: number; backendStart: string } | undefined,
 ): Promise<boolean> {
+  if (owningSession === undefined) {
+    // The session identity is unknown — the take itself never answered — so no statement that
+    // can release locks may run on this connection at all.
+    return false;
+  }
   try {
-    await connection`select pg_advisory_unlock_all()`;
-    return true;
+    const [unlockedAll] = await connection<{ unlocked: null }[]>`
+      select pg_advisory_unlock_all() as unlocked
+      where pg_backend_pid() = ${owningSession.pid}
+        and (select backend_start from pg_stat_activity where pid = pg_backend_pid())
+          = ${owningSession.backendStart}::text::timestamptz
+    `;
+    // A void function answers with one all-null row; the driver may collapse it to null. Either
+    // way the row's PRESENCE is the answer: the guard matched, so this session is the one that
+    // took the lock and the release has happened. No row: the guard filtered this session out.
+    if (unlockedAll !== undefined) {
+      return true;
+    }
+    return false;
   } catch (cause) {
     warnCoordinationStatementFailed(repositoryId, "pg_advisory_unlock_all", cause);
   }
@@ -435,6 +459,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
       let locked = false;
       let lockMayStillBeHeld = false;
+      // The server-session identity that took the lock, for the reclaim's in-statement guard. An
+      // unknown session (the take itself failed) is filtered out the same way a foreign one is.
+      let owningSession: { pid: number; backendStart: string } | undefined;
       try {
         const [lock] = await connection<{
           acquired: boolean; pid: number; backend_start: string; database_oid: string; lock_key: string;
@@ -454,6 +481,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
             databaseOid: lock.database_oid, lockKey: lock.lock_key, active: true,
             publications: new Set<Promise<unknown>>(),
           };
+          owningSession = { pid: ownership.pid, backendStart: ownership.backendStart };
           try {
             // Keep PostgreSQL's microseconds as text; Date would round away part
             // of the server-session identity. A reconnected reserved handle has
@@ -523,7 +551,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       } finally {
         // A connection whose session might still hold the repository's lock never goes back into
         // the pool; `reclaimCoordinationConnection` says whether this one is fit to.
-        if (!lockMayStillBeHeld || await reclaimCoordinationConnection(connection, repositoryId)) {
+        if (!lockMayStillBeHeld
+          || await reclaimCoordinationConnection(connection, repositoryId, owningSession)) {
           connection.release();
         }
       }
