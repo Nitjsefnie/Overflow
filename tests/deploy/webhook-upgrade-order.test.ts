@@ -20,7 +20,8 @@ describe("ordinary deployment webhook upgrade", () => {
       await writeFile(join(fixture, "overflow.env"), "");
       const script = block.replaceAll("/srv/overflow", fixture)
         .replaceAll("/etc/overflow/overflow.env", join(fixture, "overflow.env"))
-        .replaceAll("/var/log/overflow", join(fixture, "logs"));
+        .replaceAll("/var/log/overflow", join(fixture, "logs"))
+        .replaceAll("/run/overflow-deploy.lock", join(fixture, "deploy.lock"));
       const result = spawnSync("bash", ["-c", `
         git() { if [ "$1" = rev-parse ]; then printf 'abc1234\\n'; fi; }
         pnpm() {
