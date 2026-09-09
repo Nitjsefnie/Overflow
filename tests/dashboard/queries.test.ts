@@ -19,6 +19,7 @@ import {
   SETTLEMENT_HISTORY_LIMIT,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
+import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type QueryCapture = { text: string; values: unknown[] };
 
@@ -1053,6 +1054,104 @@ describe("dashboard projections", () => {
     expect(captures.map((capture) => capture.text).join("\n").toLowerCase()).not.toMatch(
       /encrypted_oauth_token|access_token|webhook_secret|credential/,
     );
+  });
+});
+
+describe("ambiguous claim assignee sentinel", () => {
+  // The reserved sentinel login marks an issue GitHub reports with two or more
+  // assignees. These pins hold the conservative contract: the queries never
+  // special-case the sentinel, so a non-null value is claimed everywhere a
+  // nullity test decides, and ambiguous exposure stays reserved.
+  it("keeps a sentinel-assigned issue off the open available-work board and projects it as claimed", async () => {
+    const { sql, captures } = sqlHarness([
+      [
+        {
+          id: "issue-ambiguous",
+          repository_name: "co-op/harbour",
+          sponsor_login: "sponsor",
+          issue_number: 8,
+          title: "Chart the double crew",
+          url: "https://github.com/co-op/harbour/issues/8",
+          opening_name: "Promise band",
+          opening_label: "delta",
+          opening_comparison_points: 3,
+          opening_reserve_points: 6,
+          claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+          available_headroom: -3,
+          created_at: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    const issues = await listEligibleIssues("member-1", {}, { sql });
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        claimState: "CLAIMED",
+        assigneeGitHubLogin: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+      }),
+    ]);
+    // The OPEN board's exclusion runs on the column's nullity, and the sentinel
+    // is a non-null value, so it never passes this filter. Special-casing the
+    // sentinel here would wave an ambiguous claim back onto the board.
+    const openBoardSql = captures[0]?.text.toLowerCase() ?? "";
+    expect(openBoardSql).toContain("claim_assignee_github_login is null");
+    expect(openBoardSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+  });
+
+  it("reserves the sponsor's exposure for an ambiguous claim as an outsider reservation", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: 0, earned_total: 0, given_total: 0, reserved_points: 0 }],
+      [],
+      [],
+      [],
+      [],
+    ]);
+
+    await getDashboard("sponsor-1", { sql });
+
+    // The reservation totals every non-null assignee that is not the sponsor,
+    // and the sentinel login is never the sponsor's, so it reserves. A
+    // carve-out for the sentinel would release exposure the claim already took.
+    const reservedSql = captures[0]?.text.toLowerCase() ?? "";
+    expect(reservedSql).toContain("issues.claim_assignee_github_login is not null");
+    expect(reservedSql).toContain(
+      "lower(issues.claim_assignee_github_login) <> lower(sponsors.github_login)",
+    );
+    expect(reservedSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
+  });
+
+  it("reserves exposure for an ambiguous claim inside the eligible-work headroom projection", async () => {
+    const { sql, captures } = sqlHarness([
+      [
+        {
+          id: "issue-ambiguous",
+          repository_name: "co-op/harbour",
+          sponsor_login: "sponsor",
+          issue_number: 8,
+          title: "Chart the double crew",
+          url: "https://github.com/co-op/harbour/issues/8",
+          opening_name: "Promise band",
+          opening_label: "delta",
+          opening_comparison_points: 3,
+          opening_reserve_points: 6,
+          claim_assignee_github_login: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+          available_headroom: -3,
+          created_at: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    ]);
+
+    await listEligibleIssues("member-1", {}, { sql });
+
+    // The headroom subquery mirrors the dashboard reservation over the sponsor's
+    // repositories; the same no-carve-out pin applies there.
+    const headroomSql = captures[0]?.text.toLowerCase() ?? "";
+    expect(headroomSql).toContain("reserved.claim_assignee_github_login is not null");
+    expect(headroomSql).toContain(
+      "lower(reserved.claim_assignee_github_login) <> lower(sponsors.github_login)",
+    );
+    expect(headroomSql).not.toContain(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
   });
 });
 

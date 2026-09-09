@@ -6,6 +6,7 @@ import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 export { GitHubApiError } from "@/lib/github/errors";
+import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import type {
   GitHubIssue,
   GitHubIssueComment,
@@ -1137,8 +1138,18 @@ function toGitHubIssue(
   };
 }
 
+/**
+ * The claim lock GitHub's assignee page states, under the `assignees(first: 2)`
+ * page cap: no assignee is null, exactly one unambiguous assignee is its login,
+ * and two nodes reliably mean two or more assignees, which is the reserved
+ * ambiguous-claim login — never null, so an ambiguous claim stays
+ * distinguishable from an unassigned issue and keeps reserving exposure.
+ */
 function claimAssigneeLogin(assignees: readonly GitHubGraphqlAssignee[]): string | null {
-  if (assignees.length !== 1) {
+  if (assignees.length >= 2) {
+    return AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN;
+  }
+  if (assignees.length === 0) {
     return null;
   }
   const login = assignees[0]?.login.trim();

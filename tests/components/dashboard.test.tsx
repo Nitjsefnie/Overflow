@@ -6,6 +6,7 @@ import { DashboardContent } from "@/app/dashboard/page";
 import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
+import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 describe("member dashboard", () => {
   it("shows independently calculated ledger totals and reserved headroom", () => {
@@ -139,6 +140,39 @@ describe("member dashboard", () => {
     expect(screen.getByRole("heading", { name: "Registered repositories" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Enforcement notices" })).toBeVisible();
     expect(screen.getByText(/UNDER_AUDIT → WARNED/)).toBeVisible();
+  });
+
+  it("reads an ambiguous claim assignee as a phrase, never the reserved sentinel login", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 6,
+          availableHeadroom: -6,
+          recentSettlements: [],
+          openClaims: [{
+            id: "claim-2",
+            repositoryName: "co-op/harbour",
+            issueNumber: 21,
+            title: "Chart the double crew",
+            url: "https://github.com/co-op/harbour/issues/21",
+            assigneeGitHubLogin: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+            openingName: "Offer band",
+            openingLabel: "shoal",
+            reservePoints: 6,
+          }],
+          registeredRepositories: [],
+          enforcementNotices: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/· assignment ambiguous ·/)).toBeVisible();
+    expect(screen.queryByText(/__overflow_ambiguous_claim__/)).not.toBeInTheDocument();
   });
 
   it("names why each unavailable repository went dark and says nothing extra for an available one", () => {
