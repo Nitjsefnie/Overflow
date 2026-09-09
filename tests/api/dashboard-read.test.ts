@@ -26,6 +26,7 @@ const projection: DashboardProjection = {
     },
   ],
   enforcementNotices: [],
+  openAudit: null,
 };
 
 beforeEach(() => {
