@@ -429,9 +429,27 @@ dd {
   max-width: 62rem;
 }
 
+/*
+ * The form's sections separate by one gap taken from the lower section's
+ * margin-top, the rule the page column uses, so an adjoining edge never sums
+ * two gaps. The gap is deliberately wider than the 0.45rem a `.field` puts
+ * between a label and its own input: the boundary between two unrelated
+ * fields has to read as wider than the one inside a single field, or the two
+ * fields are seen as one. Sections that separate by more than the generic gap
+ * — the intro, a catalog fieldset, the feedback line, the submit button — tie
+ * with this rule on specificity, so each keeps its own spacing only while this
+ * rule stays above it.
+ */
+.repository-form > * + * {
+  margin-top: 1.25rem;
+}
+
 .form-intro {
   max-width: 48rem;
-  margin-bottom: 2rem;
+}
+
+.form-intro + * {
+  margin-top: 2rem;
 }
 
 .form-intro h1 {
@@ -514,6 +532,18 @@ dd {
   align-items: end;
   padding-bottom: 0.8rem;
   border-bottom: 1px solid #8a8479;
+}
+
+/*
+ * The labels of a row start on a common line. A points label wraps to three
+ * lines in its narrow column while the label beside it takes one, and an
+ * end-aligned row lifts the wrapped fields' tops above the short one's, so the
+ * four controls appear to start at three different heights. Only the fields
+ * move: the controls that are not fields — the Remove button, the points
+ * stamp — keep the row's end alignment and stay level with the inputs.
+ */
+.catalog-row > .field {
+  align-self: start;
 }
 
 .actual-row {

@@ -119,6 +119,86 @@ describe("feedback stylesheet", () => {
   });
 });
 
+/**
+ * The stylesheet with comments stripped, so a selector is matched against the
+ * rules themselves and never against prose describing them.
+ */
+const strippedStylesheet = stylesheet.replace(/\/\*[\s\S]*?\*\//g, " ");
+
+/** Where the viewport-conditional part of the stylesheet begins. */
+const firstAtRule = strippedStylesheet.indexOf("@media");
+
+type PinnedRule = { declarations: Record<string, string>; index: number };
+
+/**
+ * The rule the selector opens, matched only where the selector is the whole
+ * prelude: `.field` is answered by its own rule and never by
+ * `.catalog-row > .field`, and the returned index is what the source-order
+ * assertions compare.
+ */
+function pinnedRule(selector: string): PinnedRule {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+  const match = strippedStylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
+  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
+  return { declarations: declarations(match![1]!), index: match!.index! };
+}
+
+/** A length in rem, so two of them can be compared as numbers. */
+function rem(value: string | undefined, what: string): number {
+  expect(value, what).toMatch(/^[\d.]+rem$/);
+  return Number.parseFloat(value!);
+}
+
+/**
+ * Spacing in the registration form.
+ *
+ * jsdom performs no layout, so a rendering test passes whether or not two
+ * fields touch. What is pinned here is the stylesheet text that produces the
+ * spacing — which declarations exist, how they compare in size, and the source
+ * order the ties between them are decided by — and never the geometry itself.
+ * A real-viewport check is what would pin that; issue 111 tracks its absence.
+ */
+describe("registration form spacing stylesheet", () => {
+  it("separates the form's sections by more than a field puts between its own label and input", () => {
+    const sectionGap = pinnedRule(".repository-form > * + *");
+
+    // The boundary between two unrelated fields has to read as wider than the
+    // one inside a single field, or the two fields are seen as one.
+    const gap = rem(sectionGap.declarations["margin-top"], "the form's section gap");
+    const labelGap = rem(pinnedRule(".field").declarations.gap, "the label-to-input gap");
+    expect(gap).toBeGreaterThan(labelGap * 2);
+    expect(sectionGap.index, "the section gap applies at every viewport").toBeLessThan(firstAtRule);
+  });
+
+  it("takes every section gap from the lower section's margin-top so no edge sums two gaps", () => {
+    const sectionGap = pinnedRule(".repository-form > * + *");
+    const introGap = pinnedRule(".form-intro + *");
+    const fieldset = pinnedRule(".catalog-fieldset");
+
+    expect(pinnedRule(".form-intro").declarations["margin-bottom"], "the intro adds no bottom margin").toBeUndefined();
+    expect(rem(introGap.declarations["margin-top"], "the gap below the intro")).toBeGreaterThanOrEqual(
+      rem(sectionGap.declarations["margin-top"], "the form's section gap"),
+    );
+
+    // Both wider gaps tie with the generic one on specificity, so each keeps
+    // its own value only while the generic rule stays above it.
+    expect(sectionGap.index).toBeLessThan(introGap.index);
+    expect(sectionGap.index).toBeLessThan(fieldset.index);
+    expect(fieldset.declarations.margin, "the fieldset keeps its own 2rem").toBe("2rem 0 0");
+  });
+
+  it("starts the labels of a catalog row on a common line at every viewport", () => {
+    const rowField = pinnedRule(".catalog-row > .field");
+
+    expect(rowField.declarations["align-self"]).toBe("start");
+    expect(rowField.index, "the row's fields align to the top at every viewport").toBeLessThan(firstAtRule);
+    // Only the fields move: the controls that are not fields — the Remove
+    // button, the points stamp — keep the row's end alignment and stay level
+    // with the inputs.
+    expect(pinnedRule(".catalog-row").declarations["align-items"]).toBe("end");
+  });
+});
+
 describe("repository registration form", () => {
   describe.each([
     ["EVIDENCE_FOUND", "success", ""],
