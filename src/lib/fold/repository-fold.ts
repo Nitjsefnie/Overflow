@@ -865,7 +865,7 @@ function resolveSettledDifficulty(
     return {
       kind: "rejected",
       reach: windowReach,
-      reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
+      reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].sort().map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
     };
   }
   const [[label, source]] = [...activeLabels.entries()];
