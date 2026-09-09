@@ -5,6 +5,18 @@ import {
   type CalibrationComparison,
   type CalibrationPair,
 } from "@/lib/calibration/statistics";
+import type {
+  AdjustmentTotal,
+  CalibrationActionability,
+  CalibrationCohortTotals,
+} from "@/lib/moderation/adjustment";
+import type {
+  CreditAdjustmentLineRecord,
+  CreditAdjustmentRecord,
+  RecalibrationCreditConflict,
+  RecalibrationCreditFailure,
+  RecalibrationCreditStore,
+} from "@/lib/moderation/credit-adjustment-store";
 import type { EnforcementState, UserRole } from "@/lib/db/types";
 import { normalizeRecalibrationPlan } from "@/lib/moderation/transitions";
 
@@ -94,6 +106,25 @@ export type ModeratorRoleChange = {
   changedAt: string;
 };
 
+/**
+ * The moderator-facing recalibration figure (decision 7): the trigger verdict
+ * over the latest SUBSTANTIATED audit's stored snapshot, the exact cohort sums
+ * it was computed from, and — when actionable — the proposed integer figure
+ * with its per-creditor line preview, beside every adjustment already applied
+ * to the account. The stored snapshot's raw pairs stay in the store layer; the
+ * figure is what a moderator decides on, not the evidence dump.
+ */
+export type RecalibrationCreditPreview = {
+  audit: { id: string; decidedAt: string | null };
+  actionability: CalibrationActionability;
+  totals: CalibrationCohortTotals;
+  /** Null when the stored comparison is not actionable: there is no figure to act on. */
+  figure: AdjustmentTotal | null;
+  /** Empty unless a positive figure distributes across the resolved settlements. */
+  lines: readonly CreditAdjustmentLineRecord[];
+  adjustments: readonly CreditAdjustmentRecord[];
+};
+
 export type ModerationStore = {
   loadCalibrationCohort(input: {
     targetAccountId: string;
@@ -143,7 +174,10 @@ export class ModerationServiceError extends Error {
 }
 
 export class AccountModerationService {
-  public constructor(private readonly store: ModerationStore) {}
+  public constructor(
+    private readonly store: ModerationStore,
+    private readonly creditStore?: RecalibrationCreditStore,
+  ) {}
 
   public async listModerators(actor: ModerationActor): Promise<ModeratorSummary[]> {
     requireModerator(actor);
@@ -286,6 +320,94 @@ export class AccountModerationService {
     );
   }
 
+  /**
+   * Shows the moderator what the latest SUBSTANTIATED audit's stored snapshot
+   * still supports: the trigger verdict, the exact sums it was computed from,
+   * and — when actionable — the proposed figure with its per-creditor lines,
+   * beside every adjustment already applied to the account. A failed trigger
+   * is not a refusal to read: the non-actionable verdict passes through so the
+   * moderator sees the honest figure there is no action to take on.
+   */
+  public async previewRecalibration(
+    actor: ModerationActor,
+    targetAccountId: string,
+  ): Promise<RecalibrationCreditPreview> {
+    requireModerator(actor);
+    const creditStore = this.requireCreditStore();
+    const target = normalizeIdentifier(targetAccountId, "Target account identifier");
+    const preview = unwrapCreditResult(await creditStore.loadRecalibrationPreview(target));
+
+    return {
+      audit: preview.audit,
+      actionability: preview.actionability,
+      totals: preview.totals,
+      figure: preview.figure,
+      lines: preview.lines,
+      adjustments: await creditStore.listCreditAdjustments(target),
+    };
+  }
+
+  /**
+   * Applies the compensating adjustment the latest SUBSTANTIATED audit's stored
+   * snapshot supports, in the credit store's single transaction. The store's
+   * uniqueness constraint, not a read, separates two applies for the same
+   * audit: the loser is a conflict. A failed trigger is the caller's error —
+   * the audit's own comparison does not support compensating anyone.
+   */
+  public async applyRecalibrationCreditAdjustment(
+    actor: ModerationActor,
+    targetAccountId: string,
+    reason: string,
+  ): Promise<CreditAdjustmentRecord> {
+    requireModerator(actor);
+    const creditStore = this.requireCreditStore();
+    return unwrapCreditResult(
+      await creditStore.applyRecalibrationCreditAdjustment({
+        actorId: actor.id,
+        targetAccountId: normalizeIdentifier(targetAccountId, "Target account identifier"),
+        reason: normalizeReason(reason),
+      }),
+    );
+  }
+
+  /**
+   * Reverses an applied adjustment by mirroring it — negative lines, its own
+   * moderation event, the original row untouched — in the credit store's
+   * single transaction. Reversing a reversal is refused: a fresh adjustment
+   * from the audit is the way to re-compensate.
+   */
+  public async reverseModerationCreditAdjustment(
+    actor: ModerationActor,
+    adjustmentId: string,
+    reason: string,
+  ): Promise<CreditAdjustmentRecord> {
+    requireModerator(actor);
+    const creditStore = this.requireCreditStore();
+    return unwrapCreditResult(
+      await creditStore.reverseModerationCreditAdjustment({
+        actorId: actor.id,
+        adjustmentId: normalizeIdentifier(adjustmentId, "Adjustment identifier"),
+        reason: normalizeReason(reason),
+      }),
+    );
+  }
+
+  /**
+   * The credit methods are available only on a service constructed with the
+   * optional second dependency, so a missing one is invisible until such a
+   * method runs. That is a server construction bug rather than user input:
+   * a plain Error naming the dependency, not a ModerationServiceError an API
+   * layer would map onto a client-facing code.
+   */
+  private requireCreditStore(): RecalibrationCreditStore {
+    if (this.creditStore === undefined) {
+      throw new Error(
+        "AccountModerationService was constructed without a recalibration credit store; pass it as the optional second constructor argument.",
+      );
+    }
+    return this.creditStore;
+  }
+
   private async compareCohort(
     window: NormalizedAuditWindow,
   ): Promise<{ loaded: LoadedCalibrationCohort; comparison: CalibrationComparison }> {
@@ -413,5 +535,39 @@ function unwrapStoreResult<T>(result: ModerationStoreResult<T>): T {
     case "conflict":
     case "invalid_state":
       throw new ModerationServiceError("CONFLICT", "The requested moderation transition is not available.");
+  }
+}
+
+/**
+ * Maps the credit store's structured results onto the service's error codes:
+ * a missing record to NOT_FOUND, drifted or already-decided evidence to
+ * CONFLICT, and a failed trigger to INVALID_INPUT — the caller asked for an
+ * action the audit's own comparison does not support.
+ */
+function unwrapCreditResult<T>(result: { kind: "ok"; value: T } | RecalibrationCreditFailure): T {
+  if (result.kind === "ok") {
+    return result.value;
+  }
+  switch (result.kind) {
+    case "not_found":
+      throw new ModerationServiceError("NOT_FOUND", "The requested moderation record was not found.");
+    case "conflict":
+      throw new ModerationServiceError("CONFLICT", creditConflictMessage(result.detail));
+    case "not_actionable":
+      throw new ModerationServiceError(
+        "INVALID_INPUT",
+        "The audit's calibration gap does not support a compensating adjustment.",
+      );
+  }
+}
+
+function creditConflictMessage(detail: RecalibrationCreditConflict): string {
+  switch (detail.cause) {
+    case "SNAPSHOT_DRIFT":
+      return `The audit's stored calibration evidence no longer matches the live records: ${detail.description}`;
+    case "ALREADY_APPLIED":
+      return "This audit already carries an applied credit adjustment.";
+    case "ALREADY_REVERSED":
+      return "This credit adjustment has already been reversed.";
   }
 }
