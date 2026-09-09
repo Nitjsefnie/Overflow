@@ -44,9 +44,11 @@ import { describe, expect, it } from "vitest";
  *                                  next/navigation capability needs a reviewed exception
  *
  * Known, accepted limits: a computed specifier (`import("next/" + "navigation")`)
- * evades the textual match, and only page.tsx modules are scanned, so a
- * layout.tsx could still hide a redirect. Both are deliberate scope cuts, in
- * exchange for a guard that reads source and nothing else.
+ * evades the textual match; only page.tsx modules are scanned, so a layout.tsx
+ * could still hide a redirect; and a page module could route through a lib
+ * wrapper that re-exports redirect from next/navigation — creating such a
+ * wrapper is deliberate evasion, and none exists today. All are deliberate
+ * scope cuts, in exchange for a guard that reads source and nothing else.
  *
  * The two declared exceptions are safe because each is served AS ITSELF by the
  * routes map in tests/dashboard/redirect-loop.test.ts, so every redirect it
@@ -344,6 +346,40 @@ describe("the scan catches every import shape", () => {
         const scan = scanAppTree(root, []);
 
         expect(scan.violations).toEqual([expect.stringContaining("widget/page.tsx:4")]);
+      },
+    );
+  });
+
+  it("keeps recursing into dot-directories, so no class of directory is skipped by name", () => {
+    withFixtureTree(
+      {
+        "widget/page.tsx": [
+          `import { redirect } from "next/navigation";`,
+          "",
+          "export default async function Page() {",
+          '  redirect("/somewhere");',
+          "}",
+        ].join("\n"),
+        ".hidden/page.tsx": [
+          "export default async function Page() {",
+          `  const { redirect } = await import("next/navigation");`,
+          '  redirect("/somewhere");',
+          "}",
+        ].join("\n"),
+      },
+      (root) => {
+        const scan = scanAppTree(root, []);
+
+        // Both axes matter: the count pins that no module was skipped, and the
+        // per-file matches pin WHICH modules were read — a walker that ever
+        // stops recursing into dot-directories (or any other class of
+        // directory) fails here instead of silently narrowing the guard.
+        expect(scan.moduleCount).toBe(2);
+        expect(scan.filesWithSites).toEqual([".hidden/page.tsx", "widget/page.tsx"]);
+        expect(scan.violations).toEqual([
+          expect.stringMatching(/^\.hidden\/page\.tsx:\d+ —/),
+          expect.stringMatching(/^widget\/page\.tsx:\d+ —/),
+        ]);
       },
     );
   });
