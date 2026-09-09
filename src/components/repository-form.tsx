@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import type { ClaimPathVerdict } from "@/lib/domain/claim-path";
 import type { ActualDifficultyLabel, OpeningDifficultyLabel } from "@/lib/domain/difficulty-scheme";
+import { plural } from "@/lib/plural";
 
 export type RepositoryFormValues = {
   repositoryUrl: string;
@@ -324,7 +325,7 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
                   ))}
                 </select>
               </label>
-              <p className="points-stamp">{actualLabel.points} points</p>
+              <p className="points-stamp">{actualLabel.points} {plural(actualLabel.points, "point")}</p>
             </div>
           ))}
         </div>

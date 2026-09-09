@@ -189,12 +189,20 @@ describe("repository registration form", () => {
     // change after the mount clears selections.
     expect(screen.getByLabelText("Actual label for 10 points")).toHaveValue("ocean");
     for (const points of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-      expect(screen.getByText(`${points} points`)).toBeVisible();
+      expect(screen.getByText(`${points} point${points === 1 ? "" : "s"}`)).toBeVisible();
     }
 
     await selectLoadedOption("Actual label for 7 points", "shelf");
     expect(screen.getByLabelText("Actual label for 7 points")).toHaveValue("shelf");
     expect(openingLabel).toHaveValue("moonlit ridge");
+  });
+
+  it("reads the actual catalog's point stamps with the plural each count takes", () => {
+    render(<RepositoryForm initialValues={initialValues} />);
+
+    expect(screen.getByText("1 point")).toBeVisible();
+    expect(screen.getByText("2 points")).toBeVisible();
+    expect(screen.getByText("10 points")).toBeVisible();
   });
 
   it("keeps an opening-label select focused throughout a multi-step edit", async () => {
