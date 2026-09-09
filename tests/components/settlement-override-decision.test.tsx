@@ -4,6 +4,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettlementOverrideDecision } from "@/components/settlement-override-decision";
 
+const { redirect, refresh } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
+
 const requestId = "00000000-0000-4000-8000-000000000009";
 
 function okResponse(): Response {
@@ -14,6 +18,7 @@ function okResponse(): Response {
 }
 
 afterEach(() => {
+  refresh.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -114,6 +119,62 @@ describe("settlement correction decision controls", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "No settlement, calibration or correction request was found under that identifier.",
     );
+  });
+
+  it("refreshes the override queue once after a successful grant and keeps the success feedback", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    fireEvent.change(screen.getByLabelText("Corrected points"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("Reason for the decision"), {
+      target: { value: "The delivered label was applied by the issue owner." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Grant correction" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Issue #44 is corrected to 6 points.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the override queue once after a successful decline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    fireEvent.change(screen.getByLabelText("Reason for the decision"), {
+      target: { value: "The evidence window closed before the label was applied." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Decline correction" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("Issue #44 keeps the outcome the fold recorded.");
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh the override queue when a decision is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: "No settlement, calibration or correction request was found under that identifier." } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    fireEvent.change(screen.getByLabelText("Reason for the decision"), { target: { value: "Handled." } });
+    fireEvent.click(screen.getByRole("button", { name: "Decline correction" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "No settlement, calibration or correction request was found under that identifier.",
+      );
+    });
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 

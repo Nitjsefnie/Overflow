@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type Decision = "grant" | "decline";
@@ -31,6 +32,7 @@ const maximumSettledPoints = 10;
  * deciding a sponsor's own closure would find no settled points to correct.
  */
 export function SettlementOverrideDecision({ requestId, issueNumber }: SettlementOverrideDecisionProps) {
+  const router = useRouter();
   const [settledPoints, setSettledPoints] = useState("");
   const [reason, setReason] = useState("");
   const [pendingDecision, setPendingDecision] = useState<Decision | null>(null);
@@ -86,6 +88,7 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
             ? `Issue #${issueNumber} is corrected to ${points} points.`
             : `Issue #${issueNumber} keeps the outcome the fold recorded.`,
       });
+      router.refresh();
     } catch {
       setFeedback({
         kind: "error",
