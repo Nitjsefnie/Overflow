@@ -12,7 +12,7 @@ import {
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
-const openAccountAuditSchema = z
+export const openAccountAuditSchema = z
   .object({
     targetAccountId: z.string().uuid(),
     repositoryId: z.string().uuid().optional(),

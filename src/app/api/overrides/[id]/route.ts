@@ -19,7 +19,7 @@ import {
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
-const decisionSchema = z.discriminatedUnion("action", [
+export const decisionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("grant"),

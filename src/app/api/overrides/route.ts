@@ -18,7 +18,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 // Strict on both sides of the union, so a body naming a settlement and a
 // calibration at once matches neither: one request corrects one priced outcome.
-const overrideRequestSchema = z.union([
+export const overrideRequestSchema = z.union([
   z
     .object({
       settlementId: z.string().uuid(),

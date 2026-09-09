@@ -11,7 +11,7 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
-const auditActionSchema = z.discriminatedUnion("action", [
+export const auditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dismiss"), reason: z.string() }).strict(),
   z.object({ action: z.literal("substantiate"), reason: z.string() }).strict(),
 ]);
