@@ -18,6 +18,14 @@ export const SIGN_IN_REFUSAL_REASONS = {
   accessToken: "SIGNIN_ACCESS_TOKEN_MISSING",
   /** Persisting the identity threw. The error itself is logged alongside. */
   persistence: "SIGNIN_PERSIST_FAILED",
+  /**
+   * GitHub's /user endpoint answered non-2xx during sign-in (rate limit,
+   * outage). Emitted by the userinfo override at the fetch site — that
+   * failure fails the sign-in before the `signIn` callback runs, so it never
+   * passes through `decideGitHubSignIn`. The status and a bounded snippet of
+   * GitHub's message are logged alongside.
+   */
+  upstream: "SIGNIN_UPSTREAM_UNAVAILABLE",
 } as const;
 
 export type SignInRefusalReason = (typeof SIGN_IN_REFUSAL_REASONS)[keyof typeof SIGN_IN_REFUSAL_REASONS];
