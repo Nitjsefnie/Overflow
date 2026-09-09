@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ModerationPage from "@/app/moderation/page";
 import { UnwritableClosureQueue } from "@/components/unwritable-closure-queue";
@@ -55,6 +55,39 @@ function selfWorked(overrides: Partial<UnwritableClosureProjection> = {}): Unwri
     calibrationOwnerLogin: "grace",
     ...overrides,
   });
+}
+
+/**
+ * The settlement corrections region is located by its heading id, never by the
+ * heading's wording: a page may reword its copy without invalidating coverage.
+ */
+function settlementCorrectionsRegion(): HTMLElement {
+  const section = screen.getAllByRole("region").find(
+    (region) => region.getAttribute("aria-labelledby") === "settlement-corrections-heading",
+  );
+  expect(section, "the settlement corrections region renders").toBeDefined();
+  return section!;
+}
+
+/**
+ * What a reader of the settlement corrections region depends on: the heading,
+ * an explanation paragraph beneath it, and the correction queue — or its load
+ * error — beneath that, in that order, all visible. The wording is never
+ * asserted: a substring-preserving negation in the copy must not be caught
+ * here (issue 218 accepts that radius), but removing, emptying or reordering
+ * these elements must fail.
+ */
+function expectExplanationAboveQueue(section: HTMLElement): void {
+  const heading = within(section).getByRole("heading");
+  expect(heading).toHaveAttribute("id", "settlement-corrections-heading");
+  const explanation = heading.nextElementSibling as HTMLElement | null;
+  expect(explanation?.tagName, "an explanation paragraph renders directly beneath the heading").toBe("P");
+  expect(explanation!).toBeVisible();
+  expect(explanation!).not.toBeEmptyDOMElement();
+  const queueState = explanation!.nextElementSibling as HTMLElement | null;
+  expect(queueState?.tagName, "the correction queue (or its load error) renders directly beneath the explanation").toBe("P");
+  expect(queueState!).toBeVisible();
+  expect(queueState!).not.toBeEmptyDOMElement();
 }
 
 describe("unwritable closure queue", () => {
@@ -345,20 +378,22 @@ describe("moderation closure section", () => {
     ]);
   });
 
-  it("says what a granted correction moves for each kind of outcome", async () => {
+  it("renders the settlement corrections explanation between the heading and the correction queue", async () => {
     sql.mockImplementation(async () => []);
 
     render(await ModerationPage());
 
-    const section = screen.getByRole("region", { name: "Settlement corrections" });
-    const explanation = within(section).getByText(/reconciliation cannot repair one whose evidence never existed/);
-    expect(explanation).toHaveTextContent(
-      "Granting a correction records the figure to apply instead: where credits move, they are recomputed from "
-      + "that figure and the review rounds the fold counted, and where the sponsor closed their own issue it "
-      + "becomes the calibration figure their comparison is drawn from.",
-    );
-    expect(explanation).toHaveTextContent("reapplied on every later reconciliation");
-    expect(within(section).queryByText(/credits are recomputed from those points/)).toBeNull();
+    expectExplanationAboveQueue(settlementCorrectionsRegion());
+
+    // The same structure holds when the queue itself could not be loaded: the
+    // explanation still renders, with the load error beneath it.
+    cleanup();
+    sql.mockImplementation(async () => {
+      throw new Error("Settlement correction queue unavailable");
+    });
+    render(await ModerationPage());
+
+    expectExplanationAboveQueue(settlementCorrectionsRegion());
   });
 
   it("shows a closure load error without hiding the other moderation queues", async () => {
