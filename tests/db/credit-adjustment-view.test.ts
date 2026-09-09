@@ -17,6 +17,7 @@ function nextExternalId(): number {
 }
 
 const adjustmentCreatedAt = "2026-09-02T00:00:00.000Z";
+const settlementCreatedAt = "2026-09-01T12:00:00.000Z";
 const adjustmentReason = "Recalibration adjustment: the sponsor's settled sample underdelivered its openings.";
 
 describe("moderation credit adjustment ledger legs", () => {
@@ -72,29 +73,31 @@ describe("moderation credit adjustment ledger legs", () => {
       from ledger_entries
       where settlement_id = any(${[fixture.settlements[0]!.id, fixture.settlements[1]!.id]}::uuid[])
     `;
-    // Ordered in the test rather than the query: uuid ordering is random per run, so both
-    // sides are sorted identically by (amount, account, counterparty, settlement) and
-    // compared as sets.
+    // Compared as multisets rather than in written order: uuid ordering is random
+    // per run, so both sides are sorted through the same total-order comparator
+    // and neither side's spelling order can decide the assertion.
     const byLeg = (left: Leg, right: Leg) =>
       left.amount - right.amount
         || left.account_id.localeCompare(right.account_id)
         || left.counterparty_id.localeCompare(right.counterparty_id)
         || left.settlement_id.localeCompare(right.settlement_id);
-    expect(legs.sort(byLeg)).toEqual([
+    const expectedLegs: Leg[] = [
       // Each compensated settlement still carries both of its own legs,
-      // untouched by 035, at the settlement's own creation moment.
+      // untouched by 035, at the settlement's own creation moment: the second
+      // settlement's is pinned to the exact instant it was inserted with.
       { settlement_id: fixture.settlements[0]!.id, account_id: fixture.sponsorId, counterparty_id: fixture.settlements[0]!.creditorId, amount: -4, created_at: expect.any(Date) },
-      { settlement_id: fixture.settlements[1]!.id, account_id: fixture.sponsorId, counterparty_id: fixture.settlements[1]!.creditorId, amount: -2, created_at: expect.any(Date) },
+      { settlement_id: fixture.settlements[1]!.id, account_id: fixture.sponsorId, counterparty_id: fixture.settlements[1]!.creditorId, amount: -2, created_at: new Date(settlementCreatedAt) },
       // The sponsor legs of the applied adjustment, one per line, at the
       // adjustment's creation moment.
       { settlement_id: fixture.settlements[0]!.id, account_id: fixture.sponsorId, counterparty_id: fixture.settlements[0]!.creditorId, amount: -2, created_at: new Date(adjustmentCreatedAt) },
       { settlement_id: fixture.settlements[1]!.id, account_id: fixture.sponsorId, counterparty_id: fixture.settlements[1]!.creditorId, amount: -1, created_at: new Date(adjustmentCreatedAt) },
       // The credit legs of the applied adjustment, one per line.
       { settlement_id: fixture.settlements[1]!.id, account_id: fixture.settlements[1]!.creditorId, counterparty_id: fixture.sponsorId, amount: 1, created_at: new Date(adjustmentCreatedAt) },
-      { settlement_id: fixture.settlements[1]!.id, account_id: fixture.settlements[1]!.creditorId, counterparty_id: fixture.sponsorId, amount: 2, created_at: expect.any(Date) },
+      { settlement_id: fixture.settlements[1]!.id, account_id: fixture.settlements[1]!.creditorId, counterparty_id: fixture.sponsorId, amount: 2, created_at: new Date(settlementCreatedAt) },
       { settlement_id: fixture.settlements[0]!.id, account_id: fixture.settlements[0]!.creditorId, counterparty_id: fixture.sponsorId, amount: 2, created_at: new Date(adjustmentCreatedAt) },
       { settlement_id: fixture.settlements[0]!.id, account_id: fixture.settlements[0]!.creditorId, counterparty_id: fixture.sponsorId, amount: 4, created_at: expect.any(Date) },
-    ]);
+    ];
+    expect(legs.sort(byLeg)).toEqual(expectedLegs.sort(byLeg));
   });
 
   it("nets account balances back through a reversal's negative lines", async () => {
@@ -202,7 +205,7 @@ async function buildAdjustmentFixture(): Promise<{
   const reporterId = await insertUser(sql);
   const settlements = [
     await insertSettledSettlement(sql, sponsorId, 4),
-    await insertSettledSettlement(sql, sponsorId, 2),
+    await insertSettledSettlement(sql, sponsorId, 2, settlementCreatedAt),
   ];
   const [moderationEvent] = await sql<{ id: string }[]>`
     insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, created_at)
@@ -295,17 +298,19 @@ async function insertSettledSettlement(
   client: Sql,
   sponsorId: string,
   credits: number,
+  createdAt?: string,
 ): Promise<{ id: string; creditorId: string }> {
   const creditorId = await insertUser(client);
   const pullRequest = await insertMergedPullRequest(client);
   const [settlement] = await client<{ id: string }[]>`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, debtor_id,
-      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, created_at
     )
     values (
       ${pullRequest.id}, ${pullRequest.issueId}, ${creditorId}, ${sponsorId},
-      5, 6, ${6 - credits}, ${credits}, ${`${nextExternalId()}`.padStart(64, "a")}, ${"SETTLED"}
+      5, 6, ${6 - credits}, ${credits}, ${`${nextExternalId()}`.padStart(64, "a")}, ${"SETTLED"},
+      ${createdAt ?? sql`now()`}
     )
     returning id
   `;
