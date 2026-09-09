@@ -247,6 +247,46 @@ describe("audit targeting against PostgreSQL", () => {
       { status: "SETTLED", credits: 6 },
     ]);
   });
+
+  it("carries the member's open audit onto the member dashboard projection", async () => {
+    const dashboard = await getDashboard(seeded.carolId);
+
+    expect(dashboard.openAudit).toEqual({ id: seeded.openAuditId, openedAt: expect.any(String) });
+  });
+
+  it("drops the audit from the projection once it is no longer OPEN", async () => {
+    await sql`update calibration_audits set state = ${"DISMISSED"}, decided_at = now() where id = ${seeded.openAuditId}`;
+    try {
+      const dashboard = await getDashboard(seeded.carolId);
+
+      expect(dashboard.openAudit).toBeNull();
+    } finally {
+      await sql`update calibration_audits set state = ${"OPEN"}, decided_at = null where id = ${seeded.openAuditId}`;
+    }
+  });
+
+  it("carries an open audit for a BANNED account, so the notice does not depend on enforcement state", async () => {
+    const [daveAudit] = await sql<{ id: string; opened_at: Date }[]>`
+      insert into calibration_audits (
+        account_id, reporter_id, state, rationale, sample_started_at, sample_ended_at, settled_sample_size
+      )
+      values (
+        ${seeded.daveId}, ${seeded.bobId}, ${"OPEN"}, ${"A moderator opened an account audit."},
+        ${"2026-01-01T00:00:00.000Z"}, ${"2026-02-01T00:00:00.000Z"}, 10
+      )
+      returning id, opened_at
+    `;
+    try {
+      const dashboard = await getDashboard(seeded.daveId);
+
+      expect(dashboard.openAudit).toEqual({
+        id: daveAudit.id,
+        openedAt: daveAudit.opened_at.toISOString(),
+      });
+    } finally {
+      await sql`delete from calibration_audits where id = ${daveAudit.id}`;
+    }
+  });
 });
 
 /** The lease columns travel with RUNNING to satisfy repository_reconciliation_jobs_lease_check. */

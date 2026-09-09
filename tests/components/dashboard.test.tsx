@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
 import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
@@ -24,6 +24,7 @@ describe("member dashboard", () => {
           openClaims: [],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -68,6 +69,7 @@ describe("member dashboard", () => {
           openClaims: [],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -134,6 +136,7 @@ describe("member dashboard", () => {
           openClaims: [],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -173,6 +176,7 @@ describe("member dashboard", () => {
           openClaims: [],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -225,6 +229,7 @@ describe("member dashboard", () => {
             reason: "Cohort review completed.",
             createdAt: "2026-09-03T00:00:00.000Z",
           }],
+          openAudit: null,
         }}
       />,
     );
@@ -237,6 +242,61 @@ describe("member dashboard", () => {
     expect(screen.getByRole("heading", { name: "Registered repositories" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Enforcement notices" })).toBeVisible();
     expect(screen.getByText(/UNDER_AUDIT → WARNED/)).toBeVisible();
+  });
+
+  it("announces an open audit in its own section whatever the enforcement state and notices say", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementState: "BANNED",
+          enforcementNotices: [],
+          openAudit: { id: "audit-9", openedAt: "2026-09-04T00:00:00.000Z" },
+        }}
+      />,
+    );
+
+    // Located structurally: the section carries its own heading id, and the
+    // date the audit opened is shown. The section renders even though the
+    // account is BANNED with no enforcement notices — the notice's presence
+    // rides the open audit alone.
+    const section = document.querySelector('section[aria-labelledby="account-audit-heading"]');
+    expect(section).not.toBeNull();
+    expect(section).toBeVisible();
+    expect(within(section).getByRole("heading")).toBeVisible();
+    expect(within(section).getByText(/2026-09-04/)).toBeVisible();
+  });
+
+  it("renders no audit section when no audit is open on the account", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    expect(document.querySelector('section[aria-labelledby="account-audit-heading"]')).toBeNull();
   });
 
   it("reads an ambiguous claim assignee as a phrase, never the reserved sentinel login", () => {
@@ -264,6 +324,7 @@ describe("member dashboard", () => {
           }],
           registeredRepositories: [],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -292,6 +353,7 @@ describe("member dashboard", () => {
             registered("repo-4", "co-op/seawall"),
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -320,6 +382,7 @@ describe("member dashboard", () => {
             { ...registered("repo-1", "co-op/harbour"), unavailableReason: "ARCHIVED_UPSTREAM" },
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -363,6 +426,7 @@ describe("member dashboard", () => {
             registered("repo-6", "co-op/seawall"),
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -401,6 +465,7 @@ describe("member dashboard", () => {
             },
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -427,6 +492,7 @@ describe("member dashboard", () => {
             { ...registered("repo-1", "co-op/harbour"), reconciliationState: "FAILED" },
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
@@ -472,6 +538,7 @@ describe("member dashboard", () => {
             },
           ],
           enforcementNotices: [],
+          openAudit: null,
         }}
       />,
     );
