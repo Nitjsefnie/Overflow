@@ -111,6 +111,7 @@ src/components/*
 !src/components/*.tsx
 !src/lib/
 src/lib/*
+!src/lib/plural.ts
 !src/lib/async/
 src/lib/async/*
 !src/lib/async/*.ts
@@ -228,6 +229,9 @@ tests/github/*
 !tests/github/*.ts
 !tests/github/graphql-cost.test.ts
 !tests/github/webhook-upgrade.test.ts
+!tests/lib/
+tests/lib/*
+!tests/lib/*.ts
 !tests/moderation/
 tests/moderation/*
 !tests/moderation/*.ts
