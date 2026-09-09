@@ -283,7 +283,14 @@ describe("scripts/deploy-revision.sh", () => {
     expect(release.endsWith(`-${FIXTURE_HASH}`)).toBe(true);
     expect(await readdir(fixture.tree)).toContain(release);
 
-    expect(entries.map(describeEntry)).toEqual([
+    // The retention listing is a pipeline, so its find and sort are started
+    // concurrently and their log lines race; everything before it is strictly
+    // ordered. Assert the sequential spine exactly, then pin the pipeline's
+    // two entries on content and on the window they must fall inside.
+    const received = entries.map(describeEntry);
+    const listingFind = `find ${fixture.tree} -regextype posix-extended -mindepth 1 -maxdepth 1 -type d -regex ${LISTING_REGEX} -printf %f\\n`;
+    const sequential = received.filter((line) => line !== listingFind && line !== "sort -r");
+    expect(sequential).toEqual([
       `flock -w 900 9`,
       `git pull --ff-only origin main`,
       `pnpm install --frozen-lockfile`,
@@ -300,10 +307,16 @@ describe("scripts/deploy-revision.sh", () => {
       `systemctl is-active ${fixture.unit}`,
       `curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 --retry-connrefused -fsS -o /dev/null -w %{http_code}\\n ${fixture.url}`,
       `pnpm --silent webhooks:upgrade`,
-      `find ${fixture.tree} -regextype posix-extended -mindepth 1 -maxdepth 1 -type d -regex ${LISTING_REGEX} -printf %f\\n`,
-      `sort -r`,
       `pnpm release:prune ${fixture.tree} --keep 3`,
     ]);
+    const upgradeAt = received.indexOf(`pnpm --silent webhooks:upgrade`);
+    const pruneAt = received.indexOf(`pnpm release:prune ${fixture.tree} --keep 3`);
+    for (const pipelineEntry of [listingFind, "sort -r"]) {
+      const at = received.indexOf(pipelineEntry);
+      expect(at, pipelineEntry).toBeGreaterThan(upgradeAt);
+      expect(at, pipelineEntry).toBeLessThan(pruneAt);
+      expect(received.filter((line) => line === pipelineEntry)).toHaveLength(1);
+    }
 
     const byCommand = (cmd: string) => entries.filter((entry) => entry.cmd === cmd);
     const [install] = byCommand("pnpm").filter((entry) => entry.args[0] === "install");
