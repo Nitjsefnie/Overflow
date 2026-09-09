@@ -4,7 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CalibrationProofPage from "@/app/calibration/[id]/page";
 import CalibrationPage from "@/app/calibration/page";
-import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
+import { CalibrationPanel, formatSigned, SelfWorkCalibrationList } from "@/components/calibration-panel";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
@@ -156,6 +156,26 @@ describe("calibration comparison", () => {
 
     expect(screen.getByText("Complete paired work to establish calibration.")).toBeVisible();
     expect(screen.queryByText(/Difference between means [+\d−]/)).not.toBeInTheDocument();
+  });
+});
+
+describe("formatSigned", () => {
+  it.each([
+    { value: 1.2676, expected: "+1.27" },
+    { value: -0.5, expected: "−0.5" },
+    { value: -0.5714285714285714, expected: "−0.57" },
+    { value: 0, expected: "0" },
+    { value: 4, expected: "+4" },
+    { value: -4, expected: "−4" },
+    { value: -0.004, expected: "0" },
+    { value: 2.675, expected: "+2.68" },
+  ])("formats $value as $expected", ({ value, expected }) => {
+    expect(formatSigned(value)).toBe(expected);
+  });
+
+  it("renders a negative whose magnitude rounds to zero as a bare zero", () => {
+    expect(formatSigned(-0.004)).toBe("0");
+    expect(formatSigned(-0.004)).not.toContain("−");
   });
 });
 
