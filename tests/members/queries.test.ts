@@ -1,4 +1,4 @@
-import postgres, { type Sql } from "postgres";
+import type { Sql } from "postgres";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../scripts/migrate";
