@@ -15,9 +15,17 @@ interface ErrorResponseFields {
 
 interface SwitchableProxy {
   readonly port: number;
-  /** Later connections are accepted and never answered — what a restarting postgres looks like. */
+  /**
+   * Later connections are accepted and held unanswered — what a restarting postgres looks like.
+   */
   blackHole(): void;
+  /** Restores forwarding and answers every connection accepted while it was off. */
   forward(): void;
+  /**
+   * Resolves once the proxy has accepted `n` client connections in total. A case that restores
+   * forwarding after provoking a reconnect waits on this rather than racing the dial.
+   */
+  accepted(n: number): Promise<void>;
   /**
    * Arms a one-shot interruption: the first client-to-server chunk carrying `needle` is swallowed,
    * `error` goes back to the client as a wire-format `ErrorResponse`, and the socket is closed with
@@ -62,15 +70,27 @@ function errorResponse({ code, message }: ErrorResponseFields): Buffer {
  */
 async function startSwitchableProxy(target: { host: string; port: number }): Promise<SwitchableProxy> {
   let forwarding = true;
+  let acceptedCount = 0;
   let interruption: { needle: string; error: ErrorResponseFields; fired: () => void } | undefined;
   const sockets = new Set<net.Socket>();
+  // Connections accepted while forwarding was off. They are held unanswered until `forward()`
+  // wires them, which is what makes reviving the proxy safe for a client that dialled during
+  // the outage.
+  const pending = new Set<net.Socket>();
+  const acceptedWaiters: { n: number; resolve: () => void }[] = [];
 
-  const server = net.createServer((client) => {
-    sockets.add(client);
-    client.on("error", () => {});
-    client.on("close", () => sockets.delete(client));
-    if (!forwarding) return;
+  const countAccepted = (): void => {
+    acceptedCount += 1;
+    for (const waiter of acceptedWaiters.splice(0)) {
+      if (acceptedCount >= waiter.n) waiter.resolve();
+      else acceptedWaiters.push(waiter);
+    }
+  };
 
+  // The forwarding accept path. Extracted so `forward()` can also wire a connection that was
+  // accepted while forwarding was off: its StartupMessage has been sitting unread in the kernel
+  // socket buffer, and attaching the data handler forwards those bytes to a fresh upstream.
+  const wire = (client: net.Socket): void => {
     const upstream = net.connect(target);
     let interrupted = false;
     sockets.add(upstream);
@@ -95,6 +115,21 @@ async function startSwitchableProxy(target: { host: string; port: number }): Pro
     client.on("end", () => !interrupted && upstream.end());
     client.on("close", () => interrupted && upstream.destroy());
     upstream.pipe(client);
+  };
+
+  const server = net.createServer((client) => {
+    countAccepted();
+    sockets.add(client);
+    client.on("error", () => {});
+    client.on("close", () => {
+      sockets.delete(client);
+      pending.delete(client);
+    });
+    if (!forwarding) {
+      pending.add(client);
+      return;
+    }
+    wire(client);
   });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -106,7 +141,19 @@ async function startSwitchableProxy(target: { host: string; port: number }): Pro
     },
     forward: () => {
       forwarding = true;
+      for (const client of pending) {
+        pending.delete(client);
+        wire(client);
+      }
     },
+    accepted: (n) =>
+      new Promise<void>((resolve) => {
+        if (acceptedCount >= n) {
+          resolve();
+          return;
+        }
+        acceptedWaiters.push({ n, resolve });
+      }),
     interrupt: (needle, error) => new Promise<void>((resolve) => {
       interruption = { needle, error, fired: resolve };
     }),
@@ -189,7 +236,11 @@ describe("the client's reserve contract", () => {
       const queued = sql.reserve().then(() => "queued: served", () => "queued: refused");
 
       // The terminate provokes a reconnect, and the reconnect reaches a socket that accepts and
-      // never answers, so its connect times out and the queued reservation is refused.
+      // never answers, so its connect times out and the queued reservation is refused. This used
+      // to be a race: the later `forward()` could land just before the second attempt's dial,
+      // so passing runs were the ones where that dial's socket-close callback lost by ~0.4ms.
+      // `forward()` now answers sockets accepted while the outage lasted, so the outcome no
+      // longer depends on which of the close callback and this microtask drain runs first.
       proxy.blackHole();
       await observer!`select pg_terminate_backend(${backend!.pid})`;
       record.push(await queued);
@@ -199,6 +250,49 @@ describe("the client's reserve contract", () => {
       const [row] = await served<{ one: number }[]>`select 1 as one`;
       record.push(`later: ${JSON.stringify(row)}`);
       served.release();
+
+      expect(record).toEqual(["queued: refused", `later: {"one":1}`]);
+    } finally {
+      await sql.end({ timeout: 0 });
+      await proxy.close();
+    }
+  });
+
+  it("serves a reservation whose reconnect dialed while forwarding was down", async () => {
+    const upstream = new URL(databaseUrl);
+    const proxy = await startSwitchableProxy({ host: upstream.hostname, port: Number(upstream.port) });
+    upstream.host = `127.0.0.1:${proxy.port}`;
+    const sql = postgres(upstream.toString(), { max: 1, connect_timeout: 1 });
+    const record: string[] = [];
+
+    try {
+      const holder = await sql.reserve();
+      const [backend] = await holder<{ pid: number }[]>`select pg_backend_pid()::integer as pid`;
+      // The pool is at its bound and the only connection is reserved, so this one is queued.
+      const queued = sql.reserve().then(() => "queued: served", () => "queued: refused");
+
+      proxy.blackHole();
+      await observer!`select pg_terminate_backend(${backend!.pid})`;
+      record.push(await queued);
+
+      // The later reservation exists before forwarding is restored, so both ways the reconnect
+      // can be dialled converge on the wait below: if the dead socket's close event processes
+      // now, the pool's close handler peeks this reservation off `queries` and dials with it;
+      // if it processed earlier, the connection sits in `closed` and `reserve()` dials it
+      // itself. Either way the proxy has accepted the second attempt by the time the wait
+      // resolves, so restoring forwarding cannot race the dial.
+      const served = sql.reserve();
+      await proxy.accepted(3);
+
+      // Against the previous proxy semantics this fails deterministically: the reconnect's
+      // socket was accepted during the outage and never answered, so its own connect timer
+      // refuses `served` with the reported CONNECT_TIMEOUT. What the case pins is that a
+      // connection accepted while forwarding was down is served once forwarding resumes.
+      proxy.forward();
+      const reserved = await served;
+      const [row] = await reserved<{ one: number }[]>`select 1 as one`;
+      record.push(`later: ${JSON.stringify(row)}`);
+      reserved.release();
 
       expect(record).toEqual(["queued: refused", `later: {"one":1}`]);
     } finally {
