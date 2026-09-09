@@ -153,9 +153,9 @@ Each build gets a new directory at the tree root, alongside `.next`, named
 The UTC timestamp makes the names sort in deployment order, and the SHA
 identifies the source revision. The explicit `--short=7` requests at least seven
 hexadecimal characters even when `core.abbrev` is shorter. `prune` deletes
-directories, so it only touches names matching this grammar to be certain they
-are ones the deployment procedure
-created. A directory named `.next-release-notes` is safe beside the releases:
+directories and the `<release>.tsconfig.json` sidecars beside them, so it only
+touches names matching this grammar to be certain they are ones the deployment
+procedure created. A directory named `.next-release-notes` is safe beside the releases:
 `prune` ignores it entirely, including when counting retention slots. Reserve
 matching names for releases; the name check does not prove a build succeeded.
 `mkdir` deliberately has no `-p`: a collision must stop the deploy, not reuse an
@@ -790,12 +790,15 @@ without an extra `--` separator, for both release package scripts. `--keep` must
 be a positive integer and defaults to `3`. Like the listing above, the script
 enumerates only real directories directly inside the tree whose names match the
 release grammar in section 5, ignoring files, symlinks and all other directory
-names. It checks no build markers when pruning, so even a failed build with a
+names, and removes the `<release>.tsconfig.json` sidecar file beside each
+directory it deletes. It then sweeps orphaned sidecars: regular files named
+`<release>.tsconfig.json` at the tree root whose release directory is absent.
+It checks no build markers when pruning, so even a failed build with a
 matching name counts. It keeps the newest N directory names in descending
 lexical order, not by modification time or build success. It also protects the
 release `.next` resolves to and directories needed to resolve its symlink chain,
-even outside that N. It prints each removed
-directory, or a no-op line if nothing was removed. A missing or dangling `.next`
+even outside that N. It prints each removed directory and sidecar, or a no-op
+line if nothing was removed. A missing or dangling `.next`
 is reported but protects no release and does not prevent deletion; do not prune
 to recover from a failed switch. Pruning knows the symlink target, not which
 build a still-running process has loaded, which is another reason to restart
