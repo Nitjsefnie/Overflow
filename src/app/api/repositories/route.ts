@@ -11,6 +11,7 @@ import {
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import {
   changeRepositoryCatalog,
+  unregisterRepository,
   RepositoryRegistrationError,
   registerRepository,
   type RepositoryRegistrationDependencies,
@@ -118,6 +119,41 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
       }
 
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    }
+  };
+}
+
+/**
+ * The sponsor-unregistration handler (issue 48). The submission is only the
+ * repository reference, and the flow is idempotent: an already-unregistered
+ * row answers success with `alreadyUnregistered`, so the dashboard control can
+ * stay rendered on every row without a repeat press ever being an error.
+ */
+export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDependencies) {
+  return async function deleteRepository(request: Request): Promise<Response> {
+    const authorized = await authorizeRepositoryRequest(request, dependencies);
+    if (authorized instanceof Response) {
+      return authorized;
+    }
+    if (authorized === null) {
+      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+    }
+
+    const input = await parseUnregisterInput(request);
+    if (input === null) {
+      return errorResponse(400, "INVALID_REQUEST", "Invalid repository unregistration request.");
+    }
+
+    try {
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
+      const result = await unregisterRepository(registrationDependencies, input);
+      return Response.json(result, { status: 200 });
+    } catch (error) {
+      if (error instanceof RepositoryRegistrationError) {
+        return registrationErrorResponse(error);
+      }
+
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to unregister the repository.");
     }
   };
 }
@@ -242,9 +278,56 @@ export const PATCH = createRepositoryPatchHandler({
   },
 });
 
+export const DELETE = createRepositoryDeleteHandler({
+  async findAccountByTokenHash(hash) {
+    return new PostgresApiTokenStore().findAccountByTokenHash(hash);
+  },
+  async getSession() {
+    const { auth } = await import("@/auth");
+    const session = await auth();
+    const user = session?.user as { id?: unknown; role?: unknown } | undefined;
+    if (
+      typeof user?.id !== "string" ||
+      (user.role !== "MEMBER" && user.role !== "MODERATOR")
+    ) {
+      return null;
+    }
+    return { user: { id: user.id, role: user.role } };
+  },
+  async createRegistrationDependencies(session) {
+    const store = new PostgresRepositoryStore();
+    const accessToken = await store.getGitHubAccessToken(session.user.id);
+    const enforcementState = await store.getEnforcementState(session.user.id);
+    if (accessToken === null) {
+      throw new Error("GitHub access token was unavailable.");
+    }
+    if (enforcementState === null) {
+      throw new Error("Account enforcement state was unavailable.");
+    }
+
+    return {
+      actor: { ...session.user, enforcementState },
+      github: new GitHubGateway({ accessToken, owner: session.user.id }),
+      store,
+      webhook: requiredWebhookConfiguration(),
+    };
+  },
+});
+
 async function parseInput(request: Request): Promise<RepositoryRegistrationInput | null> {
   try {
     const result = registrationSchema.safeParse(await request.json());
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+const unregisterSchema = z.object({ repositoryUrl: z.string() }).strict();
+
+async function parseUnregisterInput(request: Request): Promise<{ repositoryUrl: string } | null> {
+  try {
+    const result = unregisterSchema.safeParse(await request.json());
     return result.success ? result.data : null;
   } catch {
     return null;
