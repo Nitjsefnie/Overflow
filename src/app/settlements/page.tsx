@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { SETTLEMENT_HISTORY_LIMIT, type SettlementHistoryProjection, type SettlementStatus } from "@/lib/dashboard/queries";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import { plural } from "@/lib/plural";
 
 type SettlementHistoryContentProps = {
   memberName: string;
@@ -47,8 +48,8 @@ export function SettlementHistoryContent({ memberName, isModerator, settlements 
                     </a>
                   </p>
                   <p className="mono-meta">
-                    {settlement.credits} credits · review deduction {settlement.reviewRounds} · balance effect{" "}
-                    {formatSigned(settlement.balanceEffect)}
+                    {settlement.credits} {plural(settlement.credits, "credit")} · review deduction{" "}
+                    {settlement.reviewRounds} · balance effect {formatSigned(settlement.balanceEffect)}
                   </p>
                   <p className="settlement-history-note">{statusExplanation(settlement.status)}</p>
                   <Link className="text-link" href={`/settlements/${settlement.id}`}>
