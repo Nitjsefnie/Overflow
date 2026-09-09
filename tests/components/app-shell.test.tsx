@@ -66,4 +66,23 @@ describe("application shell sign-out", () => {
 
     await waitFor(() => expect(mocks.signOutAction).toHaveBeenCalledTimes(1));
   });
+
+  it("links the member standings from the member navigation, after Settlements", () => {
+    render(
+      <AppShell memberName="Lin" isModerator={false}>
+        <p>content</p>
+      </AppShell>,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "Member navigation" });
+    const members = within(navigation).getByRole("link", { name: "Members" });
+    expect(members).toHaveAttribute("href", "/members");
+
+    const items = within(navigation).getAllByRole("listitem");
+    const settlementsIndex = items.findIndex((item) =>
+      within(item).queryByRole("link", { name: "Settlements" }) !== null,
+    );
+    expect(within(items[settlementsIndex + 1] as HTMLElement).getByRole("link", { name: "Members" }))
+      .toBe(members);
+  });
 });
