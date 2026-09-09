@@ -209,6 +209,69 @@ answers `CONFLICT` for an unregistered repository, and `FORBIDDEN` for anyone
 but the repository's sponsor or an account that is not eligible to change
 repository catalogs.
 
+## Reading the ledger over the API
+
+Each page a signed-in member reads has a GET endpoint answering the same JSON
+the page renders: the dashboard behind the *Ledger* page, the issues board, the
+settlement history, a settlement's proof, and calibration. They use the same
+Overflow-issued `ovf_` tokens as registration, sent as
+`Authorization: Bearer <token>`; a browser can call them with its signed-in
+session cookie instead. The credential rules are the ones registration states:
+a recognized bearer credential takes precedence over the cookie, a rejected
+token is not rescued by a valid session, and an absent or malformed bearer
+header falls back to the cookie. Unlike the registration endpoints, these reads
+are answered without an origin check — a programmatic GET sends no `Origin`
+header at all, so guarding them would reject every script client. They take no
+request body.
+
+Every response is scoped to the authenticated account: each endpoint queries
+with the credential's account id, and the settlement proof is answered only to
+a caller who is a party to that settlement.
+
+### The endpoints
+
+| Endpoint | Parameters | Success body (HTTP `200`) |
+| --- | --- | --- |
+| `GET /api/dashboard` | None. | The dashboard projection the *Ledger* page renders. Each entry of `registeredRepositories` carries `reconciliationLastFailureAt` as an ISO 8601 string, or `null` when there is no recorded failure. |
+| `GET /api/issues` | Query parameters `repository`, `openingLabel`, `claimState`, all optional. | An array of the issue projections the board renders. |
+| `GET /api/settlements` | None. | An array of the settlement-history rows the page renders. |
+| `GET /api/settlements/<id>` | Path parameter `id`. | `{ "settlement": <settlement proof projection>, "corrections": <correction requests raised against the settlement, or null> }`. |
+| `GET /api/calibration` | None. | `{ "comparison": <calibration comparison>, "selfWork": <self-work calibration rows, or null> }`. |
+
+The field lists of these projections are the server's compiled types, not a
+schema this document maintains; this section records the endpoints, their
+parameters, and their status behavior.
+
+On `/api/issues`, a filter is applied only when the request names exactly one
+value for it — a parameter named more than once is left unset. `claimState`
+understands `CLAIMED` and `ALL`; anything unrecognized, including no value at
+all, reads the unclaimed board (`OPEN`).
+
+Two responses degrade rather than fail. In the settlement proof, `corrections`
+is `null` when the correction history could not be read, and the settlement
+itself is still answered; in the calibration response, `selfWork` is `null`
+under the same terms and the comparison is still answered. The pages render the
+same degradation, so neither null is an API-only shape.
+
+### Read responses
+
+Success is HTTP `200`. Errors use the registration error envelope,
+`{ "error": { "code": "...", "message": "..." } }`. Match the HTTP status and
+code, then use the message to distinguish causes:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
+| 403 | `FORBIDDEN` | `A member account is required.` | The credential resolved to an account that no longer exists: the member gate re-reads the account's role from the database at request time, so a session or token outliving its account is refused. |
+| 404 | `NOT_FOUND` | `Settlement proof is not available.` | (`GET /api/settlements/<id>`) No settlement with this id, or the caller is not a party to it. Both are the same refusal. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to authorize the member request.` | Credential lookup or the role re-read failed; retry when the service recovers. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to load the eligible issues.` | (`GET /api/issues`) The read behind the endpoint failed; retry when the service recovers. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to load the settlement history.` | (`GET /api/settlements`) The read behind the endpoint failed; retry when the service recovers. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to load the settlement proof.` | (`GET /api/settlements/<id>`) The read behind the endpoint failed; retry when the service recovers. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to load the calibration comparison.` | (`GET /api/calibration`) The read behind the endpoint failed; retry when the service recovers. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to load the dashboard.` | (`GET /api/dashboard`) The read behind the endpoint failed; retry when the service recovers. |
+
 ## What the ledger records
 
 - GitHub OAuth signs a member in at `/api/auth/callback/github`.
