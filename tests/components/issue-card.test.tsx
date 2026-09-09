@@ -138,6 +138,53 @@ describe("eligible issue card", () => {
     expect(lines[0].textContent?.includes("2026-09-01")).toBe(true);
   });
 
+  it("strips the catalog name prefix from an opening label that carries it", () => {
+    render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "perceived difficulty",
+          openingLabel: "perceived difficulty: 3",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    // The term carries the catalog name and the value carries only the value —
+    // a perception-catalog label stores "<name>: <value>", so the name must
+    // not repeat inside the opening row.
+    expect(factTerms()).toEqual(["perceived difficulty", "Comparison", "Reserve"]);
+    expect(factValues()).toEqual(["3", "5", "8"]);
+  });
+
+  it("leaves an opening label without the name prefix unchanged", () => {
+    render(
+      <IssueCard
+        issue={{
+          id: "issue-42",
+          repositoryName: "co-op/harbour",
+          issueNumber: 42,
+          title: "Map the tidal cache",
+          url: "https://github.com/co-op/harbour/issues/42",
+          openingName: "perceived difficulty",
+          openingLabel: "delta",
+          comparisonPoints: 5,
+          reservePoints: 8,
+          createdAt: "2026-09-01T10:00:00.000Z",
+        }}
+      />,
+    );
+
+    expect(factTerms()).toEqual(["perceived difficulty", "Comparison", "Reserve"]);
+    expect(factValues()).toEqual(["delta", "5", "8"]);
+  });
+
   it("renders each fact's value alone under its term", () => {
     render(
       <IssueCard

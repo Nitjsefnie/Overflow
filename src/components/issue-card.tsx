@@ -1,6 +1,7 @@
 import type { EligibleIssueProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
+import { stripNamePrefix } from "@/lib/strip-name-prefix";
 
 type IssueCardProps = {
   issue: EligibleIssueProjection;
@@ -26,7 +27,7 @@ export function IssueCard({ issue }: IssueCardProps) {
       <dl className="issue-facts">
         <div>
           <dt>{issue.openingName}</dt>
-          <dd>{issue.openingLabel}</dd>
+          <dd>{stripNamePrefix(issue.openingLabel, issue.openingName)}</dd>
         </div>
         <div>
           <dt>Comparison</dt>
