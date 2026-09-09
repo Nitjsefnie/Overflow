@@ -72,7 +72,7 @@ describe("dispatchJsonRpc framing", () => {
       const response = await dispatchJsonRpc(raw, tools);
       expect(response).toMatchObject({
         status: 200,
-        body: { id: 1, error: { code: -32600 } },
+        body: { id: 1, error: { code: -32600, message: "Invalid Request" } },
       });
     }
   });
@@ -85,7 +85,7 @@ describe("dispatchJsonRpc framing", () => {
       const response = await dispatchJsonRpc(raw, tools);
       expect(response).toMatchObject({
         status: 200,
-        body: { id: 1, error: { code: -32600 } },
+        body: { id: 1, error: { code: -32600, message: "Invalid Request" } },
       });
     }
   });
@@ -169,12 +169,16 @@ describe("dispatchJsonRpc tools/call", () => {
   });
 
   it("rejects a non-string or missing tool name with invalid-parameters", async () => {
-    for (const params of [undefined, { name: 42 }, {}]) {
+    for (const [index, params] of [undefined, { name: 42 }, {}].entries()) {
       const raw = params === undefined ? rpc(6, "tools/call") : rpc(6, "tools/call", params);
       const response = await dispatchJsonRpc(raw, tools);
+      const message =
+        index === 0
+          ? "Invalid parameters: params must be an object"
+          : "Invalid parameters: name must be a string";
       expect(response).toMatchObject({
         status: 200,
-        body: { id: 6, error: { code: -32602 } },
+        body: { id: 6, error: { code: -32602, message } },
       });
     }
   });
@@ -187,7 +191,7 @@ describe("dispatchJsonRpc tools/call", () => {
       );
       expect(response).toMatchObject({
         status: 200,
-        body: { id: 7, error: { code: -32602 } },
+        body: { id: 7, error: { code: -32602, message: "Invalid parameters: arguments must be an object" } },
       });
     }
 
