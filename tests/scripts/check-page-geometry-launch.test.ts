@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- untyped .mjs script module
-import { launchChromeWithRetry, missingRequiredEnv } from "../../scripts/check-page-geometry.mjs";
+import { launchChromeWithRetry, missingEnvMessage, missingRequiredEnv } from "../../scripts/check-page-geometry.mjs";
 
 /**
  * The options launchChromeWithRetry takes, declared locally because the .mjs
@@ -319,6 +319,17 @@ interface MissingRequiredEnvFn {
 
 const missingEnv = missingRequiredEnv as MissingRequiredEnvFn;
 
+/**
+ * The refusal-message composer's local signature, declared for the same
+ * reason as MissingRequiredEnvFn: the .mjs script ships no type
+ * declarations.
+ */
+interface MissingEnvMessageFn {
+  (missing: string[]): string;
+}
+
+const refusalMessage = missingEnvMessage as MissingEnvMessageFn;
+
 describe("the spawned-server environment preflight (issue 471)", () => {
   it("reports nothing missing when DATABASE_URL is set to a value", () => {
     expect(missingEnv({ DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false))
@@ -340,5 +351,16 @@ describe("the spawned-server environment preflight (issue 471)", () => {
     // The case the script turns into the exit-2 refusal before spawning
     // anything: the run would otherwise fail as a false layout regression.
     expect(missingEnv({}, () => false)).toEqual(["DATABASE_URL"]);
+  });
+
+  it("composes the refusal message with the variable's name and BOTH remedies", () => {
+    // main() prints this composition verbatim, so pinning its content here
+    // pins the refusal a reader actually sees: which variable, and both ways
+    // to fix it.
+    const message = refusalMessage(["DATABASE_URL"]);
+
+    expect(message).toContain("DATABASE_URL");
+    expect(message).toContain("Set it in the environment");
+    expect(message).toContain("write it to a repo-root .env file");
   });
 });
