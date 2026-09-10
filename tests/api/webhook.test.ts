@@ -50,6 +50,24 @@ describe("GitHub webhook route", () => {
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
+  // ready_for_review is a recognized pull_request action Overflow does not
+  // materialize (webhook-schema's unmaterializedActions). Like a PR-carrying
+  // issue envelope it must read as success to GitHub — any 2xx counts as
+  // delivered — or the delivery log turns red on traffic Overflow chose to
+  // ignore, and like every ignored delivery it must persist nothing: no
+  // processWebhook call, so no claim and no delivery row.
+  it("answers 204 for a recognized-but-unmaterialized pull_request action without processing", async () => {
+    const processWebhookMock = vi.fn().mockResolvedValue(undefined);
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(request(JSON.stringify({
+      action: "ready_for_review",
+      repository: { id: 42, full_name: "octo/example" },
+      pull_request: { id: 201, number: 11 },
+    }), { "x-github-event": "pull_request", "x-github-delivery": "ready-for-review" }));
+    expect(response.status).toBe(204);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
   it("answers 400 for a correctly signed unparseable JSON body", async () => {
     const processWebhookMock = vi.fn();
     const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
