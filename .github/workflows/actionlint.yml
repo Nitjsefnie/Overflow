@@ -62,3 +62,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --no-progress .github/workflows/
+
+      # A pull_request run tests refs/pull/N/merge — the head merged with the
+      # base as it stood at event time — and branch protection keeps strict
+      # up-to-date checking disabled, so a run that went green against an older
+      # main stays green after main advances: the tree GitHub actually lands
+      # (its rebase onto current main) was never tested by a required check
+      # (issue 441). LAST step, deliberately: the freshness certificate is
+      # issued as late as the workflow can issue it, because an earlier step
+      # re-opens the whole run duration as the stale-base window. The step
+      # compares the base the run was built against with the CURRENT head of
+      # the base branch and fails the already-required context on a mismatch;
+      # the remedy is to update the branch so the required checks re-run
+      # against current main. Push and workflow_dispatch runs test main itself
+      # and skip the gate.
+      - name: Base freshness
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          current=$(gh api "repos/$REPO_SLUG/commits/$BASE_REF" --jq .sha)
+          if [ "$current" != "$BASE_SHA" ]; then
+            echo "::error::Base moved during the run: the required checks ran against $BASE_SHA but $BASE_REF is now at $current. Update the branch so the required checks re-run against current main."
+            exit 1
+          fi

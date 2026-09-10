@@ -138,3 +138,144 @@ describe("the verify workflow's concurrency group", () => {
     ).toBe("${{ github.event_name == 'pull_request' }}");
   });
 });
+
+/**
+ * Branch protection requires the actionlint and verify contexts with strict
+ * up-to-date checking disabled, so a pull_request run can go green against a
+ * base that has since advanced: the run tests refs/pull/N/merge — the head
+ * merged with the base as it stood at event time — and nothing re-runs the
+ * checks when main moves underneath them, so the tree GitHub actually lands
+ * (its rebase onto current main) was never tested by a required check (PR 290
+ * is the worked example). The base-freshness step is the automated form of the
+ * manual final-gate check: as the LAST step of each required job it compares
+ * the base SHA the run was built against with the current head of the base
+ * branch, failing the already-required context on a mismatch (issue 441).
+ *
+ * Assertions are made on the parsed YAML data (step.name / step.run), never on
+ * the raw bytes, so reformatting or reordering unrelated steps does not
+ * disturb them and a renamed, moved, or removed step fails loudly here
+ * instead of quietly un-gating the merge.
+ */
+describe("the required workflows' base-freshness step", () => {
+  let verifySteps: WorkflowStep[] = [];
+  let actionlintSteps: WorkflowStep[] = [];
+
+  const freshness = (steps: WorkflowStep[]) =>
+    steps.filter((step) => step.name === "Base freshness");
+
+  beforeAll(async () => {
+    const [ci, actionlint] = await Promise.all([
+      readFile(resolve(".github/workflows/ci.yml"), "utf8"),
+      readFile(resolve(".github/workflows/actionlint.yml"), "utf8"),
+    ]);
+
+    const ciWorkflow = parse(ci) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+    const actionlintWorkflow = parse(actionlint) as {
+      jobs?: { actionlint?: { steps?: WorkflowStep[] } };
+    };
+
+    verifySteps = ciWorkflow.jobs?.verify?.steps ?? [];
+    actionlintSteps = actionlintWorkflow.jobs?.actionlint?.steps ?? [];
+  });
+
+  it("exists exactly once in each required job", () => {
+    expect(
+      freshness(verifySteps),
+      "the verify job must keep its Base freshness step",
+    ).toHaveLength(1);
+    expect(
+      freshness(actionlintSteps),
+      "the actionlint job must keep its Base freshness step",
+    ).toHaveLength(1);
+  });
+
+  it("is the last step of each required job", () => {
+    const verifyIndex = verifySteps.findIndex(
+      (step) => step.name === "Base freshness",
+    );
+    const actionlintIndex = actionlintSteps.findIndex(
+      (step) => step.name === "Base freshness",
+    );
+
+    expect(verifyIndex, "the verify job must contain the Base freshness step").toBeGreaterThan(-1);
+    expect(
+      actionlintIndex,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeGreaterThan(-1);
+    expect(
+      verifyIndex,
+      "Base freshness must be the LAST step of the verify job — an earlier step re-opens the whole run duration as the stale-base window",
+    ).toBe(verifySteps.length - 1);
+    expect(
+      actionlintIndex,
+      "Base freshness must be the LAST step of the actionlint job — an earlier step re-opens the whole run duration as the stale-base window",
+    ).toBe(actionlintSteps.length - 1);
+  });
+
+  it("runs only when the event is a pull request", () => {
+    const [verifyStep] = freshness(verifySteps);
+    const [actionlintStep] = freshness(actionlintSteps);
+
+    expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
+    expect(
+      actionlintStep,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeDefined();
+    expect(
+      String(verifyStep.if),
+      "Base freshness must carry an if: referencing the pull_request event — push and workflow_dispatch runs test main itself and must skip the gate",
+    ).toMatch("pull_request");
+    expect(
+      String(actionlintStep.if),
+      "Base freshness must carry an if: referencing the pull_request event — push and workflow_dispatch runs test main itself and must skip the gate",
+    ).toMatch("pull_request");
+  });
+
+  it("does not tolerate its own failure", () => {
+    const [verifyStep] = freshness(verifySteps);
+    const [actionlintStep] = freshness(actionlintSteps);
+
+    expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
+    expect(
+      actionlintStep,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeDefined();
+    expect(
+      Boolean(verifyStep["continue-on-error"]),
+      "Base freshness must not be continue-on-error — a tolerated failure does not gate the merge",
+    ).toBe(false);
+    expect(
+      Boolean(actionlintStep["continue-on-error"]),
+      "Base freshness must not be continue-on-error — a tolerated failure does not gate the merge",
+    ).toBe(false);
+  });
+
+  it("interpolates no untrusted input into the run block", () => {
+    const [verifyStep] = freshness(verifySteps);
+    const [actionlintStep] = freshness(actionlintSteps);
+
+    expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
+    expect(
+      actionlintStep,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeDefined();
+    expect(
+      verifyStep.run,
+      "Base freshness must carry a run block — the comparison is shell, not an actions expression",
+    ).toBeDefined();
+    expect(
+      actionlintStep.run,
+      "Base freshness must carry a run block — the comparison is shell, not an actions expression",
+    ).toBeDefined();
+    expect(
+      verifyStep.run?.includes("${{"),
+      "the run block must reference env names, never ${{ }} interpolation — untrusted-input interpolation in run: blocks is exactly what zizmor flags",
+    ).toBe(false);
+    expect(
+      actionlintStep.run?.includes("${{"),
+      "the run block must reference env names, never ${{ }} interpolation — untrusted-input interpolation in run: blocks is exactly what zizmor flags",
+    ).toBe(false);
+  });
+});
