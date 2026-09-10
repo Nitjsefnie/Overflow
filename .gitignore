@@ -98,6 +98,9 @@ src/app/api/moderation/recalibration/adjustment/*
 !src/app/api/moderation/rederivation/
 src/app/api/moderation/rederivation/*
 !src/app/api/moderation/rederivation/*.ts
+!src/app/api/readiness/
+src/app/api/readiness/*
+!src/app/api/readiness/*.ts
 !src/app/api/overrides/
 src/app/api/overrides/*
 !src/app/api/overrides/*.ts
