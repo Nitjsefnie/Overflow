@@ -10,6 +10,7 @@ import {
   type TransactionClient,
 } from "@/lib/db/types";
 import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
+import { calculateSettlement } from "@/lib/domain/settlement";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import {
   assessReconciliationFairness,
@@ -1006,6 +1007,12 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       if (input.synchronization !== undefined) {
         await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
       }
+      // A stale snapshot must not replay a pre-claim state over rows an
+      // identity claim has since written (issue 446), so resolve the fold's
+      // unclaimed GitHub identities inside this publication transaction before
+      // any materialization applies fold state.
+      const resolved = await reResolveIdentityClaims(transaction, input.fold);
+      const publication = { ...input, fold: resolved };
       // One snapshot of the granted corrections for the whole run: settlements
       // and calibrations are two ways of recording the same issue's outcome, so
       // reading the table twice could price one against a grant the other never
@@ -1018,12 +1025,12 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         loadExistingSelfWorkCalibrations(transaction, input.repositoryId),
         loadGrantedSettlementOverrides(transaction, input.repositoryId),
       ]);
-      const issueIds = await upsertIssues(transaction, input.repositoryId, input.fold);
-      const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, input.fold, issueIds);
-      await replacePullRequestIssueLinks(transaction, input.repositoryId, input.fold, issueIds, pullRequestIds);
+      const issueIds = await upsertIssues(transaction, input.repositoryId, publication.fold);
+      const pullRequestIds = await upsertPullRequests(transaction, input.repositoryId, publication.fold, issueIds);
+      await replacePullRequestIssueLinks(transaction, input.repositoryId, publication.fold, issueIds, pullRequestIds);
       const settlementDeltas = await materializeSettlements(
         transaction,
-        input,
+        publication,
         issueIds,
         pullRequestIds,
         existingSettlements,
@@ -1031,23 +1038,23 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       );
       const selfWorkDeltas = await materializeSelfWorkCalibrations(
         transaction,
-        input,
+        publication,
         issueIds,
         pullRequestIds,
         existingSelfWorkCalibrations,
         grantedOverrides,
       );
-      const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, input, issueIds, pullRequestIds);
-      await materializeReviewRounds(transaction, input.fold, pullRequestIds);
+      const unwritableClosureDeltas = await materializeUnwritableClosures(transaction, publication, issueIds, pullRequestIds);
+      await materializeReviewRounds(transaction, publication.fold, pullRequestIds);
       const removalDeltas = await deleteAbsentMaterialization(
         transaction,
         input.repositoryId,
-        input.fold,
+        publication.fold,
         issueIds,
         pullRequestIds,
         input.runId,
       );
-      await recordPolicyViolations(transaction, input.runId, input.fold);
+      await recordPolicyViolations(transaction, input.runId, publication.fold);
       if (input.synchronization !== undefined) {
         await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;
       }
@@ -1519,6 +1526,127 @@ export async function claimGitHubIdentity(
         and participation_eligible_at(debtor.id, pull_requests.merged_at)
     `;
   });
+}
+
+/**
+ * Re-resolve the identities a stale fold snapshot left unclaimed, so publishing
+ * it does not undo a claim made since the snapshot was taken (issue 446).
+ *
+ * A fold captured before a contributor's Overflow account existed marks their
+ * settlements UNCLAIMED (creditor unrecorded, only a GitHub user id) and their
+ * pull requests authorless. `claimGitHubIdentity` later flips those rows, and
+ * materialization rewrites the same tables from the fold — replaying the
+ * snapshot verbatim would write UNCLAIMED back over SETTLED, resurrect a
+ * settlement the claim moved into `self_work_calibrations`, and clear the
+ * claimed `pull_requests.author_id`. Inside this publication transaction,
+ * resolve each unclaimed GitHub identity against the users table and recompute
+ * the row the fold would produce today, evaluating the claim's own guards
+ * against current data.
+ *
+ * Returns a NEW fold — callers retain and reuse fold objects across runs, so
+ * the input is never mutated.
+ */
+async function reResolveIdentityClaims(
+  sql: TransactionClient,
+  fold: FoldResult,
+): Promise<FoldResult> {
+  const githubUserIds = new Set<number>();
+  for (const settlement of fold.settlements) {
+    if (settlement.status === "UNCLAIMED" && settlement.creditorGitHubUserId !== null) {
+      githubUserIds.add(settlement.creditorGitHubUserId);
+    }
+  }
+  for (const pullRequest of fold.pullRequests) {
+    if (pullRequest.authorGitHubUserId !== null) {
+      githubUserIds.add(pullRequest.authorGitHubUserId);
+    }
+  }
+  if (githubUserIds.size === 0) {
+    return fold;
+  }
+
+  const rows = await sql<{ github_user_id: string; id: string }[]>`
+    select github_user_id, id from users
+    where github_user_id = any(${sql.array([...githubUserIds].map(String))}::bigint[])
+  `;
+  const usersByGitHubId = new Map(rows.map((row) => [Number(row.github_user_id), row.id]));
+
+  // Mirrors claimGitHubIdentity's unconditional `update pull_requests set
+  // author_id`: an identity claim is authoritative for authorship, with no
+  // eligibility filter on this path.
+  const pullRequests = fold.pullRequests.map((pullRequest) => {
+    if (pullRequest.authorGitHubUserId === null) {
+      return pullRequest;
+    }
+    const userId = usersByGitHubId.get(pullRequest.authorGitHubUserId);
+    return userId === undefined ? pullRequest : { ...pullRequest, authorId: userId };
+  });
+
+  const selfWorkCalibrations = [...fold.selfWorkCalibrations];
+  const settlements: FoldSettlement[] = [];
+  for (const settlement of fold.settlements) {
+    const claimedCreditorId = settlement.status === "UNCLAIMED" && settlement.creditorGitHubUserId !== null
+      ? usersByGitHubId.get(settlement.creditorGitHubUserId)
+      : undefined;
+    if (claimedCreditorId === undefined) {
+      settlements.push(settlement);
+      continue;
+    }
+
+    // The claim's own WHERE clause, evaluated against current data: a
+    // settlement it would not have flipped stays UNCLAIMED here too. When the
+    // claimed identity is the debtor, both terms name the same user — the
+    // self-work guard the claim applies.
+    const [guard] = await sql<{ eligible: boolean }[]>`
+      select participation_eligible_at(${claimedCreditorId}, ${settlement.mergedAt})
+        and participation_eligible_at(${settlement.debtorId}, ${settlement.mergedAt}) as eligible
+    `;
+    if (guard?.eligible !== true) {
+      settlements.push(settlement);
+      continue;
+    }
+
+    if (claimedCreditorId === settlement.debtorId) {
+      // Self-work: the claim deletes the settlement and records the calibration
+      // with the field mapping the fold itself uses, so the rewritten fold
+      // describes exactly those rows.
+      selfWorkCalibrations.push({
+        githubIssueId: settlement.githubIssueId,
+        githubPullRequestId: settlement.githubPullRequestId,
+        userId: claimedCreditorId,
+        openingComparisonPoints: settlement.openingComparisonPoints,
+        actualLabel: settlement.settledLabel,
+        actualPoints: settlement.settledPoints,
+        actualLabelEventId: settlement.settledLabelEventId,
+        actualLabelActorLogin: settlement.settledLabelActorLogin,
+        actualLabelAppliedAt: settlement.settledLabelAppliedAt,
+        rationaleCommentId: settlement.settledRationaleCommentId,
+        rationaleActorLogin: settlement.settledRationaleActorLogin,
+        rationaleCommentedAt: settlement.settledRationaleCommentedAt,
+        mergeCommitOid: settlement.mergeCommitOid,
+        mergedAt: settlement.mergedAt,
+      });
+      continue;
+    }
+
+    // Re-resolve exactly as toSettlement prices a known author. reviewRounds on
+    // the fold settlement is a count, so the decision's review ids are stand-ins
+    // consistent with it.
+    const decision = calculateSettlement({
+      creditorId: claimedCreditorId,
+      debtorId: settlement.debtorId,
+      opening: settlement.openingComparisonPoints,
+      settled: settlement.settledPoints,
+      reviewIds: Array.from({ length: settlement.reviewRounds }, (_, index) => String(index)),
+    });
+    settlements.push(
+      decision.status === "SETTLED"
+        ? { ...settlement, creditorId: claimedCreditorId, credits: decision.credits, status: "SETTLED" }
+        : { ...settlement, credits: 0, status: "UNSETTLED" },
+    );
+  }
+
+  return { ...fold, pullRequests, settlements, selfWorkCalibrations };
 }
 
 async function upsertIssues(
