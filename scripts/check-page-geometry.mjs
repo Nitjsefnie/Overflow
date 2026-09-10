@@ -81,12 +81,24 @@ const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).repl
  * `styleProof` proves the real stylesheet is applied before anything is
  * measured — a computed property a stylesheet rule sets on the contract
  * element, alongside the value the rule sets and the value the element would
- * read if the stylesheet had NOT applied. A run that measures without styles
- * is not evidence, so a proof that reads the default refuses to measure.
+ * read if the stylesheet had NOT applied. The proof's `defaultRead` is the UA
+ * default for THIS contract element (a `<button>` renders `inline-block`
+ * unstyled); re-pointing the contract at a different element type means
+ * re-deriving it. A run that measures without styles is not evidence, so a
+ * proof that reads the default refuses to measure.
+ *
+ * `renderRoot` is the page's own structural anchor (the skip-link target the
+ * landing page puts on its <main>), used to tell "the page did not render"
+ * (root absent — an error page or a dead server) apart from "the page
+ * rendered but the contract selector is gone" (contract drift). The two are
+ * diagnosed differently: the error fallback in src/components/error-fallback.tsx
+ * renders the same .landing-hero/.action-button classes, so the contract
+ * selector alone cannot make the distinction.
  */
 const PAGE_CONTRACTS = [
   {
     page: "/",
+    renderRoot: "#main-content",
     viewports: [
       [1440, 800],
       // The fold height is measured, not guessed: on the current stylesheet the
@@ -105,7 +117,10 @@ const PAGE_CONTRACTS = [
   },
 ];
 
-/** Discover the Chrome binary: env override, then the common names on PATH and /usr/bin. */
+/**
+ * Discover the Chrome binary: env override first, then the common names on
+ * PATH and /usr/bin.
+ */
 function discoverChrome() {
   const searchDirs = [...new Set((process.env.PATH ?? "")
     .split(":")
@@ -149,10 +164,11 @@ class DevTools {
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
       if (message.id !== undefined && this.pending.has(message.id)) {
-        const { resolve: res, reject: rej } = this.pending.get(message.id);
+        const entry = this.pending.get(message.id);
         this.pending.delete(message.id);
-        if (message.error) rej(new Error(`${message.error.message}: ${message.error.data ?? ""}`));
-        else res(message.result);
+        clearTimeout(entry.timer);
+        if (message.error) entry.reject(new Error(`${message.error.message}: ${message.error.data ?? ""}`));
+        else entry.resolve(message.result);
         return;
       }
       for (const handler of this.eventHandlers) handler(message);
@@ -164,16 +180,16 @@ class DevTools {
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
     this.socket.send(JSON.stringify(payload));
-    return new Promise((res, rej) => {
-      this.pending.set(id, { resolve: res, reject: rej });
-      // Generous because a loaded box can stretch one page load past 20s;
-      // still bounded, so a wedged socket fails rather than hangs.
-      setTimeout(() => {
+    return new Promise((resolve, reject) => {
+      // The timer is cleared the moment the response arrives (and in its own
+      // callback), so a finished run never idles behind pending CDP timers.
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          rej(new Error(`CDP timeout: ${method}`));
+          reject(new Error(`CDP timeout: ${method}`));
         }
       }, 60000);
+      this.pending.set(id, { resolve, reject, timer });
     });
   }
 
@@ -203,48 +219,6 @@ function waitForDevToolsUrl(child) {
   });
 }
 
-/** Spawn `next start` from the production build, or null when --base-url was given. */
-async function startServer(workDir) {
-  const dotNext = join(repoRoot, ".next");
-  if (!existsSync(dotNext)) {
-    console.error(`${dotNext} not found — run pnpm build first`);
-    process.exit(2);
-  }
-
-  const logPath = join(workDir, "next-start.log");
-  const logFile = await open(logPath, "a");
-  try {
-    const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(PORT)], {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: ["ignore", logFile.fd, logFile.fd],
-    });
-
-    const deadline = Date.now() + 60000;
-    for (;;) {
-      try {
-        const response = await fetch(`${BASE_URL}/`);
-        if (response.body) await response.body.cancel(); // any HTTP response counts; release the socket
-        break;
-      } catch {
-        // no HTTP response yet
-      }
-      if (child.exitCode !== null || child.signalCode !== null) {
-        const log = await readFileHead(logPath);
-        throw new Error(`next start exited with code ${child.exitCode ?? child.signalCode}\n${log}`);
-      }
-      if (Date.now() > deadline) {
-        const log = await readFileHead(logPath);
-        throw new Error(`next start never answered on ${BASE_URL} within 60s\n${log}`);
-      }
-      await new Promise((resolveTick) => setTimeout(resolveTick, 250));
-    }
-    return child;
-  } finally {
-    await logFile.close();
-  }
-}
-
 /** The server log's tail, for error messages. */
 async function readFileHead(path) {
   try {
@@ -267,11 +241,89 @@ async function stopServer(child) {
   child.kill("SIGKILL");
 }
 
+/**
+ * Spawn `next start` from the production build and wait for readiness, or
+ * return null when --base-url was given. Readiness is this child's own
+ * answer: the loop checks the child's liveness first and after any successful
+ * response, so a stale server squatting on the port can never be mistaken for
+ * this run's build. Any throw kills the child before propagating — a failed
+ * start must not leak a server.
+ */
+async function startServer(workDir) {
+  const dotNext = join(repoRoot, ".next");
+  if (!existsSync(dotNext)) {
+    console.error(`${dotNext} not found — run pnpm build first`);
+    process.exit(2);
+  }
+
+  const logPath = join(workDir, "next-start.log");
+  const logFile = await open(logPath, "a");
+  try {
+    const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(PORT)], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", logFile.fd, logFile.fd],
+    });
+
+    try {
+      const childDied = () => child.exitCode !== null || child.signalCode !== null;
+      const death = () => `next start exited with code ${child.exitCode ?? child.signalCode}`;
+
+      const deadline = Date.now() + 60000;
+      for (;;) {
+        if (childDied()) {
+          throw new Error(`${death()} before answering on ${BASE_URL}\n${await readFileHead(logPath)}`);
+        }
+        let answered = false;
+        try {
+          const response = await fetch(`${BASE_URL}/`);
+          if (response.body) await response.body.cancel(); // any HTTP response counts; release the socket
+          answered = true;
+        } catch {
+          // no HTTP response yet
+        }
+        if (answered) {
+          if (childDied()) {
+            throw new Error(
+              `something answered on ${BASE_URL}, but ${death()} — refusing to measure a foreign server` +
+                `\n${await readFileHead(logPath)}`,
+            );
+          }
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`next start never answered on ${BASE_URL} within 60s\n${await readFileHead(logPath)}`);
+        }
+        await new Promise((resolveTick) => setTimeout(resolveTick, 250));
+      }
+      return child;
+    } catch (error) {
+      await stopServer(child);
+      throw error;
+    }
+  } finally {
+    await logFile.close();
+  }
+}
+
 /** Evaluate an expression in the page, returning its value. */
 async function evaluate(client, sessionId, expression) {
   const { result } = await client.send("Runtime.evaluate", {
     expression,
     returnByValue: true,
+  }, sessionId);
+  if (result.exceptionDetails) {
+    throw new Error(`page evaluation failed: ${JSON.stringify(result.exceptionDetails)}`);
+  }
+  return result.value;
+}
+
+/** Evaluate an async expression, awaiting its promise in the page. */
+async function evaluateAsync(client, sessionId, expression) {
+  const { result } = await client.send("Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    awaitPromise: true,
   }, sessionId);
   if (result.exceptionDetails) {
     throw new Error(`page evaluation failed: ${JSON.stringify(result.exceptionDetails)}`);
@@ -289,22 +341,39 @@ async function pollFor(client, sessionId, expression, timeoutMs) {
   }
 }
 
+/**
+ * Wait out the two layout inputs that land AFTER the load event: web fonts
+ * (a cold fontconfig resolves and swaps them late, and a fallback-font layout
+ * measures differently) and the frame that paints the post-font relayout.
+ * Measuring before both is how a clean page reads a mutant's geometry.
+ */
+async function settleLayout(client, sessionId) {
+  await evaluateAsync(client, sessionId, "document.fonts.ready.then(() => true)");
+  await evaluateAsync(client, sessionId, "new Promise((resolve) => requestAnimationFrame(() => resolve(true)))");
+}
+
 /** Format a number as a compact measurement. */
 const px = (value) => `${Math.round(value * 10) / 10}px`;
 
 /**
  * The in-page measurement for one contract: the primary action's rect, the
  * style-proof property, and the viewport bounds, all read in the page.
- * `selector` is interpolated with JSON.stringify, never string-concatenated.
+ * Selectors are interpolated with JSON.stringify, never string-concatenated.
+ * A missing render root and a missing contract element are returned as
+ * distinct shapes so the caller can tell "page did not render" from
+ * "contract drift".
  */
-function measureExpression(selector, styleProof) {
+function measureExpression(selector, rootSelector, styleProof) {
   return `(() => {
+  const root = document.querySelector(${JSON.stringify(rootSelector)});
+  if (!root) return { rootFound: false };
   const element = document.querySelector(${JSON.stringify(selector)});
+  if (!element) return { rootFound: true, found: false };
   const proofProperty = ${JSON.stringify(styleProof.property)};
-  if (!element) return { found: false };
   const rect = element.getBoundingClientRect();
   const style = getComputedStyle(element);
   return {
+    rootFound: true,
     found: true,
     proofValue: style[proofProperty],
     width: rect.width,
@@ -323,10 +392,10 @@ function measureExpression(selector, styleProof) {
 /**
  * The assertions of one page/viewport row, evaluated against one measurement.
  * Returns the list of failed assertions with measured numbers; an empty list
- * is a PASS row. Assertion (a) — the contract selector matching nothing — is
- * handled by the caller: it is a hard fail that stops the whole run, because a
- * faithful markup rewrite must re-point the contract visibly rather than
- * silently drop coverage.
+ * is a PASS row. Assertion (a) — the contract selector matching nothing on a
+ * RENDERED page — is handled by the caller: it is a hard fail that stops the
+ * whole run, because a faithful markup rewrite must re-point the contract
+ * visibly rather than silently drop coverage.
  */
 function failedAssertions(measured, styleProof) {
   const failures = [];
@@ -372,12 +441,24 @@ function failedAssertions(measured, styleProof) {
 /** Short human label for a viewport pair. */
 const viewportLabel = ([width, height]) => `${width}x${height}`;
 
+/** This run's HTTP status for a page, for render-failure diagnosis. */
+async function probeStatus(page) {
+  try {
+    const response = await fetch(`${BASE_URL}${page}`);
+    if (response.body) await response.body.cancel();
+    return response.status;
+  } catch {
+    return "no response";
+  }
+}
+
 async function main() {
   const chrome = discoverChrome();
   const workDir = await mkdtemp(join(tmpdir(), "page-geometry-"));
   const spawned = BASE_URL === `http://127.0.0.1:${PORT}`;
   let server = null;
   let failed = false;
+  let hardFailure = null;
 
   try {
     if (spawned) server = await startServer(workDir);
@@ -403,9 +484,16 @@ async function main() {
       await client.send("Page.enable", {}, sessionId);
 
       const rows = [];
+      pageLoop:
       for (const contract of PAGE_CONTRACTS) {
-        await client.send("Page.navigate", { url: `${BASE_URL}${contract.page}` }, sessionId);
-        await pollFor(client, sessionId, "document.readyState === 'complete'", 30000);
+        const url = `${BASE_URL}${contract.page}`;
+        await client.send("Page.navigate", { url }, sessionId);
+        // The URL match keeps the poll from being satisfied by the departing
+        // about:blank document before the navigation commits.
+        await pollFor(client, sessionId,
+          `document.readyState === 'complete' && location.href === ${JSON.stringify(url)}`,
+          30000);
+        await settleLayout(client, sessionId);
 
         for (const viewport of contract.viewports) {
           await client.send("Emulation.setDeviceMetricsOverride", {
@@ -414,24 +502,38 @@ async function main() {
             deviceScaleFactor: 1,
             mobile: false,
           }, sessionId);
-          // Let the relayout settle before reading geometry.
-          await new Promise((resolveTick) => setTimeout(resolveTick, 100));
+          // The override forces a relayout; measure only after fonts and the
+          // painting frame have settled the new layout.
+          await settleLayout(client, sessionId);
 
-          const measured = await evaluate(client, sessionId, measureExpression(contract.primaryAction, contract.styleProof));
+          const measured = await evaluate(client, sessionId, measureExpression(contract.primaryAction, contract.renderRoot, contract.styleProof));
+          const label = `${contract.page} @ ${viewportLabel(viewport)}`;
 
-          // (a) The contract itself: a selector that matches nothing is a hard
-          // fail that stops the run — coverage must be re-pointed visibly.
-          if (!measured.found) {
-            console.error(
-              `page contract out of date — update the selector in scripts/check-page-geometry.mjs ` +
-                `("${contract.primaryAction}" matched nothing on ${contract.page} at ` +
-                `${viewportLabel(viewport)})`,
+          if (!measured.rootFound) {
+            // The document lacks the page's structural anchor: this is a
+            // render failure (error page, dead server), not contract drift.
+            const status = await probeStatus(contract.page);
+            failed = true;
+            console.log(
+              `${label}: FAIL — page did not render (HTTP ${status}); ` +
+                `document lacks "${contract.renderRoot}"`,
             );
-            process.exit(1);
+            rows.push({ label, failures: ["render"] });
+            break;
+          }
+
+          if (!measured.found) {
+            // The page rendered but the contract element is gone: a markup
+            // rewrite must re-point the contract VISIBLY, so stop the run —
+            // after cleanup, via the flag below, never via process.exit.
+            hardFailure =
+              `page contract out of date — update the selector in scripts/check-page-geometry.mjs ` +
+              `("${contract.primaryAction}" matched nothing on ${contract.page} at ` +
+              `${viewportLabel(viewport)}; the page rendered — "${contract.renderRoot}" is present)`;
+            break pageLoop;
           }
 
           const failures = failedAssertions(measured, contract.styleProof);
-          const label = `${contract.page} @ ${viewportLabel(viewport)}`;
           if (failures.length === 0) {
             console.log(
               `${label}: PASS (action ${px(measured.width)} x ${px(measured.height)} at ` +
@@ -455,10 +557,14 @@ async function main() {
     await stopServer(server);
   }
 
-  if (failed) process.exit(1);
+  if (hardFailure) {
+    console.error(hardFailure);
+    process.exitCode = 1;
+  }
+  if (failed) process.exitCode = 1;
 }
 
 main().catch((error) => {
   console.error(error.message);
-  process.exit(1);
+  process.exitCode = 1;
 });

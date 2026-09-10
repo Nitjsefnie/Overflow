@@ -7,12 +7,15 @@ import { parse } from "yaml";
 /**
  * The parsed shape of a verify-job step this suite reads. Steps this suite does
  * not reason about (checkout, setup-node) carry only `uses`, which is why every
- * field is optional.
+ * field is optional. `if` and `continue-on-error` are pinned because either one
+ * can leave the step in the file while CI stops gating on it.
  */
 type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
+  if?: unknown;
+  "continue-on-error"?: unknown;
 };
 
 /**
@@ -68,5 +71,21 @@ describe("the verify workflow's page-geometry step", () => {
     expect(buildIndex).toBeGreaterThan(-1);
     expect(geometryIndex).toBeGreaterThan(-1);
     expect(geometryIndex).toBeGreaterThan(buildIndex);
+  });
+
+  it("gates the page geometry step unconditionally", () => {
+    const [step] = steps.filter((step) =>
+      step.run?.includes("scripts/check-page-geometry.mjs"),
+    );
+
+    expect(step, "the geometry step must exist to be gated").toBeDefined();
+    expect(
+      step.if,
+      "the geometry step must carry no `if:` — a conditional step does not gate",
+    ).toBeUndefined();
+    expect(
+      Boolean(step["continue-on-error"]),
+      "the geometry step must not be continue-on-error — a tolerated failure does not gate",
+    ).toBe(false);
   });
 });
