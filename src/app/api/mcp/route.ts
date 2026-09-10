@@ -16,6 +16,7 @@ import {
   type MemberRouteDependencies,
 } from "@/lib/security/member-route-auth";
 import { guardByCredential } from "@/lib/security/route-credential";
+import { readTrustedOrigin } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { createModerationPostHandler } from "@/app/api/moderation/route";
 import { createModerationAuditPatchHandler } from "@/app/api/moderation/[id]/route";
@@ -149,14 +150,42 @@ export type McpRouteDependencies = MemberRouteDependencies & {
  * The MCP transport: one JSON-RPC request per POST, gated exactly like the
  * routes it fronts. The credential guard runs first (a bearer request is
  * exempt from the origin check, a cookie request is not), then the member
- * gate; a refusal from either surfaces as-is. JSON-RPC results and errors go
- * out in-band at HTTP 200, and a notification — no id, nothing to answer —
- * is HTTP 202 with no body.
+ * gate; a refusal from either surfaces as-is, with one exception: a request
+ * that carries neither a bearer credential nor a session cookie nor an allowed
+ * Origin is a programmatic client's unauthenticated probe, so its 403 is
+ * replaced by a 401 whose WWW-Authenticate points at this resource's
+ * RFC 9728 metadata. JSON-RPC results and errors go out in-band at HTTP 200,
+ * and a notification — no id, nothing to answer — is HTTP 202 with no body.
  */
 export function createMcpPostHandler(dependencies: McpRouteDependencies) {
   return async function postMcp(request: Request): Promise<Response> {
     const refusal = guardByCredential(request);
     if (refusal !== null) {
+      // On this route the guard's 403 is only ever the origin guard's, and a
+      // request that reached it with no Cookie header carries no browser
+      // session — the cookie case keeps the 403, which is the CSRF defense.
+      // With no parsable APP_URL there is no origin to advertise, so the
+      // original refusal stands (fail closed to today's behavior).
+      if (refusal.status === 403 && request.headers.get("cookie") === null) {
+        const origin = readTrustedOrigin();
+        if (origin !== null) {
+          return Response.json(
+            {
+              error: {
+                code: "UNAUTHENTICATED",
+                message: "Provide a bearer API token.",
+              },
+            },
+            {
+              status: 401,
+              headers: {
+                "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+                "Cache-Control": "no-store",
+              },
+            },
+          );
+        }
+      }
       return refusal;
     }
 
