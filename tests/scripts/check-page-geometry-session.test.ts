@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, authedLandingState, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, authedLandingState, loadRepoEnvFile, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -140,6 +140,82 @@ describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () 
     const env = spawnedServerEnv({ AUTH_TRUST_HOST: "" });
 
     expect(env.AUTH_TRUST_HOST).toBe("true");
+  });
+});
+
+/**
+ * The gate process's own .env loading (issue 453, round 4). The spawned
+ * `next start` loads the repo-root .env family for itself, but the run's
+ * seeding and secret reads happen in THIS process — after the branch added
+ * authed contracts, a preflight-passing .env-only run threw "DATABASE_URL is
+ * not set" from the very variable the preflight had just declared satisfied.
+ * The semantics are the db:migrate precedent (node's --env-file-if-exists):
+ * .env at the repo root only, a missing file is a no-op, and an
+ * already-exported variable wins.
+ */
+describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", () => {
+  it("fills variables the environment does not carry", async () => {
+    const env: Record<string, string> = {};
+
+    const applied = await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () => "DATABASE_URL=postgresql://example/db\nAUTH_SECRET=the-secret\n",
+    });
+
+    expect(applied).toEqual(["DATABASE_URL", "AUTH_SECRET"]);
+    expect(env.DATABASE_URL).toBe("postgresql://example/db");
+    expect(env.AUTH_SECRET).toBe("the-secret");
+  });
+
+  it("prefers an already-exported variable over the .env value", async () => {
+    const env: Record<string, string> = { DATABASE_URL: "from-exported-environment" };
+
+    const applied = await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () => "DATABASE_URL=from-dotenv-file\n",
+    });
+
+    expect(applied).toEqual([]);
+    expect(env.DATABASE_URL).toBe("from-exported-environment");
+  });
+
+  it("treats a missing .env as a no-op, the way CI without one still runs", async () => {
+    const env: Record<string, string> = {};
+
+    const applied = await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () => {
+        throw new Error("ENOENT: no .env here");
+      },
+    });
+
+    expect(applied).toEqual([]);
+    expect(env.DATABASE_URL).toBeUndefined();
+  });
+
+  it("parses the shapes .env files actually carry", async () => {
+    const env: Record<string, string> = {};
+
+    await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () =>
+        [
+          "# a comment line",
+          "export TOKEN_ENCRYPTION_KEY=\"abc def\"",
+          "EMPTY=",
+          "BROKEN LINE WITHOUT AN EQUALS SIGN",
+          "=VALUE_WITH_NO_KEY",
+        ].join("\n") + "\n",
+    });
+
+    expect(env.TOKEN_ENCRYPTION_KEY).toBe("abc def");
+    expect(env.EMPTY).toBe("");
+    expect(env.BROKEN).toBeUndefined();
+    expect(env[""]).toBeUndefined();
   });
 });
 

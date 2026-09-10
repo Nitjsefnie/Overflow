@@ -106,6 +106,45 @@ function repoEnvFileExists() {
 }
 
 /**
+ * Load the repo-root `.env` into the run's environment, the way the
+ * preflight's remedy and USAGE advertise and the spawned server experiences
+ * them. The server loads the .env family itself at startup — but the run's
+ * seeding and secret reads happen in THIS process, so without this a
+ * preflight-passing .env-only run threw "DATABASE_URL is not set" from the
+ * very variable the preflight had just declared satisfied (issue 453 round
+ * 4; the db:migrate --env-file-if-exists contract is the precedent, and its
+ * tests/scripts/db-migrate-env-file.test.ts the pin shape).
+ *
+ * Semantics: `.env` at the repo root only; a missing file is a no-op; an
+ * already-exported variable wins over the file value (an empty exported
+ * value counts as exported). Returns the names this load filled.
+ */
+export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process.env, readFileFn = readFile } = {}) {
+  const text = await readFileFn(join(root, ".env"), "utf8").catch(() => null);
+  if (text === null) return [];
+
+  const applied = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const withoutExportPrefix = trimmed.startsWith("export ") ? trimmed.slice("export ".length) : trimmed;
+    const equals = withoutExportPrefix.indexOf("=");
+    if (equals <= 0) continue;
+    const key = withoutExportPrefix.slice(0, equals).trim();
+    let value = withoutExportPrefix.slice(equals + 1).trim();
+    const quoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+    if (quoted && value.length >= 2) value = value.slice(1, -1);
+    if (env[key] === undefined) {
+      env[key] = value;
+      applied.push(key);
+    }
+  }
+  return applied;
+}
+
+/**
  * The required names this run's environment leaves unsatisfied: a name is
  * missing when it is absent or empty from `env` AND no repo-root .env file
  * would supply it at server startup. `env` defaults to process.env and the
@@ -382,17 +421,22 @@ export function authedLandingState(targetUrl, href, staleDocument) {
  * URL — never the contract-drift hard stop and never a poll timeout.
  */
 const PAGE_CONTRACTS = [
+  // ORDER: the signed-out / contract must stay FIRST. The authed contracts
+  // below it set their session cookie before each navigation; a reorder
+  // would leave / measured with a cookie in the jar, where it redirects to
+  // /dashboard instead of rendering.
   {
     page: "/",
     renderRoot: "#main-content",
     viewports: [
       [1440, 800],
-      // Measured bottom 668.4px on BOTH environments (1280-wide viewport).
-      // The original 700px fold pinned ~31px of headroom and was this file's
-      // documentation pattern; the runner-vs-local text-wrap spread that
-      // red-lined /dashboard's narrow rows applies here too, so the fold
-      // gives ~100px instead: 770, with ~102px of headroom.
-      [1280, 770],
+      // Restored to the original tight pin: the primary action's bottom sits
+      // at 668.4px IDENTICALLY in both measurement environments (this box
+      // and the GitHub runner) — zero observed spread — so the issue-111 pin
+      // keeps its teeth. The ~100px policy applies only where the two
+      // environments disagree (see /dashboard's narrow rows) or headroom is
+      // otherwise thin.
+      [1280, 700],
     ],
     primaryAction: ".landing-hero .action-button",
     styleProof: {
@@ -1050,10 +1094,18 @@ function failedAssertions(measured, styleProof) {
 /** Short human label for a viewport pair. */
 const viewportLabel = ([width, height]) => `${width}x${height}`;
 
-/** This run's HTTP status for a page, for render-failure diagnosis. */
+/**
+ * This run's HTTP status for a page, for render-failure diagnosis. Fetches
+ * with redirect:"manual" so a bounced contract reports its real 307 — the
+ * default follow would land the status on the redirect target (a role
+ * bounce read "HTTP 200", naming the /dashboard page the bounce PRODUCED
+ * instead of the /moderation response that caused it). The other
+ * render-failure paths read the same as before: a dead server still answers
+ * "no response", and error pages do not redirect.
+ */
 async function probeStatus(page) {
   try {
-    const response = await fetch(`${BASE_URL}${page}`);
+    const response = await fetch(`${BASE_URL}${page}`, { redirect: "manual" });
     if (response.body) await response.body.cancel();
     return response.status;
   } catch {
@@ -1062,6 +1114,13 @@ async function probeStatus(page) {
 }
 
 async function main() {
+  // The gate process itself needs DATABASE_URL (seeding) and AUTH_SECRET
+  // (the session fixture) from the same .env the preflight advertises — the
+  // spawned server loads it for itself, but these reads happen in-process
+  // (issue 453 round 4). Real environment wins, matching migrate's
+  // --env-file-if-exists behavior; .env at the repo root only.
+  await loadRepoEnvFile();
+
   const spawned = BASE_URL === `http://127.0.0.1:${PORT}`;
 
   // The environment preflight (issue 471) runs only when this run spawns its
@@ -1096,6 +1155,16 @@ async function main() {
       );
     }
     const fixtureUsers = await seedFixtureUsers({ databaseUrl });
+    // The run's first write, made visible at the moment it happens — host
+    // and database name only, never the credentials in the URL.
+    let seededInto;
+    try {
+      const parsed = new URL(databaseUrl);
+      seededInto = `${parsed.host}${parsed.pathname}`;
+    } catch {
+      seededInto = "(database url unparsable)";
+    }
+    console.log(`seeded fixture users into ${seededInto}`);
 
     // The launch retries itself (issue 447): a failed attempt is killed and
     // relaunched inside launchChromeWithRetry, so reaching this line means
