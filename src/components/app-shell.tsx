@@ -20,6 +20,14 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
           <span>Overflow</span>
         </Link>
         <nav aria-label="Member navigation">
+          {/* The account-data notice is deliberately NOT in this list. The
+              header contract is measured: the moderator nav (the widest
+              Overflow ships) fills the middle column to 749.5px of its 757.9px
+              at every desktop width, so a ninth link — any ninth link, given
+              the 16px column gap — wraps inside the column and re-creates the
+              issue-40 defect. The notice links from the footer instead, and
+              scripts/measure-header-geometry.mjs holds the line if this list
+              ever changes. */}
           <ul className="site-nav">
             <li>
               <Link href="/dashboard">Ledger</Link>
@@ -65,6 +73,9 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
       </main>
       <footer className="site-footer">
         <p>Overflow keeps cooperative promises legible.</p>
+        <p>
+          <Link href="/account-data">Account data</Link>
+        </p>
       </footer>
     </div>
   );
@@ -94,15 +105,23 @@ export function PublicAppShell({ children }: PublicAppShellProps) {
         </Link>
         <nav aria-label="Site navigation">
           {/* Every link here must point at a route that renders for a
-              signed-out visitor. Only / does today (/session is a recovery
-              surface, not a destination) and the wordmark already carries it,
-              so the list stays empty until another route is proven public. */}
-          <ul className="site-nav" />
+              signed-out visitor. / is carried by the wordmark (/session is a
+              recovery surface, not a destination); /account-data is the one
+              proven-public route in this list — a static page with no session
+              read, proved by tests/components/account-data-page.test.tsx. */}
+          <ul className="site-nav">
+            <li>
+              <Link href="/account-data">Account data</Link>
+            </li>
+          </ul>
         </nav>
       </header>
       {children}
       <footer className="site-footer">
         <p>Overflow keeps cooperative promises legible.</p>
+        <p>
+          <Link href="/account-data">Account data</Link>
+        </p>
       </footer>
     </div>
   );

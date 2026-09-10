@@ -1,4 +1,5 @@
 import { signIn } from "@/auth";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
 
@@ -22,6 +23,9 @@ export function LandingPage() {
             Sign in with GitHub
           </button>
         </form>
+        <Link className="text-link" href="/account-data">
+          What Overflow stores about your account
+        </Link>
       </section>
       <section className="landing-principles" aria-label="How Overflow works">
         <article>

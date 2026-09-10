@@ -94,8 +94,11 @@ const MODERATOR_LINKS = [...MEMBER_LINKS, ["Moderation", "/moderation"]];
 const VARIANTS = [
   { id: "member", links: MEMBER_LINKS },
   { id: "moderator", links: MODERATOR_LINKS },
-  /** The signed-out shell (PublicAppShell): empty nav, no session controls. */
-  { id: "public", links: [] },
+  /**
+   * The signed-out shell (PublicAppShell): no session controls, and the nav
+   * carries the proven-public account-data notice.
+   */
+  { id: "public", links: [["Account data", "/account-data"]] },
 ];
 
 function escapeHtml(text) {
@@ -105,9 +108,8 @@ function escapeHtml(text) {
 /**
  * The real header markup, transcribed: AppShell in src/components/app-shell.tsx
  * with the moderator-only Moderation link parameterized, and PublicAppShell
- * for the public variant — wordmark linking the public entry, an intentionally
- * empty nav (no whitespace inside the ul, exactly as JSX emits it, so :empty
- * matches), and no session controls.
+ * for the public variant — wordmark linking the public entry, the nav carrying
+ * the proven-public account-data link, and no session controls.
  */
 function harnessPage(variant, cssUrl) {
   const listItems = variant.links.map(([label, href]) =>
@@ -123,9 +125,7 @@ function harnessPage(variant, cssUrl) {
   const wordmarkHref = variant.id === "public" ? "/" : "/dashboard";
   const wordmarkLabel = variant.id === "public" ? "Overflow home" : "Overflow dashboard";
   const navLabel = variant.id === "public" ? "Site navigation" : "Member navigation";
-  const navList = variant.id === "public"
-    ? `      <ul class="site-nav"></ul>`
-    : `      <ul class="site-nav">
+  const navList = `      <ul class="site-nav">
 ${listItems}
       </ul>`;
   return `<!doctype html>
@@ -282,16 +282,22 @@ const MEASURE = `(() => {
  * wrapped only inside its own full-width left-aligned row.
  */
 function judge(row, variant) {
+  const navFullWidth = Math.abs(row.navLeft - row.headerLeft) <= 1 &&
+    Math.abs(row.navWidth - row.headerWidth) <= 1;
   if (variant === "public") {
-    const expected = row.wordmarkHeight + row.headerPaddingY;
-    const heightOk = Math.abs(row.headerHeight - expected) <= 1;
+    // The signed-out header renders the wordmark and the account-data link,
+    // so its nav must hold one row when the header holds one (desktop) and
+    // take its own full-width row when the header stacks — the same nav
+    // criterion as the member variants, minus the session-controls alignment
+    // that has no counterpart here.
+    const navOk = row.navRowCount === 1 || navFullWidth;
     return {
-      navFullWidth: false,
+      navFullWidth,
       aligned: true,
-      navOk: true,
+      navOk,
       elementCentresDistinct: 1,
-      defect: !heightOk || row.navRowCount !== 0,
-      pass: heightOk && row.navRowCount === 0,
+      defect: row.navRowCount >= 2 && !navFullWidth,
+      pass: navOk,
     };
   }
   const centres = [row.wordmarkCentre, row.stampCentre, row.firstNavRowCentre]
@@ -302,8 +308,6 @@ function judge(row, variant) {
   }
   const aligned = row.sessionControlsCentre !== null &&
     Math.abs(row.wordmarkCentre - row.sessionControlsCentre) <= 1;
-  const navFullWidth = Math.abs(row.navLeft - row.headerLeft) <= 1 &&
-    Math.abs(row.navWidth - row.headerWidth) <= 1;
   const navOk = row.navRowCount === 1 || navFullWidth;
   return {
     navFullWidth,

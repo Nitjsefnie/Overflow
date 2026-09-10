@@ -122,6 +122,9 @@ src/app/api/settlements/[[]id[]]/*
 !src/app/api/tokens/
 src/app/api/tokens/*
 !src/app/api/tokens/*.ts
+!src/app/account-data/
+src/app/account-data/*
+!src/app/account-data/*.tsx
 !src/app/dashboard/
 src/app/dashboard/*
 !src/app/dashboard/*.tsx

@@ -57,11 +57,17 @@ describe("session recovery chrome", () => {
     expect(within(header).queryByRole("button")).not.toBeInTheDocument();
     expect(header.querySelector(".member-stamp")).toBeNull();
     expect(header.querySelector(".session-controls")).toBeNull();
-    // The chrome navigates nowhere but the public entry: the header's only
-    // link is the wordmark, so no member navigation rides along.
+    // The chrome navigates nowhere but the public entry and the proven-public
+    // routes: the wordmark, plus the site navigation whose only member is the
+    // account-data notice (its signed-out render is proven by
+    // tests/components/account-data-page.test.tsx). No member navigation
+    // rides along.
     const headerLinks = within(header).queryAllByRole("link");
-    expect(headerLinks).toHaveLength(1);
+    expect(headerLinks).toHaveLength(2);
     expect(headerLinks[0]).toHaveClass("wordmark");
     expect(headerLinks[0]).toHaveAttribute("href", "/");
+    const navigation = within(header).getByRole("navigation", { name: "Site navigation" });
+    expect(headerLinks[1]!.closest("nav")).toBe(navigation);
+    expect(headerLinks[1]).toHaveAttribute("href", "/account-data");
   });
 });
