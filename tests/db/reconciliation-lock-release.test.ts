@@ -189,10 +189,13 @@ describe("a reconciliation whose advisory unlock fails", () => {
     await workSql?.end();
     await unlockAllSql?.end();
     await discardAllSql?.end();
-    // Forced, because postgres.js (3.4.9) does not clear a connection's in-flight query when that
-    // query dies with the socket, and `Connection.end()` waits for a connection with a query still
-    // in flight, so an ordinary `end()` on the client whose session was terminated never settles.
-    // Filed as Overflow issue 150; this is the only client in the repository that meets it.
+    // No longer forced by the dependency: patches/postgres@3.4.9.patch clears a connection's
+    // in-flight query when its socket dies (`query = null` in `error()`) — the defect Overflow
+    // issue 150 filed — so an ordinary `end()` settles on this client, and issue 150 is
+    // settled by the patch. The forced shape stays anyway, as a bound that does not lean on
+    // that repair: `end({ timeout: 0 })` arms `destroy()`, which terminates every connection
+    // and rejects queued work outright, because patches/README.md records orderings the patch
+    // does not cover.
     await terminatingSql?.end({ timeout: 0 });
     await laterCoordinationSql?.end();
     await admin?.end();
