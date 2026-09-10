@@ -15,7 +15,7 @@ tree="${OVERFLOW_DEPLOY_TREE:-/srv/overflow}"
 env_file="${OVERFLOW_DEPLOY_ENV_FILE:-/etc/overflow/overflow.env}"
 lock="${OVERFLOW_DEPLOY_LOCK:-/run/overflow-deploy.lock}"
 unit="${OVERFLOW_DEPLOY_UNIT:-overflow.service}"
-url="${OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/}"
+url="${OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/api/readiness}"
 log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 
 # The CI gate: refuse to ship a SHA that main's required checks have not
