@@ -205,6 +205,36 @@ describe("GET /api/settlements/[id]", () => {
     expect(correctionsService.listRequestsForSettlement).not.toHaveBeenCalled();
   });
 
+  it("answers a malformed settlement id with the 404 not-found refusal, before the query runs", async () => {
+    const dependencies = proofDependencies();
+
+    const response = await createSettlementProofGetHandler(dependencies)(
+      settlementProofRequest(),
+      proofContext("not-a-uuid"),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "NOT_FOUND", message: "Settlement proof is not available." },
+    });
+    expect(dependencies.getSettlementProof).not.toHaveBeenCalled();
+  });
+
+  it.each(["123", "{not-a-uuid}"])("answers the malformed settlement id %s with the 404 not-found refusal, before the query runs", async (malformedId) => {
+    const dependencies = proofDependencies();
+
+    const response = await createSettlementProofGetHandler(dependencies)(
+      settlementProofRequest(),
+      proofContext(malformedId),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "NOT_FOUND", message: "Settlement proof is not available." },
+    });
+    expect(dependencies.getSettlementProof).not.toHaveBeenCalled();
+  });
+
   it("answers an anonymous request with the 401 sign-in refusal, before the query runs", async () => {
     const dependencies = proofDependencies({
       getSession: vi.fn().mockResolvedValue(null),
