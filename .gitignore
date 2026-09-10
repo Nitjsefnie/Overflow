@@ -309,15 +309,6 @@ tests/webhooks/*
 
 !docs/
 docs/*
-!docs/superpowers/
-docs/superpowers/*
-!docs/superpowers/plans/
-docs/superpowers/plans/*
-!docs/superpowers/plans/*.md
-!docs/superpowers/specs/
-docs/superpowers/specs/*
-!docs/superpowers/specs/*.md
-!docs/superpowers/specs/*.html
 
 !docs/reviews/
 docs/reviews/*
