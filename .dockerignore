@@ -1,0 +1,8 @@
+.git
+node_modules
+.next
+.next-release-*
+.env
+.env.*
+!.env.example
+*.log

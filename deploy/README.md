@@ -14,6 +14,9 @@ commands are run as root. Everything except the running service is root-owned:
 the service account can read the code it executes and cannot write it, so
 code execution inside the web process cannot rewrite what the next restart runs.
 
+The optional container route — an alternative to section 10's host procedure,
+not used in production on this host — lives in [container.md](container.md).
+
 Values used throughout: deployment tree `/srv/overflow`, service account
 `overflow:overflow`, Node 24.17.0 at `/usr/local/lib/nodejs/node-v24.17.0`,
 secrets in `/etc/overflow/overflow.env`, listener `127.0.0.1:3000` behind nginx.
