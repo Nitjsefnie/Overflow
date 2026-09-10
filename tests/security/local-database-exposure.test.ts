@@ -141,6 +141,18 @@ describe("local development database exposure", () => {
     expect(findings).toEqual([]);
   });
 
+  // The loopback case above judges whatever host_ip Compose resolves, so the
+  // classifier it calls is pinned directly on the spellings Compose accepts:
+  // an IPv4-mapped address is loopback exactly when its embedded IPv4 tail is,
+  // whether that tail is written dotted ("::ffff:127.0.0.2") or hex
+  // ("::ffff:7f00:2"). The negative side keeps a constant-true classifier from
+  // passing.
+  it("classifies loopback addresses, including IPv4-mapped spellings", () => {
+    expect(["127.0.0.1", "::1", "::ffff:127.0.0.2", "::ffff:7f00:2"].map(isLoopbackAddress))
+      .toEqual([true, true, true, true]);
+    expect(["0.0.0.0", "::", "::ffff:0.0.0.0"].map(isLoopbackAddress)).toEqual([false, false, false]);
+  });
+
   it("keeps the nonproduction credentials on the database service", async () => {
     const resolved = await resolvedComposeDocument();
     expect(resolved.services?.[DATABASE_SERVICE]?.environment).toMatchObject(NONPRODUCTION_CREDENTIALS);
@@ -182,10 +194,12 @@ function portCovers(spec: string, port: number): boolean {
   return Number(range[1]) <= port && port <= Number(range[2]);
 }
 
-// Docker accepts loopback in any of these spellings; `localhost` and octal
-// forms such as `0177.0.0.1` it rejects outright, so the classifier has no
-// reason to understand them. Compose's resolved output carries the address as
-// written, so every spelling Compose accepts must classify correctly here.
+// Compose resolves host_ip as written, so the classifier must read every
+// spelling Docker accepts: a loopback bind is a 127/8 dotted quad, or any IPv6
+// spelling of ::1 — compressed, full-form, or IPv4-mapped with the mapped
+// address written dotted or hex, which are the same address. `localhost` and
+// octal forms such as `0177.0.0.1` Docker rejects outright, so the classifier
+// has no reason to understand them.
 function isLoopbackAddress(address: string): boolean {
   let ip = address;
   if (ip.startsWith("[") && ip.endsWith("]")) ip = ip.slice(1, -1);
@@ -210,6 +224,19 @@ function expandIpv6(address: string): string | null {
   if (parts.length > 2) return null;
   const head = parts[0] === "" ? [] : parts[0].split(":");
   const tail = parts.length === 2 ? (parts[1] === "" ? [] : parts[1].split(":")) : [];
+  // An embedded IPv4 tail ("::ffff:127.0.0.2") is valid only as the final 32
+  // bits, so it expands into the last two hex groups — the same address as its
+  // hex spelling "::ffff:7f00:2".
+  const last = tail[tail.length - 1];
+  if (last !== undefined && net.isIPv4(last)) {
+    const quad = last.split(".").map(Number);
+    tail.splice(
+      tail.length - 1,
+      1,
+      ((quad[0] << 8) | quad[1]).toString(16).padStart(4, "0"),
+      ((quad[2] << 8) | quad[3]).toString(16).padStart(4, "0"),
+    );
+  }
   const fill = 8 - head.length - tail.length;
   if (fill < 0) return null;
   const groups = [...head, ...Array<string>(fill).fill("0"), ...tail];
