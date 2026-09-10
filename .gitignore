@@ -245,6 +245,9 @@ tests/api/*
 !tests/auth/
 tests/auth/*
 !tests/auth/*.ts
+!tests/ci/
+tests/ci/*
+!tests/ci/*.ts
 !tests/calibration/
 tests/calibration/*
 !tests/calibration/*.ts
