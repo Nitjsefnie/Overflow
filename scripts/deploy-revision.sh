@@ -118,7 +118,7 @@ case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
     ;;
 esac
 # Redundant-deploy skip: the serving release records the exact commit it was
-# built from (REVISION, written after the build), so a pull that left HEAD at
+# built from (REVISION, written only after the deploy verifies), so a pull that left HEAD at
 # that commit means production already serves this source. A match also means
 # the migrations for HEAD are applied: the run that built this release ran
 # pnpm db:migrate at the same commit, immediately before building it. A
