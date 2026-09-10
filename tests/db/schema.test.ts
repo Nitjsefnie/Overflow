@@ -227,6 +227,7 @@ describe("initial PostgreSQL materialization", () => {
       "033_self_work_calibrations_issue_unique.sql",
       "034_repository_unregistration.sql",
       "035_moderation_credit_adjustments.sql",
+      "036_override_reconciliation_reason.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
