@@ -23,6 +23,10 @@ const compose = parse(
 ) as ComposeFile;
 
 describe("docker-compose.yml", () => {
+  it("defines no service beyond app and postgres", () => {
+    expect(Object.keys(compose.services).sort()).toEqual(["app", "postgres"]);
+  });
+
   it("starts the app service only when the app profile is requested", () => {
     const { profiles } = compose.services.app;
     expect(profiles).toContain("app");
@@ -58,5 +62,9 @@ describe("docker-compose.yml", () => {
 
   it("still defines the overflow-postgres-data volume", () => {
     expect(compose.volumes).toHaveProperty("overflow-postgres-data");
+  });
+
+  it("defines no volume beyond overflow-postgres-data", () => {
+    expect(Object.keys(compose.volumes).sort()).toEqual(["overflow-postgres-data"]);
   });
 });
