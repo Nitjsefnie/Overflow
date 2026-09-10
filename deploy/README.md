@@ -591,10 +591,12 @@ commit; ignored operational files (`.next`, releases, `node_modules`,
 generated files) do not block — the required-checks gate that must bless the
 exact deployed SHA before anything is installed (below), the copy-import
 install, the environment load, `db:migrate`, a
-grammar-named release directory created with a collision-aborting `mkdir` and
-recording the exact source SHA in a `REVISION` file inside the release,
-generated-config preparation, the build, the ownership reset excluding the
-serving cache, the new cache handover to the service account, the conditional
+grammar-named release directory created with a collision-aborting `mkdir`,
+generated-config preparation, the build, after whose clean step — it wipes the
+release directory, everything outside `cache|dev|lock|trace` — the exact source
+SHA is recorded in a `REVISION` file inside the release, the ownership reset
+excluding the serving cache, the new cache handover to the service account, the
+conditional
 switch, the restart, the `is-active` and readiness-endpoint verification, the webhook
 upgrade written to a retained JSONL log with a nonzero upgrade exiting the
 script nonzero, the retention listing, and the prune via `release:prune --keep 3`.
