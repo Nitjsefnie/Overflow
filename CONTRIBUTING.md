@@ -138,8 +138,8 @@ corrected.
 CI is one workflow with one job. `.github/workflows/ci.yml` defines `verify`,
 which runs on pushes to `main`, on pull requests targeting `main`, and on
 manual dispatch. It stands up PostgreSQL 17 as a service, installs the pinned
-toolchain, and then runs four commands after applying the migrations. Run the
-same five locally, in this order:
+toolchain, and then runs five commands after applying the migrations. Run the
+same six locally, in this order:
 
 ```bash
 pnpm db:migrate
@@ -147,12 +147,27 @@ pnpm test --run
 pnpm lint
 pnpm typecheck
 pnpm build
+node scripts/check-page-geometry.mjs
 ```
 
 The order is CI's, and it is the useful one: the migration runs first because
 the database suites migrate a container of their own and a broken migration
-should fail before the whole suite does, and the build runs last because it is
-the slowest and the least likely to tell you something the other three did not.
+should fail before the whole suite does, and the build runs after the static
+checks because it is the slowest and the least likely to tell you something
+the other three did not.
+
+The geometry check runs after the build because it measures the build's
+output. It needs a Chrome/Chromium binary — `LAYOUT_CHECK_CHROME` overrides
+discovery; otherwise `google-chrome-stable`, `google-chrome`, `chromium` or
+`chromium-browser` on `PATH` and `/usr/bin` — and, when it spawns its own
+server, `DATABASE_URL` from the environment or a repo-root `.env` file.
+`--base-url URL` measures an already-running server instead. Refusals exit 2;
+measured failures exit 1.
+
+On pull requests the job ends with a Base freshness step that fails when the
+base the run built against is no longer `main`'s tip, so a green run against a
+stale base fails — update the branch to re-run the checks against current
+`main`.
 
 Use `pnpm test --run` — the same command CI runs — for anything you are going
 to report. `--run` is what pins a single non-interactive pass regardless of how

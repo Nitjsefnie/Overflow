@@ -390,13 +390,14 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    pnpm dev
    ```
 
-Useful verification commands:
+Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL`):
 
 ```bash
 pnpm test --run
 pnpm lint
 pnpm typecheck
 pnpm build
+node scripts/check-page-geometry.mjs
 ```
 
 `CONTRIBUTING.md` covers the rest of the development surface, including the conventions that reject work silently.
@@ -494,7 +495,7 @@ does. The startup sweep reconciles evidence but does not upgrade subscriptions.
 
 ## Continuous integration
 
-GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.
+GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`, finishing with the page-geometry check, `node scripts/check-page-geometry.mjs`, against the built output. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.
 
 ## Environment reference
 
