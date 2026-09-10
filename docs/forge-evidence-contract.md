@@ -13,8 +13,11 @@ sweep verifying all 86 citation checks, fresh evidence fetches (the REST issues 
 one live issue object, the live GraphQL schema dump, and REST entity sources), and an
 adversarial verification that refuted this contract's first Decision 2 — replaced
 below with a zero-round definition grounded in what GitLab verifiably exposes. The
-item-16 live leg is preserved verbatim: raw response `state_reason_live.json`,
-2026-09-10, filed alongside the probe's artifacts.
+item-16 artifact trail is preserved: raw response `state_reason_live.json`,
+2026-09-10, filed alongside the probe's artifacts. Preserved first and re-read with
+a literal key check, that artifact refuted this document's own first description of
+the item-16 live leg — the regrade below (five consistent negatives) rests on the
+artifact, not the description.
 
 Every capability claim in this document matches that probe. Nothing here upgrades a
 DOC verdict to LIVE, and nothing asserts what the probe marks UNVERIFIED.
@@ -81,7 +84,7 @@ one.
 | 13 | Sponsor attribution predicate: numeric actor id wins, login only when no id reported | `src/lib/fold/repository-fold.ts:1228-1234` | Numeric ids embedded on every actor object | LIVE-VERIFIED — with the bot-attribution semantics caveat (gap 9) | Public |
 | 14 | Merged closing PR selection: MERGED, valid timestamps, `finalCommitAt <= mergedAt`, 40-hex `mergeCommitOid`, earliest merge wins | `src/lib/fold/repository-fold.ts:750-776` (oid regex `:761`) → `pull_requests` merge columns (007:95-107) | MR object: `state=merged`, `merged_at`, `merge_commit_sha` | LIVE-VERIFIED — 40-hex check excludes SHA-256 repositories (gap 2) | Public |
 | 15 | Closing-issues linkage (PR ↔ issues) | `src/lib/github/client.ts:193-210` (`closingIssuesReferences`), used `src/lib/fold/reconcile.ts:282-289` → `pull_request_issues` (003:21) | `GET /projects/:id/issues/:iid/closed_by` and `GET /projects/:id/merge_requests/:iid/closes_issues` — both directions, live-verified, empty-array-is-evidence | LIVE-VERIFIED | Public |
-| 16 | Issue state (CLOSED) and `stateReason` | `src/lib/fold/repository-fold.ts:389-391,451-478` (`NOT_PLANNED` gate `:469`) | Issue `state` (opened/closed) live-verified. A REST `state_reason` field DOES exist on issue objects — live-verified 2026-09-10, raw response preserved (`state_reason_live.json`, alongside the probe's artifacts; value null on a plain close, alongside `duplicated_to_id`) — but it is absent from `doc/api/issues.md@master`, untyped in the live GraphQL schema dump (no `stateReason` field, no `DUPLICATED` value anywhere), and its value vocabulary is UNVERIFIED | PARTIAL — state and the `state_reason` field supplied; a GitHub `NOT_PLANNED` equivalent genuinely absent (gap 1) | Public |
+| 16 | Issue state (CLOSED) and `stateReason` | `src/lib/fold/repository-fold.ts:389-391,451-478` (`NOT_PLANNED` gate `:469`) | Issue `state` (opened/closed) live-verified. A REST `state_reason` field was observed on NO probed surface — five preserved artifacts agree on its absence: the live issue object (`state_reason_live.json`), the probe's issue-list responses (r17/r18/r24), the master REST entity sources (`lib/api/entities/issue.rb`, `issue_basic.rb`), `doc/api/issues.md@master`, and the live GraphQL schema dump (no `stateReason`, no `DUPLICATED` value anywhere). A duplicate-close link, `closed_as_duplicate_of`, is live-observed null in the issue's `_links`; its semantics are UNVERIFIED. Field existence: NOT SUPPLIED on probed surfaces / UNVERIFIED beyond probe | PARTIAL — state supplied; the `state_reason` leg NOT SUPPLIED on every probed surface; a GitHub `NOT_PLANNED` equivalent genuinely absent (gap 1) | Public |
 | 17 | Review rounds (deduction) — definition in section 4 | `src/lib/fold/repository-fold.ts:483,1073-1103`, `src/lib/domain/settlement.ts:41,58-60` → `settlements.review_rounds` (001:102), `review_rounds` rows (001:85-92) | Approvals read live (`approved_by` + `approved_at`, Free and Ultimate); retraction observable only via webhook or system notes — no append-only REST approval-event endpoint; `approved_by` is a mutable snapshot | PARTIAL — approvals state public; the retraction event stream is webhook-or-notes only; `review_rounds.github_review_id` cannot be populated | Public (approvals); webhook secret + maintainer setup, or read_api PAT (system notes), for retraction |
 | 18 | Raw unified diff of the merged PR, hashed as settlement proof | `src/lib/github/client.ts:358-367` (REST diff media type), hash at `repository-fold.ts:484,1190-1192` → `proof_sha256` (001:104, 003:44) | Diff endpoint not probed; `diff_refs` present on the MR object. Diff representation differs between forges regardless. | UNVERIFIED — and proof hashes are never comparable cross-forge (gap 12) | — |
 | 19 | Issue raw view ordering (webhook vs fold clocks) | `src/lib/fold/postgres-store.ts:1532` (`acceptsRawView`) → `issues.github_updated_at` (027:3) | Issue `updated_at` live-verified on issue objects | LIVE-VERIFIED | Public |
@@ -268,12 +271,15 @@ Numbered for reference from later steps.
 1. **A GitHub `NOT_PLANNED` close reason has no GitLab equivalent.** The not-planned
    gate (`repository-fold.ts:469`, string constant `NOT_PLANNED`) is
    GitHub-vocabulary and needs a forge-neutral reformulation in later steps. The
-   blanket "no state-reason" claim is dead: a REST `state_reason` field exists on
-   GitLab issue objects (live-verified 2026-09-10; value null on a plain close,
-   alongside `duplicated_to_id`) — but it is absent from
-   `doc/api/issues.md@master`, untyped in the live GraphQL schema dump, its value
-   vocabulary is UNVERIFIED, and no verified value carries the not-planned
-   semantics. The unwritable-closure prose ("No merged GitHub GraphQL closing pull
+   conclusion rests on five consistent negatives, not one unpreserved description:
+   a REST `state_reason` field appears on NO probed surface — `state_reason_live.json`
+   (the live issue object), the probe's issue-list responses (r17/r18/r24), the
+   master REST entity sources (`lib/api/entities/issue.rb`, `issue_basic.rb`),
+   `doc/api/issues.md@master`, and the live GraphQL schema dump all agree on its
+   absence — so field existence grades NOT SUPPLIED on probed surfaces and
+   UNVERIFIED beyond the probe. A duplicate-close link, `closed_as_duplicate_of`,
+   is live-observed null in the issue's `_links`; its semantics are UNVERIFIED.
+   The unwritable-closure prose ("No merged GitHub GraphQL closing pull
    request was found.") bakes GitHub into moderator-facing text.
 2. **The 40-hex merge-commit CHECK and the fold regex exclude SHA-256
    repositories.** `db/migrations/007:105-107` requires `^[0-9a-f]{40}$` and the
@@ -333,12 +339,15 @@ The brief for this step said so, and the probe returned several. Listed as
 first-class outcomes — these are what GitLab cannot supply, or supplies only
 partially, and any later step designs around them rather than discovering them:
 
-- **No not-planned close reason.** The REST issue object DOES carry a `state_reason`
-  field (live-verified, null on a plain close) — this contract's first draft graded
-  it NOT SUPPLIED without probe evidence, and that blanket claim is corrected here —
-  but the field is undocumented in the current REST doc, untyped in the GraphQL
-  schema, its value vocabulary is UNVERIFIED, and no verified value expresses
-  GitHub's `NOT_PLANNED`. The not-planned gate stays unportable as written (gap 1).
+- **No not-planned close reason.** A REST `state_reason` field appears on NO probed
+  surface — five preserved artifacts agree on its absence (`state_reason_live.json`,
+  the probe's issue-list responses r17/r18/r24, the master REST entity sources,
+  `doc/api/issues.md@master`, the live GraphQL schema dump) — so field existence
+  grades NOT SUPPLIED on probed surfaces / UNVERIFIED beyond the probe. This
+  contract's first draft described the field as live-observed and was regraded
+  against its own preserved artifact; the not-planned conclusion is STRONGER for
+  it: it rests on five consistent negatives, not one unpreserved description. The
+  not-planned gate stays unportable as written (gap 1).
 - **No append-only REST approval-event endpoint.** `approved_by` is a mutable
   snapshot; retraction is observable only through webhooks (structured,
   `approval`/`unapproval` actions) or system notes (auth-gated, locale-fragile).
