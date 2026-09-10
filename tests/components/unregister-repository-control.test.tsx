@@ -46,6 +46,28 @@ describe("unregister repository control", () => {
     expect(screen.queryByRole("button", { name: "Confirm unregister" })).toBeNull();
   });
 
+  it("moves focus onto Keep registered when the confirm step opens", () => {
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+
+    // The swap happens under the focused control, so the focus position is
+    // the announcement: it must land on the non-destructive choice (WAI-ARIA
+    // practice) rather than fall back to <body> in front of a destructive
+    // confirmation.
+    expect(screen.getByRole("button", { name: "Keep registered" })).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("returns focus to the Unregister trigger when the confirm step is declined", () => {
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep registered" }));
+
+    expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
+  });
+
   it("fires DELETE /api/repositories with the repository reference on confirm", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(
       { repository: { ownerName: "co-op/harbour" }, webhookDeleted: true, alreadyUnregistered: false },
