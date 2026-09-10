@@ -1467,6 +1467,18 @@ export async function claimGitHubIdentity(
     throw new Error("GitHub user id must be a positive integer.");
   }
   await sql.begin(async (transaction) => {
+    // Fence against concurrent fold publications (issue 472): a publication takes
+    // its repository's registered_repositories row lock as its own first statement,
+    // so claiming under every such row lock orders a claim against every
+    // publication transaction — one committing between the publication's identity
+    // re-resolution and its materialization writes can no longer be overwritten by
+    // the stale snapshot. The claim's write scope is every repository, so the
+    // fence's scope is every repository; row locks release at COMMIT/ROLLBACK, so
+    // unlike the per-repository advisory locks there is no session-lock pool
+    // hazard. Ordered by id so two concurrent claims serialize without deadlock;
+    // a publication takes exactly its one row and waits on nothing else, so no
+    // cycle exists with concurrent publications either.
+    await transaction`select id from registered_repositories order by id for update`;
     const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
       select
         settlements.id,
@@ -1544,11 +1556,11 @@ export async function claimGitHubIdentity(
  * against current data.
  *
  * The resolution is only as current as this transaction's users-table read: a
- * claim committing after that read but before the settlement writes below can
- * still be overwritten, because claimGitHubIdentity takes neither the
- * per-repository advisory lock nor the registered_repositories row lock this
- * publication holds. That window is pre-existing in mechanism and self-healing
- * — the next fresh fold resolves the identity again.
+ * claim committing between that read and the materialization writes below
+ * would be overwritten by those writes. claimGitHubIdentity fences against
+ * this by taking every registered_repositories row lock, in id order, as its
+ * own first statement — a claim waits here for this publication to commit
+ * before it applies, so this window is closed rather than merely self-healing.
  *
  * Returns a NEW fold — callers retain and reuse fold objects across runs, so
  * the input is never mutated.
