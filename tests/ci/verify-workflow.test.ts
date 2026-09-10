@@ -89,3 +89,52 @@ describe("the verify workflow's page-geometry step", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * Concurrency is the difference between a superseded pull request branch run
+ * (fine to cancel) and a merged SHA's run (never fine): the deploy gate in
+ * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
+ * and a run cancelled by the next push to main concludes `cancelled`, which the
+ * gate refuses. A push to main carries no pull_request number, so the group
+ * falls back to the ref and every main push shares one group; a literal
+ * `cancel-in-progress: true` then cancelled the previous merged SHA's run on
+ * every merge (issue 474). The group stays per-pull-request with a ref
+ * fallback, and cancellation itself is gated on the event being a pull request.
+ *
+ * Assertions are made on the parsed YAML data (workflow.concurrency), never on
+ * the raw bytes, so reformatting the block does not disturb them and a change
+ * to either key fails loudly here instead of quietly changing what CI cancels.
+ */
+describe("the verify workflow's concurrency group", () => {
+  let concurrency: {
+    group?: unknown;
+    "cancel-in-progress"?: unknown;
+  } = {};
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    const workflow = parse(source) as {
+      concurrency?: { group?: unknown; "cancel-in-progress"?: unknown };
+    };
+
+    concurrency = workflow.concurrency ?? {};
+  });
+
+  it("scopes the group per pull request, falling back to the ref", () => {
+    expect(
+      concurrency.group,
+      "the concurrency group must be ci-${{ github.event.pull_request.number || github.ref }} — per-pull-request, falling back to the ref for push and workflow_dispatch events",
+    ).toBe("ci-${{ github.event.pull_request.number || github.ref }}");
+  });
+
+  it("cancels in-progress runs only when the event is a pull request", () => {
+    expect(
+      typeof concurrency["cancel-in-progress"],
+      "cancel-in-progress must be a string holding the event expression, not a literal boolean",
+    ).toBe("string");
+    expect(
+      concurrency["cancel-in-progress"],
+      "cancel-in-progress must be the expression ${{ github.event_name == 'pull_request' }} — a literal true also cancels main pushes, and a cancelled check makes the deploy gate refuse the merged SHA",
+    ).toBe("${{ github.event_name == 'pull_request' }}");
+  });
+});
