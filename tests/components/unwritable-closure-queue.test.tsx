@@ -135,9 +135,9 @@ function expectExplanationAboveQueue(section: HTMLElement, queueTag: "P" | "OL")
 /**
  * A fallback alert communicates only what a reader can see: every element
  * inside it that carries text is visible, and the visible text carries at
- * least one non-format character once trimmed — whitespace-only text and
- * zero-width (`Cf`-only) text both fail, so the alert cannot read as blank
- * to a person while satisfying either shape of "nonblank" check.
+ * least one character that is neither a format character nor whitespace —
+ * so any text that strips to nothing (whitespace-only, zero-width-only, or
+ * any mix of the two in any positions) fails.
  */
 function expectReaderVisibleAlert(alert: HTMLElement): void {
   expect(alert).toBeVisible();
@@ -146,7 +146,7 @@ function expectReaderVisibleAlert(alert: HTMLElement): void {
       expect(element, "a text-bearing element inside the alert renders visibly").toBeVisible();
     }
   }
-  expect(visibleText(alert).trim(), "the alert's visible text carries a non-format character").toMatch(/\P{Cf}/u);
+  expect(visibleText(alert).replace(/\p{Cf}|\s/gu, ""), "the alert's visible text carries a character a reader can see").not.toBe("");
 }
 
 function hasNonblankText(element: Element): boolean {
@@ -157,9 +157,11 @@ function hasNonblankText(element: Element): boolean {
 
 /**
  * The text a reader sees: every text node whose element chain is visible.
- * Descends only into elements jest-dom's own predicate would call visible
+ * Descends only into elements a parallel predicate would call visible
  * (display, visibility, opacity, `hidden`, `aria-hidden`, each level checked
- * on the way down), so what this returns is exactly the visible text.
+ * on the way down) — it mirrors jest-dom's `toBeVisible` rather than calling
+ * it, so the per-element assertions above stay the authority on visibility
+ * and this walk only scopes the text they leave visible.
  */
 function visibleText(element: Element): string {
   let text = "";
