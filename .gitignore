@@ -326,6 +326,8 @@ tests/webhooks/*
 
 !docs/
 docs/*
+!docs/forge-evidence-contract.md
+!docs/forge-evidence-contract.html
 
 !docs/reviews/
 docs/reviews/*
