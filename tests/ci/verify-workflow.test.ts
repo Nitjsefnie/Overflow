@@ -8,7 +8,9 @@ import { parse } from "yaml";
  * The parsed shape of a verify-job step this suite reads. Steps this suite does
  * not reason about (checkout, setup-node) carry only `uses`, which is why every
  * field is optional. `if` and `continue-on-error` are pinned because either one
- * can leave the step in the file while CI stops gating on it.
+ * can leave the step in the file while CI stops gating on it. `env` is pinned
+ * for the freshness step because a rewired input silently voids the
+ * certificate it issues.
  */
 type WorkflowStep = {
   name?: string;
@@ -16,6 +18,7 @@ type WorkflowStep = {
   uses?: string;
   if?: unknown;
   "continue-on-error"?: unknown;
+  env?: Record<string, string | undefined>;
 };
 
 /**
@@ -224,13 +227,13 @@ describe("the required workflows' base-freshness step", () => {
       "the actionlint job must contain the Base freshness step",
     ).toBeDefined();
     expect(
-      String(verifyStep.if),
-      "Base freshness must carry an if: referencing the pull_request event — push and workflow_dispatch runs test main itself and must skip the gate",
-    ).toMatch("pull_request");
+      verifyStep.if,
+      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request' }} — a substring pin also accepts a sibling event such as pull_request_target, which these workflows never trigger, so the gate would silently stop running",
+    ).toBe("${{ github.event_name == 'pull_request' }}");
     expect(
-      String(actionlintStep.if),
-      "Base freshness must carry an if: referencing the pull_request event — push and workflow_dispatch runs test main itself and must skip the gate",
-    ).toMatch("pull_request");
+      actionlintStep.if,
+      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request' }} — a substring pin also accepts a sibling event such as pull_request_target, which these workflows never trigger, so the gate would silently stop running",
+    ).toBe("${{ github.event_name == 'pull_request' }}");
   });
 
   it("does not tolerate its own failure", () => {
@@ -277,5 +280,32 @@ describe("the required workflows' base-freshness step", () => {
       actionlintStep.run?.includes("${{"),
       "the run block must reference env names, never ${{ }} interpolation — untrusted-input interpolation in run: blocks is exactly what zizmor flags",
     ).toBe(false);
+  });
+
+  it("wires its inputs from the pull_request base through env", () => {
+    const [verifyStep] = freshness(verifySteps);
+    const [actionlintStep] = freshness(actionlintSteps);
+
+    expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
+    expect(
+      actionlintStep,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeDefined();
+
+    const expectedEnv = {
+      GH_TOKEN: "${{ github.token }}",
+      REPO_SLUG: "${{ github.repository }}",
+      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      BASE_REF: "${{ github.event.pull_request.base.ref }}",
+    };
+
+    expect(
+      verifyStep.env,
+      "Base freshness must take exactly these four inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source and the freshness certificate is meaningless",
+    ).toEqual(expectedEnv);
+    expect(
+      actionlintStep.env,
+      "Base freshness must take exactly these four inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source and the freshness certificate is meaningless",
+    ).toEqual(expectedEnv);
   });
 });
