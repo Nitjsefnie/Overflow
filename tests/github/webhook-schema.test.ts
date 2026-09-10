@@ -62,14 +62,14 @@ describe("webhook delivery classification", () => {
     })).toEqual({ status: "ignored" });
   });
 
-  it("classifies a recognized-but-unmaterialized pull_request action as ignored, not invalid", () => {
-    // ready_for_review arrives on a webhook subscribed event-grained to
-    // pull_request, which cannot unsubscribe per-action. It is a deliberate
-    // drop, not malformed traffic: the parser must answer ignored so the route
-    // returns 2xx and GitHub's delivery log does not turn red on valid
+  it.each(["ready_for_review", "converted_to_draft"])("classifies recognized-but-unmaterialized pull_request action %s as ignored, not invalid", (action) => {
+    // These actions arrive on a webhook subscribed event-grained to
+    // pull_request, which cannot unsubscribe per-action. They are deliberate
+    // drops, not malformed traffic: the parser must answer ignored so the
+    // route returns 2xx and GitHub's delivery log does not turn red on valid
     // deliveries Overflow chooses not to materialize.
     expect(parseGitHubWebhookDeliveryDetailed("pull_request", "delivery", {
-      action: "ready_for_review",
+      action,
       repository: { id: 42, full_name: "octo/example" },
       pull_request: { id: 201, number: 11 },
     })).toEqual({ status: "ignored" });
