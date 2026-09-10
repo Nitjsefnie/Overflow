@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type UnregisterRepositoryControlProps = {
   /** The stored owner/name path the DELETE submission carries. */
@@ -26,6 +26,32 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
   const [confirming, setConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const keepRegisteredRef = useRef<HTMLButtonElement>(null);
+  const wasConfirmingRef = useRef(false);
+
+  /**
+   * A confirm swap that happens under the user's focus is silent to assistive
+   * tech: the focused control is what a screen reader announces and where a
+   * keyboard user's place is. Move focus onto the non-destructive choice when
+   * the confirmation opens (WAI-ARIA practice for destructive confirmations)
+   * and back onto the trigger when it is declined. The previous-value guard
+   * keeps the effect off the initial mount — and off StrictMode's second
+   * invocation of it — so rendering the control never steals focus; after a
+   * confirmed submit the declined branch targets a trigger that isSubmitting
+   * has disabled, where focus() is a silent no-op.
+   */
+  useEffect(() => {
+    if (confirming === wasConfirmingRef.current) {
+      return;
+    }
+    wasConfirmingRef.current = confirming;
+    if (confirming) {
+      keepRegisteredRef.current?.focus();
+    } else {
+      triggerRef.current?.focus();
+    }
+  }, [confirming]);
 
   async function submit() {
     setFeedback(null);
@@ -76,6 +102,7 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
             Confirm unregister
           </button>
           <button
+            ref={keepRegisteredRef}
             className="quiet-button"
             type="button"
             disabled={isSubmitting}
@@ -86,6 +113,7 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
         </>
       ) : (
         <button
+          ref={triggerRef}
           className="quiet-button"
           type="button"
           disabled={isSubmitting}
