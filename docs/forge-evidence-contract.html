@@ -333,7 +333,9 @@
         and nothing asserts what the probe marks UNVERIFIED. Fix round 1: independent
         citation review plus a mechanical 86-check sweep, fresh evidence fetches, and an
         adversarial verification that refuted the first Decision 2 — now replaced with a
-        zero-round definition grounded in what GitLab verifiably exposes. This document
+        zero-round definition grounded in what GitLab verifiably exposes. The item-16 live leg
+        is preserved verbatim: raw response <code>state_reason_live.json</code>, 2026-09-10,
+        filed alongside the probe's artifacts. This document
         decides nothing about schema or code — it is the contract a human signs off before
         later steps design against it.
       </div>
@@ -545,7 +547,7 @@
             <td class="num">16</td>
             <td class="slate">Issue state (CLOSED) and <code>stateReason</code></td>
             <td><span class="gh">repository-fold.ts:389-391,451-478</span> (<code>NOT_PLANNED</code> gate <span class="gh">:469</span>)</td>
-            <td>Issue <code>state</code> (opened/closed) live-verified. A REST <code>state_reason</code> field DOES exist on issue objects — live-verified 2026-09-10 (value null on a plain close, alongside <code>duplicated_to_id</code>) — but it is absent from <code>doc/api/issues.md@master</code>, untyped in the live GraphQL schema dump (no <code>stateReason</code> field, no <code>DUPLICATED</code> value anywhere), and its value vocabulary is UNVERIFIED</td>
+            <td>Issue <code>state</code> (opened/closed) live-verified. A REST <code>state_reason</code> field DOES exist on issue objects — live-verified 2026-09-10, raw response preserved (<code>state_reason_live.json</code>, alongside the probe's artifacts; value null on a plain close, alongside <code>duplicated_to_id</code>) — but it is absent from <code>doc/api/issues.md@master</code>, untyped in the live GraphQL schema dump (no <code>stateReason</code> field, no <code>DUPLICATED</code> value anywhere), and its value vocabulary is UNVERIFIED</td>
             <td><span class="vchip part">PARTIAL</span><br>state and the <code>state_reason</code> field supplied; a GitHub <code>NOT_PLANNED</code> equivalent genuinely absent (gap 1) &middot; Public</td>
           </tr>
           <tr>
@@ -768,9 +770,11 @@
           probe) — the action itself conflates the two. System-initiated resets
           (<code>approvals_reset_on_push</code>) are distinguishable in the payload
           (<code>system: true</code>), but reset-on-push is a Premium/Ultimate feature enabled by
-          default (probe tier notes), and the adversarial verification of this round confirmed
-          live that the reset's payload <code>user</code> is the PUSHER and that the reset path
-          writes no system note at all. REST system notes, where they exist, are prose bodies —
+          default &mdash; attributed to the approvals-settings doc live-fetched during this
+          round's adversarial verification, not to the probe's tier notes &mdash; and the
+          grounds that the reset's payload <code>user</code> is the PUSHER and that the reset
+          path writes no system note at all are DOC-VERIFIED the same way (fetched webhook doc +
+          source), not observed live. REST system notes, where they exist, are prose bodies —
           and the probe's own finding stands: note text is presentation, not contract.</li>
         <li><strong>No approval-event surface carries a stable event id.</strong>
           <code>approved_by</code> is a mutable snapshot with no history (probe); a webhook
