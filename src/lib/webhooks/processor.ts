@@ -45,12 +45,16 @@ export async function processWebhook(
     }
     const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
     return { status: markedProcessed ? "PROCESSED" : "DUPLICATE" };
-  } catch {
+  } catch (error) {
     try {
       await dependencies.store.markFailed(delivery.deliveryId, claim.leaseToken, "Webhook processing failed.");
     } catch {
       // A stale pending lease remains reclaimable if recording its failure also fails.
     }
-    throw new Error("Webhook processing failed.");
+    // The stored message stays the sanitized constant: persisted error text is
+    // product data, and an upstream error can carry secrets (a connection
+    // string, a token in a URL). The cause belongs in the server log instead,
+    // so it rides on the thrown error for the route to report there.
+    throw new Error("Webhook processing failed.", { cause: error });
   }
 }

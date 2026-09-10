@@ -72,7 +72,19 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     try {
       await dependencies.processWebhook(delivery);
       return new Response(null, { status: 202 });
-    } catch {
+    } catch (error) {
+      // GitHub sees only an empty 503 and the store persists the sanitized
+      // constant, so this console line is the operators' one view of why a
+      // delivery failed. The message is a fixed template over the delivery's
+      // identifiers, and the error object itself rides as the second argument
+      // — Node renders its type, stack and Error.cause chain natively, and
+      // nothing user-controlled beyond those identifiers is concatenated.
+      console.error(
+        `Webhook processing failed for delivery ${delivery.deliveryId}`
+          + ` (event ${delivery.event}, repository ${delivery.repositoryFullName},`
+          + ` GitHub id ${delivery.repositoryGitHubId}).`,
+        error,
+      );
       return new Response(null, { status: 503 });
     }
   };

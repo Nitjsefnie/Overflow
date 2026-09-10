@@ -210,16 +210,22 @@ describe("GitHub webhook route", () => {
       secret,
       processWebhook: (delivery) => processWebhook(dependencies, delivery),
     });
+    // The diagnostic the route logs for this failure is pinned separately; here
+    // it is only expected noise.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(
+        request(rawPayload, {
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-unqueued",
+        }),
+      );
 
-    const response = await route(
-      request(rawPayload, {
-        "x-github-event": "pull_request",
-        "x-github-delivery": "delivery-unqueued",
-      }),
-    );
-
-    expect(response.status).toBe(503);
-    expect(markedFailed).toEqual([{ deliveryId: "delivery-unqueued", leaseToken: "lease-1" }]);
+      expect(response.status).toBe(503);
+      expect(markedFailed).toEqual([{ deliveryId: "delivery-unqueued", leaseToken: "lease-1" }]);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("rejects an invalid signature before attempting to parse malformed JSON", async () => {
@@ -267,15 +273,98 @@ describe("GitHub webhook route", () => {
       secret,
       processWebhook: vi.fn().mockRejectedValue(new Error("upstream connection refused")),
     });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(
+        request(rawPayload, {
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-4",
+        }),
+      );
 
-    const response = await route(
-      request(rawPayload, {
-        "x-github-event": "pull_request",
-        "x-github-delivery": "delivery-4",
-      }),
-    );
+      expect(response.status).toBe(503);
+    } finally {
+      logged.mockRestore();
+    }
+  });
 
-    expect(response.status).toBe(503);
+  it("reports a processing failure to the server log with the delivery identifiers and the error itself", async () => {
+    const rootCause = new Error("probe enqueue root cause");
+    const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
+    const calls: unknown[][] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    try {
+      const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+
+      const response = await route(
+        request(rawPayload, {
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-diagnostic",
+        }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("");
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = calls[0];
+      expect(message).toContain("delivery-diagnostic");
+      expect(message).toContain("pull_request");
+      expect(message).toContain("octo/example");
+      expect(message).toContain("GitHub id 42");
+      // The error object itself is the second argument, never a stringified
+      // copy: Node renders its type, stack and Error.cause chain natively, so
+      // flattening it into the message line would erase the diagnostic.
+      expect(loggedError).toBe(rootCause);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("keeps the processor's cause chain intact through the route's diagnostic", async () => {
+    const rootCause = new Error("probe enqueue root cause");
+    const dependencies: WebhookProcessorDependencies = {
+      store: {
+        applyIssueView: async () => {},
+        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        markProcessed: async () => true,
+        markFailed: async () => true,
+      },
+      enqueueReconciliation: async () => {
+        throw rootCause;
+      },
+    };
+    const calls: unknown[][] = [];
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    try {
+      const route = createGitHubWebhookPostHandler({
+        secret,
+        processWebhook: (delivery) => processWebhook(dependencies, delivery),
+      });
+
+      const response = await route(
+        request(rawPayload, {
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-cause-chain",
+        }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = calls[0];
+      expect(message).toContain("delivery-cause-chain");
+      expect(loggedError).toBeInstanceOf(Error);
+      expect((loggedError as Error).message).toBe("Webhook processing failed.");
+      // The processor's rethrow reaches the log with its cause still attached,
+      // so a composed failure names the layer that actually broke.
+      expect((loggedError as Error).cause).toBe(rootCause);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   // A delivery is rejected for size before its body is buffered, so an

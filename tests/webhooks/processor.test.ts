@@ -51,6 +51,24 @@ describe("processWebhook", () => {
     );
   });
 
+  it("preserves the root cause on the thrown error while every persisted surface stays sanitized", async () => {
+    const dependencies = processorDependencies({
+      enqueueReconciliation: vi.fn().mockRejectedValue(new Error("probe enqueue root cause")),
+    });
+
+    const error = await processWebhook(dependencies, delivery()).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Webhook processing failed.");
+    expect((error as Error).cause).toBeInstanceOf(Error);
+    expect(((error as Error).cause as Error).message).toBe("probe enqueue root cause");
+    expect(dependencies.store.markFailed).toHaveBeenCalledWith(
+      "delivery-1",
+      "lease-1",
+      "Webhook processing failed.",
+    );
+  });
+
   it("keeps a sanitized failure when persisting FAILED itself fails", async () => {
     const dependencies = processorDependencies({
       claimDelivery: claimedLease("lease-1"),
