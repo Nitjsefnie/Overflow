@@ -166,7 +166,7 @@ Test success for one submitted repository, non-admin denial, duplicate registrat
 
 - [ ] **Step 4: Implement Auth.js, registration, and the route**
 
-GitHub OAuth scopes are `read:user user:email repo admin:repo_hook`. The sign-in callback upserts GitHub identity and encrypted access token. Moderator role is assigned only from normalized `MODERATOR_GITHUB_LOGINS`. The repository route requires a session and returns structured `400`, `401`, `403`, `409`, or `502` JSON.
+The only GitHub OAuth scope is `admin:repo_hook`. The sign-in callback upserts GitHub identity and encrypted access token. Moderator role is assigned only from normalized `MODERATOR_GITHUB_USER_IDS`. The repository route requires a session and returns structured `400`, `401`, `403`, `409`, or `502` JSON.
 
 - [ ] **Step 5: Verify task gates and commit**
 
@@ -218,7 +218,7 @@ expect(foldRepository(twoReviewRoundsFixture()).settlements[0].credits).toBe(4);
 
 - [ ] **Step 4: Implement the fold, materialization, reconciliation, and auth reconciliation hook**
 
-Hash the raw diff but persist no patch/churn fields. Upsert a complete repository materialization transactionally, write reconciliation provenance/deltas, and delete derived rows absent from the authoritative snapshot. Webhooks run a scoped reconciliation rather than a second scoring path. When a matching GitHub user signs in, reconcile unclaimed rows.
+Hash the raw diff but persist no patch/churn fields. Upsert a complete repository materialization transactionally, write reconciliation provenance/deltas, and delete derived rows absent from the authoritative snapshot. Webhooks enqueue a reconciliation job on a durable queue, and the in-process worker claims and folds it. When a matching GitHub user signs in, reconcile unclaimed rows.
 
 - [ ] **Step 5: Verify full gates and commit**
 
