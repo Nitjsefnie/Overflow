@@ -76,6 +76,36 @@ describe("unregister repository control", () => {
     expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
   });
 
+  it("returns focus to the trigger once a confirmed deletion succeeds", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(Response.json(
+      { repository: { ownerName: "co-op/harbour" }, webhookDeleted: true, alreadyUnregistered: false },
+      { status: 200 },
+    )));
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
+
+    // The confirm pair unmounts while the request is in flight, so the settle
+    // must hand the reader's place back to the re-enabled trigger.
+    await screen.findByRole("status");
+    expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
+  });
+
+  it("returns focus to the trigger once a confirmed deletion fails", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(Response.json(
+      { error: { code: "NOT_FOUND", message: "No registration holds the GitHub path co-op/harbour, so there is nothing to unregister." } },
+      { status: 403 },
+    )));
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unregister co-op/harbour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
+
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
+  });
+
   it("fires DELETE /api/repositories with the repository reference on confirm", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json(
       { repository: { ownerName: "co-op/harbour" }, webhookDeleted: true, alreadyUnregistered: false },

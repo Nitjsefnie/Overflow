@@ -29,6 +29,7 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
   const triggerRef = useRef<HTMLButtonElement>(null);
   const keepRegisteredRef = useRef<HTMLButtonElement>(null);
   const wasConfirmingRef = useRef(false);
+  const wasSubmittingRef = useRef(false);
 
   /**
    * A confirm swap that happens under the user's focus is silent to assistive
@@ -39,7 +40,8 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
    * keeps the effect off the initial mount — and off StrictMode's second
    * invocation of it — so rendering the control never steals focus; after a
    * confirmed submit the declined branch targets a trigger that isSubmitting
-   * has disabled, where focus() is a silent no-op.
+   * has disabled, where focus() is a silent no-op — the settle effect below
+   * reclaims focus when that clears.
    */
   useEffect(() => {
     if (confirming === wasConfirmingRef.current) {
@@ -52,6 +54,24 @@ export function UnregisterRepositoryControl({ ownerName }: UnregisterRepositoryC
       triggerRef.current?.focus();
     }
   }, [confirming]);
+
+  /**
+   * The settle half: by the time a confirmed deletion finishes, the confirm
+   * pair has unmounted and taken the focused node with it (activeElement
+   * falls back to <body>), and the effect above could only no-op against the
+   * disabled trigger. On the isSubmitting true→false transition the trigger is
+   * enabled again, so focusing it lands — restoring the reader's place on the
+   * success and error paths alike. Same previous-value guard as above.
+   */
+  useEffect(() => {
+    if (isSubmitting === wasSubmittingRef.current) {
+      return;
+    }
+    wasSubmittingRef.current = isSubmitting;
+    if (!isSubmitting) {
+      triggerRef.current?.focus();
+    }
+  }, [isSubmitting]);
 
   async function submit() {
     setFeedback(null);
