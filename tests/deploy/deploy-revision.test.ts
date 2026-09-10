@@ -911,6 +911,13 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atSha).toBeGreaterThanOrEqual(0);
     expect(atGate, "the gate after full_sha").toBeGreaterThan(atSha);
     expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
+    // The record must be written before the build: a failed build still
+    // records what was being built.
+    const atRevision = source.indexOf("printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"");
+    const atBuild = source.indexOf('NEXT_DIST_DIR="$release" pnpm build');
+    expect(atRevision, "the REVISION write present").toBeGreaterThan(-1);
+    expect(atBuild, "the build line present").toBeGreaterThan(-1);
+    expect(atRevision, "the REVISION write before the build").toBeLessThan(atBuild);
   });
 });
 
