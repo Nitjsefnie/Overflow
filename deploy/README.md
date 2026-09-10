@@ -595,14 +595,16 @@ record and, on a match — the run that built the serving release migrated at
 that same commit — exits without installing, migrating or building, the
 copy-import install, the environment load, `db:migrate`, a
 grammar-named release directory created with a collision-aborting `mkdir`,
-generated-config preparation, the build, after whose clean step — it wipes the
-release directory, everything outside `cache|dev|lock|trace` — the exact source
-SHA is recorded in a `REVISION` file inside the release, the ownership reset
+generated-config preparation, the build, whose clean step wipes the release
+directory (everything outside `cache|dev|lock|trace`), the ownership reset
 excluding the serving cache, the new cache handover to the service account, the
 conditional
 switch, the restart, the `is-active` and readiness-endpoint verification, the webhook
 upgrade written to a retained JSONL log with a nonzero upgrade exiting the
-script nonzero, the retention listing, and the prune via `release:prune --keep 3`.
+script nonzero, after which the exact source SHA is recorded in a `REVISION`
+file inside the release — attesting a fully deployed release (built after the
+wipe, switched, verified), so a redundant deploy may trust it — the retention
+listing, and the prune via `release:prune --keep 3`.
 The migration-safety analysis and every other guard below govern the script's
 run exactly as they govern the manual block; read this whole section before
 running either.
