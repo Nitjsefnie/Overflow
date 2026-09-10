@@ -87,9 +87,12 @@ describe("unregister repository control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
 
     // The confirm pair unmounts while the request is in flight, so the settle
-    // must hand the reader's place back to the re-enabled trigger.
+    // must hand the reader's place back to the re-enabled trigger. That focus
+    // write lands in a passive effect after the commit that renders the
+    // status, so poll for it rather than assert synchronously — under load the
+    // synchronous read can observe the DOM between the commit and the effect.
     await screen.findByRole("status");
-    expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus());
   });
 
   it("returns focus to the trigger once a confirmed deletion fails", async () => {
@@ -103,7 +106,9 @@ describe("unregister repository control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm unregister" }));
 
     await screen.findByRole("alert");
-    expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus();
+    // Same settle race as the success path: the focus write is a passive
+    // effect, so poll for it rather than assert synchronously.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unregister co-op/harbour" })).toHaveFocus());
   });
 
   it("fires DELETE /api/repositories with the repository reference on confirm", async () => {
