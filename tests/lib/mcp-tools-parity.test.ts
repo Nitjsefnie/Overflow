@@ -39,12 +39,21 @@ function advertisedInputSchema(toolName: string): Record<string, unknown> {
 }
 
 /**
- * The same strip tools.ts's publicJsonSchema applies: zod stamps its dialect
- * key on the rendered schema and the advertised contract carries none.
+ * The same rendering tools.ts's publicJsonSchema applies: zod stamps its
+ * dialect key on the rendered schema and the advertised contract carries
+ * none, and a top-level union whose every branch is an object schema is
+ * stamped type: "object" alongside its combinator — the tools/list contract
+ * requires every advertised inputSchema to be an object schema.
  */
 function publicJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
   delete jsonSchema.$schema;
+  const branches = (jsonSchema.oneOf ?? jsonSchema.anyOf) as Record<string, unknown>[] | undefined;
+  if (jsonSchema.type === undefined && Array.isArray(branches)) {
+    if (branches.every((branch) => branch.type === "object")) {
+      jsonSchema.type = "object";
+    }
+  }
   return jsonSchema;
 }
 

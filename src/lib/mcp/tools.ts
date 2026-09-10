@@ -341,5 +341,27 @@ function withQuery(
 function publicJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
   delete jsonSchema.$schema;
+  stampObjectUnionType(jsonSchema);
   return jsonSchema;
+}
+
+/**
+ * zod renders a top-level union as a bare combinator, but the tools/list
+ * contract requires every advertised inputSchema to be an object schema: a
+ * client validating the document rejects the one schema without "type" — and
+ * with it every other tool. When every branch of the combinator is an object
+ * schema, "object" is true of the top level too, so it is stamped alongside
+ * the combinator. The branches are never collapsed: the tools are genuinely
+ * variant-shaped and the either/or semantics are the contract. A union with
+ * any non-object branch stays unstamped, which the advertised-schema guard
+ * then fails — the escalation such a schema deserves.
+ */
+function stampObjectUnionType(jsonSchema: Record<string, unknown>): void {
+  const branches = (jsonSchema.oneOf ?? jsonSchema.anyOf) as Record<string, unknown>[] | undefined;
+  if (jsonSchema.type !== undefined || !Array.isArray(branches)) {
+    return;
+  }
+  if (branches.every((branch) => branch.type === "object")) {
+    jsonSchema.type = "object";
+  }
 }
