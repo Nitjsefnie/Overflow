@@ -1138,12 +1138,29 @@ export type CalibrationCohorts = {
 /**
  * The one cohort read per request: load the account's two cohorts once and
  * hand the result to both projections. Neither projection selects.
+ *
+ * Both selections run inside one repeatable-read transaction (the snapshot
+ * scope), so a reconciliation commit landing between them cannot split the
+ * cohort pair across two committed states — at READ COMMITTED each statement
+ * takes its own snapshot, and the self-work selection then answers from before
+ * the commit while the outsider selection answers from after it. The
+ * projections are pure derivations of the pair, so the breakdown stays a
+ * partition of the pooled comparison (issue 499).
  */
 export async function loadCalibrationCohorts(
   accountId: string,
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<CalibrationCohorts> {
   const sql = resolveSql(dependencies);
+  const snapshotScope = defaultSnapshotScope(sql);
+  return snapshotScope((txSql) => readCalibrationCohorts(txSql, accountId));
+}
+
+/** Reads the two cohort selections, both through the one transaction sql. */
+async function readCalibrationCohorts(
+  sql: DashboardSql,
+  accountId: string,
+): Promise<CalibrationCohorts> {
   const selfWorkRows = await sql<RepositoryCalibrationRow[]>`
     select
       repositories.github_repository_id,
