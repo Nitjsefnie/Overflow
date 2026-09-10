@@ -26,7 +26,7 @@ One repository has one accountable sponsor in the MVP.
 ### Authentication and explicit registration
 
 - Authentication uses GitHub OAuth through Auth.js.
-- OAuth requests `read:user`, `user:email`, `repo`, and `admin:repo_hook` to support private repositories and create a webhook during registration.
+- OAuth requests only `admin:repo_hook`, used to create the webhook during registration. Repositories must be public; the fold declines non-public repositories.
 - A repository is registered only after a signed-in member submits `owner/name` or its canonical GitHub URL.
 - Registration verifies repository administration permission, creates the webhook, and records only that repository. It never registers the rest of the member's accessible repositories.
 - Registration stores a repository-specific difficulty scheme made of two explicit label catalogs and human-readable display names. Nothing derives meaning from label text.
@@ -54,7 +54,7 @@ One repository has one accountable sponsor in the MVP.
 
 The production webhook endpoint at `/api/github/webhooks` verifies `X-Hub-Signature-256` against the raw body before parsing JSON and deduplicates `X-GitHub-Delivery`. It processes issue/assignment/label state, submitted formal reviews, pull-request merge state, and installation/repository availability.
 
-`overflow reconcile` performs a fully paginated GraphQL fold for every active registered repository and upserts the PostgreSQL materialization. A PostgreSQL repository coordinator serializes each repository from before snapshot collection through materialization so an older worker cannot overwrite a newer result. Reconciliation must be idempotent and must report additions, removals, and changes. Deleting or rewriting GitHub facts legitimately changes the rebuilt materialization; the reconciliation audit records both versions.
+`pnpm reconcile` performs a fully paginated GraphQL fold for every active registered repository and upserts the PostgreSQL materialization. A PostgreSQL repository coordinator serializes each repository from before snapshot collection through materialization so an older worker cannot overwrite a newer result. Reconciliation must be idempotent and must report additions, removals, and changes. Deleting or rewriting GitHub facts legitimately changes the rebuilt materialization; the reconciliation audit records both versions.
 
 ## Rating and ledger rules
 
