@@ -249,7 +249,7 @@
         <div class="f-head"><span class="f-id">I10</span><h3 class="f-title">Custom cookie-authenticated POST routes lack an origin/CSRF boundary</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/17">Issue #17</a></div>
         <div class="f-body">
           <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">src/app/api/repositories/route.ts:48,112</span><span class="cite">src/app/api/moderation/route.ts:48</span><span class="cite">Auth.js lib/utils/cookie.js:48</span></div></div>
-          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Custom POST handlers authenticate the session and parse JSON regardless of Content-Type or Origin. They do not inherit Auth.js's own endpoint CSRF protection. An isolated moderation-handler probe accepted <code>Origin: https://untrusted.nitjsefni.eu</code> and <code>Content-Type: text/plain</code>, then invoked the authorized mutation.</p><p>SameSite=Lax does not isolate sibling origins. An untrusted HTTPS sibling can submit a simple credentialed POST without a CORS preflight. This requires an authenticated victim and an untrusted same-site origin; the probe supplied the session and was not a live-browser exploit. <a href="https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF">MDN CSRF guidance</a>.</p></div>
+          <div class="f-block"><span class="bk">Observed behavior and impact</span><p>Custom POST handlers authenticate the session and parse JSON regardless of Content-Type or Origin. They do not inherit Auth.js's own endpoint CSRF protection. An isolated moderation-handler probe accepted <code>Origin: https://untrusted.example</code> and <code>Content-Type: text/plain</code>, then invoked the authorized mutation.</p><p>SameSite=Lax does not isolate sibling origins. An untrusted HTTPS sibling can submit a simple credentialed POST without a CORS preflight. This requires an authenticated victim and an untrusted same-site origin; the probe supplied the session and was not a live-browser exploit. <a href="https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF">MDN CSRF guidance</a>.</p></div>
           <div class="f-block"><span class="bk">Remediation · now</span><div class="remediation"><p>Validate the exact allowed Origin and JSON Content-Type for custom mutations, or use a tested CSRF-token/server-action boundary. Apply one policy consistently to all mutating routes.</p><p>Add negative foreign-origin and unsupported-content-type tests, including a same-site sibling, alongside successful authorized mutations.</p></div></div>
         </div>
         <fieldset class="f-decide" data-picker="I10"><legend>Decision for I10</legend><label class="opt"><input type="radio" name="I10" value="fix">Fix now</label><label class="opt"><input type="radio" name="I10" value="defer">Defer</label><label class="opt"><input type="radio" name="I10" value="accept">Accept risk</label></fieldset>
@@ -302,7 +302,7 @@
       <article class="finding" id="I15" data-severity="Important" data-status="unresolved" data-priority="now">
         <div class="f-head"><span class="f-id">I15</span><h3 class="f-title">The production application runs as root without process hardening</h3><span class="sev high">IMPORTANT</span><a class="issue" href="https://github.com/Nitjsefnie/Overflow/issues/22">Issue #22</a></div>
         <div class="f-body">
-          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">/etc/systemd/system/overflow.service:9,11,16</span><span class="cite">systemctl show overflow.service</span></div></div>
+          <div class="f-block full"><span class="bk">Evidence</span><div class="evidence"><span class="cite">production systemd unit for overflow.service:9,11,16</span><span class="cite">systemctl show overflow.service</span></div></div>
           <div class="f-block"><span class="bk">Observed behavior and impact</span><p>The read-only unit inspection reported <code>User=root</code>, <code>Group=root</code>, <code>NoNewPrivileges=no</code>, <code>ProtectSystem=no</code>, <code>ProtectHome=no</code>, and <code>PrivateTmp=no</code>.</p><p>This internet-facing process decrypts public-repository OAuth credentials. A future application/dependency code-execution defect would inherit host-root authority and extend impact beyond Overflow. No RCE was found or attempted; the directly observed finding is the process's privilege and blast radius.</p></div>
           <div class="f-block"><span class="bk">Remediation · now, before broader enrollment</span><div class="remediation"><p>Deploy as a dedicated unprivileged service account outside <code>/root</code>. Narrow access to environment/runtime files and enable compatible systemd filesystem and privilege restrictions. Preserve the loopback listener and TLS proxy.</p><p>Verify file permissions, restart, and rollback behavior during an authorized deployment.</p></div></div>
         </div>
@@ -370,13 +370,13 @@
           <li>Bounded diagnostic fixtures stayed under <code>/tmp</code>; database probes used disposable PostgreSQL 17 containers.</li>
         </ul></div>
         <div class="col"><h3>Not exercised</h3><ul>
-          <li>No real OAuth consent/login, legitimate repository enrollment, real authenticated webhook-to-settlement journey, or production write was attempted by the source reviewer.</li>
+          <li>No real OAuth consent/login, legitimate repository enrollment, real authenticated webhook-to-settlement journey, or production write was attempted during the source review.</li>
           <li>No live takeover, CSRF, RCE, XSS, clickjacking, or corruption experiment was attempted. Isolated probes are identified as such.</li>
           <li>No real-browser viewport, screen-reader, keyboard-only end-to-end, or automated axe audit was run.</li>
           <li>No private backup inventory/restore, online dependency/advisory audit, or fresh remote CI job-provenance audit was performed.</li>
         </ul></div>
       </div>
-      <p class="callout"><strong>Evidence attribution:</strong> this HTML preserves the source review and its newer-deployment addendum. Baseline file/line references resolve in <a href="https://github.com/Nitjsefnie/Overflow/tree/a6459b7752e9242994bae8d536ace58bf520a4bc">the exact reviewed tree</a>; absolute service paths describe separately inspected live files. The source reviewer changed no application source, production data, service, deployment, DNS, or GitHub setting. The independently authorized lead/deployment work accounts for the later SHA.</p>
+      <p class="callout"><strong>Evidence attribution:</strong> this HTML preserves the source review and its newer-deployment addendum. Baseline file/line references resolve in <a href="https://github.com/Nitjsefnie/Overflow/tree/a6459b7752e9242994bae8d536ace58bf520a4bc">the exact reviewed tree</a>; absolute service paths describe separately inspected live files. The source review changed no application source, production data, service, deployment, DNS, or GitHub setting; separately authorized deployment work accounts for the later SHA.</p>
       <p><strong>Confidence:</strong> high in source/probe-supported defects and exact-SHA local checks; moderate in full operational readiness because the unexercised boundaries above remain. This report records observed evidence, not a claim that every possible defect was found.</p>
     </section>
 
@@ -415,8 +415,8 @@
         <tr><td>Additional isolated regression probes</td><td><strong class="warn">9/9 demonstrate bad behavior</strong>. Their green result confirms reproduction, not product acceptance.</td></tr>
       </tbody></table></div>
       <h3>Nine retained reproductions</h3>
-      <p>Probe source: <code>/tmp/overflow-review-probes.DWCN8u/probes.test.ts</code>. From <code>/root/overflow</code>, the recorded command uses its external configuration:</p>
-      <pre><code>pnpm exec vitest run --config /tmp/overflow-review-probes.DWCN8u/vitest.config.mjs --reporter verbose</code></pre>
+      <p>Probe source: a scratch probe file with its vitest configuration in a temporary directory outside the repository. From the repository checkout, the recorded command uses that external configuration:</p>
+      <pre><code>pnpm exec vitest run --config &lt;scratch-dir&gt;/vitest.config.mjs --reporter verbose</code></pre>
       <p>The probes start a disposable <code>postgres:17-alpine</code> container and stop it afterward; they do not use the production <code>DATABASE_URL</code>. Retained evidence establishes:</p>
       <ol>
         <li><a href="#I11">I11:</a> upgrading committed 001+002 fails with <code>55P04</code>, unsafe new enum value <code>UNCLAIMED</code>.</li>
@@ -430,8 +430,8 @@
         <li><a href="#I10">I10:</a> a custom POST accepts a foreign sibling Origin and <code>text/plain</code> JSON and invokes a mutation. Session supplied by the test; not a live exploit.</li>
       </ol>
       <h3>Read-only live checks</h3>
-      <p>At baseline, source/live SHA and clean-status checks matched. <code>systemctl show overflow.service</code> reported active/running and zero restarts, with the privileges in <a href="#I15">I15</a>. The live service uses <code>/root/overflow-mvp</code>, so the verification build in <code>/root/overflow</code> did not overwrite live <code>.next</code> files.</p>
-      <p>HTTP checks observed HTTP→HTTPS redirect, HTTPS 200, private/no-store caching, HSTS, anonymous <code>/api/auth/session</code> returning <code>null</code>, and anonymous <code>/dashboard</code> redirecting to <code>/</code>. The nginx vhost at <code>/etc/nginx/sites-available/overflow.nitjsefni.eu:23</code> proxies to loopback port 3000. Supporting deployment reports did not substitute for these checks.</p>
+      <p>At baseline, source/live SHA and clean-status checks matched. <code>systemctl show overflow.service</code> reported active/running and zero restarts, with the privileges in <a href="#I15">I15</a>. The live service runs from a separate deployment checkout, so the verification build in the source checkout did not overwrite live <code>.next</code> files.</p>
+      <p>HTTP checks observed HTTP→HTTPS redirect, HTTPS 200, private/no-store caching, HSTS, anonymous <code>/api/auth/session</code> returning <code>null</code>, and anonymous <code>/dashboard</code> redirecting to <code>/</code>. The deployment's TLS-terminating reverse proxy routes HTTPS to loopback port 3000. Supporting deployment reports did not substitute for these checks.</p>
       <p>A fresh read-only <code>gh api repos/Nitjsefnie/Overflow</code> returned <code>private=false</code>, <code>allow_merge_commit=false</code>, <code>allow_squash_merge=false</code>, and <code>allow_rebase_merge=true</code>. These settings concern the Overflow source repository.</p>
     </section>
 
@@ -449,7 +449,7 @@
         <tr><td>GitHub login and PostgreSQL</td><td>Implemented and baseline gates pass. Real consent/login not exercised. The private-profile scope request was corrected at the newer SHA (<a href="#I1">I1</a>).</td></tr>
         <tr><td>Public repos only; no private profile/repository scopes</td><td>The newer request is exactly <code>public_repo</code>: <code>repo</code>, <code>read:user</code>, and <code>user:email</code> are absent. Initial private registration is denied. Ongoing visibility enforcement and prior grants still need work (<a href="#I1">I1 follow-ups</a>, <a href="#I2">I2</a>).</td></tr>
         <tr><td>Only rebase merging</td><td>Verified for Overflow's source repository. The platform does not merge PRs or inspect participant repositories' merge settings. If this is meant to constrain every rewarded PR, that requires an explicit participant policy and enforcement.</td></tr>
-        <tr><td>Production target overflow.nitjsefni.eu</td><td>Available over HTTPS at the inspected deployment. Availability does not prove end-to-end acceptance, hardening, or recovery.</td></tr>
+        <tr><td>Production target</td><td>Available over HTTPS at the inspected deployment. Availability does not prove end-to-end acceptance, hardening, or recovery.</td></tr>
       </tbody></table></div>
       <p>The checked-in design's private-repository scope requirement (<code>docs/superpowers/specs/2026-09-04-overflow-mvp-design.md:29</code>) is superseded by the public-only/no-private-profile contract. Removing broad scopes is justified; optional credit floors, notifications, cash settlement, agent execution, and capacity pooling remain outside corrective scope.</p>
     </section>
@@ -563,8 +563,8 @@
       <p><a href="https://github.com/Nitjsefnie/Overflow/pull/6">PR #6</a> was landed and deployed while the source review was being finalized. The read-only comparison to <code>d9312709a90a385e735612d4011282738a6f1681</code> showed exactly two changed files, seven insertions, and six deletions: <code>src/auth.ts</code> requests only <code>public_repo</code>, and <code>tests/security/github-oauth-scope.test.ts</code> updates the expectation and explicitly excludes <code>read:user</code>. No other application, schema, CLI, pool, or policy path changed.</p>
       <div class="table-wrap"><table class="tbl"><caption>Evidence stays attached to the commit actually checked</caption><thead><tr><th>Commit / evidence owner</th><th>Verification and finding disposition</th></tr></thead><tbody>
         <tr><td>Baseline <code>a6459b7752e9242994bae8d536ace58bf520a4bc</code></td><td>Full 241-test/lint/typecheck/build and local workflow checks described above. Baseline count: 1 Critical, 16 Important, 4 Minor.</td></tr>
-        <tr><td>Updated deployment <code>d9312709a90a385e735612d4011282738a6f1681</code></td><td>The source reviewer independently confirmed clean <code>/root/overflow</code> and <code>/root/overflow-mvp</code> at this SHA and ran <code>pnpm test --run tests/security/github-oauth-scope.test.ts</code>: <strong>2/2 passed, exit 0</strong>.</td></tr>
-        <tr><td>Lead/deployment agent report</td><td><code>/tmp/overflow-public-profile-redeploy.md:9</code> records frozen install, migrations, production build, restart, loopback listener, and public endpoint checks. Those actions belong to the deployment agent, not the read-only source reviewer.</td></tr>
+        <tr><td>Updated deployment <code>d9312709a90a385e735612d4011282738a6f1681</code></td><td>The source reviewer independently confirmed clean deployment checkouts at this SHA and ran <code>pnpm test --run tests/security/github-oauth-scope.test.ts</code>: <strong>2/2 passed, exit 0</strong>.</td></tr>
+        <tr><td>Deployment work record</td><td>Separately authorized deployment work records frozen install, migrations, production build, restart, loopback listener, and public endpoint checks. Those actions belong to the deployment work, not the read-only source review.</td></tr>
         <tr><td>Current audit disposition</td><td><span class="badge fixed">I1 primary scope fixed</span> — remaining provider/prior-grant work is <a href="https://github.com/Nitjsefnie/Overflow/issues/8">follow-up #8</a>. Other paths unchanged: 1 Critical + 15 Important + 4 Minor = <strong>20 unresolved findings</strong>.</td></tr>
       </tbody></table></div>
       <p>The 241-test full-gate evidence is not relabeled as a fresh full run at the newer SHA. Real OAuth consent, provider email fallback, and effective scopes of stored tokens remain unverified in production. The source review's finite jobs completed and disposable probe containers were cleaned up; its report and probes were retained under <code>/tmp</code>.</p>
@@ -583,8 +583,8 @@
       <noscript><p>JavaScript is disabled. You can still read the report and use native radio buttons/notes, but automatic export is unavailable. Copy your selected decisions manually before closing.</p></noscript>
     </section>
     <footer class="footer">
-      <p>Overflow full-application audit · 2026-09-05 CEST · source review and HTML author: GPT-6-Astra. Human-facing register adapted from the audit-register template. <a href="#top">Back to top</a>.</p>
-      <p>Durable artifact: <code>docs/reviews/2026-09-05-full-application-audit.html</code>. <a href="https://docs.nitjsefni.eu/#/d/overflow/2026-09-05-full-application-audit">Published report</a>. Re-audit when the prioritized corrections land, using each final commit's own verification evidence.</p>
+      <p>Overflow full-application audit · 2026-09-05 CEST. <a href="#top">Back to top</a>.</p>
+      <p>Durable artifact: <code>docs/reviews/2026-09-05-full-application-audit.html</code>. <a href="https://github.com/Nitjsefnie/Overflow/blob/main/docs/reviews/2026-09-05-full-application-audit.html">Published report</a>. Re-audit when the prioritized corrections land, using each final commit's own verification evidence.</p>
     </footer>
   </main>
   <script>
@@ -592,8 +592,7 @@
       'use strict';
       const cards = Array.from(document.querySelectorAll('.finding'));
       const labels = { fix: 'Fix', defer: 'Defer', accept: 'Accept risk' };
-      const docUrl = 'https://docs.nitjsefni.eu/#/d/overflow/2026-09-05-full-application-audit';
-      const agentDocUrl = 'https://docs.nitjsefni.eu/d/overflow/2026-09-05-full-application-audit';
+      const docUrl = 'https://github.com/Nitjsefnie/Overflow/blob/main/docs/reviews/2026-09-05-full-application-audit.html';
       const clean = (value) => value.replace(/\s+/g, ' ').trim();
       function paragraphText(element) {
         const paragraphs = Array.from(element.querySelectorAll('p'));
@@ -650,7 +649,7 @@
         const current = report();
         const chosen = current.findings.filter((finding) => finding.decision !== null || finding.notes);
         const lines = [
-          'Use this Overflow audit register: ' + agentDocUrl,
+          'Use this Overflow audit register: ' + docUrl,
           'Baseline full-suite evidence belongs to ' + current.baselineSha + '.',
           'OAuth scope correction: ' + current.deploymentAddendumSha + '. I1 is primary-fixed; its decisions cover remaining follow-ups only.',
           'Review decisions below are planning input. Apply recorded fix decisions within the authorized task; retain defer/accept decisions and their conditions. Unreviewed items are not approved changes.',
