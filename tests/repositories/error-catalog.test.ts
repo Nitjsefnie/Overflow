@@ -628,6 +628,9 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async getRepository() {
         return githubRepositoryFixture();
       },
+      async getRepositoryById() {
+        return githubRepositoryFixture();
+      },
       async listRepositoryLabels() {
         return new Set([
           ...registrationInput().openingLabels.map(({ label }) => label),

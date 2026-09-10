@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import type { GitHubRepository } from "@/lib/github/types";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
@@ -965,38 +966,81 @@ describe("draining the abandoned webhook cleanup records", () => {
     expect(harness.deleteWebhookReferences).toEqual([]);
   });
 
-  it("deletes the recorded webhook through the stored owner path and clears the record when the registration is unregistered", async () => {
+  it("resolves the repository by id and deletes the recorded webhook through the name GitHub serves now", async () => {
     const harness = createHarness({
       existing: registeredRepository(),
       existingUnregistered: true,
-      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      abandonedRecords: [{ ...cleanupRecord(501, "2020-01-01T00:00:00.000Z"), ownerName: "octo/old-name" }],
+      resolvedByIdRepository: githubRepositoryFixture({
+        name: "new-name",
+        fullName: "octo/new-name",
+        url: "https://github.com/octo/new-name",
+      }),
     });
 
     await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.repositoryByIdLookups).toEqual([42]);
+    expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "new-name" }]);
     expect(harness.deletedWebhookIds).toEqual([501]);
-    expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "overflow" }]);
     expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
   });
 
-  it("keeps the record when the deletion fails without a proven 404", async () => {
+  it("keeps the record when the deletion at the resolved path fails without a proven 404", async () => {
     const harness = createHarness({
       abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
       deleteWebhookFailure: new GitHubApiError(403),
     });
 
     await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "overflow" }]);
     expect(harness.abandonedClears).toEqual([]);
   });
 
-  it("reads a proven 404 as deleted and clears the record", async () => {
+  it("reads a 404 at the resolved current path as proven and clears the record", async () => {
     const harness = createHarness({
-      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      existing: registeredRepository(),
+      existingUnregistered: true,
+      abandonedRecords: [{ ...cleanupRecord(501, "2020-01-01T00:00:00.000Z"), ownerName: "octo/old-name" }],
+      resolvedByIdRepository: githubRepositoryFixture({
+        name: "new-name",
+        fullName: "octo/new-name",
+        url: "https://github.com/octo/new-name",
+      }),
       deleteWebhookFailure: new GitHubApiError(404),
     });
 
     await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
-    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.repositoryByIdLookups).toEqual([42]);
+    expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "new-name" }]);
     expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+  });
+
+  it("clears the record without touching webhooks when the id no longer resolves to a repository", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      existingUnregistered: true,
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      resolvedByIdRepository: null,
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.repositoryByIdLookups).toEqual([42]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.deleteWebhookReferences).toEqual([]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+  });
+
+  it("keeps the record and attempts no deletion when resolving the repository by id fails", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      existingUnregistered: true,
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      resolvedByIdRepository: new GitHubApiError(502),
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.deleteWebhookReferences).toEqual([]);
+    expect(harness.abandonedClears).toEqual([]);
   });
 
   // The wiring itself is pinned here, not just the drain's branches: a seeded
@@ -1064,6 +1108,8 @@ type HarnessOptions = {
   /** The label names the fake GitHub answers `listRepositoryLabels` with. */
   repositoryLabels?: readonly string[];
   webhookFailure?: boolean;
+  /** What the fake GitHub answers `getRepositoryById` with: a repository, null for a deleted repository, or a rejection to throw. Default: the repository under its stored name. */
+  resolvedByIdRepository?: GitHubRepository | null | Error;
   databaseFailure?: boolean;
   storeRejectsAsDuplicateId?: boolean;
   storeClaimedOwnerName?: string;
@@ -1080,6 +1126,7 @@ function createHarness(options: HarnessOptions = {}) {
   const githubCalls: string[] = [];
   const deletedWebhookIds: number[] = [];
   const deleteWebhookReferences: Array<{ owner: string; name: string }> = [];
+  const repositoryByIdLookups: number[] = [];
   const duplicateLookupIds: number[] = [];
   const stateLookupIds: number[] = [];
   const stateLookupsByOwnerName: string[] = [];
@@ -1126,6 +1173,17 @@ function createHarness(options: HarnessOptions = {}) {
           url: `https://github.com/${options.owner ?? "octo"}/${options.name ?? "overflow"}`,
           canAdminister: options.canAdminister ?? true,
         };
+      },
+      async getRepositoryById(githubRepositoryId) {
+        callOrder.push(`getRepositoryById:${githubRepositoryId}`);
+        repositoryByIdLookups.push(githubRepositoryId);
+        if (options.resolvedByIdRepository instanceof Error) {
+          throw options.resolvedByIdRepository;
+        }
+        if (options.resolvedByIdRepository !== undefined) {
+          return options.resolvedByIdRepository;
+        }
+        return githubRepositoryFixture({ id: githubRepositoryId });
       },
       async listRepositoryLabels(repository) {
         githubCalls.push(`listRepositoryLabels:${repository.owner}/${repository.name}`);
@@ -1245,6 +1303,7 @@ function createHarness(options: HarnessOptions = {}) {
     githubCalls,
     deletedWebhookIds,
     deleteWebhookReferences,
+    repositoryByIdLookups,
     duplicateLookupIds,
     stateLookupIds,
     stateLookupsByOwnerName,
@@ -1304,5 +1363,19 @@ function registeredRepository(): RegisteredRepository {
     sponsorId: "moderator-id",
     visibility: "PUBLIC",
     githubWebhookId: 501,
+  };
+}
+
+function githubRepositoryFixture(overrides: Partial<GitHubRepository> = {}): GitHubRepository {
+  return {
+    id: 42,
+    owner: "octo",
+    ownerType: "USER",
+    name: "overflow",
+    fullName: "octo/overflow",
+    visibility: "PUBLIC",
+    url: "https://github.com/octo/overflow",
+    canAdminister: true,
+    ...overrides,
   };
 }

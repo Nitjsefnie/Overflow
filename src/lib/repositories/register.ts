@@ -57,6 +57,15 @@ export type RepositoryUnregisterOutcome =
 
 export type RepositoryRegistrationGateway = {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
+  /**
+   * Reads the repository by its immutable GitHub numeric id — the drain's
+   * resolution primitive (issue 516). The id survives a rename and an owner
+   * transfer (see the parallel note on `GitHubPullRequest.repositoryGitHubId`),
+   * while an owner/name path stored earlier does not. Answers null only when
+   * GitHub reports no repository for the id (HTTP 404); every other failure is
+   * rethrown so a transient outage is never read as a deleted repository.
+   */
+  getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>>;
   createWebhook(
     repository: GitHubRepositoryReference,
@@ -74,6 +83,7 @@ export type RepositoryRegistrationGateway = {
  */
 export type AbandonedWebhookCleanup = {
   githubRepositoryId: number;
+  /** The owner/name path at record time; kept for humans and diagnostics only — the drain addresses hooks through the id. */
   ownerName: string;
   webhookId: number;
   createdAt: string;
@@ -379,11 +389,15 @@ export async function registerRepository(
  * registration created the hook and then failed to store the registration.
  * Every record the cleanup table holds is worked through: one whose active
  * registration came back holding the same webhook id only has its record
- * cleared (the hook is wanted again), every other one is deleted through the
- * stored owner path — a GitHub 404 counts as proven, the hook is already gone
- * — and its record cleared. A webhook that cannot be proven deleted keeps its
- * record for the next drain. Never throws: the drain must never disturb the
- * registration or unregistration that just succeeded.
+ * cleared (the hook is wanted again), every other one is resolved through its
+ * repository's immutable id to the owner/name GitHub serves now — the id
+ * survives renames and owner transfers while a stored path does not (issue
+ * 516) — and the hook is deleted through that current path, where a GitHub 404
+ * counts as proven. A repository the id no longer resolves to is deleted
+ * itself, and its webhooks are gone with it, so the record clears without a
+ * deletion call. A webhook that cannot be proven deleted keeps its record for
+ * the next drain. Never throws: the drain must never disturb the registration
+ * or unregistration that just succeeded.
  */
 export async function drainAbandonedWebhooks(
   dependencies: Pick<RepositoryRegistrationDependencies, "github" | "store">,
@@ -410,21 +424,29 @@ export async function drainAbandonedWebhooks(
         continue;
       }
 
-      let reference: GitHubRepositoryReference;
+      // The hook is addressed through the repository's immutable id, never the
+      // stored owner/name: the id survives a rename and an owner transfer, so
+      // the resolution carries the path GitHub serves NOW. A 404 here is a
+      // deleted repository, whose webhooks are gone with it — proven without
+      // touching the webhook at all.
+      let repository: GitHubRepository | null;
       try {
-        reference = parseGitHubRepository(record.ownerName);
+        repository = await dependencies.github.getRepositoryById(record.githubRepositoryId);
       } catch {
-        // Nothing can address a hook recorded under a path GitHub cannot hand back; keep the
-        // record so the failure stays visible in the table rather than silently dropped.
+        // A failed resolution proves nothing about the hook: keep the record
+        // and attempt no deletion this pass.
         continue;
       }
 
-      try {
-        await dependencies.github.deleteWebhook(reference, record.webhookId);
-      } catch (error) {
-        if (!(error instanceof GitHubApiError && error.status === 404)) {
-          // Not proven — keep the record and let a later drain retry the deletion.
-          continue;
+      if (repository !== null) {
+        const reference: GitHubRepositoryReference = { owner: repository.owner, name: repository.name };
+        try {
+          await dependencies.github.deleteWebhook(reference, record.webhookId);
+        } catch (error) {
+          if (!(error instanceof GitHubApiError && error.status === 404)) {
+            // Not proven — keep the record and let a later drain retry the deletion.
+            continue;
+          }
         }
       }
 
