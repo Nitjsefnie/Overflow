@@ -54,6 +54,13 @@ const supportedActions = {
   issue_comment: new Set(["created", "edited", "deleted"]),
 };
 
+// Recognized pull-request actions Overflow deliberately does not materialize.
+// The route answers these 204 (parsed-but-ignored), reserving 400 for
+// malformed traffic; GitHub's repository webhooks cannot unsubscribe per-action.
+const unmaterializedActions: Partial<Record<SupportedGitHubWebhookEvent, Set<string>>> = {
+  pull_request: new Set(["ready_for_review"]),
+};
+
 export const githubWebhookEvents = Object.keys(supportedActions) as SupportedGitHubWebhookEvent[];
 
 export function parseGitHubWebhookDeliveryDetailed(
@@ -71,7 +78,16 @@ export function parseGitHubWebhookDeliveryDetailed(
   }
 
   const parsed = payloadSchema.safeParse(payload);
-  if (!parsed.success || !supportedActions[eventName].has(parsed.data.action)) {
+  if (!parsed.success) return { status: "invalid" };
+  if (unmaterializedActions[eventName]?.has(parsed.data.action)) {
+    // A recognized action this deployment deliberately does not materialize:
+    // parsed-but-ignored, so the route answers 204 and GitHub's delivery log
+    // stays green on valid traffic Overflow chose not to process. Checked
+    // before subject parsing — the delivery is dropped regardless of what
+    // else the envelope carries.
+    return { status: "ignored" };
+  }
+  if (!supportedActions[eventName].has(parsed.data.action)) {
     return { status: "invalid" };
   }
   const isIssueEvent = eventName === "issues" || eventName === "issue_comment";
