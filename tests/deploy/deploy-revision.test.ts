@@ -876,6 +876,73 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain(`Source revision: ${fullSha}`);
   });
 
+  it("skips install, migrate and build when the pulled commit is the one already serving", async () => {
+    const fixture = await makeFixture();
+    await writeFile(path.join(fixture.prevDir, "REVISION"), `${FIXTURE_HASH}\n`);
+    const result = await runDeploy(fixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain(`Already serving ${realpathSync(fixture.prevDir)} (${FIXTURE_HASH})`);
+    // Nothing after the required-checks gate runs: the log is exactly the
+    // fence, the pull, the SHA resolution, the cleanliness read and the two
+    // gate reads.
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.map(describeEntry)).toEqual([
+      `flock -w 900 9`,
+      `git pull --ff-only origin main`,
+      `git rev-parse HEAD`,
+      `git status --porcelain=v1 -uall`,
+      `git config --get remote.origin.url`,
+      `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
+      `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+    ]);
+    const grammarNames = (await readdir(fixture.tree)).filter((name) => RELEASE_GRAMMAR.test(name));
+    expect(grammarNames.sort()).toEqual(
+      [
+        ".next-release-20260801T000000Z-def5678",
+        ".next-release-20260906T000000Z-abc1234",
+        ".next-release-20260907T000000Z-def5678",
+        ".next-release-20260908T000000Z-abc1234",
+      ].sort(),
+    );
+  });
+
+  it("proceeds with the full deploy when the serving release records a different commit", async () => {
+    const fixture = await makeFixture();
+    await writeFile(path.join(fixture.prevDir, "REVISION"), "0000000000000000000000000000000000000000\n");
+    const result = await runDeploy(fixture);
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(true);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(true);
+  });
+
+  it("proceeds when the serving release records no REVISION at all", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture);
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(true);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(true);
+  });
+
+  it("does not skip on a dangling anchor, and the run still refuses the unusable serving state downstream", async () => {
+    const fixture = await makeFixture();
+    await rm(path.join(fixture.tree, ".next"));
+    await symlink(".next-release-20260101T000000Z-dead1234", path.join(fixture.tree, ".next"));
+    const result = await runDeploy(fixture);
+
+    // No skip: the install started. The run then refuses at the pre-existing
+    // test -d on the dangling anchor's cache, as it already did before this
+    // gate existed.
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).not.toContain("Already serving");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(true);
+  });
+
   it("matches real git: silent on a production-shaped ignored tree, loud once a tracked file changes", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "overflow-deploy-revision-git-"));
     try {
@@ -934,6 +1001,23 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atRevision, "the REVISION write present").toBeGreaterThan(-1);
     expect(atBuild, "the build line present").toBeGreaterThan(-1);
     expect(atRevision, "the REVISION write after the build").toBeGreaterThan(atBuild);
+  });
+
+  it("places the redundant-deploy skip after the CI-gate case and before the install", async () => {
+    const source = await readFile(script, "utf8");
+    expect(source).toContain('if [ "$(cat "$serving_release/REVISION")" = "$full_sha" ]; then');
+    expect(source).toContain('[ -f "$serving_release/REVISION" ]');
+    expect(source).toContain("Already serving");
+    // After the required-checks gate, so the gate's refusal semantics are
+    // untouched; before the install, so a skip mutates nothing. The esac that
+    // matters is the CI-gate's own closing line, found searching back from
+    // the install so the skip block's own text cannot confuse the pin.
+    const atInstall = source.indexOf("npm_config_package_import_method=copy pnpm install");
+    const atEsac = source.lastIndexOf("esac", atInstall);
+    const atSkip = source.indexOf("Already serving");
+    expect(atEsac, "the CI-gate esac present").toBeGreaterThan(-1);
+    expect(atSkip, "the skip after the CI-gate case").toBeGreaterThan(atEsac);
+    expect(atInstall, "the install after the skip").toBeGreaterThan(atSkip);
   });
 });
 
