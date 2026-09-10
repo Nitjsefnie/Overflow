@@ -122,6 +122,7 @@ set -a; . "$env_file"; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
+# Before the build: a failed build still records what was being built.
 printf '%s\n' "$full_sha" > "$release/REVISION"
 printf 'Source revision: %s\n' "$full_sha"
 node scripts/release.ts prepare "$tree" "$release"
