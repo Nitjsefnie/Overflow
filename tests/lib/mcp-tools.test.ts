@@ -318,6 +318,15 @@ describe("defineMcpTools", () => {
       }
     });
 
+    it("advertises an object schema at the top level of every tool", () => {
+      // A spec-compliant client validates the whole tools/list document, so
+      // one schema without "type" rejects every tool, not just its own.
+      const malformed = defineMcpTools(dependencies(), new Headers())
+        .filter((tool) => tool.inputSchema.type !== "object")
+        .map((tool) => tool.name);
+      expect(malformed, "tools whose inputSchema lacks type: object").toEqual([]);
+    });
+
     it("keeps the exposed objects strict", () => {
       const schemas = schemasByName();
       for (const name of [
