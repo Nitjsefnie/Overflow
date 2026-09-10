@@ -30,7 +30,7 @@ type RepositoryRow = {
   owner_name: string;
   sponsor_id: string;
   visibility: "PUBLIC" | "PRIVATE";
-  github_webhook_id: number | string;
+  github_webhook_id: number | string | null;
 };
 
 type RepositoryStateRow = RepositoryRow & {
@@ -265,7 +265,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       if (constraint === ownerNameConstraint) {
         throw new RepositoryOwnerNameConflictError(repository.ownerName);
       }
-      if (constraint === webhookIdConstraint) {
+      // A null id cannot collide: Postgres unique indexes let NULLs
+      // coexist, so this conflict always names a claimed non-null id.
+      if (constraint === webhookIdConstraint && repository.githubWebhookId !== null) {
         throw new RepositoryWebhookIdConflictError(repository.githubWebhookId);
       }
       throw error;
@@ -444,7 +446,7 @@ function toRegisteredRepository(row: RepositoryRow): RegisteredRepository {
     ownerName: row.owner_name,
     sponsorId: row.sponsor_id,
     visibility: row.visibility,
-    githubWebhookId: toSafeInteger(row.github_webhook_id),
+    githubWebhookId: row.github_webhook_id === null ? null : toSafeInteger(row.github_webhook_id),
   };
 }
 

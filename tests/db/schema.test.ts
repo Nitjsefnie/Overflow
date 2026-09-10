@@ -231,6 +231,7 @@ describe("initial PostgreSQL materialization", () => {
       "037_abandoned_webhook_cleanups.sql",
       "038_forge_identities_and_provider_columns.sql",
       "039_forge_identity_user_fk.sql",
+      "040_forge_repository_columns.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
