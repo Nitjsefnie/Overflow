@@ -5,6 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview } from "@/lib/github/types";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
@@ -31,6 +32,14 @@ const correctedCalibrationIssueId = 8_100_005;
 const correctedCalibrationPullRequestId = 8_100_006;
 const uncorrectedCalibrationIssueId = 8_100_007;
 const uncorrectedCalibrationPullRequestId = 8_100_008;
+const queueConvergenceRepositoryGitHubId = 8_300_005;
+const queueConvergenceOwnerName = "example/queue-convergence";
+const queueConvergenceIssueId = 8_100_009;
+const queueConvergencePullRequestId = 8_100_010;
+const queueConvergenceSelfWorkRepositoryGitHubId = 8_300_007;
+const queueConvergenceSelfWorkOwnerName = "example/queue-convergence-self-work";
+const queueConvergenceSelfWorkIssueId = 8_100_011;
+const queueConvergenceSelfWorkPullRequestId = 8_100_012;
 
 beforeAll(async () => {
   const started = await startPostgresContainer({
@@ -192,6 +201,80 @@ describe("a granted settlement override survives reconciliation", () => {
   });
 });
 
+describe("a grant schedules its own materialization through the reconciliation queue", () => {
+  it("converges the corrected settlement when the queue is driven the way the worker drives it", async () => {
+    const sponsorId = await insertUser("queue-sponsor", 5001);
+    const contributorId = await insertUser("queue-contributor", 5002);
+    const moderatorId = await insertUser("queue-moderator", 5003);
+    await giveAccessToken(sponsorId);
+    const repositoryId = await insertRepository(sponsorId, {
+      githubRepositoryId: queueConvergenceRepositoryGitHubId,
+      ownerName: queueConvergenceOwnerName,
+      githubWebhookId: 8_300_006,
+    });
+    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const github = queueConvergenceGateway();
+
+    // The bookkeeping failure the correction answers: no rationale comment, so
+    // the fold records an unsettled settlement worth nothing.
+    await reconcileRepository({ store, github }, repositoryId);
+    await expect(settlementFacts(queueConvergenceIssueId)).resolves.toMatchObject({
+      status: "UNSETTLED",
+      settled_points: null,
+      credits: 0,
+    });
+
+    const overrides = new PostgresSettlementOverrideStore(sql);
+    const request = await overrides.createRequest({
+      requesterId: contributorId,
+      target: { kind: "settlement", settlementId: await settlementIdFor(queueConvergenceIssueId) },
+      reason: "The delivered work was eight points of difficulty.",
+    });
+    if (request.kind !== "ok") {
+      throw new Error("Expected the correction request to open.");
+    }
+    await overrides.decideRequest({
+      actorId: moderatorId,
+      requestId: request.value.id,
+      decision: "GRANT",
+      settledPoints: 8,
+      reason: "The delivered diff carries eight points of work.",
+    });
+
+    // The decision itself must not rewrite the settlement row: materialization
+    // belongs to the fold, and the fold belongs to the queue.
+    await expect(settlementFacts(queueConvergenceIssueId)).resolves.toMatchObject({
+      status: "UNSETTLED",
+      settled_points: null,
+      credits: 0,
+    });
+
+    // Claim, fold and complete exactly as the worker does — including every
+    // job earlier tests' grants left queued.
+    const processed = await drainQueue(store, [
+      [repositoryId, github],
+      [await repositoryIdFor(disputedIssueId), gateway()],
+    ]);
+    expect(processed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: "OVERRIDE", repositoryId }),
+      ]),
+    );
+
+    await expect(settlementFacts(queueConvergenceIssueId)).resolves.toEqual({
+      status: "SETTLED",
+      settled_points: 8,
+      review_rounds: 0,
+      credits: 8,
+      creditor_id: contributorId,
+      debtor_id: sponsorId,
+    });
+    await expect(sql`
+      select state::text as state from settlement_override_requests where id = ${request.value.id}
+    `).resolves.toEqual([{ state: "GRANTED" }]);
+  });
+});
+
 describe("a granted correction to a self-work calibration survives reconciliation", () => {
   it("rebuilds the corrected calibration on every reconciliation without inventing evidence", async () => {
     const selfWorkSponsorId = await insertUser(selfWorkSponsorLogin, 4001);
@@ -268,6 +351,63 @@ describe("a granted correction to a self-work calibration survives reconciliatio
       actual_points: null,
     });
   });
+
+  it("converges the corrected calibration through the queue, without the moderator waiting on other traffic", async () => {
+    const selfWorkSponsorId = await insertUser("queue-self-sponsor", 5004);
+    const moderatorId = await insertUser("queue-self-moderator", 5005);
+    await giveAccessToken(selfWorkSponsorId);
+    const repositoryId = await insertRepository(selfWorkSponsorId, {
+      githubRepositoryId: queueConvergenceSelfWorkRepositoryGitHubId,
+      ownerName: queueConvergenceSelfWorkOwnerName,
+      githubWebhookId: 8_300_008,
+    });
+    const store = new PostgresFoldStore(sql, tokenEncryptionKey);
+    const github = queueConvergenceSelfWorkGateway();
+
+    await reconcileRepository({ store, github }, repositoryId);
+    await expect(calibrationFacts(queueConvergenceSelfWorkIssueId)).resolves.toMatchObject({
+      actual_points: null,
+    });
+
+    const overrides = new PostgresSettlementOverrideStore(sql);
+    const request = await overrides.createRequest({
+      requesterId: selfWorkSponsorId,
+      target: { kind: "calibration", calibrationId: await calibrationIdFor(queueConvergenceSelfWorkIssueId) },
+      reason: "The delivered work was harder than the opening estimate.",
+    });
+    if (request.kind !== "ok") {
+      throw new Error("Expected the calibration correction request to open.");
+    }
+    await overrides.decideRequest({
+      actorId: moderatorId,
+      requestId: request.value.id,
+      decision: "GRANT",
+      settledPoints: 8,
+      reason: "Eight points matches the delivered diff.",
+    });
+
+    const processed = await drainQueue(store, [
+      [repositoryId, github],
+      [await repositoryIdFor(correctedCalibrationIssueId), selfWorkGateway()],
+    ]);
+    expect(processed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: "OVERRIDE", repositoryId }),
+      ]),
+    );
+
+    await expect(calibrationFacts(queueConvergenceSelfWorkIssueId)).resolves.toEqual({
+      user_id: selfWorkSponsorId,
+      opening_comparison_points: 5,
+      actual_points: 8,
+      settled_label: null,
+      settled_label_event_id: null,
+      settled_rationale_comment_id: null,
+    });
+    await expect(sql`
+      select state::text as state from settlement_override_requests where id = ${request.value.id}
+    `).resolves.toEqual([{ state: "GRANTED" }]);
+  });
 });
 
 async function reconcileOnce(
@@ -280,6 +420,37 @@ async function reconcileOnce(
     throw new Error("Reconciliation was skipped, so it materialized nothing.");
   }
   return summary.runId;
+}
+
+/**
+ * Works the queue until it is empty exactly as the worker does — claim, fold,
+ * complete — because a job that is never claimed corrects nothing, whatever the
+ * decision that enqueued it said. Each claimed job is folded through the
+ * gateway its repository is registered with, so jobs earlier tests' grants left
+ * queued converge here too instead of lingering behind the one under test.
+ */
+async function drainQueue(
+  store: PostgresFoldStore,
+  gateways: readonly (readonly [string, ReconciliationGateway])[],
+): Promise<ClaimedReconciliationJob[]> {
+  const gatewayByRepository = new Map(gateways);
+  const processed: ClaimedReconciliationJob[] = [];
+  for (;;) {
+    const job = await store.claimNextReconciliationJob();
+    if (job === null) {
+      return processed;
+    }
+    const github = gatewayByRepository.get(job.repositoryId);
+    if (github === undefined) {
+      throw new Error(`No gateway was registered for queued repository ${job.repositoryId}.`);
+    }
+    await reconcileRepository({ store, github }, job.repositoryId);
+    const completed = await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration);
+    if (!completed) {
+      throw new Error("Completing the claimed job failed, so the queue would never drain.");
+    }
+    processed.push(job);
+  }
 }
 
 async function calibrationFacts(githubIssueId: number) {
@@ -574,5 +745,67 @@ function selfWorkGateway(): ReconciliationGateway {
     })),
     getPullRequestReviews: async () => [],
     getPullRequestDiff: async (_repository, pullRequestNumber) => `self-work diff ${pullRequestNumber}`,
+  };
+}
+
+/**
+ * One closed issue whose pull request merged without the rationale comment, so
+ * the fold records an unsettled settlement the correction can then reprice.
+ */
+function queueConvergenceGateway(): ReconciliationGateway {
+  const participants = {
+    repository: queueConvergenceOwnerName,
+    ownerLogin: "queue-sponsor",
+    assigneeLogin: "queue-contributor",
+  };
+  const author = {
+    repositoryGitHubId: queueConvergenceRepositoryGitHubId,
+    repository: queueConvergenceOwnerName,
+    authorLogin: "queue-contributor",
+    authorGitHubUserId: 5002,
+  };
+  return {
+    getRepositoryById: verifiedRepositoryAt(queueConvergenceOwnerName),
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
+    listIssues: async () => [
+      unsettledIssue({ id: queueConvergenceIssueId, number: 1, ...participants }),
+    ].map((issue) => ({
+      ...issue,
+      closingPullRequests: [mergedPullRequest({ id: queueConvergencePullRequestId, number: 11, ...author })],
+    })),
+    getPullRequestReviews: async () => [],
+    getPullRequestDiff: async (_repository, pullRequestNumber) => `queue convergence diff ${pullRequestNumber}`,
+  };
+}
+
+/**
+ * The same bookkeeping failure for a sponsor who closed their own issue, so the
+ * fold records a self-work calibration rather than a settlement.
+ */
+function queueConvergenceSelfWorkGateway(): ReconciliationGateway {
+  const participants = {
+    repository: queueConvergenceSelfWorkOwnerName,
+    ownerLogin: "queue-self-sponsor",
+    assigneeLogin: "queue-self-sponsor",
+  };
+  const author = {
+    repositoryGitHubId: queueConvergenceSelfWorkRepositoryGitHubId,
+    repository: queueConvergenceSelfWorkOwnerName,
+    authorLogin: "queue-self-sponsor",
+    authorGitHubUserId: 5004,
+  };
+  return {
+    getRepositoryById: verifiedRepositoryAt(queueConvergenceSelfWorkOwnerName),
+    getIssue: async () => null,
+    getPullRequestClosingIssues: async () => [],
+    listIssues: async () => [
+      unsettledIssue({ id: queueConvergenceSelfWorkIssueId, number: 1, ...participants }),
+    ].map((issue) => ({
+      ...issue,
+      closingPullRequests: [mergedPullRequest({ id: queueConvergenceSelfWorkPullRequestId, number: 11, ...author })],
+    })),
+    getPullRequestReviews: async () => [],
+    getPullRequestDiff: async (_repository, pullRequestNumber) => `queue convergence diff ${pullRequestNumber}`,
   };
 }
