@@ -58,7 +58,7 @@ const supportedActions = {
 // The route answers these 204 (parsed-but-ignored), reserving 400 for
 // malformed traffic; GitHub's repository webhooks cannot unsubscribe per-action.
 const unmaterializedActions: Partial<Record<SupportedGitHubWebhookEvent, Set<string>>> = {
-  pull_request: new Set(["ready_for_review"]),
+  pull_request: new Set(["ready_for_review", "converted_to_draft"]),
 };
 
 export const githubWebhookEvents = Object.keys(supportedActions) as SupportedGitHubWebhookEvent[];

@@ -50,20 +50,21 @@ describe("GitHub webhook route", () => {
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
-  // ready_for_review is a recognized pull_request action Overflow does not
-  // materialize (webhook-schema's unmaterializedActions). Like a PR-carrying
-  // issue envelope it must read as success to GitHub — any 2xx counts as
-  // delivered — or the delivery log turns red on traffic Overflow chose to
-  // ignore, and like every ignored delivery it must persist nothing: no
-  // processWebhook call, so no claim and no delivery row.
-  it("answers 204 for a recognized-but-unmaterialized pull_request action without processing", async () => {
+  // ready_for_review and converted_to_draft are recognized pull_request
+  // actions Overflow does not materialize (webhook-schema's
+  // unmaterializedActions). Like a PR-carrying issue envelope they must read
+  // as success to GitHub — any 2xx counts as delivered — or the delivery log
+  // turns red on traffic Overflow chose to ignore, and like every ignored
+  // delivery they must persist nothing: no processWebhook call, so no claim
+  // and no delivery row.
+  it.each(["ready_for_review", "converted_to_draft"])("answers 204 for a recognized-but-unmaterialized %s action without processing", async (action) => {
     const processWebhookMock = vi.fn().mockResolvedValue(undefined);
     const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
     const response = await route(request(JSON.stringify({
-      action: "ready_for_review",
+      action,
       repository: { id: 42, full_name: "octo/example" },
       pull_request: { id: 201, number: 11 },
-    }), { "x-github-event": "pull_request", "x-github-delivery": "ready-for-review" }));
+    }), { "x-github-event": "pull_request", "x-github-delivery": `unmaterialized-${action}` }));
     expect(response.status).toBe(204);
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
@@ -267,14 +268,14 @@ describe("GitHub webhook route", () => {
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
-  it("requires GitHub delivery headers and a supported event action", async () => {
+  it("requires GitHub delivery headers; a recognized-but-unmaterialized action answers 204 without processing", async () => {
     const processWebhookMock = vi.fn();
     const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
 
     const missingDelivery = await route(
       request(rawPayload, { "x-github-event": "pull_request" }),
     );
-    const unsupportedAction = await route(
+    const unmaterializedAction = await route(
       request(JSON.stringify({ ...JSON.parse(rawPayload), action: "converted_to_draft" }), {
         "x-github-event": "pull_request",
         "x-github-delivery": "delivery-3",
@@ -282,7 +283,7 @@ describe("GitHub webhook route", () => {
     );
 
     expect(missingDelivery.status).toBe(400);
-    expect(unsupportedAction.status).toBe(400);
+    expect(unmaterializedAction.status).toBe(204);
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
