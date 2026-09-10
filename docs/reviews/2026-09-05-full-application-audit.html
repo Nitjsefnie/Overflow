@@ -367,7 +367,7 @@
           <li>Every tracked path was inventoried: package/lock/config files, both CI workflows, all seven migrations, both operational scripts, application/API/components/domain/adapters, tests, README variants, and design/plan/deployment reports.</li>
           <li>Manual review concentrated on executable source, migration behavior, security boundaries, and representative assertions. Generated or duplicate document renderings were not counted as independent implementation evidence.</li>
           <li>Read-only deployment checks covered source/live SHAs and status, the service unit, nginx loopback proxy, anonymous HTTPS/auth/dashboard responses, and source-repository merge settings.</li>
-          <li>Bounded diagnostic fixtures stayed under <code>/tmp</code>; database probes used disposable PostgreSQL 17 containers.</li>
+          <li>Bounded diagnostic fixtures stayed under a temporary scratch directory; database probes used disposable PostgreSQL 17 containers.</li>
         </ul></div>
         <div class="col"><h3>Not exercised</h3><ul>
           <li>No real OAuth consent/login, legitimate repository enrollment, real authenticated webhook-to-settlement journey, or production write was attempted during the source review.</li>
@@ -567,7 +567,7 @@
         <tr><td>Deployment work record</td><td>Separately authorized deployment work records frozen install, migrations, production build, restart, loopback listener, and public endpoint checks. Those actions belong to the deployment work, not the read-only source review.</td></tr>
         <tr><td>Current audit disposition</td><td><span class="badge fixed">I1 primary scope fixed</span> — remaining provider/prior-grant work is <a href="https://github.com/Nitjsefnie/Overflow/issues/8">follow-up #8</a>. Other paths unchanged: 1 Critical + 15 Important + 4 Minor = <strong>20 unresolved findings</strong>.</td></tr>
       </tbody></table></div>
-      <p>The 241-test full-gate evidence is not relabeled as a fresh full run at the newer SHA. Real OAuth consent, provider email fallback, and effective scopes of stored tokens remain unverified in production. The source review's finite jobs completed and disposable probe containers were cleaned up; its report and probes were retained under <code>/tmp</code>.</p>
+      <p>The 241-test full-gate evidence is not relabeled as a fresh full run at the newer SHA. Real OAuth consent, provider email fallback, and effective scopes of stored tokens remain unverified in production. The source review's finite jobs completed and disposable probe containers were cleaned up; its report and probes were retained under a temporary scratch directory.</p>
     </section>
     <section class="selections" id="decisions" aria-labelledby="decisions-title">
       <div class="sec-head"><span class="num">13</span><h2 id="decisions-title">Review decisions and exports</h2></div>
