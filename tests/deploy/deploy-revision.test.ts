@@ -61,6 +61,8 @@ interface Fixture {
   bins: string;
   shimLog: string;
   prevDir: string;
+  protectionJson: string;
+  checkRunsSuccess: string;
 }
 
 let liveFixture: Fixture | undefined;
@@ -73,6 +75,10 @@ afterEach(async () => {
 const FIXTURE_UNIT = "overflow-fixture.service";
 const FIXTURE_URL = "http://127.0.0.1:39999/deploy-fixture";
 const FIXTURE_HASH = "abc1234";
+const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
+const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
+const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
+const JQ_CHECKRUNS = `.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv`;
 const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 const LISTING_REGEX = String.raw`.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}`;
 
@@ -112,6 +118,22 @@ async function makeFixture(options: {
   const bins = path.join(dir, "bins");
   await mkdir(logDir);
   await mkdir(bins);
+  // The gh shim cats these files verbatim, so each holds what gh prints after
+  // applying the script's --jq program for that API path: the protection call
+  // yields one required-check name per line, and the check-runs call yields
+  // `name\tstatus\tconclusion` TSV. The argv-shape assertions below still pin
+  // that the script passes those exact --jq programs.
+  const protectionJson = path.join(dir, "protection.txt");
+  await writeFile(protectionJson, "verify\ndeploy-gate\n");
+  const checkRunsSuccess = path.join(dir, "check-runs-success.txt");
+  await writeFile(
+    checkRunsSuccess,
+    [
+      "verify\tcompleted\tsuccess",
+      "deploy-gate\tcompleted\tsuccess",
+      "claim\tcompleted\tsuccess",
+    ].join("\n") + "\n",
+  );
   const fixture: Fixture = {
     dir,
     tree,
@@ -123,6 +145,8 @@ async function makeFixture(options: {
     bins,
     shimLog: path.join(dir, "shim-log"),
     prevDir,
+    protectionJson,
+    checkRunsSuccess,
   };
   liveFixture = fixture;
   return fixture;
@@ -149,6 +173,10 @@ if [ "$1" = rev-parse ]; then
   printf '%s\\n' "\${GIT_SHIM_HASH:-}"
   exit 0
 fi
+if [ "$1" = config ]; then
+  printf '%s\\n' "\${GIT_SHIM_REMOTE_URL:-}"
+  exit 0
+fi
 exit 0
 `,
   },
@@ -163,6 +191,35 @@ fi
 exit 0
 `,
   },
+  gh: {
+    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_CHECKRUNS_SEQUENCE", "GH_SHIM_STATUS"],
+    dispatch: `
+if [ -n "\${GH_SHIM_STATUS:-}" ] && [ "\$GH_SHIM_STATUS" != 0 ]; then exit "\$GH_SHIM_STATUS"; fi
+path=""
+prev=""
+for a in "\$@"; do
+  if [ "\$prev" = api ]; then path="\$a"; fi
+  prev="\$a"
+done
+case "\$path" in
+  */branches/main/protection)
+    cat "\${GH_SHIM_PROTECTION_JSON:?}"
+    ;;
+  */check-runs*)
+    idx_file="\${SHIM_LOG:?}.gh-seq"
+    idx=\$(cat "\$idx_file" 2>/dev/null || printf '0')
+    IFS=':' read -r -a seq_files <<< "\${GH_SHIM_CHECKRUNS_SEQUENCE:?}"
+    if [ "\$idx" -ge \${#seq_files[@]} ]; then idx=\$((\${#seq_files[@]} - 1)); fi
+    cat "\${seq_files[\$idx]}"
+    printf '%s' "\$((idx + 1))" > "\$idx_file"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`,
+  },
+  sleep: { envKeys: [], dispatch: "exit 0\n" },
   node: { envKeys: [], dispatch: "exit 0\n" },
   systemctl: { envKeys: [], dispatch: "exit 0\n" },
   curl: {
@@ -235,6 +292,9 @@ async function runDeploy(
       SHIM_LOG: fixture.shimLog,
       GIT_SHIM_HASH: FIXTURE_HASH,
       GIT_SHIM_TREE: fixture.tree,
+      GIT_SHIM_REMOTE_URL: FIXTURE_REMOTE_URL,
+      GH_SHIM_PROTECTION_JSON: fixture.protectionJson,
+      GH_SHIM_CHECKRUNS_SEQUENCE: fixture.checkRunsSuccess,
       OVERFLOW_DEPLOY_TREE: fixture.tree,
       OVERFLOW_DEPLOY_ENV_FILE: fixture.envFile,
       OVERFLOW_DEPLOY_LOCK: fixture.lock,
@@ -259,6 +319,7 @@ describe("scripts/deploy-revision.sh", () => {
       "OVERFLOW_DEPLOY_UNIT",
       "OVERFLOW_DEPLOY_URL",
       "OVERFLOW_DEPLOY_LOG_DIR",
+      "OVERFLOW_DEPLOY_CI_TIMEOUT",
     ]) {
       expect(source).toContain(knob);
     }
@@ -301,6 +362,10 @@ describe("scripts/deploy-revision.sh", () => {
     expect(sequential).toEqual([
       `flock -w 900 9`,
       `git pull --ff-only origin main`,
+      `git rev-parse HEAD`,
+      `git config --get remote.origin.url`,
+      `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
+      `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
       `pnpm install --frozen-lockfile`,
       `pnpm db:migrate`,
       `git rev-parse --short=7 HEAD`,
@@ -496,6 +561,173 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toContain("LC_ALL=C sort");
     expect(source).toContain("-printf '%f\\n'");
     expect(source).toContain(".next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}");
+  });
+
+  it("gates the deploy on main's required checks for the deployed SHA", async () => {
+    const source = await readFile(script, "utf8");
+    expect(source).toContain('gh api "repos/$repo/branches/main/protection"');
+    expect(source).toContain('"repos/$repo/commits/$full_sha/check-runs?per_page=100"');
+    expect(source).toContain("--paginate");
+    expect(source).toContain("OVERFLOW_DEPLOY_CI_TIMEOUT");
+    expect(source).toContain("OVERFLOW_DEPLOY_CI_GATE");
+    expect(source).toContain('git rev-parse HEAD');
+  });
+
+  async function writeCheckRuns(
+    fixture: Fixture,
+    name: string,
+    rows: Array<[string, string, string?]>,
+  ): Promise<string> {
+    const file = path.join(fixture.dir, name);
+    await writeFile(
+      file,
+      rows.map(([n, status, conclusion]) => [n, status, conclusion ?? ""].join("\t")).join("\n") + "\n",
+    );
+    return file;
+  }
+
+  it("refuses before install when a required check's latest run failed", async () => {
+    const fixture = await makeFixture();
+    const failed = await writeCheckRuns(fixture, "check-runs-failed.txt", [
+      ["verify", "completed", "failure"],
+      ["deploy-gate", "completed", "success"],
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_CHECKRUNS_SEQUENCE: failed });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("verify");
+    expect(result.stderr).toContain("failure");
+    const entries = await readLog(fixture.shimLog);
+    const started = entries.filter(
+      (entry) =>
+        entry.cmd === "pnpm" &&
+        ["install", "db:migrate", "build", "release:switch", "release:prune"].includes(entry.args[0]!),
+    );
+    expect(started).toEqual([]);
+    expect(entries.some((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart")).toBe(false);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
+  });
+
+  it("refuses fail-closed when a required check has no check run on the SHA", async () => {
+    const fixture = await makeFixture();
+    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+      ["verify", "completed", "success"],
+      ["claim", "completed", "success"],
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_CHECKRUNS_SEQUENCE: absent });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("deploy-gate");
+    expect(result.stderr).toContain("absent");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
+  });
+
+  it("waits for a pending required check and proceeds once it succeeds", async () => {
+    const fixture = await makeFixture();
+    const pending = await writeCheckRuns(fixture, "check-runs-pending.txt", [
+      ["verify", "completed", "success"],
+      ["deploy-gate", "in_progress"],
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_CHECKRUNS_SEQUENCE: `${pending}:${fixture.checkRunsSuccess}`,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const isCheckRuns = (entry: ShimLogEntry) =>
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+    const checkRunsCalls = entries.filter(isCheckRuns);
+    expect(checkRunsCalls).toHaveLength(2);
+    const checkRunsAt = entries.findIndex(isCheckRuns);
+    const sleepBetween = entries
+      .map(describeEntry)
+      .filter((line, at) => line === "sleep 15" && at > checkRunsAt);
+    expect(sleepBetween.length).toBeGreaterThanOrEqual(1);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch")).toBe(true);
+  });
+
+  it("refuses on the timeout while a required check stays pending, before mutating anything", async () => {
+    const fixture = await makeFixture();
+    const pending = await writeCheckRuns(fixture, "check-runs-stuck-pending.txt", [
+      ["verify", "completed", "success"],
+      ["deploy-gate", "in_progress"],
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_CHECKRUNS_SEQUENCE: pending,
+      OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
+    });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("deploy-gate");
+    expect(result.stderr).toContain("pending");
+    expect(result.stderr).toContain("nothing has been mutated");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
+  });
+
+  it("refuses when the required-checks read itself fails", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GH_SHIM_STATUS: "1" });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("could not determine required checks");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(1);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+  });
+
+  it("refuses when main's protection reads but declares no required checks", async () => {
+    const fixture = await makeFixture();
+    const empty = path.join(fixture.dir, "protection-empty.txt");
+    await writeFile(empty, "");
+    const result = await runDeploy(fixture, { GH_SHIM_PROTECTION_JSON: empty });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("could not determine required checks");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(1);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+  });
+
+  it("skips the entire gate under OVERFLOW_DEPLOY_CI_GATE=skip, with a loud warning", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { OVERFLOW_DEPLOY_CI_GATE: "skip" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("OVERFLOW_DEPLOY_CI_GATE=skip");
+    expect(result.stderr).toContain(`skipping the required-checks gate for ${FIXTURE_HASH}`);
+    expect(result.stderr).toContain("CI is NOT verified");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch")).toBe(true);
+  });
+
+  it("refuses on any other OVERFLOW_DEPLOY_CI_GATE value, naming the accepted one", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { OVERFLOW_DEPLOY_CI_GATE: "Skip" });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("OVERFLOW_DEPLOY_CI_GATE");
+    expect(result.stderr).toContain("skip");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+  });
+
+  it("refuses when remote.origin.url does not parse to an owner/repo pair", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      GIT_SHIM_REMOTE_URL: "https://gitlab.com/overflow-fixture/overflow-fixture.git",
+    });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("remote.origin.url");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
 });
 

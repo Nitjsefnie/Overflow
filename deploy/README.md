@@ -570,7 +570,9 @@ the same guards the manual fallback below documents: the `flock` fence on
 `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
 with the serialization refusal when the lock is not acquired, the `.next`
 anchor taken before `git pull` and passed to `release:switch --expect-current`,
-the pull itself, the copy-import install, the environment load, `db:migrate`, a
+the pull itself, the required-checks gate that must bless the exact deployed
+SHA before anything is installed (below), the copy-import install, the
+environment load, `db:migrate`, a
 grammar-named release directory created with a collision-aborting `mkdir`,
 generated-config preparation, the build, the ownership reset excluding the
 serving cache, the new cache handover to the service account, the conditional
@@ -592,14 +594,31 @@ was withheld. The manual path keeps a human as the guard through the
 confirm-first rule below; the script's guard is additional automation, and the
 manual rule is what still applies when pruning by hand.
 
-The script takes no arguments and reads exactly six environment overrides,
-which exist for the test harness; production sets none of them and runs on the
-defaults: `OVERFLOW_DEPLOY_TREE` (default `/srv/overflow`),
+The script deploys only a SHA that main's required checks have blessed. Right
+after the pull it resolves the exact SHA being deployed and reads main's
+required checks from the branch protection; every required check's latest run
+on that SHA must conclude `success` before install, migrations, build, switch
+or restart. A failed, cancelled or otherwise non-successful conclusion refuses
+immediately, an absent check run refuses (absent is not passed), and a queued
+or in-progress check makes the script wait, polling every 15 seconds until
+`OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
+the still-pending checks named; a refused gate mutates nothing.
+`OVERFLOW_DEPLOY_CI_GATE=skip` bypasses the entire gate with a loud warning
+naming the skip and the SHA, and is reserved for rollback or recovery deploys
+when main's CI is red; unset or empty enforces the gate, and any other value
+refuses.
+
+The script takes no arguments and reads exactly seven environment overrides
+for the test harness; production sets none of them and runs on the defaults:
+`OVERFLOW_DEPLOY_TREE` (default `/srv/overflow`),
 `OVERFLOW_DEPLOY_ENV_FILE` (default `/etc/overflow/overflow.env`),
 `OVERFLOW_DEPLOY_LOCK` (default `/run/overflow-deploy.lock`),
 `OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
-`OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/`) and
-`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`).
+`OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/`),
+`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`) and
+`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). One further override is
+operator-facing, not a test knob: `OVERFLOW_DEPLOY_CI_GATE`, whose only
+accepted non-default value is `skip` (the gate paragraph above).
 
 Every revision deploy finishes by upgrading existing webhook subscriptions after
 the new parser-capable release is serving and its readiness check succeeds. Keep
