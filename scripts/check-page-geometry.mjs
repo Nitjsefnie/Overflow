@@ -171,6 +171,12 @@ const FIXTURE_USERS = [
 ];
 
 /**
+ * The contract table's `authAs` values, total: an unknown value throws naming
+ * the contract instead of silently signing in as one of the real roles.
+ */
+const AUTH_AS_ROLES = { member: "MEMBER", moderator: "MODERATOR" };
+
+/**
  * Idempotently create the fixture users in whatever database `databaseUrl`
  * names — the gate's DATABASE_URL, a scratch container in CI or --base-url
  * mode alike. Never deletes or demotes anything else; the only columns the
@@ -296,6 +302,31 @@ function fixtureAuthSecret() {
     );
   }
   return secret;
+}
+
+/**
+ * Deliver the session cookie on the page's flat DevTools session. The Network
+ * domain must be enabled on the session FIRST (main enables it right after
+ * Page.enable) — an unenabled domain answers "'Network.setCookie' wasn't
+ * found" (a probe-proven -32601, issue 453 review) — and a set that DevTools
+ * itself reports as failed must be a hard error, never a silent continue:
+ * every authed contract would otherwise read as a session bounce instead of
+ * surfacing the delivery refusal. Exported for the session tests, which drive
+ * it with a fake DevTools client (the same pattern launchChromeWithRetry and
+ * missingRequiredEnv are exported for).
+ */
+export async function setSessionCookie(client, sessionId, value, baseUrl) {
+  const result = await client.send("Network.setCookie", {
+    name: SESSION_COOKIE_NAME,
+    value,
+    url: baseUrl,
+  }, sessionId);
+  if (result?.success !== true) {
+    throw new Error(
+      `Network.setCookie could not set the "${SESSION_COOKIE_NAME}" session cookie on ${baseUrl} ` +
+        `(DevTools answered ${JSON.stringify(result) ?? "nothing"}) — signed-in contracts cannot run without it`,
+    );
+  }
 }
 
 /**
@@ -877,6 +908,10 @@ async function main() {
       const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
       const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
       await client.send("Page.enable", {}, sessionId);
+      // Network domain commands (the session-cookie set, issue 453) answer
+      // "'Network.setCookie' wasn't found" until the domain is enabled on the
+      // flat session; enabling it on a signed-out-only run is harmless.
+      await client.send("Network.enable", {}, sessionId);
 
       const rows = [];
       pageLoop:
@@ -885,15 +920,18 @@ async function main() {
         // navigation: the member/moderator switch overwrites the same cookie,
         // and a re-set is idempotent and cheap (issue 453).
         if (contract.authAs !== undefined) {
-          await client.send("Network.setCookie", {
-            name: SESSION_COOKIE_NAME,
-            value: mintSessionCookieValue({
-              secret: fixtureAuthSecret(),
-              userId: contract.authAs === "member" ? fixtureUsers.memberUserId : fixtureUsers.moderatorUserId,
-              role: contract.authAs === "member" ? "MEMBER" : "MODERATOR",
-            }),
-            url: BASE_URL,
-          }, sessionId);
+          const role = AUTH_AS_ROLES[contract.authAs];
+          if (role === undefined) {
+            throw new Error(
+              `unknown authAs "${contract.authAs}" on the ${contract.page} contract — ` +
+                `expected "member" or "moderator"`,
+            );
+          }
+          await setSessionCookie(client, sessionId, mintSessionCookieValue({
+            secret: fixtureAuthSecret(),
+            userId: role === "MEMBER" ? fixtureUsers.memberUserId : fixtureUsers.moderatorUserId,
+            role,
+          }), BASE_URL);
         }
 
         const url = `${BASE_URL}${contract.page}`;
