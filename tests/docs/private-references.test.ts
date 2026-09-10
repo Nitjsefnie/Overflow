@@ -17,9 +17,10 @@ import { describe, expect, it } from "vitest";
  * product's public instance `overflow.nitjsefni.eu` — the host `README.md`
  * and `CONTRIBUTING.md` present as where the product runs, serving the public
  * API surface including `/api/mcp`. The exemption is a negative lookbehind on
- * the `overflow.` prefix, so the token stays one domain and an internal
- * hostname added later is still caught by default; the `\b` inside the
- * lookbehind stops a longer prefix such as `xoverflow.` from being exempted.
+ * the `overflow.` prefix, so exactly an `overflow.` preceded by a non-word
+ * character or the line start is exempt — an internal hostname added later is
+ * still caught by default, and a longer prefix such as `xoverflow.` is not
+ * exempted.
  *
  * Each entry pairs the reported token with its matcher. The machine paths are
  * matched with a word boundary so the bare form — `under /root`, no trailing
@@ -60,5 +61,32 @@ describe("private references in committed docs", () => {
       violations,
       `\n${violations.join("\n")}`,
     ).toStrictEqual([]);
+  });
+
+  it("pins the exemption lookbehind and the machine-path word boundaries", () => {
+    const patternFor = (token: string): RegExp => {
+      const entry = FORBIDDEN_PATTERNS.find(({ token: t }) => t === token);
+      if (!entry) throw new Error(`no FORBIDDEN_PATTERNS entry for ${token}`);
+      return entry.pattern;
+    };
+    const domain = patternFor("nitjsefni.eu");
+
+    // "foo-overflow.nitjsefni.eu" is exempt too (non-word char before the
+    // prefix defeats the lookbehind's `\b`) — pinned as accepted, not
+    // desirable: a property of the maintainer-mandated fail-safe shape, and
+    // no such host exists.
+    expect(domain.test("overflow.nitjsefni.eu")).toBe(false);
+    expect(domain.test("https://overflow.nitjsefni.eu")).toBe(false);
+    expect(domain.test("foo-overflow.nitjsefni.eu")).toBe(false);
+    expect(domain.test("nitjsefni.eu")).toBe(true);
+    expect(domain.test("docs.nitjsefni.eu")).toBe(true);
+    expect(domain.test("xoverflow.nitjsefni.eu")).toBe(true);
+
+    expect(patternFor("/root").test("under /root")).toBe(true);
+    expect(patternFor("/etc").test("in /etc")).toBe(true);
+    expect(patternFor("/tmp").test("under /tmp")).toBe(true);
+    expect(patternFor("/root").test("/rooted")).toBe(false);
+    expect(patternFor("/etc").test("/etcetera")).toBe(false);
+    expect(patternFor("/tmp").test("/temporary")).toBe(false);
   });
 });
