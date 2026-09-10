@@ -333,9 +333,12 @@
         and nothing asserts what the probe marks UNVERIFIED. Fix round 1: independent
         citation review plus a mechanical 86-check sweep, fresh evidence fetches, and an
         adversarial verification that refuted the first Decision 2 — now replaced with a
-        zero-round definition grounded in what GitLab verifiably exposes. The item-16 live leg
-        is preserved verbatim: raw response <code>state_reason_live.json</code>, 2026-09-10,
-        filed alongside the probe's artifacts. This document
+        zero-round definition grounded in what GitLab verifiably exposes. The item-16 artifact
+        trail is preserved: raw response <code>state_reason_live.json</code>, 2026-09-10, filed
+        alongside the probe's artifacts. Preserved first and re-read with a literal key check,
+        that artifact refuted this document's own first description of the item-16 live leg —
+        the regrade below (five consistent negatives) rests on the artifact, not the
+        description. This document
         decides nothing about schema or code — it is the contract a human signs off before
         later steps design against it.
       </div>
@@ -547,8 +550,8 @@
             <td class="num">16</td>
             <td class="slate">Issue state (CLOSED) and <code>stateReason</code></td>
             <td><span class="gh">repository-fold.ts:389-391,451-478</span> (<code>NOT_PLANNED</code> gate <span class="gh">:469</span>)</td>
-            <td>Issue <code>state</code> (opened/closed) live-verified. A REST <code>state_reason</code> field DOES exist on issue objects — live-verified 2026-09-10, raw response preserved (<code>state_reason_live.json</code>, alongside the probe's artifacts; value null on a plain close, alongside <code>duplicated_to_id</code>) — but it is absent from <code>doc/api/issues.md@master</code>, untyped in the live GraphQL schema dump (no <code>stateReason</code> field, no <code>DUPLICATED</code> value anywhere), and its value vocabulary is UNVERIFIED</td>
-            <td><span class="vchip part">PARTIAL</span><br>state and the <code>state_reason</code> field supplied; a GitHub <code>NOT_PLANNED</code> equivalent genuinely absent (gap 1) &middot; Public</td>
+            <td>Issue <code>state</code> (opened/closed) live-verified. A REST <code>state_reason</code> field was observed on NO probed surface — five preserved artifacts agree on its absence: the live issue object (<code>state_reason_live.json</code>), the probe's issue-list responses (r17/r18/r24), the master REST entity sources (<code>lib/api/entities/issue.rb</code>, <code>issue_basic.rb</code>), <code>doc/api/issues.md@master</code>, and the live GraphQL schema dump (no <code>stateReason</code>, no <code>DUPLICATED</code> value anywhere). A duplicate-close link, <code>closed_as_duplicate_of</code>, is live-observed null in the issue's <code>_links</code>; its semantics are UNVERIFIED. Field existence: NOT SUPPLIED on probed surfaces / UNVERIFIED beyond probe</td>
+            <td><span class="vchip part">PARTIAL</span><br>state supplied; the <code>state_reason</code> leg NOT SUPPLIED on every probed surface; a GitHub <code>NOT_PLANNED</code> equivalent genuinely absent (gap 1) &middot; Public</td>
           </tr>
           <tr>
             <td class="num">17</td>
@@ -866,13 +869,18 @@
           <div class="dt">1 &middot; A GitHub NOT_PLANNED close reason has no GitLab equivalent</div>
           <div class="dd">The not-planned gate (<span class="gh">repository-fold.ts:469</span>,
             constant <code>NOT_PLANNED</code>) is GitHub-vocabulary and needs a forge-neutral
-            reformulation in later steps. The blanket "no state-reason" claim is dead: a REST
-            <code>state_reason</code> field exists on GitLab issue objects (live-verified
-            2026-09-10; null on a plain close, alongside <code>duplicated_to_id</code>) — but it
-            is absent from <code>doc/api/issues.md@master</code>, untyped in the live GraphQL
-            schema dump, its value vocabulary is UNVERIFIED, and no verified value carries the
-            not-planned semantics. The unwritable-closure prose ("No merged GitHub GraphQL
-            closing pull request was found.") bakes GitHub into moderator-facing text.</div>
+            reformulation in later steps. The conclusion rests on five consistent negatives, not
+            one unpreserved description: a REST <code>state_reason</code> field appears on NO
+            probed surface — <code>state_reason_live.json</code> (the live issue object), the
+            probe's issue-list responses (r17/r18/r24), the master REST entity sources
+            (<code>lib/api/entities/issue.rb</code>, <code>issue_basic.rb</code>),
+            <code>doc/api/issues.md@master</code>, and the live GraphQL schema dump all agree on
+            its absence — so field existence grades NOT SUPPLIED on probed surfaces and
+            UNVERIFIED beyond the probe. A duplicate-close link,
+            <code>closed_as_duplicate_of</code>, is live-observed null in the issue's
+            <code>_links</code>; its semantics are UNVERIFIED. The unwritable-closure prose ("No
+            merged GitHub GraphQL closing pull request was found.") bakes GitHub into
+            moderator-facing text.</div>
         </div>
         <div class="defer">
           <div class="dt">2 &middot; The 40-hex merge-commit CHECK and the fold regex exclude SHA-256 repositories</div>
@@ -966,12 +974,15 @@
       <div class="deferred">
         <div class="defer rust">
           <div class="dt">No not-planned close reason</div>
-          <div class="dd">The REST issue object DOES carry a <code>state_reason</code> field
-            (live-verified, null on a plain close) — this contract's first draft graded it NOT
-            SUPPLIED without probe evidence, and that blanket claim is corrected here — but the
-            field is undocumented in the current REST doc, untyped in the GraphQL schema, its
-            value vocabulary is UNVERIFIED, and no verified value expresses GitHub's
-            <code>NOT_PLANNED</code>. The not-planned gate stays unportable as written (gap 1).</div>
+          <div class="dd">A REST <code>state_reason</code> field appears on NO probed surface —
+            five preserved artifacts agree on its absence (<code>state_reason_live.json</code>,
+            the probe's issue-list responses r17/r18/r24, the master REST entity sources,
+            <code>doc/api/issues.md@master</code>, the live GraphQL schema dump) — so field
+            existence grades NOT SUPPLIED on probed surfaces / UNVERIFIED beyond the probe. This
+            contract's first draft described the field as live-observed and was regraded against
+            its own preserved artifact; the not-planned conclusion is STRONGER for it: it rests
+            on five consistent negatives, not one unpreserved description. The not-planned gate
+            stays unportable as written (gap 1).</div>
         </div>
         <div class="defer rust">
           <div class="dt">No append-only REST approval-event endpoint</div>
