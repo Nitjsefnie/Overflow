@@ -32,9 +32,11 @@ export function AccountDataNotice() {
       <section className="surface" aria-labelledby="account-data-usage-heading">
         <h2 id="account-data-usage-heading">What the token is used for</h2>
         <p>
-          On repositories you administer, the token reads repository and difficulty-label data, and creates or
-          deletes Overflow&apos;s webhook when you register or unregister a repository. These are the flows you
-          trigger. The token is never displayed in the product.
+          When you register or change a repository, the token creates or deletes Overflow&apos;s webhook on it, and
+          a labels lookup runs on any GitHub repository path you submit during registration or catalog flows.
+          Overflow&apos;s reconciliation re-reads the registered repository&apos;s issues, pull requests, reviews,
+          and diffs — when you register or change a repository, and unattended, as a periodic sweep keeps the
+          ledger current — using that repository&apos;s sponsor token. The token is never displayed in the product.
         </p>
       </section>
 
@@ -42,8 +44,8 @@ export function AccountDataNotice() {
         <h2 id="account-data-access-heading">Who can see it</h2>
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
-          Other signed-in members and moderators see your GitHub login and avatar: Overflow&apos;s member roster and
-          moderation surfaces display them.
+          Other signed-in members and moderators see your GitHub login — the member roster and the moderation
+          surfaces display it. Your avatar URL is stored but not displayed.
         </p>
       </section>
 
