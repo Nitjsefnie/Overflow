@@ -387,12 +387,12 @@ const PAGE_CONTRACTS = [
     renderRoot: "#main-content",
     viewports: [
       [1440, 800],
-      // The fold height is measured, not guessed: on the current stylesheet the
-      // primary action's bottom edge sits at 668.4px on a 1280-wide viewport, so
-      // a 600px fold would leave this row red on the clean page. 700px pins
-      // today's layout with ~31px of headroom, and any downward move past that
-      // (the issue-111 mutant class) turns the row red.
-      [1280, 700],
+      // Measured bottom 668.4px on BOTH environments (1280-wide viewport).
+      // The original 700px fold pinned ~31px of headroom and was this file's
+      // documentation pattern; the runner-vs-local text-wrap spread that
+      // red-lined /dashboard's narrow rows applies here too, so the fold
+      // gives ~100px instead: 770, with ~102px of headroom.
+      [1280, 770],
     ],
     primaryAction: ".landing-hero .action-button",
     styleProof: {
@@ -417,12 +417,16 @@ const PAGE_CONTRACTS = [
    * `<button>` reads `inline-block`), so re-pointing a selector at a
    * different element type means re-deriving it.
    *
-   * Fold heights below are measured, not guessed (the same discipline as the
-   * landing row's 1280x700 comment): each is the clean page's measured
-   * action bottom plus ~30-40px of headroom, so a downward move past that
-   * turns the row red. The signed-in pages' heading block sits the primary
-   * action ~60-80px lower than the landing page's, which is why their
-   * 1280-wide fold is taller than the landing's 700. The rows pin the
+   * Fold heights are measured, not guessed — against BOTH environments that
+   * enforce them. The first pass pinned ~30-40px of headroom over this box's
+   * measurements alone, and CI red-lined /dashboard's two narrow rows: its
+   * text-wrap-sensitive ledger-note link laid out ~42-57px taller on the
+   * GitHub runner (1042.9px bottom at 780 wide vs 985.6px here; 1163.7px vs
+   * 1121.7px at 520) while every other row matched to the decimal. The rule
+   * now: each fold gives ~100px of headroom over the WORSE of the two
+   * environments' bottoms, and a row with under 60px on either gets raised
+   * even when it passes. Per-row comments carry the measured bottoms (this
+   * box's number first, the runner's where the two differ). The rows pin the
    * fixture's empty-ledger state — what CI's scratch database renders — not
    * an arbitrary member's data.
    */
@@ -436,20 +440,23 @@ const PAGE_CONTRACTS = [
     authAs: "member",
     renderRoot: "#main-content",
     viewports: [
-      [1440, 800],
-      // Measured, not guessed: the ledger-note link's bottom sits at 775.6px
-      // on this width (the page-heading block is ~75px taller than the
-      // landing page's, so the landing's 700px fold would be red on the
-      // clean page). 810 pins today's layout with ~34px of headroom.
-      [1280, 810],
-      // Measured bottom 985.6px at this width — the 780px breakpoint stacks
-      // the dashboard grid, dropping the aside below the balance card.
-      // 1020 pins it with ~34px of headroom.
-      [780, 1020],
-      // Measured bottom 1121.7px at this width (the 520px breakpoint's
-      // narrower shell and single-column fields push it lower still).
-      // 1160 pins it with ~38px of headroom.
-      [520, 1160],
+      // Measured bottom 778.8px on both environments; 800 left only ~21px of
+      // headroom, so the fold rises to 880 (~101px).
+      [1440, 880],
+      // Measured bottom 775.6px on both environments; 810 left ~34px, so
+      // 880 pins ~104px.
+      [1280, 880],
+      // THIS is the row class that taught the two-environment rule: the
+      // ledger-note link text-wrapped taller on the GitHub runner —
+      // bottom 985.6px here vs 1042.9px there (the 780px breakpoint stacks
+      // the dashboard grid, and the runner's fonts wrapped the link onto an
+      // extra line). 1020 (a ~34px pin over the local number) failed CI at
+      // 1042.9. 1140 gives ~97px over the WORSE measurement.
+      [780, 1140],
+      // Same wrap spread at this width: bottom 1121.7px here vs 1163.7px on
+      // the runner (the 520px breakpoint's narrower shell and single-column
+      // fields). 1160 failed CI at 1163.7. 1260 gives ~96px over the worse.
+      [520, 1260],
     ],
     primaryAction: ".ledger-note .text-link",
     styleProof: {
@@ -468,15 +475,19 @@ const PAGE_CONTRACTS = [
     authAs: "member",
     renderRoot: "#main-content",
     viewports: [
+      // Measured bottom 727.6px on both environments — ~72px of headroom at
+      // the 800px fold, above the raise threshold, so it stays.
       [1440, 800],
-      // Measured bottom 724.4px on this width; 760 pins it with ~36px of
-      // headroom (the landing's 700px fold would be red on the clean page).
-      [1280, 760],
-      // Measured bottom 691.5px (the filter form's fields stack at the 780px
-      // breakpoint); 725 pins it with ~33px of headroom.
-      [780, 725],
-      // Measured bottom 719.6px; 755 pins it with ~35px of headroom.
-      [520, 755],
+      // Measured bottom 724.4px on both environments; 760 left ~36px, so
+      // 825 pins ~101px.
+      [1280, 825],
+      // Measured bottom 691.5px on both environments (the filter form's
+      // fields stack at the 780px breakpoint); 725 left ~34px, so 795 pins
+      // ~104px.
+      [780, 795],
+      // Measured bottom 719.6px on both environments; 755 left ~35px, so
+      // 820 pins ~100px.
+      [520, 820],
     ],
     primaryAction: ".surface .action-button",
     styleProof: {
@@ -496,14 +507,18 @@ const PAGE_CONTRACTS = [
     authAs: "member",
     renderRoot: "#main-content",
     viewports: [
-      [1440, 800],
-      // Measured bottom 739.3px on this width; 775 pins it with ~36px of
-      // headroom (the landing's 700px fold would be red on the clean page).
-      [1280, 775],
-      // Measured bottom 621.6px; 655 pins it with ~33px of headroom.
-      [780, 655],
-      // Measured bottom 656px; 690 pins it with ~34px of headroom.
-      [520, 690],
+      // Measured bottom 742.5px on both environments; 800 left ~58px of
+      // headroom — just under the raise threshold — so 845 pins ~102px.
+      [1440, 845],
+      // Measured bottom 739.3px on both environments; 775 left ~36px, so
+      // 840 pins ~101px.
+      [1280, 840],
+      // Measured bottom 621.6px on both environments; 655 left ~33px, so
+      // 725 pins ~103px.
+      [780, 725],
+      // Measured bottom 656px on both environments; 690 left ~34px, so 760
+      // pins ~104px.
+      [520, 760],
     ],
     primaryAction: ".empty-state .text-link",
     styleProof: {
@@ -528,20 +543,21 @@ const PAGE_CONTRACTS = [
     viewports: [
       // No consumer-scale fold holds this action: the audit form's five
       // fields and its textarea all precede the button, putting its bottom
-      // at ~1275px on the desktop widths. The heights below pin the
-      // button's measured position with ~35-38px of headroom, so a downward
-      // move still turns the row red; what they give up is the
-      // above-the-fold claim a shorter fold would carry. The narrow rows'
-      // tighter folds (1190, 1345) remain the guard on the stacked layouts.
-      [1440, 1310],
-      [1280, 1310],
-      // Measured bottom 1152.8px (form-grid columns stay side by side at
-      // this width, but the stacked audit section sits lower); 1190 pins
-      // it with ~37px of headroom.
-      [780, 1190],
-      // Measured bottom 1308.9px (the 520px breakpoint stacks the form's
-      // fields single-column); 1345 pins it with ~36px of headroom.
-      [520, 1345],
+      // at ~1272-1275px on the desktop widths (identical on both
+      // environments). The heights below pin the button's measured position
+      // with ~100px of headroom, so a large downward move still turns the
+      // row red; what they give up is the above-the-fold claim a shorter
+      // fold would carry.
+      [1440, 1375],
+      [1280, 1375],
+      // Measured bottom 1152.8px on both environments (form-grid columns
+      // stay side by side at this width, but the stacked audit section sits
+      // lower); 1190 left ~37px, so 1255 pins ~102px.
+      [780, 1255],
+      // Measured bottom 1308.9px on both environments (the 520px breakpoint
+      // stacks the form's fields single-column); 1345 left ~36px, so 1410
+      // pins ~101px.
+      [520, 1410],
     ],
     primaryAction: ".open-audit-form .action-button",
     styleProof: {
