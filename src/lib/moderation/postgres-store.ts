@@ -344,6 +344,13 @@ export class PostgresModerationStore implements ModerationStore {
     moderator: boolean;
   }): Promise<ModerationStoreResult<ModeratorRoleChange>> {
     return this.sql.begin(async (transaction) => {
+      // Serialization boundary, taken before any row lock: every moderator role
+      // change queues on one transaction-scoped advisory lock, so two mutual
+      // revocations cannot each hold the other's actor row FOR UPDATE while
+      // their audit inserts wait for a KEY SHARE on it (a 40P01 deadlock that
+      // surfaced as a 502), and the survivor count below is evaluated against a
+      // settled predecessor rather than an uncommitted one.
+      await transaction`select pg_advisory_xact_lock(hashtext('overflow:moderator-role-changes'))`;
       const [target] = await transaction<{ id: string; github_login: string; role: "MEMBER" | "MODERATOR" }[]>`
         select id, github_login, role from users where id = ${input.targetAccountId} for update
       `;
@@ -351,9 +358,10 @@ export class PostgresModerationStore implements ModerationStore {
         return { kind: "not_found" };
       }
 
-      // Counted inside the transaction, with the target row already locked, so
-      // two moderators revoking each other at the same moment cannot both see a
-      // survivor and leave the instance with none.
+      // Counted inside the transaction, under the advisory boundary above: the
+      // target row is locked, and every competing role change is either fully
+      // committed or still queued on the advisory lock, so the count cannot
+      // pass twice while the other revocation is uncommitted.
       if (!input.moderator) {
         const [remaining] = await transaction<{ count: string }[]>`
           select count(*)::text as count from users where role = 'MODERATOR' and id <> ${input.targetAccountId}
