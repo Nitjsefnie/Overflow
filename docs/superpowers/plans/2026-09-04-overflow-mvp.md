@@ -313,7 +313,7 @@ Run `pnpm test --run tests/components tests/dashboard`. Expected: all pass witho
 
 - [ ] **Step 4: Add local operations and documentation**
 
-Ship PostgreSQL 17 Compose with volume/healthcheck. `.env.example` names `DATABASE_URL`, `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `TOKEN_ENCRYPTION_KEY`, `GITHUB_WEBHOOK_SECRET`, `APP_URL`, `MODERATOR_GITHUB_LOGINS`, and optional `CREDIT_FLOOR`. README covers OAuth callback, public HTTPS webhook, configurable S/M/L-or-other opening catalogs, required actual 1–10 mappings, GraphQL requirement, migration, reconciliation, scoring/self-work, statistical ladder, local commands, and PostgreSQL already installed as an alternative to Compose.
+Ship PostgreSQL 17 Compose with volume/healthcheck. `.env.example` names `DATABASE_URL`, `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `TOKEN_ENCRYPTION_KEY`, `GITHUB_WEBHOOK_SECRET`, `APP_URL`, `MODERATOR_GITHUB_USER_IDS`, and optional `CREDIT_FLOOR`. README covers OAuth callback, public HTTPS webhook, configurable S/M/L-or-other opening catalogs, required actual 1–10 mappings, GraphQL requirement, migration, reconciliation, scoring/self-work, statistical ladder, local commands, and PostgreSQL already installed as an alternative to Compose.
 
 - [ ] **Step 5: Run the complete verification matrix**
 
