@@ -56,10 +56,12 @@ does not overflow sideways. Exits 1 on any failure.
   --help           this text
 
 A spawned server (no --base-url) needs DATABASE_URL, from the environment or
-a repo-root .env file; the run refuses to launch anything without it.
+the repo-root .env file (the only env file this check loads); the run refuses
+to launch anything without it.
 
 Chrome is discovered from LAYOUT_CHECK_CHROME, then google-chrome-stable,
 google-chrome, chromium, chromium-browser (PATH and /usr/bin).
+LAYOUT_CHECK_PORT overrides the spawned server's port (default 3219).
 `;
 
 if (process.argv.includes("--help")) {
@@ -80,7 +82,35 @@ function flaggedValue(flag) {
 }
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const PORT = 3219;
+
+/**
+ * The port the spawned measurement server binds, overridable so concurrent
+ * runs on one machine need not squat each other's port (issue 514: three
+ * simultaneous sightings in one night). Mirrors the LAYOUT_CHECK_CHROME
+ * discovery override. Unset or empty keeps the default; anything that is
+ * not a plain decimal integer from 1 to 65535 is refused, naming the
+ * variable and the offending value. --base-url mode spawns nothing and
+ * never consults this.
+ */
+export function parseLayoutCheckPort(value) {
+  if (value === undefined || value === "") return 3219;
+  if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error(`LAYOUT_CHECK_PORT must be a whole number from 1 to 65535, got "${value}"`);
+  }
+  return Number(value);
+}
+
+/** flaggedValue's failure shape — the message, the USAGE, exit 2. */
+function parseLayoutCheckPortOrExit(value) {
+  try {
+    return parseLayoutCheckPort(value);
+  } catch (error) {
+    console.error(`${error.message}\n\n${USAGE}`);
+    process.exit(2);
+  }
+}
+
+const PORT = parseLayoutCheckPortOrExit(process.env.LAYOUT_CHECK_PORT);
 const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).replace(/\/+$/, "");
 
 /**
@@ -132,10 +162,19 @@ export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process
     if (equals <= 0) continue;
     const key = withoutExportPrefix.slice(0, equals).trim();
     let value = withoutExportPrefix.slice(equals + 1).trim();
-    const quoted =
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"));
-    if (quoted && value.length >= 2) value = value.slice(1, -1);
+    // Both real consumers of this format — node's --env-file and the
+    // installed @next/env — strip an unquoted `#` comment unconditionally
+    // (not only after whitespace), and keep a `#` inside quotes. Matching
+    // them is load-bearing: a DATABASE_URL whose password carries `#` must
+    // parse the same for the seeding read as for the server it renders
+    // against (reviewer differential, round-4 polish).
+    const quote = value.startsWith('"') || value.startsWith("'") ? value[0] : undefined;
+    if (quote !== undefined && value.endsWith(quote) && value.length >= 2) {
+      value = value.slice(1, -1);
+    } else {
+      const commentStart = value.indexOf("#");
+      if (commentStart !== -1) value = value.slice(0, commentStart).trim();
+    }
     if (env[key] === undefined) {
       env[key] = value;
       applied.push(key);
@@ -164,16 +203,20 @@ export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFil
 
 /**
  * The refusal message for a run whose required environment is unsatisfied,
- * composed from the missing names and the .env-family list (issue 471).
- * Extracted so a test can pin the message's content — both remedies and the
- * variable name — against the same composition the script prints, the way a
- * mutant that drops a remedy cannot slip past the suite.
+ * composed from the missing names (issue 471). The remedy names the
+ * repo-root .env file EXACTLY — the only env file this check's own process
+ * loads (loadRepoEnvFile above) — not the wider Next.js family the spawned
+ * server reads: a developer following the printed remedy with the variable
+ * solely in .env.local would otherwise self-contradict mid-run (round-4
+ * polish). Extracted so a test can pin the message's content — both
+ * remedies and the variable name — against the same composition the script
+ * prints, the way a mutant that drops a remedy cannot slip past the suite.
  */
 export function missingEnvMessage(missing) {
   return (
     `${missing.join(", ")} is not set — the spawned server cannot render any page without it. ` +
-    `Set it in the environment, or write it to a repo-root .env file ` +
-    `(${ENV_FILE_NAMES.join(", ")}), then rerun.`
+    `Set it in the environment, or write it to the repo-root .env file ` +
+    `(the only env file this check loads), then rerun.`
   );
 }
 

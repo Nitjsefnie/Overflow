@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- untyped .mjs script module
-import { launchChromeWithRetry, missingEnvMessage, missingRequiredEnv } from "../../scripts/check-page-geometry.mjs";
+import { launchChromeWithRetry, missingEnvMessage, missingRequiredEnv, parseLayoutCheckPort } from "../../scripts/check-page-geometry.mjs";
 
 /**
  * The options launchChromeWithRetry takes, declared locally because the .mjs
@@ -361,6 +361,38 @@ describe("the spawned-server environment preflight (issue 471)", () => {
 
     expect(message).toContain("DATABASE_URL");
     expect(message).toContain("Set it in the environment");
-    expect(message).toContain("write it to a repo-root .env file");
+    // The remedy names the repo-root .env file EXACTLY — the only env file
+    // the check's own process loads — not the wider Next.js family the
+    // spawned server reads (issue 453 round-4 polish).
+    expect(message).toContain("write it to the repo-root .env file");
+    expect(message).toContain("(the only env file this check loads)");
   });
+});
+
+/**
+ * The spawned server's port override (issue 514): concurrent gate runs on
+ * one machine squat each other's fixed port, so the port becomes
+ * overridable the way Chrome discovery already is. Unset or empty keeps
+ * the default; anything that is not a plain decimal integer from 1 to
+ * 65535 is refused, naming the variable and the offending value.
+ */
+describe("parseLayoutCheckPort — the spawned server's port override (issue 514)", () => {
+  it("keeps the default 3219 when the variable is unset or empty", () => {
+    expect(parseLayoutCheckPort(undefined)).toBe(3219);
+    expect(parseLayoutCheckPort("")).toBe(3219);
+  });
+
+  it("accepts a plain decimal TCP port", () => {
+    expect(parseLayoutCheckPort("4321")).toBe(4321);
+    expect(parseLayoutCheckPort("1")).toBe(1);
+    expect(parseLayoutCheckPort("65535")).toBe(65535);
+  });
+
+  it.each(["0", "65536", "99999", "-1", "12.5", "abc", "0x10"])(
+    "refuses %s, naming the variable and the offending value",
+    (bad) => {
+      expect(() => parseLayoutCheckPort(bad)).toThrow(/LAYOUT_CHECK_PORT/);
+      expect(() => parseLayoutCheckPort(bad)).toThrow(new RegExp(`"${bad}"`.replace(/[.]/g, "\\.")));
+    },
+  );
 });
