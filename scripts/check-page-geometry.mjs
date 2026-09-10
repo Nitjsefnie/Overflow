@@ -201,11 +201,14 @@ class DevTools {
 
 /**
  * Wait for one Chrome attempt to print its DevTools endpoint. An attempt
- * fails one of two ways: the child exits (rejects immediately, the error
- * carrying `exitCode`), or the attempt's budget expires while the child is
- * still alive and silent (tagged `silentStart`, so the retry loop can tell
- * the two classes apart). Its rejection messages carry no retry context —
- * the launcher owns that.
+ * fails one of three ways — the taxonomy the launcher's messages implement:
+ * the child exits (rejects immediately, the error carrying `exitCode`), the
+ * child could not be spawned at all (the process object's `error` event, no
+ * `exit` following — unlistened, that failure crashes as an unhandled event
+ * error instead of a retryable launch failure; tagged `spawnError`), or the
+ * attempt's budget expires while the child is still alive and silent (tagged
+ * `silentStart`). Its rejection messages carry no retry context — the
+ * launcher owns that.
  */
 function waitForDevToolsUrl(child, budgetMs = 20000) {
   return new Promise((resolve, reject) => {
@@ -224,6 +227,12 @@ function waitForDevToolsUrl(child, budgetMs = 20000) {
       error.exitCode = code;
       reject(error);
     };
+    const onError = (cause) => {
+      finish();
+      const error = new Error(`chrome could not be spawned: ${cause.message}`);
+      error.spawnError = cause;
+      reject(error);
+    };
     const timer = setTimeout(() => {
       finish();
       const error = new Error(`chrome alive but silent for ${budgetMs}ms`);
@@ -234,9 +243,11 @@ function waitForDevToolsUrl(child, budgetMs = 20000) {
       clearTimeout(timer);
       child.stderr.off("data", onData);
       child.off("exit", onExit);
+      child.off("error", onError);
     };
     child.stderr.on("data", onData);
     child.on("exit", onExit);
+    child.on("error", onError);
   });
 }
 
@@ -255,11 +266,12 @@ function stderrTail(text) {
  * while attempts remain (issue 447): a slow Chrome start on a loaded runner
  * used to get one flat 20s budget and fail the required check, so the budget
  * is now per attempt and each failed attempt is retried with a fresh one. A
- * silent attempt's child is killed (SIGKILL) before relaunching so nothing
+ * failed attempt's child is killed (SIGKILL) before relaunching so nothing
  * leaks. Every rejection carries the captured stderr tail, so a genuine
- * launch failure is diagnosable from the CI log alone, and the two failure
- * classes are named distinctly. `spawnChild`, `attempts` and `budgetMs` are
- * injectable so tests drive this with fake children and reduced budgets.
+ * launch failure is diagnosable from the CI log alone, and the three failure
+ * classes — an early exit, a spawn failure, an alive-but-silent start — are
+ * named distinctly. `spawnChild`, `attempts` and `budgetMs` are injectable
+ * so tests drive this with fake children and reduced budgets.
  */
 export async function launchChromeWithRetry({
   command,
@@ -268,6 +280,10 @@ export async function launchChromeWithRetry({
   attempts = 3,
   budgetMs = 20000,
 }) {
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new TypeError(`attempts must be a whole number >= 1, got ${attempts}`);
+  }
+
   const stderrChunks = [];
   let lastFailure = null;
 
@@ -278,6 +294,10 @@ export async function launchChromeWithRetry({
 
     try {
       const browserUrl = await waitForDevToolsUrl(child, budgetMs);
+      // The child is handed back alive: drop the accumulating collector and
+      // let stderr keep flowing, discarded, for the measurement's lifetime.
+      child.stderr.off("data", collect);
+      child.stderr.resume();
       return { child, browserUrl };
     } catch (error) {
       // A failed attempt must not leak its child, and its stderr listener is
@@ -286,7 +306,9 @@ export async function launchChromeWithRetry({
       child.stderr.off("data", collect);
       lastFailure = error.silentStart
         ? { kind: "silent" }
-        : { kind: "exit", code: error.exitCode };
+        : error.spawnError
+          ? { kind: "spawn", cause: error.spawnError }
+          : { kind: "exit", code: error.exitCode };
     }
   }
 
@@ -296,6 +318,9 @@ export async function launchChromeWithRetry({
     throw new Error(
       `chrome alive but silent (no "DevTools listening on" line within ${budgetMs}ms)${attemptNote}\n${tail}`,
     );
+  }
+  if (lastFailure.kind === "spawn") {
+    throw new Error(`chrome could not be spawned (${lastFailure.cause.message})${attemptNote}\n${tail}`);
   }
   throw new Error(`chrome exited early with code ${lastFailure.code}${attemptNote}\n${tail}`);
 }
