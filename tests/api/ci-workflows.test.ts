@@ -214,6 +214,58 @@ describe("GitHub Actions release gates", () => {
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);
   });
+
+  it("parses a source-only CodeQL scan that installs and builds nothing", async () => {
+    const workflow = await readWorkflow("code-scanning.yml") as Workflow & { name: string };
+    expect(workflow.name).toBe("code scanning");
+    expect(workflow.on).toEqual({
+      push: { branches: ["main"] },
+      pull_request: { branches: ["main"] },
+      schedule: [{ cron: "43 5 * * 3" }],
+      workflow_dispatch: null,
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.concurrency).toEqual({
+      group: "code-scanning-${{ github.event.pull_request.number || github.ref }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    });
+
+    const analyze = workflow.jobs.analyze! as typeof workflow.jobs.analyze & {
+      permissions: Record<string, string>;
+    };
+    expect(analyze.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
+
+    // The whole job, exactly, in the dependency-audit style: the job-level
+    // permissions object is the least privilege uploading SARIF needs, and
+    // any extra key — a tolerated failure, a checkout without
+    // persist-credentials disabled — fails this equality.
+    expect(analyze).toEqual({
+      permissions: { contents: "read", "security-events": "write" },
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 30,
+      steps: [
+        {
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "persist-credentials": false },
+        },
+        {
+          uses: "github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63",
+          with: { languages: "javascript-typescript" },
+        },
+        {
+          uses: "github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63",
+          with: { category: "/language:javascript-typescript" },
+        },
+      ],
+    } satisfies typeof analyze);
+
+    // The no-build principle as its own named assertion, so a "helpful"
+    // install or build step fails a pin that says so rather than only a
+    // shape diff: CodeQL for JS/TS extracts from source.
+    for (const command of analyze.steps.map((step) => step.run).filter(Boolean)) {
+      expect(command).not.toMatch(/pnpm (install|build)/);
+    }
+  });
 });
 
 async function readWorkflow(name: string): Promise<Workflow> {
