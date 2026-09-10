@@ -230,6 +230,7 @@ describe("initial PostgreSQL materialization", () => {
       "036_override_reconciliation_reason.sql",
       "037_abandoned_webhook_cleanups.sql",
       "038_forge_identities_and_provider_columns.sql",
+      "039_forge_identity_user_fk.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
