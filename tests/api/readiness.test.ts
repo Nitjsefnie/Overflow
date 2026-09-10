@@ -5,17 +5,11 @@ import { closeSql } from "@/lib/db/client";
 import { GET, createReadinessGetHandler, type Readiness } from "@/app/api/readiness/route";
 import { startPostgresContainer } from "../support/postgres-container";
 
-const requestUrl = "https://overflow.test/api/readiness";
-
-function readinessRequest(): Request {
-  return new Request(requestUrl);
-}
-
 describe("readiness endpoint", () => {
   it("answers 200 ready with no-store when the probe succeeds", async () => {
     const handler = createReadinessGetHandler({ probe: async () => "ready", now: () => 0 });
 
-    const response = await handler(readinessRequest());
+    const response = await handler();
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ready" });
@@ -28,7 +22,7 @@ describe("readiness endpoint", () => {
       now: () => 0,
     });
 
-    const response = await handler(readinessRequest());
+    const response = await handler();
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ status: "unavailable" });
@@ -43,7 +37,7 @@ describe("readiness endpoint", () => {
       now: () => 0,
     });
 
-    const response = await handler(readinessRequest());
+    const response = await handler();
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ status: "unavailable" });
@@ -57,7 +51,7 @@ describe("readiness endpoint", () => {
 
     // The vitest timeout is the failure mode if the hard cap is missing: this
     // await must resolve through the cap, never through the stalled probe.
-    const response = await handler(readinessRequest());
+    const response = await handler();
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ status: "unavailable" });
@@ -77,11 +71,11 @@ describe("readiness endpoint", () => {
       calls += 1;
       started();
       await gate;
-      return "ready";
+      return "ready" as const;
     };
     const handler = createReadinessGetHandler({ probe, now: () => 0 });
 
-    const pending = Array.from({ length: 20 }, () => handler(readinessRequest()));
+    const pending = Array.from({ length: 20 }, () => handler());
     await firstProbeStart;
     expect(calls).toBe(1);
     release();
@@ -104,18 +98,18 @@ describe("readiness endpoint", () => {
     };
     const handler = createReadinessGetHandler({ probe, now: () => clock });
 
-    await handler(readinessRequest());
+    await handler();
     clock = 2999;
-    const cached = await handler(readinessRequest());
+    const cached = await handler();
     expect(calls).toBe(1);
     expect(cached.status).toBe(200);
 
-    const expiredHandler = createReadinessGetHandler({ probe: countingProbe, now: () => clock });
+    const expiredHandler = createReadinessGetHandler({ probe, now: () => clock });
     const before = calls;
     clock = 6000;
-    await expiredHandler(readinessRequest());
+    await expiredHandler();
     clock = 9001;
-    await expiredHandler(readinessRequest());
+    await expiredHandler();
     expect(calls - before).toBe(2);
   });
 
@@ -127,8 +121,8 @@ describe("readiness endpoint", () => {
     };
     const handler = createReadinessGetHandler({ probe, now: () => 0 });
 
-    const first = await handler(readinessRequest());
-    const second = await handler(readinessRequest());
+    const first = await handler();
+    const second = await handler();
 
     expect(calls).toBe(1);
     expect(first.status).toBe(503);
@@ -165,7 +159,7 @@ describe("readiness endpoint against real databases", () => {
   });
 
   it("answers 200 through the production GET export against a real database", async () => {
-    const response = await GET(readinessRequest());
+    const response = await GET();
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ready" });
@@ -174,12 +168,14 @@ describe("readiness endpoint against real databases", () => {
 
   it("answers 503 against a black-holed socket and bounds concurrent probes to one connection", async () => {
     let connections = 0;
+    const sockets = new Set<net.Socket>();
     let sawFirstConnection!: () => void;
     const firstConnection = new Promise<void>((resolve) => {
       sawFirstConnection = resolve;
     });
     const blackHole = net.createServer((socket) => {
       connections += 1;
+      sockets.add(socket);
       socket.on("error", () => {});
       sawFirstConnection();
     });
@@ -190,11 +186,14 @@ describe("readiness endpoint against real databases", () => {
       process.env.DATABASE_URL = `postgresql://probe:probe@127.0.0.1:${port}/probe`;
       await closeSql();
 
-      // The first GET starts the one probe the single-flight bound allows; the
-      // burst must share it rather than open connections of its own.
-      const first = GET(readinessRequest());
+      // A fresh production handler, not the shared GET export: that export's
+      // closure still holds the preceding test's cached 200, whose zero-work
+      // TTL hit would answer without ever probing the black-hole socket.
+      // Fresh construction is the same reset path the unit tests use.
+      const get = createReadinessGetHandler();
+      const first = get();
       await firstConnection;
-      const burst = Array.from({ length: 10 }, () => GET(readinessRequest()));
+      const burst = Array.from({ length: 10 }, () => get());
       const responses = await Promise.all([first, ...burst]);
 
       for (const response of responses) {
@@ -203,10 +202,14 @@ describe("readiness endpoint against real databases", () => {
       }
       expect(connections).toBe(1);
     } finally {
-      await closeSql();
+      // Destroy the stalled sockets BEFORE ending the client: the pool's end()
+      // waits out a live handshake, and a peer that never answers would hang
+      // the shutdown — a socket close is the event that settles it.
+      for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve, reject) => {
         blackHole.close((error) => (error ? reject(error) : resolve()));
       });
+      await closeSql();
     }
   });
 });
