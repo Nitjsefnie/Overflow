@@ -16,6 +16,7 @@ import {
   listSelfWorkCalibrations,
   listSettlementHistory,
   listUnwritableClosures,
+  loadCalibrationCohorts,
   SELF_WORK_CALIBRATION_HISTORY_LIMIT,
   SETTLEMENT_HISTORY_LIMIT,
   type DashboardBegin,
@@ -1412,6 +1413,53 @@ describe("calibration comparison per repository", () => {
       ["member-1"],
       ["member-1", "member-1"],
     ]);
+  });
+
+  // Issue 435: every request ran the two cohort selections twice — once for
+  // the pooled comparison and once for the per-repository breakdown — because
+  // each projection selected for itself. The selection is now the one loader
+  // both projections derive from, so a projection cannot read at all. The
+  // stub records every statement and scripts exactly one answer pair: a
+  // second selection has no answer left and fails the harness loudly, and the
+  // count below pins that outright.
+  describe("one cohort selection for both projections", () => {
+    it("reads each cohort once and derives both projections from that one selection", async () => {
+      const selfWorkRows = [
+        selfWorkRow(2, harbour, 10, 5, 6),
+        selfWorkRow(7, lighthouse, 20, 4, 8),
+      ];
+      const outsiderRows = [
+        selfWorkRow(2, harbour, 12, 4, 7),
+        selfWorkRow(7, lighthouse, 21, 4, 6),
+      ];
+      const { sql, captures } = sqlHarness([selfWorkRows, outsiderRows]);
+
+      const cohorts = await loadCalibrationCohorts("member-1", { sql });
+      const pooled = getCalibrationComparison(cohorts);
+      const entries = getCalibrationComparisonByRepository(cohorts);
+
+      expect(captures).toHaveLength(2);
+      expect(
+        captures.map((capture) =>
+          capture.text.includes("from self_work_calibrations")
+            ? "self_work_calibrations"
+            : capture.text.includes("from settlements")
+              ? "settlements"
+              : "unknown",
+        ),
+      ).toEqual(["self_work_calibrations", "settlements"]);
+
+      // Both projections consumed the loader's own result — the same object,
+      // handed to each unchanged, so the breakdown is a partition of a
+      // comparison drawn from one committed state.
+      expect(cohorts.selfWorkRows).toEqual(selfWorkRows);
+      expect(cohorts.outsiderRows).toEqual(outsiderRows);
+      expect(pooled.selfWork.count).toBe(2);
+      expect(pooled.outsider.count).toBe(2);
+      expect(entries.map((entry) => entry.repositoryName)).toEqual([harbour, lighthouse]);
+      expect(entries.map((entry) => entry.comparison.selfWork.count)).toEqual([1, 1]);
+      expect(entries.map((entry) => entry.comparison.outsider.count)).toEqual([1, 1]);
+    });
   });
 });
 
