@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { POSTGRES_IMAGE } from "../support/postgres-container";
 
 interface ComposeService {
   image?: string;
@@ -46,6 +47,7 @@ describe("docker-compose.yml", () => {
     const app = compose.services.app;
     expect(app.restart).toBe("unless-stopped");
     expect(app.depends_on?.postgres?.condition).toBe("service_healthy");
+    expect(app.ports).toEqual(["${APP_HOST_BIND:-127.0.0.1}:3000:3000"]);
   });
 
   it("plumbs SOURCE_SHA into the app build so compose builds carry the provenance arg", () => {
@@ -74,6 +76,16 @@ describe("docker-compose.yml", () => {
 
   it("still defines the overflow-postgres-data volume", () => {
     expect(compose.volumes).toHaveProperty("overflow-postgres-data");
+  });
+
+  it("pins the DB suites' testcontainers postgres image to the same verified digest as compose", () => {
+    // Issue 461: every postgres in the repository resolves the same reviewed
+    // bytes. One digest literal here pins the compose image above and the
+    // testcontainers constant together — they are a shared fact, and a pin
+    // that drifts from the other names a different image.
+    expect(POSTGRES_IMAGE).toBe(
+      "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+    );
   });
 
   it("defines no volume beyond overflow-postgres-data", () => {
