@@ -13,9 +13,8 @@
  *
  * The request also carries an application-owned deadline — the same 10
  * seconds the GitHub REST and GraphQL clients apply. Expiry aborts the
- * transport and fails the call through this same diagnostic, so a transport
- * that never settles (or ignores the abort signal) cannot hold sign-in open
- * past the deadline.
+ * transport and fails the call through this same diagnostic, so sign-in
+ * cannot be held open past the deadline by a never-settling transport.
  *
  * The stock fallback this override routes around is defective as installed.
  * When the profile has no public email, `@auth/core` 0.41.3
@@ -77,7 +76,7 @@ export async function requestGitHubPublicIdentity({
   let timeout: ReturnType<typeof setTimeout> | undefined;
   // One absolute deadline covers the response headers and the body read: the
   // expiry aborts the transport, and the race below settles the call even
-  // against a transport that ignores the abort signal.
+  // against a transport that never settles.
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error("GitHub /user request timed out.");
