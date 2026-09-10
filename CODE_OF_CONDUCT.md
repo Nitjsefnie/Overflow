@@ -50,9 +50,11 @@ upheld. These do:
   contact details, an address, anything they have kept private.
 - Sexualized language or imagery, and unwelcome attention of any kind.
 - Spam.
-- Deliberately gaming the ledger. The Rules page defines what account-level
-  gaming is and what it triggers; the conduct point is that doing it on
-  purpose is a conduct problem here, whatever it scores there.
+- Deliberately gaming the ledger. The Rules page's Moderation section
+  defines the ladder account-level abuse is handled with —
+  audit → warn → recalibrate → ban, with supporting evidence at every step;
+  the conduct point is that doing it on purpose is a conduct problem here,
+  whatever the ledger scores.
 
 ## Reporting
 
@@ -73,8 +75,8 @@ Because the tracker is public, keep the opening report usable:
 - Keep sensitive third-party details out of the opening report. Quote what is
   needed to identify the behavior and link to the rest.
 
-Reports may be about anyone, and the maintainer's own conduct is in scope —
-handled the same way as any other.
+Reports may be about anyone, and the maintainer's own conduct is in scope: a
+report about the maintainer is decided, like every report, by the maintainer.
 
 ## Enforcement
 
@@ -89,5 +91,6 @@ is a one-maintainer project: expect a human reply, not a triage pipeline.
 
 If enforcement touched a settled credit and you believe the settlement itself
 was wrong, dispute it through the corrections process the Rules page
-describes. That process owns settlement disputes; this document does not
-create a second one.
+describes — though only the settlement's creditor or the sponsor can ask
+there. That process owns settlement disputes; this document does not create
+a second one.
