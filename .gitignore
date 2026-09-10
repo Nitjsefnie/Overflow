@@ -291,6 +291,9 @@ tests/repositories/*
 !tests/repositories/*.ts
 !tests/repositories/upgrade-webhooks.test.ts
 !tests/repositories/webhook-upgrade-postgres.test.ts
+!tests/scripts/
+tests/scripts/*
+!tests/scripts/*.ts
 !tests/security/
 tests/security/*
 !tests/security/*.ts
