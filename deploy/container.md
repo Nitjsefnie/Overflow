@@ -48,7 +48,7 @@ reaches the app.
 
 By default both services bind to loopback — the app on `127.0.0.1:3000`, the
 database on `127.0.0.1:5432` — and `APP_HOST_BIND` / `POSTGRES_HOST_BIND`
-move or widen those binds deliberately.
+move or widen those binds deliberately. `APP_URL` must name the real browsable host: with a placeholder such as `127.0.0.2`, Auth.js logs `[auth][error] UntrustedHost` and refuses every sign-in (observed in this repository's container smoke).
 
 ## Decisions
 

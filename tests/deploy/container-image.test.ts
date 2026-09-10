@@ -36,6 +36,9 @@ describe("Dockerfile", () => {
     expect(cmd).toContain(migration);
     expect(cmd).toContain(server);
     expect(cmd!.indexOf(migration)).toBeLessThan(cmd!.indexOf(server));
+    // `exec` hands the PID to the server, so containerd's signals reach it —
+    // the property deploy/container.md's start-command note rests on.
+    expect(cmd).toContain(`exec ${server}`);
   });
 
   it("installs dependencies with the frozen lockfile", () => {
@@ -57,5 +60,18 @@ describe(".dockerignore", () => {
     for (const pattern of [".env", "node_modules", ".next", ".git"]) {
       expect(lines).toContain(pattern);
     }
+  });
+});
+
+describe("deploy/container.md", () => {
+  it("warns that APP_URL must name the real browsable host or Auth.js refuses sessions", () => {
+    const containerDoc = readFileSync(
+      new URL("../../deploy/container.md", import.meta.url),
+      "utf8",
+    );
+    const guidance = containerDoc
+      .split("\n")
+      .find((line) => line.includes("APP_URL") && line.includes("UntrustedHost"));
+    expect(guidance, "the Auth.js trust guidance line naming APP_URL and UntrustedHost").toBeDefined();
   });
 });

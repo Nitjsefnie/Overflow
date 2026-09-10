@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -11,6 +11,7 @@ const ENVIRONMENT_FILE = ".env.example";
 const DATABASE_SERVICE = "postgres";
 const DATABASE_PORT = 5432;
 const BIND_VARIABLE = "POSTGRES_HOST_BIND";
+const APP_SERVICE = "app";
 const NONPRODUCTION_CREDENTIALS = {
   POSTGRES_DB: "overflow",
   POSTGRES_USER: "overflow",
@@ -23,10 +24,20 @@ const NONPRODUCTION_CREDENTIALS = {
 // security pin that silently stops checking is worse than one that fails
 // loudly, and CI (ubuntu-latest) ships the plugin.
 let resolvedDocument: Promise<ResolvedDocument> | undefined;
+let resolvedProfiledDocument: Promise<ResolvedDocument> | undefined;
 
 function resolvedComposeDocument(): Promise<ResolvedDocument> {
   resolvedDocument ??= resolveComposeDocument();
   return resolvedDocument;
+}
+
+function resolvedProfiledComposeDocument(): Promise<ResolvedDocument> {
+  resolvedProfiledDocument ??= resolveComposeDocumentWithProfiles();
+  return resolvedProfiledDocument;
+}
+
+function resolvedComposeDocuments(): Promise<ResolvedDocument[]> {
+  return Promise.all([resolvedComposeDocument(), resolvedProfiledComposeDocument()]);
 }
 
 async function resolveComposeDocument(): Promise<ResolvedDocument> {
@@ -79,6 +90,60 @@ async function resolveComposeDocument(): Promise<ResolvedDocument> {
   }
 }
 
+async function resolveComposeDocumentWithProfiles(): Promise<ResolvedDocument> {
+  // The profiled services carry `env_file: [.env]`, and `docker compose
+  // config` refuses a resolution whose selected service declares an env file
+  // the project directory does not hold — a clean checkout has none, and the
+  // repo root must not grow a real one. The compose file is therefore resolved
+  // from a copy in a temporary directory, beside a stub `.env` that satisfies
+  // the declaration without carrying a value; interpolation still reads the
+  // empty `--env-file`, so the verdict depends on nothing else.
+  const environment: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
+  for (const name of ["PATH", "HOME", "DOCKER_CONFIG"] as const) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  const directory = await mkdtemp(resolve(tmpdir(), "compose-exposure-profiled-"));
+  try {
+    const composeCopy = resolve(directory, COMPOSE_FILE);
+    await copyFile(resolve(COMPOSE_FILE), composeCopy);
+    await writeFile(resolve(directory, ".env"), "");
+    const emptyEnvironmentFile = resolve(directory, "empty.env");
+    await writeFile(emptyEnvironmentFile, "");
+    const profileArguments = declaredProfileNames(
+      await readFile(resolve(COMPOSE_FILE), "utf8"),
+    ).flatMap((profile) => ["--profile", profile]);
+    const stdout = await new Promise<string>((resolvePromise, reject) => {
+      execFile(
+        "docker",
+        [
+          "compose",
+          "-f",
+          composeCopy,
+          ...profileArguments,
+          "--env-file",
+          emptyEnvironmentFile,
+          "config",
+          "--format",
+          "json",
+        ],
+        { env: environment },
+        (error, stdout, stderr) => {
+          if (error !== null) {
+            error.message = diagnoseComposeFailure(error, stderr);
+            reject(error);
+            return;
+          }
+          resolvePromise(stdout);
+        },
+      );
+    });
+    return JSON.parse(stdout) as ResolvedDocument;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 function diagnoseComposeFailure(error: Error, stderr: string): string {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") {
     return 'docker was not found on PATH. This suite reads the database exposure contract off "docker compose config" instead of re-implementing Compose resolution, so the docker CLI must be installed; install Docker Engine and re-run this suite.';
@@ -98,47 +163,86 @@ describe("local development database exposure", () => {
   // covering it silently.
   it("resolves every service the file declares", async () => {
     const declared = declaredServiceNames(await readFile(resolve(COMPOSE_FILE), "utf8"));
-    const resolved = Object.keys((await resolvedComposeDocument()).services ?? {});
+    const documents = await resolvedComposeDocuments();
+    const resolved = new Set(
+      documents.flatMap((document) => Object.keys(document.services ?? {})),
+    );
     expect(
-      declared.filter((name) => !resolved.includes(name)),
+      declared.filter((name) => !resolved.has(name)),
       'Compose resolved fewer services than the file declares. A "profiles:" key hides a service from `docker compose config`, so the assertions below do not cover it while `docker compose --profile <name> up` would still publish it. Write the service into the default profile, or extend this suite to resolve with that profile.',
     ).toEqual([]);
+    // The profiled resolution must genuinely select the profiled services,
+    // or every assertion that iterates it is vacuously green.
+    expect(
+      Object.keys((await resolvedProfiledComposeDocument()).services ?? {}),
+      `docker compose config with every declared profile resolved none of the file's profiled services, so there is nothing for this suite to pin.`,
+    ).toContain(APP_SERVICE);
   });
 
   it("puts no service on the host network, which would bypass port publishing entirely", async () => {
-    const resolved = await resolvedComposeDocument();
-    expect(
-      Object.entries(resolved.services ?? {})
-        .filter(([, service]) => service.network_mode === "host")
-        .map(([name]) => name),
-    ).toEqual([]);
+    for (const resolved of await resolvedComposeDocuments()) {
+      expect(
+        Object.entries(resolved.services ?? {})
+          .filter(([, service]) => service.network_mode === "host")
+          .map(([name]) => name),
+      ).toEqual([]);
+    }
   });
 
   it("binds every published port touching the database port to loopback, on every service", async () => {
-    const resolved = await resolvedComposeDocument();
     const findings: string[] = [];
-    for (const [name, service] of Object.entries(resolved.services ?? {})) {
-      for (const entry of service.ports ?? []) {
-        if (!isPublishedDatabaseFacing(entry)) continue;
-        // An absent host_ip publishes on every interface; that is the default
-        // Compose resolves to, so it is read as the exposure it is.
-        const hostIp = entry.host_ip;
-        if (hostIp === undefined || hostIp === "") {
-          findings.push(`${name}: ${JSON.stringify(entry)} binds every interface (no host_ip)`);
-        } else if (!isLoopbackAddress(hostIp)) {
-          findings.push(`${name}: ${JSON.stringify(entry)} binds ${hostIp}, which is not loopback`);
+    for (const resolved of await resolvedComposeDocuments()) {
+      for (const [name, service] of Object.entries(resolved.services ?? {})) {
+        for (const entry of service.ports ?? []) {
+          if (!isPublishedDatabaseFacing(entry)) continue;
+          // An absent host_ip publishes on every interface; that is the default
+          // Compose resolves to, so it is read as the exposure it is.
+          const hostIp = entry.host_ip;
+          if (hostIp === undefined || hostIp === "") {
+            findings.push(`${name}: ${JSON.stringify(entry)} binds every interface (no host_ip)`);
+          } else if (!isLoopbackAddress(hostIp)) {
+            findings.push(`${name}: ${JSON.stringify(entry)} binds ${hostIp}, which is not loopback`);
+          }
         }
       }
     }
     // The shipped database must actually publish the port: otherwise every
     // filter above runs over nothing and the pin is vacuously green.
-    const databaseEntries = (resolved.services?.[DATABASE_SERVICE]?.ports ?? [])
-      .filter((entry) => isPublishedDatabaseFacing(entry));
+    const databaseEntries = (await resolvedComposeDocument()).services?.[DATABASE_SERVICE]?.ports ?? [];
     expect(
-      databaseEntries,
+      databaseEntries.filter((entry) => isPublishedDatabaseFacing(entry)),
       `${COMPOSE_FILE} publishes no ${DATABASE_PORT} port on the "${DATABASE_SERVICE}" service, so there is nothing for this suite to pin.`,
     ).not.toHaveLength(0);
     expect(findings).toEqual([]);
+  });
+
+  it("publishes the app service on loopback and database-facing ports none", async () => {
+    const app = (await resolvedProfiledComposeDocument()).services?.[APP_SERVICE];
+    expect(app, `the "${APP_SERVICE}" service in the profiled resolution`).toBeDefined();
+    const published = (app?.ports ?? []).filter(
+      (entry) => entry.published !== undefined && entry.published !== null && entry.published !== "",
+    );
+    // The app service publishes a port by contract (compose-file.test.ts pins
+    // the loopback mapping); a profiled service that publishes nothing would
+    // make every check below vacuous.
+    expect(
+      published,
+      `${COMPOSE_FILE} publishes no port on the "${APP_SERVICE}" service, so there is nothing for this suite to pin.`,
+    ).not.toHaveLength(0);
+    expect(
+      published.filter((entry) => isPublishedDatabaseFacing(entry)),
+      `the "${APP_SERVICE}" service must publish no ${DATABASE_PORT}-facing port: the database is postgres's to publish.`,
+    ).toEqual([]);
+    for (const entry of published) {
+      expect(
+        entry.host_ip,
+        `the "${APP_SERVICE}" service publishes ${JSON.stringify(entry)} without a host_ip, which binds every interface`,
+      ).toBeDefined();
+      expect(
+        isLoopbackAddress(entry.host_ip as string),
+        `the "${APP_SERVICE}" service publishes ${JSON.stringify(entry)} on ${entry.host_ip}, which is not loopback`,
+      ).toBe(true);
+    }
   });
 
   // The loopback case above judges whatever host_ip Compose resolves, so the
@@ -258,6 +362,22 @@ function declaredServiceNames(contents: string): string[] {
     throw new Error(`${COMPOSE_FILE} declares "services" as something other than a mapping.`);
   }
   return Object.keys(document.services);
+}
+
+// The profiles the file declares, in first-seen order: the profiled resolution
+// selects every one of them, so a service added behind a new profile is
+// covered without a further edit here.
+function declaredProfileNames(contents: string): string[] {
+  const document = parse(contents) as {
+    services?: Record<string, { profiles?: string[] } | undefined>;
+  };
+  const profileNames: string[] = [];
+  for (const service of Object.values(document.services ?? {})) {
+    for (const profile of service?.profiles ?? []) {
+      if (!profileNames.includes(profile)) profileNames.push(profile);
+    }
+  }
+  return profileNames;
 }
 
 type ResolvedPort = {
