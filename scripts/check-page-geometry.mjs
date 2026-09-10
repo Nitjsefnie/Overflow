@@ -269,10 +269,30 @@ async function startServer(workDir) {
       const childDied = () => child.exitCode !== null || child.signalCode !== null;
       const death = () => `next start exited with code ${child.exitCode ?? child.signalCode}`;
 
+      /**
+       * Readiness needs evidence ONLY this child can produce: next prints
+       * "Ready in ..." to its captured output once it is serving. A foreign
+       * server squatting on the port answers fetches in milliseconds while
+       * this child is still reaching its bind, so an answering socket alone
+       * proves nothing — the ready line does.
+       */
+      const logHas = async (needle) =>
+        readFile(logPath, "utf8").then(
+          (text) => text.includes(needle),
+          () => false,
+        );
+
       const deadline = Date.now() + 60000;
+      let everAnswered = false;
       for (;;) {
         if (childDied()) {
           throw new Error(`${death()} before answering on ${BASE_URL}\n${await readFileHead(logPath)}`);
+        }
+        if (await logHas("EADDRINUSE")) {
+          throw new Error(
+            `next start could not bind its port — a foreign server is squatting on ${BASE_URL}` +
+              `\n${await readFileHead(logPath)}`,
+          );
         }
         let answered = false;
         try {
@@ -283,15 +303,24 @@ async function startServer(workDir) {
           // no HTTP response yet
         }
         if (answered) {
+          everAnswered = true;
           if (childDied()) {
             throw new Error(
               `something answered on ${BASE_URL}, but ${death()} — refusing to measure a foreign server` +
                 `\n${await readFileHead(logPath)}`,
             );
           }
-          break;
+          if (await logHas("Ready in")) break;
+          // Something answered and this child is alive, but its ready line has
+          // not landed yet — keep polling until THIS child declares readiness.
         }
         if (Date.now() > deadline) {
+          if (everAnswered) {
+            throw new Error(
+              `a server answered on ${BASE_URL}, but this run's next start never printed its ready line ` +
+                `within 60s — refusing to measure a foreign server\n${await readFileHead(logPath)}`,
+            );
+          }
           throw new Error(`next start never answered on ${BASE_URL} within 60s\n${await readFileHead(logPath)}`);
         }
         await new Promise((resolveTick) => setTimeout(resolveTick, 250));
@@ -332,11 +361,13 @@ async function evaluateAsync(client, sessionId, expression) {
 }
 
 /** Poll a boolean-valued expression until it evaluates true. */
-async function pollFor(client, sessionId, expression, timeoutMs) {
+async function pollFor(client, sessionId, expression, timeoutMs, waitingFor) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await evaluate(client, sessionId, expression)) return;
-    if (Date.now() > deadline) throw new Error("timed out waiting for the page to settle");
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${waitingFor}`);
+    }
     await new Promise((resolveTick) => setTimeout(resolveTick, 100));
   }
 }
@@ -492,7 +523,8 @@ async function main() {
         // about:blank document before the navigation commits.
         await pollFor(client, sessionId,
           `document.readyState === 'complete' && location.href === ${JSON.stringify(url)}`,
-          30000);
+          30000,
+          `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
         await settleLayout(client, sessionId);
 
         for (const viewport of contract.viewports) {
@@ -548,8 +580,10 @@ async function main() {
         }
       }
 
-      const passed = rows.filter((row) => row.failures.length === 0).length;
-      console.log(`\n${rows.length} page/viewport checks: ${passed} pass, ${rows.length - passed} fail`);
+      if (!hardFailure) {
+        const passed = rows.filter((row) => row.failures.length === 0).length;
+        console.log(`\n${rows.length} page/viewport checks: ${passed} pass, ${rows.length - passed} fail`);
+      }
     } finally {
       child.kill("SIGKILL");
     }
