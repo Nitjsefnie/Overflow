@@ -74,6 +74,16 @@ path's release directories) was rejected because it reintroduces the
 artifact-out-of-band problem the container exists to close: the image, not the
 tree it was built from, is the deployable unit.
 
+**The container runs as the base image's non-root `node` account.** The
+runtime stage selects `USER node` (UID 1000, shipped by the base image), so
+the pre-start migration step and the long-lived server share one non-root
+identity: they are the same Node workload, needing only network egress to
+Postgres and read access to `/app`, and neither writes to the filesystem, so
+a second identity would bound nothing. `docker-compose.yml` deliberately
+carries no `user:` override — the image's `USER` is the single source of
+truth for the runtime identity, and a test pins both the selection and the
+absent override.
+
 **Rollback is redeploying the previous image tag — the analogue of the
 symlink switch.** Where the host path flips `.next` back to the previous
 release directory with `pnpm release:switch`, the container path redeploys the
