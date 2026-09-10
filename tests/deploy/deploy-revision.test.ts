@@ -326,6 +326,11 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toMatch(/production sets none/);
   });
 
+  it("defaults the deploy verification curl to the readiness endpoint", async () => {
+    const source = await readFile(script, "utf8");
+    expect(source).toContain("OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/api/readiness");
+  });
+
   it("refuses at the fence without invoking git, pnpm or node when the lock is taken", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { FLOCK_STATUS: "1" });
