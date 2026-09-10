@@ -743,6 +743,35 @@ export async function listEligibleIssues(
   const openingLabelFilter = normalizedFilter(filters.openingLabel);
   const claimState = filters.claimState ?? "OPEN";
   const rows = await sql<EligibleIssueRow[]>`
+    with reservations as materialized (
+      -- The reservation total is priced once per sponsor here, and joined to
+      -- that sponsor's issue rows below, rather than re-derived as correlated
+      -- subplans once per output row (and twice more inside the order-by tier,
+      -- which re-reads the headroom expression). Materialized on purpose: a
+      -- plain left join to a grouped subquery gets flattened by the planner
+      -- back into a per-row parameterized aggregate, which is the defect this
+      -- reshape exists to remove.
+      select
+        sponsored.sponsor_id,
+        sum(reserved.opening_reserve_points) as reserved_points
+      from registered_repositories as sponsored
+      join users as sponsors on sponsors.id = sponsored.sponsor_id
+      join issues as reserved on reserved.repository_id = sponsored.id
+      where reserved.state = 'OPEN'
+        and reserved.claim_assignee_github_login is not null
+        -- Same identity rule as getDashboard's reserved_points above: the
+        -- login decides claimed-ness only, who claims is decided by the
+        -- immutable account id (migrations 013 and 032), and IS DISTINCT FROM
+        -- so a claimed issue whose assignee id is not yet reconciled cannot
+        -- prove self-assignment and stays reserved until GitHub backfills it.
+        and reserved.claim_assignee_github_user_id is distinct from sponsors.github_user_id
+      group by sponsored.sponsor_id
+    ),
+    sponsor_balances as materialized (
+      -- One balances pass per query for the same reason; the view already
+      -- holds one row per account, so the join cannot fan out.
+      select account_id, balance from balances
+    )
     select
       ranked.*
     from (
@@ -759,25 +788,15 @@ export async function listEligibleIssues(
       issues.opening_reserve_points,
       issues.claim_assignee_github_login,
       (
-        coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0)
-        - coalesce((
-          select sum(reserved.opening_reserve_points)
-          from issues as reserved
-          where reserved.repository_id in (
-            select sponsored.id from registered_repositories as sponsored where sponsored.sponsor_id = sponsors.id
-          )
-            and reserved.state = 'OPEN'
-            and reserved.claim_assignee_github_login is not null
-            -- Same identity rule as getDashboard's reserved_points above: the
-            -- login decides claimed-ness only, the account id decides who
-            -- claims, and a null id counts as reserved until reconciled.
-            and reserved.claim_assignee_github_user_id is distinct from sponsors.github_user_id
-        ), 0)
+        coalesce(sponsor_balances.balance, 0)
+        - coalesce(reservations.reserved_points, 0)
       )::integer as available_headroom,
       issues.created_at
     from issues
     join registered_repositories as repositories on repositories.id = issues.repository_id
     join users as sponsors on sponsors.id = repositories.sponsor_id
+    left join sponsor_balances on sponsor_balances.account_id = sponsors.id
+    left join reservations on reservations.sponsor_id = sponsors.id
     where issues.state = 'OPEN'
       and repositories.active = true
       and sponsors.id <> ${accountId}
