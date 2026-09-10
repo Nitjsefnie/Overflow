@@ -217,6 +217,38 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
     expect(env.BROKEN).toBeUndefined();
     expect(env[""]).toBeUndefined();
   });
+
+  it("strips an unquoted # comment the way node's --env-file and @next/env do", async () => {
+    // The differential that forced this pin: BOTH real consumers strip an
+    // unquoted # unconditionally (not only after whitespace), so a DATABASE_URL
+    // whose password carries # must not seed a different URL than the server
+    // renders against.
+    const env: Record<string, string> = {};
+
+    await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () =>
+        "DATABASE_URL=postgresql://me:p#ss@host/db\nB=trail # inline comment\n",
+    });
+
+    expect(env.DATABASE_URL).toBe("postgresql://me:p");
+    expect(env.B).toBe("trail");
+  });
+
+  it("keeps a # inside a quoted value, on plain and exported-prefixed lines", async () => {
+    const env: Record<string, string> = {};
+
+    await loadRepoEnvFile({
+      repoRoot: "/fake-root",
+      env,
+      readFileFn: async () =>
+        "DATABASE_URL=\"postgresql://me:p#ss@host/db\"\nexport AUTH_SECRET='s#cret'\n",
+    });
+
+    expect(env.DATABASE_URL).toBe("postgresql://me:p#ss@host/db");
+    expect(env.AUTH_SECRET).toBe("s#cret");
+  });
 });
 
 /**
