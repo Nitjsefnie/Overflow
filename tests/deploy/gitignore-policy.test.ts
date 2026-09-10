@@ -20,6 +20,7 @@ describe("docs/superpowers planning artifacts are untracked", () => {
   it("ignores future docs/superpowers plan and spec paths", () => {
     expect(checkIgnore("docs/superpowers/plans/probe.md")).toBe(0);
     expect(checkIgnore("docs/superpowers/specs/probe.md")).toBe(0);
+    expect(checkIgnore("docs/superpowers/specs/probe.html")).toBe(0);
   });
 
   it("keeps the docs/reviews audit reachable by the ignore policy", () => {
