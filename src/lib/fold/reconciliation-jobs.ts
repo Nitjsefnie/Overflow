@@ -1,4 +1,9 @@
-export type ReconciliationJobReason = "WEBHOOK" | "REGISTRATION" | "SWEEP" | "REDERIVATION";
+export type ReconciliationJobReason =
+  | "WEBHOOK"
+  | "REGISTRATION"
+  | "SWEEP"
+  | "REDERIVATION"
+  | "OVERRIDE";
 export type ReconciliationJobState = "PENDING" | "RUNNING" | "FAILED";
 
 export type ClaimedReconciliationJob = {

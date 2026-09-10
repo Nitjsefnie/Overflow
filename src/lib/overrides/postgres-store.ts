@@ -191,27 +191,56 @@ export class PostgresSettlementOverrideStore implements SettlementOverrideStore 
   ): Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>> {
     const settledPoints = input.decision === "GRANT" ? input.settledPoints : null;
     const state: SettlementOverrideState = input.decision === "GRANT" ? "GRANTED" : "DECLINED";
-    const rows = await this.sql<RequestRow[]>`
-      update settlement_override_requests
-      set state = ${state}::settlement_override_state,
-          settled_points = ${settledPoints},
-          decided_by_id = ${input.actorId},
-          decision_reason = ${input.reason},
-          decided_at = now()
-      where id = ${input.requestId} and state = 'OPEN'
-      returning
-        id, issue_id, requester_id, reason, state::text as state, settled_points,
-        decided_by_id, decision_reason, created_at, decided_at
-    `;
-    const row = rows[0];
-    if (row !== undefined) {
-      return { kind: "ok", value: toRequest(row) };
-    }
+    // The grant and the materialization it owes belong to one atomic unit: a
+    // decision that flips a request to GRANTED but never reaches the queue
+    // leaves the settlement at its old points until unrelated traffic or the
+    // sweep happens to converge it, while the UI already reports the corrected
+    // figure. The queue already carries pending, follow-up and retry semantics,
+    // and the materializer already applies granted overrides on every run, so
+    // the grant's only missing link is this enqueue — scheduled in the same
+    // transaction as the decision, never apart from it.
+    return this.sql.begin(async (transaction) => {
+      const rows = await transaction<RequestRow[]>`
+        update settlement_override_requests
+        set state = ${state}::settlement_override_state,
+            settled_points = ${settledPoints},
+            decided_by_id = ${input.actorId},
+            decision_reason = ${input.reason},
+            decided_at = now()
+        where id = ${input.requestId} and state = 'OPEN'
+        returning
+          id, issue_id, requester_id, reason, state::text as state, settled_points,
+          decided_by_id, decision_reason, created_at, decided_at
+      `;
+      const row = rows[0];
+      if (row !== undefined && input.decision === "GRANT") {
+        // The request is keyed on the issue, and the issue names the repository
+        // whose ledger needs folding; one statement resolves it and upserts the
+        // repository's single queue row. The arms are the shared enqueue policy
+        // (see PostgresFoldStore.reconciliationJobConflictUpdate): a RUNNING
+        // job keeps its lease and records the follow-up instead, a FAILED job
+        // is revived due now with its attempts reset. `reason` is left as first
+        // recorded. The select-based insert enqueues nothing if the issue has
+        // meanwhile been deleted out from under the request by unregistration.
+        await transaction`
+          insert into repository_reconciliation_jobs (repository_id, reason)
+          select repository_id, 'OVERRIDE' from issues where id = ${row.issue_id}
+          on conflict (repository_id) do update set
+            state = case when repository_reconciliation_jobs.state = 'RUNNING' then 'RUNNING' else 'PENDING' end::repository_reconciliation_job_state,
+                follow_up_requested = case when repository_reconciliation_jobs.state = 'RUNNING' then true else repository_reconciliation_jobs.follow_up_requested end,
+                attempt_count = case when repository_reconciliation_jobs.state = 'FAILED' then 0 else repository_reconciliation_jobs.attempt_count end,
+                run_after = case when repository_reconciliation_jobs.state = 'FAILED' then now() else repository_reconciliation_jobs.run_after end
+        `;
+      }
+      if (row !== undefined) {
+        return { kind: "ok", value: toRequest(row) };
+      }
 
-    const [existing] = await this.sql<{ id: string }[]>`
-      select id from settlement_override_requests where id = ${input.requestId} limit 1
-    `;
-    return existing === undefined ? { kind: "not_found" } : { kind: "conflict" };
+      const [existing] = await transaction<{ id: string }[]>`
+        select id from settlement_override_requests where id = ${input.requestId} limit 1
+      `;
+      return existing === undefined ? { kind: "not_found" } : { kind: "conflict" };
+    }) as Promise<SettlementOverrideStoreResult<SettlementOverrideRequest>>;
   }
 
   /**
