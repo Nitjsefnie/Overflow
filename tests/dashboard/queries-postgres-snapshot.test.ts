@@ -152,7 +152,7 @@ describe("the dashboard projection reads one database snapshot", () => {
 
 /** Reinserts the settlement if a projection left it deleted, so the suite stays idempotent. */
 async function restoreDeletedSettlement(client: Sql, saved: SavedSettlement): Promise<void> {
-  const [row] = await sql<{ total: string }[]>`
+  const [row] = await client<{ total: string }[]>`
     select count(*) as total from settlements where id = ${saved.id}
   `;
   if (Number(row.total) === 0) {
