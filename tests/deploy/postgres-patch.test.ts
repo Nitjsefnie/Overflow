@@ -309,6 +309,7 @@ describe("postgres@3.4.9 patch guard", () => {
       const probe = spawnSync(process.execPath, ["-e", "require('postgres')"], {
         cwd: process.cwd(), // the tree root, so the probe resolves this tree's node_modules
         encoding: "utf8",
+        timeout: 15000,
       });
 
       const output = (probe.stdout ?? "") + (probe.stderr ?? "");
