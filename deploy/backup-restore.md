@@ -218,7 +218,11 @@ sudo -u postgres psql -c "alter database overflow_replacement rename to overflow
 systemctl start overflow.service
 ```
 
-and verify the service per deploy/README.md section 7. Drop
+and verify the service per deploy/README.md section 7. To repoint by
+configuration instead of renaming, skip the two `alter database` lines and
+change `DATABASE_URL` in `/etc/overflow/overflow.env` to name
+`overflow_replacement` before the restart — the rename exists so the
+environment file, the unit and the deploy procedure stay untouched. Drop
 `overflow_old_<epoch>` only after a soak period: the old database is the
 rollback for a bad restore, and dropping it is the point of no return.
 
