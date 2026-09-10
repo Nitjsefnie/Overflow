@@ -58,6 +58,9 @@ src/app/api/calibration/*
 !src/app/api/calibration/*.ts
 !src/app/api/dashboard/
 src/app/api/dashboard/*
+!src/app/api/forge-identities/
+src/app/api/forge-identities/*
+!src/app/api/forge-identities/*.ts
 !src/app/api/dashboard/*.ts
 !src/app/api/github/
 src/app/api/github/*
@@ -184,6 +187,12 @@ src/lib/dashboard/*
 !src/lib/db/
 src/lib/db/*
 !src/lib/db/*.ts
+!src/lib/forge/
+src/lib/forge/*
+!src/lib/forge/*.ts
+!src/lib/gitlab/
+src/lib/gitlab/*
+!src/lib/gitlab/*.ts
 !src/lib/domain/
 src/lib/domain/*
 !src/lib/domain/*.ts
@@ -274,6 +283,9 @@ tests/auth/*
 !tests/ci/
 tests/ci/*
 !tests/ci/*.ts
+!tests/forge/
+tests/forge/*
+!tests/forge/*.ts
 !tests/calibration/
 tests/calibration/*
 !tests/calibration/*.ts
