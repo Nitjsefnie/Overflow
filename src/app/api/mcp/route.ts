@@ -164,8 +164,11 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
       // On this route the guard's 403 is only ever the origin guard's, and a
       // request that reached it with no Cookie header carries no browser
       // session — the cookie case keeps the 403, which is the CSRF defense.
-      // With no parsable APP_URL there is no origin to advertise, so the
-      // original refusal stands (fail closed to today's behavior).
+      // An unparsable APP_URL never reaches this branch at all: the origin
+      // guard refuses it with its own 500 first. The null-check below is
+      // belt-and-braces against a future widening of this gate, so a widened
+      // refusal still stands rather than a discovery answer with no origin
+      // to advertise.
       if (refusal.status === 403 && request.headers.get("cookie") === null) {
         const origin = readTrustedOrigin();
         if (origin !== null) {
