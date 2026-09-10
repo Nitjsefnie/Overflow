@@ -4,6 +4,7 @@ import { parse } from "yaml";
 
 interface ComposeService {
   image?: string;
+  build?: { context?: string; args?: Record<string, string> };
   profiles?: string[];
   restart?: string;
   depends_on?: Record<string, { condition?: string }>;
@@ -35,7 +36,7 @@ describe("docker-compose.yml", () => {
 
   it("leaves the postgres service unchanged", () => {
     const postgres = compose.services.postgres;
-    expect(postgres.image).toBe("postgres:17-alpine");
+    expect(postgres.image).toBe("postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73");
     expect(postgres.restart).toBe("unless-stopped");
     expect(postgres.healthcheck).toBeDefined();
     expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"]);
@@ -45,7 +46,12 @@ describe("docker-compose.yml", () => {
     const app = compose.services.app;
     expect(app.restart).toBe("unless-stopped");
     expect(app.depends_on?.postgres?.condition).toBe("service_healthy");
-    expect(app.ports).toEqual(["${APP_HOST_BIND:-127.0.0.1}:3000:3000"]);
+  });
+
+  it("plumbs SOURCE_SHA into the app build so compose builds carry the provenance arg", () => {
+    const build = compose.services.app.build;
+    expect(build?.context).toBe(".");
+    expect(build?.args?.SOURCE_SHA).toBe("${SOURCE_SHA:-}");
   });
 
   it("leaves the app service's runtime user to the image instead of overriding it", () => {

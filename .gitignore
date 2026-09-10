@@ -253,6 +253,7 @@ scripts/*
 !scripts/deploy-revision.sh
 !scripts/db-backup.sh
 !scripts/db-restore.sh
+!scripts/container-build.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
