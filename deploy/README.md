@@ -365,7 +365,7 @@ owner. Keep that order when pasting the commands separately too.
 set -e
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
-  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
 printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
   "$(cat /run/overflow-preswitch-mainpid)" \
   "$(systemctl show overflow.service -p MainPID --value)"
@@ -374,7 +374,10 @@ systemctl show overflow.service \
 ps -o user=,pid=,args= -p "$(systemctl show overflow.service -p MainPID --value)"
 ```
 
-Expected: `active`; `200` from curl; the two `MainPID` values differ and the current
+Expected: `active`; `200` from curl — the readiness endpoint answers `200` only
+when PostgreSQL is reachable (a bounded probe: at most a few seconds, ~3 s worst
+case), so a `200` here is a real dependency check, not a bare port probe; the
+two `MainPID` values differ and the current
 one is not `0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
 `ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`.
 
@@ -474,7 +477,9 @@ mean the rollback path works — the `root` is the point of it, since that is th
 state the saved unit runs in. Then repeat section 6 and section 7 to get back to
 the hardened unit; section 6's `restart` is what makes that return leg real, and
 its `MainPID` pair is what proves it happened. A rollback that has never been run
-is an assumption.
+is an assumption. This block keeps the landing-page URL on purpose: the restored
+old checkout predates the readiness endpoint, and what the block verifies is
+unit-rollback serving, not dependency reachability.
 
 ## 9. Rolling back
 
@@ -528,7 +533,7 @@ pnpm release:switch /srv/overflow "$previous_release" --expect-current "$expecte
 systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
-  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
 ```
 
 Expect `active` and HTTP `200`, then exercise the application and inspect its
@@ -536,6 +541,12 @@ journal as in section 7. Restart immediately after switching: a process running
 across the swap retains its old writable cache mount, while the fresh start
 picks up the selected release's cache. A symlink switch alone is not a deploy
 or a rollback.
+
+A retained release built before the readiness endpoint existed answers `404`
+there. `curl -f` treats `404` as a failure, so the verification fails —
+readiness unknown rather than confirmed — and that is the intended fail-safe:
+never report a rollback healthy on a signal that cannot see the database. The
+caveat goes moot once every retained release postdates the endpoint.
 
 This rolls back the build, not the revision. The checkout and `node_modules`
 are shared with the current revision, and database migrations are not undone.
@@ -578,7 +589,7 @@ environment load, `db:migrate`, a
 grammar-named release directory created with a collision-aborting `mkdir`,
 generated-config preparation, the build, the ownership reset excluding the
 serving cache, the new cache handover to the service account, the conditional
-switch, the restart, the `is-active` and HTTP 200 verification, the webhook
+switch, the restart, the `is-active` and readiness-endpoint verification, the webhook
 upgrade written to a retained JSONL log with a nonzero upgrade exiting the
 script nonzero, the retention listing, and the prune via `release:prune --keep 3`.
 The migration-safety analysis and every other guard below govern the script's
@@ -616,7 +627,7 @@ for the test harness; production sets none of them and runs on the defaults:
 `OVERFLOW_DEPLOY_ENV_FILE` (default `/etc/overflow/overflow.env`),
 `OVERFLOW_DEPLOY_LOCK` (default `/run/overflow-deploy.lock`),
 `OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
-`OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/`),
+`OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/api/readiness`),
 `OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`) and
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). One further override is
 operator-facing, not a test knob: `OVERFLOW_DEPLOY_CI_GATE`, whose only
@@ -756,7 +767,7 @@ pnpm release:switch /srv/overflow "$release" --expect-current "$expected_serving
 systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
-  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
 install -d -m 0700 /var/log/overflow
 upgrade_log="/var/log/overflow/webhook-upgrade-$release.jsonl"
 upgrade_status=0
