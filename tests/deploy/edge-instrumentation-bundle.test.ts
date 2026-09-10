@@ -35,9 +35,15 @@ it("builds without loading a Node.js module into the Edge Runtime", () => {
   });
 
   // Exit 0 and a real compile, so a build that never ran cannot read as a pass
-  // on the warning check below.
+  // on the warning checks below.
   expect(build.status, build.stdout + build.stderr).toBe(0);
   const output = build.stdout + build.stderr;
   expect(output).toContain("Compiled successfully");
+  // Two anchors, because they fail differently. The counter line is the stable
+  // one: any nonzero warning count at all retires the pin, so a Turbopack
+  // upgrade cannot silently reword the Node-module warning into a pass. The
+  // wording anchor is second: it names the exact failure issue 88 was about,
+  // and holds the line even if the counter line itself moves or disappears.
+  expect(output).not.toMatch(/Turbopack build encountered [1-9]\d* warnings?/);
   expect(output).not.toContain("not supported in the Edge Runtime");
 }, 300_000);
