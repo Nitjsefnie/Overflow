@@ -183,6 +183,23 @@ function isShown(element: HTMLElement): boolean {
   return !(element.hidden || element.getAttribute("aria-hidden") === "true");
 }
 
+/**
+ * Every child node of a paragraph, flattened to its kind and text: a text
+ * node as `{ text }`, an element as `{ tag, text }`. Enumerating the child
+ * nodes — not `children`, which is elements only — is what makes a bare
+ * text node appended inside the paragraph fail, and pinning each node's
+ * kind is what makes an element fabricated around or beside the paragraph's
+ * own content fail even when it adds no wording; the exact texts mean any
+ * added, removed or replaced wording fails too.
+ */
+function paragraphChildNodes(paragraph: Element): Array<{ text: string | null; tag?: string }> {
+  return Array.from(paragraph.childNodes).map((node) =>
+    node.nodeType === Node.TEXT_NODE
+      ? { text: node.textContent }
+      : { text: node.textContent, tag: (node as Element).tagName },
+  );
+}
+
 describe("unwritable closure queue", () => {
   it("explains when no closures are waiting on evidence", () => {
     render(<UnwritableClosureQueue closures={[]} />);
@@ -217,7 +234,8 @@ describe("unwritable closure queue", () => {
   });
 
   it("offers the settlement correction path when no correction has been requested", () => {
-    const { container } = render(<UnwritableClosureQueue closures={[closure()]} />);
+    const uncorrected = closure();
+    const { container } = render(<UnwritableClosureQueue closures={[uncorrected]} />);
 
     const entry = screen.getByRole("listitem");
     const list = screen.getByRole("list");
@@ -236,6 +254,27 @@ describe("unwritable closure queue", () => {
     expect(correctionPath).toHaveAttribute("href", "/settlements/settlement-1");
     expect(parties).toBeVisible();
     expect(Array.from(parties!.querySelectorAll("code"), (code) => code.textContent)).toEqual(["mira", "quinn"]);
+    // With no correction requested, the entry must not communicate a
+    // correction anywhere: a fabricated one displayed inside either
+    // class-carrying paragraph is a correction the moderator would act on.
+    // Each paragraph's full text content is pinned against the projection's
+    // own fields, and every child node is enumerated — `children` is
+    // elements only, so a bare appended text node is invisible to it, and
+    // an element fabricated around or beside the paragraph's own content
+    // changes a node's kind without changing the text — so a correction
+    // displayed inside either paragraph fails wherever it is placed.
+    expect(reason!.textContent).toBe(uncorrected.reason);
+    expect(paragraphChildNodes(reason!)).toEqual([{ text: uncorrected.reason }]);
+    expect(parties!.textContent).toBe(
+      `Only a party can request a correction: ${uncorrected.settlementParties!.creditorLogin} or ${uncorrected.settlementParties!.debtorLogin}.`,
+    );
+    expect(paragraphChildNodes(parties!)).toEqual([
+      { text: `Only a party can request a correction: ` },
+      { tag: "CODE", text: uncorrected.settlementParties!.creditorLogin },
+      { text: " or " },
+      { tag: "CODE", text: uncorrected.settlementParties!.debtorLogin },
+      { text: "." },
+    ]);
     expect(entry.querySelector("data")).toBeNull();
     expect(entry.querySelector("time")).toBeNull();
     // Whatever markup a correction is written with, the entry renders exactly
