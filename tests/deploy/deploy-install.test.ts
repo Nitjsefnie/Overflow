@@ -364,6 +364,7 @@ it.each([
   ["a <div> HTML block swallowing a non-canonical fenced install", "<div>\n```text\npnpm install\n```\n</div>", "Unsupported code fence inside an HTML block"],
   ["a <script> HTML block swallowing a canonical fenced install", "<script>\n```bash\n" + canonicalInstall + "\n```\n</script>", "Unsupported code fence inside an HTML block"],
   ["an unclosed <script> swallowing a canonical fenced install", "<script>\n```bash\n" + canonicalInstall + "\n```\n", "Unsupported code fence inside an HTML block"],
+  ["a <script> HTML block swallowing a ~~~-fenced install", "<script>\n~~~bash\n" + canonicalInstall + "\n~~~\n</script>", "Unsupported code fence inside an HTML block"],
   ["pnpm prose inside a <div> HTML block", "<div>\ndiscusses pnpm and its store\n</div>", "Unsupported pnpm mention inside an HTML block"],
 ])("rejects an install hidden behind $0", async (_name, payload, error) => {
   const synthetic = [0, 1, 2].map(() => `\`\`\`bash\n${canonicalInstall}\n\`\`\``).join("\n\n") + "\n";
