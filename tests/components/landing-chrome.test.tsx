@@ -20,6 +20,15 @@ import { readFileSync } from "node:fs";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import HomePage from "@/app/page";
 
+/**
+ * The routes this suite has a signed-out render for. "/" is proven by this
+ * file's own HomePage render; "/account-data" is a static page with no
+ * session read, proven by tests/components/account-data-page.test.tsx, which
+ * renders the route signed out. A new public route proves itself the same way
+ * and then joins this set.
+ */
+const PROVEN_PUBLIC_ROUTES = new Set(["/", "/account-data"]);
+
 // Issue 38: the signed-out entry route rendered a bare main.landing-page with no
 // site chrome, while every signed-in page carried the header, navigation and
 // footer through AppShell. These cases walk the route itself (with the session
@@ -68,25 +77,25 @@ describe("signed-out landing chrome", () => {
     expect(signInButton.closest("main")).toBe(main);
   });
 
-  it("carries no navigation link until its route is proven to render signed-out", async () => {
+  it("carries only proven-public routes in the site navigation", async () => {
     render(await HomePage());
 
     const nav = screen.getByRole("navigation", { name: "Site navigation" });
+    const hrefs = Array.from(nav.querySelectorAll("a")).map((anchor) => anchor.getAttribute("href"));
 
-    // Every chrome link must land on a route that renders for a signed-out
-    // visitor. Today only / does, and the wordmark already carries it, so the
-    // nav stays linkless; adding one means proving the route public first
-    // (see the links case below) and this list is where the proof lands.
     expect(
-      within(nav).queryAllByRole("link"),
+      hrefs.filter((href) => !PROVEN_PUBLIC_ROUTES.has(href!)),
       "a navigation link appeared without a proof that its route renders for a signed-out visitor",
     ).toEqual([]);
+    // The nav is the chrome's list of proven-public routes; today that is
+    // exactly the account-data notice.
+    expect(hrefs).toContain("/account-data");
   });
 
   it("keeps every chrome link on a route a signed-out visitor can reach", async () => {
     // This very render is the proof for "/": the route resolved with no session
-    // and produced the landing content. A second public route would need the
-    // same kind of proof here before the chrome may link it.
+    // and produced the landing content. A second public route needs the same
+    // kind of proof here before the chrome may link it.
     render(await HomePage());
     expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
 
@@ -101,9 +110,8 @@ describe("signed-out landing chrome", () => {
     );
     expect(linked.length).toBeGreaterThan(0);
 
-    const proven = new Set(["/"]);
     expect(
-      linked.filter((href) => !proven.has(href)),
+      linked.filter((href) => !PROVEN_PUBLIC_ROUTES.has(href)),
       "the chrome links a route this suite has no signed-out render for; prove it renders signed-out and add it to the proven set",
     ).toEqual([]);
   });
