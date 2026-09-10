@@ -151,23 +151,34 @@ describe("GitHub Actions release gates", () => {
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
 
-    const audit = workflow.jobs.audit!;
-    expect(audit["runs-on"]).toBe("ubuntu-latest");
-    expect(audit.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
-    expect(audit.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
-      .toEqual(expect.objectContaining({ "persist-credentials": false }));
-    expect(audit.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
-      .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));
-
-    const runs = audit.steps.map((step) => step.run).filter(Boolean);
-    expect(runs.some((run) => run?.includes("corepack install --global pnpm@10.33.0"))).toBe(true);
-    // The gate is the audit command's own exit code, exactly as verified
-    // against pnpm 10.33.0: bare `pnpm audit` exits 1 iff advisories exist.
-    // No flag may narrow or widen that semantics, and no install or build may
-    // precede it — pnpm audit reads pnpm-lock.yaml directly.
-    expect(audit.steps.find((step) => step.run === "pnpm audit")).toBeDefined();
-    expect(runs.some((run) => run?.includes("pnpm install"))).toBe(false);
-    expect(runs.some((run) => run?.includes("pnpm build"))).toBe(false);
+    // The whole job, exactly, in the claim/pr-gate style: any extra key — a
+    // step-level continue-on-error tolerating a red audit, or a job-level
+    // permissions override — fails this equality. The gate is the audit
+    // command's own exit code, exactly as verified against pnpm 10.33.0:
+    // bare `pnpm audit` exits 1 iff advisories exist. No install and no
+    // build precede it — pnpm audit reads pnpm-lock.yaml directly.
+    expect(workflow.jobs.audit).toEqual({
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 10,
+      steps: [
+        {
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "persist-credentials": false },
+        },
+        {
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: { "node-version": "24.17.0" },
+        },
+        {
+          name: "Enable the pinned package manager",
+          run: "corepack enable\ncorepack install --global pnpm@10.33.0\npnpm --version\n",
+        },
+        {
+          name: "Audit lockfile advisories",
+          run: "pnpm audit",
+        },
+      ],
+    });
   });
 
   it("keeps the dependabot update policy excluding the locally patched postgres", async () => {

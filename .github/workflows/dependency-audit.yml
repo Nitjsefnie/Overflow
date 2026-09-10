@@ -6,12 +6,13 @@ name: dependency audit
 #
 # Exit-code semantics, verified empirically against pnpm 10.33.0: the bare
 # `pnpm audit` exits 1 exactly when the lockfile carries advisories, and 0
-# when it is clean. Do not add --audit-level: in 10.33.0 it gates neither the
-# exit code nor the printed advisories (with a critical bar set, every
-# moderate advisory still printed and the run exited 0). Do not add
+# when it is clean. Do not add --audit-level: it sets a severity bar, and
+# findings below the bar still print but exit 0 (captured: a critical bar
+# over 3 moderate + 3 high advisories printed all six and exited 0) — a bar
+# on a detection signal silently passes below-bar findings. Do not add
 # --ignore-registry-errors either: a registry outage also exits 1, so a red
-# run means "advisories found, or the registry could not answer" — either way
-# a human looks, which is what a detection signal is for.
+# run means "advisories found, or the registry could not answer" — either
+# way a human looks, which is what a detection signal is for.
 on:
   schedule:
     # Mondays 06:37 UTC, off the top of the hour where the Actions queue is
