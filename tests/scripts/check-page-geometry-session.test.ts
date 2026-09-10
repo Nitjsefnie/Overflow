@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, authedLandingState, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -131,6 +131,53 @@ describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () 
     const env = spawnedServerEnv({ AUTH_TRUST_HOST: "false" });
 
     expect(env.AUTH_TRUST_HOST).toBe("false");
+  });
+
+  it("treats an empty AUTH_TRUST_HOST as unset, not as an explicit negative", () => {
+    // The server-side trust parser reads the variable truthily, so an empty
+    // string grants nothing — forcing "true" is the only honest reading of
+    // "the caller left it empty".
+    const env = spawnedServerEnv({ AUTH_TRUST_HOST: "" });
+
+    expect(env.AUTH_TRUST_HOST).toBe("true");
+  });
+});
+
+/**
+ * The authed navigation's terminal landing states (issue 453 fix round 2).
+ * A rejected session bounces to / or /session?reason=..., and a session the
+ * ledger admits at the WRONG ROLE bounces to /dashboard (the role is
+ * re-read from the database; /moderation redirects non-moderators there).
+ * Every bounce must settle the poll and fail the ROW as a render failure
+ * naming the landed URL — the original predicate knew only / and /session*,
+ * so a /dashboard bounce burned the full 30s timeout and aborted the run
+ * with no row and no diagnosis (reviewer-proven against this exact gate).
+ */
+describe("authedLandingState — the authed navigation's terminal landing states (issue 453)", () => {
+  const target = "http://127.0.0.1:3219/moderation";
+
+  it("settles at the target regardless of the stale-document marker", () => {
+    expect(authedLandingState(target, target, false)).toBe("target");
+    expect(authedLandingState(target, target, true)).toBe("target");
+  });
+
+  it("reads every bounce pathname — including /dashboard — as a row-level bounce", () => {
+    expect(authedLandingState(target, "http://127.0.0.1:3219/", false)).toBe("bounce");
+    expect(authedLandingState(target, "http://127.0.0.1:3219/session?reason=stale", false)).toBe("bounce");
+    expect(authedLandingState(target, "http://127.0.0.1:3219/dashboard", false)).toBe("bounce");
+  });
+
+  it("holds the departing document pending so a previous page cannot satisfy the bounce arm", () => {
+    // The stale-document marker is set on the document the navigation
+    // departs from; while it lives, its location — bounce-shaped or not —
+    // must read as pending, never as a landed bounce.
+    expect(authedLandingState(target, "http://127.0.0.1:3219/", true)).toBe("pending");
+    expect(authedLandingState(target, "http://127.0.0.1:3219/dashboard", true)).toBe("pending");
+  });
+
+  it("keeps an unrelated in-flight location pending", () => {
+    expect(authedLandingState(target, "about:blank", false)).toBe("pending");
+    expect(authedLandingState(target, "http://127.0.0.1:3219/issues", false)).toBe("pending");
   });
 });
 

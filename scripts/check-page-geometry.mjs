@@ -330,6 +330,30 @@ export async function setSessionCookie(client, sessionId, value, baseUrl) {
 }
 
 /**
+ * The terminal landing states of an authed contract's navigation. The target
+ * URL itself, or a bounce: a session the page refuses lands on `/` (no
+ * usable session) or `/session?reason=...` (an identity the ledger cannot
+ * vouch for), and a session it admits at the WRONG ROLE lands on
+ * `/dashboard` — requireMemberPageSession re-reads the role from the
+ * database and /moderation redirects non-moderators there. Every bounce is
+ * a row-level render failure naming the landed URL, never the contract-drift
+ * hard stop and never a poll timeout. `staleDocument` mirrors the in-page
+ * `__geometryStaleDocument` marker: the DEPARTING document carries it, so
+ * its location can never satisfy the bounce arm. The poll predicate in
+ * main() is this function's literal in-page string mirror — change the two
+ * together. Exported so tests can pin each landing state.
+ */
+export function authedLandingState(targetUrl, href, staleDocument) {
+  if (href === targetUrl) return "target";
+  if (staleDocument === true) return "pending";
+  const { pathname } = new URL(href);
+  if (pathname === "/" || pathname === "/dashboard" || pathname.startsWith("/session")) {
+    return "bounce";
+  }
+  return "pending";
+}
+
+/**
  * The page contracts, the table this check exists to keep extensible: a new
  * page's geometry cover is one more entry, not one more test file.
  *
@@ -353,8 +377,9 @@ export async function setSessionCookie(client, sessionId, value, baseUrl) {
  * `authAs` (optional) signs the page in as a fixture user while measuring —
  * "member" or "moderator" (issue 453). The session cookie is set fresh before
  * each authed contract's navigation (overwriting the previous role's cookie),
- * and a navigation that bounces to / or /session?... is a render failure of
- * that contract, not a hard contract-drift stop.
+ * and a navigation that bounces to / , /session?... , or /dashboard (a role
+ * bounce) is a ROW-LEVEL render failure of that contract naming the landed
+ * URL — never the contract-drift hard stop and never a poll timeout.
  */
 const PAGE_CONTRACTS = [
   {
@@ -492,7 +517,8 @@ const PAGE_CONTRACTS = [
   // rendered by src/app/moderation/page.tsx's first action section) — the
   // ladder's first rung and the page's primary control. Only a moderator's
   // session renders the page at all; a member session bounces to /dashboard
-  // and the row fails as a render failure, which is its own cover. The
+  // (a role bounce — a terminal landing state alongside / and /session*) and
+  // the row fails as a render failure naming the landed URL. The
   // button is a <button>, unstyled read `inline-block`; .action-button sets
   // `inline-flex`.
   {
@@ -1119,24 +1145,30 @@ async function main() {
             30000,
             `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
         } else {
-          // A rejected session bounces to / or /session?...: settle at EITHER
-          // the target or a bounced URL, then diagnose from where it landed.
-          // The stale-document flag keeps the previous page (still at '/',
-          // already complete) from satisfying the bounce predicate early.
+          // Settle at the target or at a bounce — / , /session?... , or
+          // /dashboard (a role bounce; authedLandingState above names what
+          // each means) — then diagnose from where the browser actually
+          // landed. The stale-document flag keeps the departing page (already
+          // complete) from satisfying the bounce arm before the navigation
+          // commits. This expression is the in-page string mirror of
+          // authedLandingState; change the two together.
           await pollFor(client, sessionId,
             `document.readyState === 'complete' && (location.href === ${JSON.stringify(url)} ` +
-              `|| (!window.__geometryStaleDocument && (location.pathname === '/' || location.pathname.startsWith('/session'))))`,
+              `|| (!window.__geometryStaleDocument && (location.pathname === '/' ` +
+              `|| location.pathname === '/dashboard' || location.pathname.startsWith('/session'))))`,
             30000,
-            `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
+            `"${url}" to finish loading (document.readyState complete at the target or a bounced URL, no hang)`);
           const landedAt = await evaluate(client, sessionId, "location.href");
-          if (landedAt !== url) {
-            // Same branch as a render failure — HTTP status plus where the
-            // browser actually landed — never the contract-drift hard stop.
+          if (authedLandingState(url, landedAt, false) !== "target") {
+            // A bounce — rejected cookie, untrusted host, or wrong role — is
+            // the render-failure branch: HTTP status plus the landed URL,
+            // never the contract-drift hard stop and never a poll timeout.
             const status = await probeStatus(contract.page);
             failed = true;
             console.log(
               `${contract.page}: FAIL — signed-in page did not render (HTTP ${status}); ` +
-                `the session cookie was not accepted, the browser bounced to ${landedAt} ` +
+                `the session was not admitted (a rejected cookie, an untrusted host, or a role bounce), ` +
+                `the browser landed on ${landedAt} ` +
                 `(a server that does not trust the request host drops sessions silently: ` +
                 `the spawned server grants itself AUTH_TRUST_HOST=true; a --base-url ` +
                 `target must be started with it)`,
