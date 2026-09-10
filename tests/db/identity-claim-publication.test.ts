@@ -109,6 +109,11 @@ describe("identity claims survive republication of a stale fold", () => {
         fold_revision: FOLD_REVISION,
       }),
     ]);
+    // Callers retain and reuse folds across runs, so the resolution must have
+    // produced a fresh object instead of appending to or rewriting the
+    // snapshot's own arrays in place.
+    expect(scenario.fold.selfWorkCalibrations).toEqual([]);
+    expect(scenario.fold.settlements.map((settlement) => settlement.status)).toEqual(["UNCLAIMED"]);
   });
 
   it("preserves a claimed pull request author when a stale snapshot is republished", async () => {
@@ -127,6 +132,34 @@ describe("identity claims survive republication of a stale fold", () => {
     await publish(scenario.store, scenario.repositoryId, scenario.fold);
     expect(await pullRequestRows(scenario.repositoryId)).toEqual([
       expect.objectContaining({ author_id: contributor.id }),
+    ]);
+  });
+
+  it("leaves a settlement UNCLAIMED when only the debtor is not participation-eligible at merge time", async () => {
+    // The mirror of the banned-creditor case: the creditor's own eligibility
+    // is not sufficient, the claim requires the debtor eligible at merge time
+    // too, so publication must not promote the settlement on the creditor
+    // alone.
+    const scenario = await createUnclaimedScenario(sql, { sponsorEnforcementState: "BANNED" });
+    await publish(scenario.store, scenario.repositoryId, scenario.fold);
+
+    const [contributor] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${scenario.creditorGitHubId}, ${`contributor-${scenario.creditorGitHubId}`}) returning id
+    `;
+    await claimGitHubIdentity(sql, contributor.id, scenario.creditorGitHubId);
+    expect(await settlementRows(scenario.repositoryId)).toEqual([
+      expect.objectContaining({ status: "UNCLAIMED", creditor_id: null }),
+    ]);
+
+    const second = await publish(scenario.store, scenario.repositoryId, scenario.fold);
+    expect(second.deltas).toEqual({ adds: 0, changes: 0, removals: 0 });
+    expect(await settlementRows(scenario.repositoryId)).toEqual([
+      expect.objectContaining({
+        status: "UNCLAIMED",
+        creditor_id: null,
+        fold_revision: FOLD_REVISION,
+      }),
     ]);
   });
 
@@ -184,15 +217,19 @@ let externalId = 5_000_000;
  */
 async function createUnclaimedScenario(
   sql: Sql,
-  options?: { creditorGitHubUserId?: "sponsor" },
+  options?: { creditorGitHubUserId?: "sponsor"; sponsorEnforcementState?: "BANNED" },
 ) {
   const sponsorGitHubId = externalId++;
   const creditorGitHubId = options?.creditorGitHubUserId === "sponsor"
     ? sponsorGitHubId
     : externalId++;
+  // No moderation events exist, so enforcement_state_at falls back to the
+  // users row itself: a banned sponsor is not participation-eligible at any
+  // merge time.
+  const sponsorState = options?.sponsorEnforcementState ?? "ACTIVE";
   const [sponsor] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
-    values (${sponsorGitHubId}, ${`sponsor-${sponsorGitHubId}`}) returning id
+    insert into users (github_user_id, github_login, enforcement_state)
+    values (${sponsorGitHubId}, ${`sponsor-${sponsorGitHubId}`}, ${sponsorState}::enforcement_state) returning id
   `;
   const repositoryGitHubId = externalId++;
   const [repository] = await sql<{ id: string }[]>`
