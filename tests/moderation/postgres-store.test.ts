@@ -666,6 +666,54 @@ describe("PostgreSQL account moderation transitions", () => {
       sponsorId,
     });
   });
+
+  it("serializes mutual moderator revocations so exactly one lands", async () => {
+    const aliceId = await insertUser("MODERATOR");
+    const bobId = await insertUser("MODERATOR");
+    const store = new PostgresModerationStore(sql);
+
+    // Earlier cases in this file leave MODERATOR rows behind, and the
+    // last-moderator guard counts the whole users table: demote them so alice
+    // and bob are the only moderators during this case. This runs before the
+    // sleep trigger below exists, so it does not inherit the pause.
+    await sql`update users set role = 'MEMBER' where role = 'MODERATOR' and id not in (${aliceId}, ${bobId})`;
+
+    await sql`
+      create function overflow_test_role_sleep() returns trigger as $$
+      begin
+        perform pg_sleep(1);
+        return new;
+      end
+      $$ language plpgsql
+    `;
+    await sql`
+      create trigger widen_moderator_race before update of role on users
+      for each row when (old.role is distinct from new.role)
+      execute function overflow_test_role_sleep()
+    `;
+    let outcomes: PromiseSettledResult<Awaited<ReturnType<typeof store.setModeratorRole>>>[] = [];
+    try {
+      outcomes = await Promise.allSettled([
+        store.setModeratorRole({ actorId: aliceId, targetAccountId: bobId, moderator: false }),
+        store.setModeratorRole({ actorId: bobId, targetAccountId: aliceId, moderator: false }),
+      ]);
+    } finally {
+      await sql`drop trigger if exists widen_moderator_race on users`;
+      await sql`drop function if exists overflow_test_role_sleep()`;
+    }
+
+    // A rejection entry is the 40P01 deadlock (each revocation holds the other's
+    // actor row FOR UPDATE while its audit insert wants a KEY SHARE on it), or
+    // both revocations committing and leaving zero moderators.
+    const kinds = outcomes.map((outcome) =>
+      outcome.status === "fulfilled" ? outcome.value.kind : `rejected: ${String(outcome.reason)}`,
+    );
+    expect(kinds.sort()).toEqual(["invalid_state", "ok"]);
+
+    const roster = await store.listModerators();
+    const survivors = roster.filter((entry) => entry.accountId === aliceId || entry.accountId === bobId);
+    expect(survivors).toHaveLength(1);
+  });
 });
 
 async function openAudit(store: PostgresModerationStore, input: OpenAccountAuditStoreInput) {
