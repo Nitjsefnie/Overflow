@@ -500,6 +500,8 @@ async function insertRepository(
   sql: Sql,
   sponsor: SeededAccountHandle,
 ): Promise<SeededRepositoryHandle> {
+  // active is the moderation lever postgres-store filters on, so it is seeded explicitly: an
+  // upgrade that flips the column fails the per-boundary readback below.
   const row: SeededRepository = {
     github_repository_id: nextExternalId(),
     owner_name: "legacy-owner/legacy-repository",
