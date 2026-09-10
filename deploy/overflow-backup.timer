@@ -1,0 +1,18 @@
+# Daily timer for the Overflow database backup (overflow-backup.service).
+#
+# Install as /etc/systemd/system/overflow-backup.timer.
+# deploy/backup-restore.md carries the install and verification steps.
+
+[Unit]
+Description=Daily Overflow database backup
+
+[Timer]
+# Fixed wall-clock schedule in UTC, stated explicitly so a host timezone
+# change cannot move the backup window. Persistent= catches up a backup missed
+# while the host was down, on the next boot.
+OnCalendar=*-*-* 01:30:00 UTC
+Persistent=true
+Unit=overflow-backup.service
+
+[Install]
+WantedBy=timers.target
