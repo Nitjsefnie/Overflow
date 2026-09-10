@@ -4,6 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 
 let container: StartedTestContainer | undefined;
@@ -364,6 +365,46 @@ describe("PostgreSQL settlement override requests", () => {
     await expect(jobRows(declinedRepositoryId)).resolves.toEqual([]);
   });
 
+  // The grant and its enqueue are one transaction on purpose: an enqueue that
+  // fails after the state flip must take the flip back with it, or the row
+  // reads GRANTED while the ledger never hears about the correction — this
+  // issue's defect, one refactor deep. The failure is injected black-box, so
+  // the pin survives either half of that refactor: moving the enqueue off the
+  // transaction client, or swallowing its error.
+  it("rolls the grant decision back when its enqueue fails", async () => {
+    const store = new PostgresSettlementOverrideStore(sql);
+    const settlement = await insertSettlement();
+    const moderator = await insertUser("rollback-moderator");
+    const opened = await store.createRequest({
+      requesterId: settlement.creditorId,
+      target: { kind: "settlement", settlementId: settlement.settlementId },
+      reason: "The settled points are too low.",
+    });
+    if (opened.kind !== "ok") {
+      throw new Error("Expected the request to open.");
+    }
+
+    const failingStore = new PostgresSettlementOverrideStore(sqlClientFailingOverrideEnqueue(sql));
+    await expect(
+      failingStore.decideRequest({
+        actorId: moderator,
+        requestId: opened.value.id,
+        decision: "GRANT",
+        settledPoints: 8,
+        reason: "A grant whose enqueue is about to fail.",
+      }),
+    ).rejects.toThrow("injected: the override enqueue failed");
+
+    // The flip rode in the same transaction as the failed enqueue, so nothing
+    // of the decision survived: the request is still OPEN with no points, and
+    // the repository's queue row was never written.
+    await expect(sql`
+      select state::text as state, settled_points
+      from settlement_override_requests where id = ${opened.value.id}
+    `).resolves.toEqual([{ state: "OPEN", settled_points: null }]);
+    await expect(jobRows(await repositoryIdForIssue(settlement.issueId))).resolves.toEqual([]);
+  });
+
   it("queues open requests with the settlement evidence a moderator needs, and drops them once decided", async () => {
     const store = new PostgresSettlementOverrideStore(sql);
     const settlement = await insertSettlement({ reviewRounds: 2 });
@@ -591,6 +632,42 @@ async function jobRows(repositoryId: string) {
     from repository_reconciliation_jobs
     where repository_id = ${repositoryId}
   `;
+}
+
+/**
+ * A client whose every statement runs for real except one: inside a
+ * transaction, the statement hitting `repository_reconciliation_jobs` rejects.
+ * Only the transaction client is faulted, so an enqueue that escapes the
+ * transaction (moved onto the outer client) runs untouched and is caught —
+ * that escape is precisely the refactor this pin exists to fail on.
+ */
+function sqlClientFailingOverrideEnqueue(real: Sql): SqlClient {
+  const faultTransaction = (transaction: TransactionClient): TransactionClient => {
+    // The forwarded call must reach the real client verbatim, so the forwarding
+    // leg is cast once rather than re-declaring the driver's parameter types.
+    const failingCall = (...callArgs: unknown[]): Promise<unknown> => {
+      const query = callArgs[0] as TemplateStringsArray;
+      if (query.some((text) => text.includes("repository_reconciliation_jobs"))) {
+        return Promise.reject(new Error("injected: the override enqueue failed"));
+      }
+      return (transaction as (...forwardedArgs: unknown[]) => Promise<unknown>)(...callArgs);
+    };
+    return new Proxy(failingCall, {
+      get: (_target, property) => (transaction as unknown as Record<PropertyKey, unknown>)[property],
+    }) as TransactionClient;
+  };
+
+  const passthrough = ((...callArgs: unknown[]) =>
+    (real as (...forwardedArgs: unknown[]) => Promise<unknown>)(...callArgs)) as unknown as SqlClient;
+  return new Proxy(passthrough, {
+    get: (target, property) => {
+      if (property === "begin") {
+        return (callback: (transaction: TransactionClient) => Promise<unknown>) =>
+          real.begin((transaction) => callback(faultTransaction(transaction)));
+      }
+      return (target as unknown as Record<PropertyKey, unknown>)[property];
+    },
+  }) as SqlClient;
 }
 
 async function insertSettlement(options: { reviewRounds?: number } = {}): Promise<{
