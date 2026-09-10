@@ -1,0 +1,46 @@
+name: code scanning
+
+# A detection signal on application source, not a pipeline gate. CodeQL for
+# JS/TS extracts from source, so there is deliberately no install and no
+# build — the same principle as the dependency audit's no-install audit.
+# Findings land in the Security tab as a triage surface for a human; they do
+# not block a merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Wednesdays 05:43 UTC, off the top of the hour where the Actions queue
+    # is busiest. Query packs evolve, so periodic re-analysis is the point.
+    - cron: "43 5 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Same shape as ci.yml: per-ref group with cancellation gated on pull_request
+  # events — a fresh push to a pull request cancels its previous run, while
+  # scheduled and main-branch runs queue instead of cancelling each other.
+  group: code-scanning-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Least privilege at the job level: only what uploading SARIF requires.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        with:
+          category: "/language:javascript-typescript"
