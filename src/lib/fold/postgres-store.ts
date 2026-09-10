@@ -1543,6 +1543,13 @@ export async function claimGitHubIdentity(
  * the row the fold would produce today, evaluating the claim's own guards
  * against current data.
  *
+ * The resolution is only as current as this transaction's users-table read: a
+ * claim committing after that read but before the settlement writes below can
+ * still be overwritten, because claimGitHubIdentity takes neither the
+ * per-repository advisory lock nor the registered_repositories row lock this
+ * publication holds. That window is pre-existing in mechanism and self-healing
+ * — the next fresh fold resolves the identity again.
+ *
  * Returns a NEW fold — callers retain and reuse fold objects across runs, so
  * the input is never mutated.
  */
