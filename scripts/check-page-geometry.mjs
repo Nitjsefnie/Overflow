@@ -29,14 +29,19 @@
  *
  * No new npm dependencies: the script drives Chrome over the DevTools protocol
  * with Node's built-in WebSocket, and starts/stops its own `next start` server.
+ * The session fixture (issue 453) mints its JWT with node:crypto and seeds its
+ * users through the `postgres` client the app itself already depends on.
  */
 
 import { spawn } from "node:child_process";
+import { createCipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import postgres from "postgres";
 
 const USAGE = `usage: node scripts/check-page-geometry.mjs [--base-url URL] [--help]
 
@@ -134,6 +139,166 @@ export function missingEnvMessage(missing) {
 }
 
 /**
+ * The session fixture (issue 453): the reusable pieces a signed-in contract
+ * needs. Seeding creates two fixed-ID users; minting produces the session
+ * cookie value the server accepts for one of them; delivery is CDP's
+ * Network.setCookie in the contract loop below. Later geometry cases inherit
+ * the whole mechanism by adding a contract row with `authAs`.
+ */
+
+/**
+ * The NextAuth session cookie name on a non-secure origin. BASE_URL is always
+ * http://127.0.0.1, so `useSecureCookies` is false and the name carries no
+ * `__Secure-` prefix (installed @auth/core `defaultCookies(false)`). It is
+ * also the hkdf salt: the app's session decode passes the cookie NAME as the
+ * salt (installed @auth/core `lib/actions/session.js`: `salt =
+ * options.cookies.sessionToken.name`).
+ */
+export const SESSION_COOKIE_NAME = "authjs.session-token";
+
+/** One hour of token life — a gate run lasts minutes; freshness is cheap. */
+const SESSION_TOKEN_MAX_AGE_SECONDS = 3600;
+
+/**
+ * The fixture users, by fixed IDs so repeated seeding is an upsert and later
+ * runs find the same rows. The github ids/logins are namespaced to this
+ * fixture; should a real user ever own them, the insert fails loudly on the
+ * unique constraint rather than silently reusing that account.
+ */
+const FIXTURE_USERS = [
+  { id: "00000000-0000-4000-8000-00000000453a", githubUserId: 945300453, login: "geometry-fixture-member", role: "MEMBER" },
+  { id: "00000000-0000-4000-8000-00000000453b", githubUserId: 945300454, login: "geometry-fixture-moderator", role: "MODERATOR" },
+];
+
+/**
+ * Idempotently create the fixture users in whatever database `databaseUrl`
+ * names — the gate's DATABASE_URL, a scratch container in CI or --base-url
+ * mode alike. Never deletes or demotes anything else; the only columns the
+ * conflict path rewrites are `role` (back to the fixture contract) and
+ * `updated_at`. Every other NOT NULL column of `users` has a default
+ * (db/migrations/001_initial.sql). Opens its own client and closes it.
+ */
+export async function seedFixtureUsers({ databaseUrl }) {
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const [member, moderator] = FIXTURE_USERS;
+    const seeded = await sql`
+      insert into users (id, github_user_id, github_login, role)
+      values
+        (${member.id}, ${member.githubUserId}, ${member.login}, ${member.role}),
+        (${moderator.id}, ${moderator.githubUserId}, ${moderator.login}, ${moderator.role})
+      on conflict (id) do update set role = excluded.role, updated_at = now()
+      returning id, role
+    `;
+
+    const roleById = new Map(seeded.map((row) => [row.id, row.role]));
+    for (const fixture of FIXTURE_USERS) {
+      if (roleById.get(fixture.id) !== fixture.role) {
+        throw new Error(
+          `geometry fixture user ${fixture.id} did not seed as ${fixture.role} ` +
+            `(row reads ${String(roleById.get(fixture.id))})`,
+        );
+      }
+    }
+
+    return { memberUserId: member.id, moderatorUserId: moderator.id };
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+/**
+ * The JWK thumbprint of the derived key, the `kid` jwt.js writes into the
+ * protected header: the SHA-512 digest (a 64-byte key -> "sha512") of the
+ * RFC 7638 canonical `{"k","kty"}` JSON, base64url-encoded. Matches the
+ * installed jose `calculateJwkThumbprint` for an "oct" key byte for byte.
+ */
+function derivedKeyThumbprint(cek) {
+  return createHash("sha512")
+    .update(`{"k":"${cek.toString("base64url")}","kty":"oct"}`, "utf8")
+    .digest("base64url");
+}
+
+/**
+ * Mint a NextAuth session JWT exactly as the installed @auth/core 0.41.3
+ * writes the session cookie — derived from the installed
+ * `node_modules/@auth/core/jwt.js` and its jose 6.2.11 dependency, not from
+ * memory, and pinned by the interop test in
+ * tests/scripts/check-page-geometry-session.test.ts. The plan's first-pass
+ * sketch differed from the installed code in three ways; the installed code
+ * wins everywhere:
+ *
+ *   - hkdf info is NOT empty: `Auth.js Generated Encryption Key (<salt>)`,
+ *     output 64 bytes for A256CBC-HS512 (jwt.js getDerivedEncryptionKey).
+ *   - The token is a dir + A256CBC-HS512 JWE with a `kid` thumbprint header,
+ *     not a CompactEncrypt/A256GCM token (jwt.js `alg`/`enc` and
+ *     `setProtectedHeader`).
+ *   - jti is `crypto.randomUUID()` (jwt.js `setJti`).
+ *
+ * A256CBC-HS512 is an RFC 7518 §5.2 CBC-HMAC cipher: the 64-byte CEK splits
+ * into a MAC key (first half) and an AES key (second half); the tag is the
+ * HMAC-SHA-512 of AAD || IV || ciphertext || uint64be(AAD length in bits),
+ * truncated to 32 bytes. AAD is the ASCII of the base64url protected header,
+ * and WebCrypto's AES-CBC pads like node's `aes-256-cbc` (PKCS#7) — the byte
+ * shapes copied from the installed jose `content_encryption.js` and
+ * `jwe_encrypt.js`. `now` is injectable so tests can mint deterministically;
+ * an expired token must fail the server-side decode, which is its own test.
+ */
+export function mintSessionCookieValue({ secret, userId, role, now = Date.now() }) {
+  const issuedAtSeconds = Math.floor((now instanceof Date ? now.getTime() : now) / 1000);
+
+  const salt = SESSION_COOKIE_NAME;
+  const cek = Buffer.from(hkdfSync("sha256", secret, salt, `Auth.js Generated Encryption Key (${salt})`, 64));
+
+  const protectedHeader = Buffer.from(
+    JSON.stringify({ alg: "dir", enc: "A256CBC-HS512", kid: derivedKeyThumbprint(cek) }),
+    "utf8",
+  ).toString("base64url");
+
+  const payload = JSON.stringify({
+    sub: userId,
+    userId,
+    role,
+    iat: issuedAtSeconds,
+    exp: issuedAtSeconds + SESSION_TOKEN_MAX_AGE_SECONDS,
+    jti: randomUUID(),
+  });
+
+  const iv = randomBytes(16);
+  const macKey = cek.subarray(0, 32);
+  const encKey = cek.subarray(32);
+  const cipher = createCipheriv("aes-256-cbc", encKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+
+  const aad = Buffer.from(protectedHeader, "ascii");
+  const aadBits = Buffer.alloc(8);
+  aadBits.writeBigUInt64BE(BigInt(aad.length * 8));
+  const macData = Buffer.concat([aad, iv, ciphertext, aadBits]);
+  const tag = createHmac("sha512", macKey).update(macData).digest().subarray(0, 32);
+
+  // Compact serialization; the second member (encrypted key) is empty for
+  // `dir` (jose joins protected, encrypted_key, iv, ciphertext, tag with ".").
+  return [protectedHeader, "", iv.toString("base64url"), ciphertext.toString("base64url"), tag.toString("base64url")].join(".");
+}
+
+/**
+ * The AUTH_SECRET the session cookie is minted with — the target server
+ * derives its decryption key from the same value, so only an exact match is
+ * accepted. Required on the first authed contract only; a run with no authed
+ * contracts never asks for it.
+ */
+function fixtureAuthSecret() {
+  const secret = process.env.AUTH_SECRET;
+  if (secret === undefined || secret === "") {
+    throw new Error(
+      "AUTH_SECRET is not set — a signed-in contract cannot get a session cookie the server accepts. " +
+        "Set it to the same secret the target server was started with.",
+    );
+  }
+  return secret;
+}
+
+/**
  * The page contracts, the table this check exists to keep extensible: a new
  * page's geometry cover is one more entry, not one more test file.
  *
@@ -153,6 +318,12 @@ export function missingEnvMessage(missing) {
  * diagnosed differently: the error fallback in src/components/error-fallback.tsx
  * renders the same .landing-hero/.action-button classes, so the contract
  * selector alone cannot make the distinction.
+ *
+ * `authAs` (optional) signs the page in as a fixture user while measuring —
+ * "member" or "moderator" (issue 453). The session cookie is set fresh before
+ * each authed contract's navigation (overwriting the previous role's cookie),
+ * and a navigation that bounces to / or /session?... is a render failure of
+ * that contract, not a hard contract-drift stop.
  */
 const PAGE_CONTRACTS = [
   {
@@ -671,6 +842,18 @@ async function main() {
   try {
     if (spawned) server = await startServer(workDir);
 
+    // The session fixture (issue 453) seeds before any contract runs — in
+    // --base-url mode too: the database is whatever DATABASE_URL names.
+    const databaseUrl = process.env.DATABASE_URL;
+    if (databaseUrl === undefined || databaseUrl === "") {
+      throw new Error(
+        "DATABASE_URL is not set — the geometry fixture users cannot be seeded. " +
+          "The gate prepares its signed-in session fixture in --base-url mode too; " +
+          "point DATABASE_URL at the database the target server renders against.",
+      );
+    }
+    const fixtureUsers = await seedFixtureUsers({ databaseUrl });
+
     // The launch retries itself (issue 447): a failed attempt is killed and
     // relaunched inside launchChromeWithRetry, so reaching this line means
     // the child is alive and its DevTools endpoint is known.
@@ -698,14 +881,59 @@ async function main() {
       const rows = [];
       pageLoop:
       for (const contract of PAGE_CONTRACTS) {
+        // An authed contract re-sets its session cookie before EVERY
+        // navigation: the member/moderator switch overwrites the same cookie,
+        // and a re-set is idempotent and cheap (issue 453).
+        if (contract.authAs !== undefined) {
+          await client.send("Network.setCookie", {
+            name: SESSION_COOKIE_NAME,
+            value: mintSessionCookieValue({
+              secret: fixtureAuthSecret(),
+              userId: contract.authAs === "member" ? fixtureUsers.memberUserId : fixtureUsers.moderatorUserId,
+              role: contract.authAs === "member" ? "MEMBER" : "MODERATOR",
+            }),
+            url: BASE_URL,
+          }, sessionId);
+        }
+
         const url = `${BASE_URL}${contract.page}`;
+        // Mark the document the navigation departs from, so a bounce poll can
+        // tell "a document the new navigation produced" from the previous
+        // page still sitting at '/' (whose pathname would otherwise satisfy
+        // the bounce predicate before the navigation even commits).
+        await evaluate(client, sessionId, "window.__geometryStaleDocument = true");
         await client.send("Page.navigate", { url }, sessionId);
-        // The URL match keeps the poll from being satisfied by the departing
-        // about:blank document before the navigation commits.
-        await pollFor(client, sessionId,
-          `document.readyState === 'complete' && location.href === ${JSON.stringify(url)}`,
-          30000,
-          `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
+        if (contract.authAs === undefined) {
+          // The URL match keeps the poll from being satisfied by the departing
+          // about:blank document before the navigation commits.
+          await pollFor(client, sessionId,
+            `document.readyState === 'complete' && location.href === ${JSON.stringify(url)}`,
+            30000,
+            `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
+        } else {
+          // A rejected session bounces to / or /session?...: settle at EITHER
+          // the target or a bounced URL, then diagnose from where it landed.
+          // The stale-document flag keeps the previous page (still at '/',
+          // already complete) from satisfying the bounce predicate early.
+          await pollFor(client, sessionId,
+            `document.readyState === 'complete' && (location.href === ${JSON.stringify(url)} ` +
+              `|| (!window.__geometryStaleDocument && (location.pathname === '/' || location.pathname.startsWith('/session'))))`,
+            30000,
+            `"${url}" to finish loading (document.readyState complete at that URL, no redirect)`);
+          const landedAt = await evaluate(client, sessionId, "location.href");
+          if (landedAt !== url) {
+            // Same branch as a render failure — HTTP status plus where the
+            // browser actually landed — never the contract-drift hard stop.
+            const status = await probeStatus(contract.page);
+            failed = true;
+            console.log(
+              `${contract.page}: FAIL — signed-in page did not render (HTTP ${status}); ` +
+                `the session cookie was not accepted, the browser bounced to ${landedAt}`,
+            );
+            rows.push({ label: contract.page, failures: ["auth"] });
+            continue;
+          }
+        }
         await settleLayout(client, sessionId);
 
         for (const viewport of contract.viewports) {
