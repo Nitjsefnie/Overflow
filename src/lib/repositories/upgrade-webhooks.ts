@@ -4,7 +4,10 @@ import type { PostgresRepositoryStore } from "@/lib/repositories/postgres-store"
 
 export type WebhookUpgradeOutcome = {
   repositoryId: string;
-  subscription: "VERIFIED" | "FAILED";
+  /** NOT_APPLICABLE: the registration carries no webhook (a GitLab
+   * registration — contract items 27/28 PARTIAL), so there is nothing to
+   * upgrade and the run is neither a success over GitHub work nor a failure. */
+  subscription: "VERIFIED" | "FAILED" | "NOT_APPLICABLE";
   queue: "QUEUED" | "FAILED" | "NOT_ATTEMPTED";
   failure: "REGISTRATION_FAILED" | "CREDENTIALS_FAILED" | "REPOSITORY_FAILED" | "SUBSCRIPTION_FAILED" | "QUEUE_FAILED" | null;
 };
@@ -42,6 +45,13 @@ async function upgradeRegistration(
   try {
     const registration = await store.findActiveRepositoryById(repositoryId);
     if (registration === null || registration.id !== repositoryId) return outcome;
+
+    // A repository registered without a webhook — a GitLab registration — has
+    // nothing to drain. The skip is explicit and precedes every read: no
+    // sponsor credential is read and no gateway is built for it.
+    if (registration.githubWebhookId === null) {
+      return { repositoryId, subscription: "NOT_APPLICABLE", queue: "NOT_ATTEMPTED", failure: null };
+    }
 
     outcome.failure = "CREDENTIALS_FAILED";
     const token = await store.getGitHubAccessToken(registration.sponsorId);

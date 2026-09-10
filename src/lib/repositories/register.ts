@@ -29,7 +29,13 @@ export type RegisteredRepository = {
   ownerName: string;
   sponsorId: string;
   visibility: "PUBLIC" | "PRIVATE";
-  githubWebhookId: number;
+  /**
+   * Null for a repository registered without a webhook — a GitLab
+   * registration (contract items 27/28 PARTIAL; webhook ingestion deferred).
+   * Every GitHub-side webhook operation must treat null as "nothing to
+   * operate on", never as an id.
+   */
+  githubWebhookId: number | null;
 };
 
 export type NewRegisteredRepository = Omit<RegisteredRepository, "id"> & {
@@ -522,17 +528,22 @@ export async function unregisterRepository(
     );
   }
 
-  let webhookDeleted = true;
-  try {
-    await dependencies.github.deleteWebhook(submittedRepository, state.repository.githubWebhookId);
-  } catch (error) {
-    // A 404 says the hook, or its repository, is already gone: the desired
-    // end state holds, so the flow continues rather than failing. Any other
-    // failure leaves the local row untouched and maps through the catalog.
-    if (error instanceof GitHubApiError && error.status === 404) {
-      webhookDeleted = false;
-    } else {
-      throw githubSetupError(error, null, "delete the repository webhook");
+  // A null webhook id — a GitLab registration — has no hook to delete, so
+  // nothing is called and the result honestly reports no deletion happened.
+  let webhookDeleted = false;
+  if (state.repository.githubWebhookId !== null) {
+    webhookDeleted = true;
+    try {
+      await dependencies.github.deleteWebhook(submittedRepository, state.repository.githubWebhookId);
+    } catch (error) {
+      // A 404 says the hook, or its repository, is already gone: the desired
+      // end state holds, so the flow continues rather than failing. Any other
+      // failure leaves the local row untouched and maps through the catalog.
+      if (error instanceof GitHubApiError && error.status === 404) {
+        webhookDeleted = false;
+      } else {
+        throw githubSetupError(error, null, "delete the repository webhook");
+      }
     }
   }
 

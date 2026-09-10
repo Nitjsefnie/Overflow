@@ -3,6 +3,9 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "@/lib/repositories/upgrade-webhooks";
+import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -120,5 +123,77 @@ describe("migration 038: forge identities and provider columns", () => {
     `;
     expect(index).toHaveLength(1);
     expect(index[0]!.indexdef).toContain("WHERE (provider <> 'github'::text)");
+  });
+
+  it("stores a GitLab-shaped registration row whose webhook id is null, and reads it back", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const [row] = await sql<{ sponsor_id: string }[]>`
+      select sponsor_id from registered_repositories where id = ${fixture.repositoryId}
+    `;
+    const store = new PostgresRepositoryStore();
+    const created = await store.createRepository({
+      githubRepositoryId: 920_001,
+      ownerName: "gitlab-group/gitlab-project",
+      sponsorId: row!.sponsor_id,
+      visibility: "PUBLIC",
+      githubWebhookId: null,
+      difficultyScheme: validDifficultyScheme(),
+    });
+    expect(created).not.toBeNull();
+    expect(created!.githubWebhookId).toBeNull();
+    const reread = await store.findRepositoryByGitHubId(920_001);
+    expect(reread).not.toBeNull();
+    expect(reread!.githubWebhookId).toBeNull();
+  });
+
+  it("skips a null-webhook-id registration in the webhook upgrade drain before any credential or gateway work", async () => {
+    // A repository registered without a webhook has nothing to drain. The
+    // drain's skip is load-bearing: with it removed the run would reach for
+    // the sponsor's GitHub credentials and build a gateway, so this case
+    // kills that mutant three ways — the reported outcome shape, the summary
+    // counts, and the credential-read log.
+    const fixture = await materializeRepositoryFixture(sql);
+    const [row] = await sql<{ sponsor_id: string }[]>`
+      select sponsor_id from registered_repositories where id = ${fixture.repositoryId}
+    `;
+    const store = new PostgresRepositoryStore();
+    const created = await store.createRepository({
+      githubRepositoryId: 920_002,
+      ownerName: "gitlab-group/another-project",
+      sponsorId: row!.sponsor_id,
+      visibility: "PUBLIC",
+      githubWebhookId: null,
+      difficultyScheme: validDifficultyScheme(),
+    });
+    expect(created).not.toBeNull();
+
+    const outcomes: unknown[] = [];
+    const credentialReads: string[] = [];
+    const dependencies: WebhookUpgradeDependencies = {
+      store: {
+        listActiveRepositoryIds: async () => [created!.id],
+        findActiveRepositoryById: async (id) => (created!.id === id ? { ...created! } : null),
+        getGitHubAccessToken: async (sponsorId) => {
+          credentialReads.push(sponsorId);
+          return `token-${sponsorId}`;
+        },
+        requestRepositoryRederivation: async () => {
+          throw new Error("no queue work may be requested for a webhook-less repository");
+        },
+      },
+      webhookSecret: "secret",
+      createGateway: () => {
+        throw new Error("no gateway may be built for a webhook-less repository");
+      },
+      report: (outcome) => {
+        outcomes.push(outcome);
+      },
+    };
+
+    expect(await upgradeRepositoryWebhooks(dependencies)).toEqual({ succeeded: 1, failed: 0 });
+    expect(outcomes).toEqual([
+      { repositoryId: created!.id, subscription: "NOT_APPLICABLE", queue: "NOT_ATTEMPTED", failure: null },
+    ]);
+    expect(credentialReads).toEqual([]);
   });
 });
