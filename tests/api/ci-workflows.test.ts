@@ -95,7 +95,7 @@ describe("GitHub Actions release gates", () => {
     });
 
     const verify = workflow.jobs.verify!;
-    expect(verify.services?.postgres?.image).toBe("postgres:17");
+    expect(verify.services?.postgres?.image).toBe("postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675");
     expect(verify.services?.postgres?.options).toContain("pg_isready");
     expect(verify.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
