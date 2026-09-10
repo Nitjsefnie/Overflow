@@ -5,8 +5,9 @@ import { parse } from "yaml";
 interface ComposeService {
   image?: string;
   profiles?: string[];
+  restart?: string;
   depends_on?: Record<string, { condition?: string }>;
-  env_file?: Array<string | { path: string }>;
+  env_file?: Array<string | { path: string; required?: boolean }>;
   environment?: Record<string, string>;
   ports?: string[];
   healthcheck?: Record<string, unknown>;
@@ -30,25 +31,29 @@ describe("docker-compose.yml", () => {
   it("leaves the postgres service unchanged", () => {
     const postgres = compose.services.postgres;
     expect(postgres.image).toBe("postgres:17-alpine");
+    expect(postgres.restart).toBe("unless-stopped");
     expect(postgres.healthcheck).toBeDefined();
-    expect(postgres.ports).toContain("${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432");
+    expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"]);
   });
 
   it("starts the app only after postgres reports healthy, on a loopback port by default", () => {
     const app = compose.services.app;
+    expect(app.restart).toBe("unless-stopped");
     expect(app.depends_on?.postgres?.condition).toBe("service_healthy");
-    expect(app.ports).toContain("${APP_HOST_BIND:-127.0.0.1}:3000:3000");
+    expect(app.ports).toEqual(["${APP_HOST_BIND:-127.0.0.1}:3000:3000"]);
   });
 
   it("feeds the app .env and pins DATABASE_URL at the compose layer", () => {
     const app = compose.services.app;
-    const envFilePaths = (app.env_file ?? []).map((entry) =>
-      typeof entry === "string" ? entry : entry.path,
+    const envFiles = (app.env_file ?? []).map((entry) =>
+      typeof entry === "string"
+        ? { path: entry, required: true }
+        : { path: entry.path, required: entry.required ?? true },
     );
-    expect(envFilePaths).toContain(".env");
-    expect(app.environment?.DATABASE_URL).toBe(
-      "postgresql://overflow:overflow_local_only@postgres:5432/overflow",
-    );
+    expect(envFiles).toEqual([{ path: ".env", required: true }]);
+    expect(app.environment).toEqual({
+      DATABASE_URL: "postgresql://overflow:overflow_local_only@postgres:5432/overflow",
+    });
   });
 
   it("still defines the overflow-postgres-data volume", () => {
