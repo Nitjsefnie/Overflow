@@ -412,7 +412,7 @@ GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
 GITHUB_WEBHOOK_SECRET=<the-webhook-secret-configured-in-github>
 ```
 
-GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`.
+GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`. The webhook endpoint rejects deliveries larger than 25 MiB with HTTP 413.
 
 ## Operating an instance: the production service
 

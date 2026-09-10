@@ -12,6 +12,13 @@ const rawPayload = JSON.stringify({
   pull_request: { id: 201, number: 11 },
 });
 
+// The route's declared limit is 25 MiB; the oversize cases sit just above it.
+// The values are hardcoded here rather than imported so the tests pin the
+// 25 MiB ceiling itself, not whatever the module happens to say.
+const WEBHOOK_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
+const CHUNK_BYTES = 1024 * 1024; // 1 MiB
+const CHUNK_COUNT = 32; // 32 MiB total: past the ceiling with room to spare, so a stopped reader is distinguishable from a drained one
+
 describe("GitHub webhook route", () => {
   it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201, number: "11" }])(
     "rejects comment delivery without a valid issue subject, even if it contains a PR subject: %j", async (issue) => {
@@ -271,6 +278,98 @@ describe("GitHub webhook route", () => {
     expect(response.status).toBe(503);
   });
 
+  // A delivery is rejected for size before its body is buffered, so an
+  // oversized (or lying-about-size) request can never force the endpoint to
+  // allocate its full length in memory before the signature check answers.
+  // Mutants: DROP_DECLARED_SIZE_CHECK, DRAIN_UNCONDITIONALLY.
+  it("rejects a declared oversize delivery with 413 before reading any of the body", async () => {
+    const { stream, record } = trackedBodyStream(CHUNK_COUNT);
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(streamRequest(stream, {
+      "content-length": String(WEBHOOK_BODY_LIMIT_BYTES + 1),
+      "x-github-event": "pull_request",
+      "x-github-delivery": "oversize-declared",
+      "x-hub-signature-256": "sha256=not-a-signature",
+    }));
+    expect(response.status).toBe(413);
+    expect(record.handedOutBytes).toBe(0);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // Mutants: DRAIN_UNCONDITIONALLY (and any fix that only reads Content-Length).
+  it("stops reading a delivery with no Content-Length once the body crosses 25 MiB, answering 413", async () => {
+    const { stream, record } = trackedBodyStream(CHUNK_COUNT);
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(streamRequest(stream, {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "oversize-stream",
+      "x-hub-signature-256": "sha256=not-a-signature",
+    }));
+    expect(response.status).toBe(413);
+    expect(record.handedOutBytes).toBeGreaterThan(WEBHOOK_BODY_LIMIT_BYTES);
+    expect(record.handedOutBytes).toBeLessThanOrEqual(WEBHOOK_BODY_LIMIT_BYTES + CHUNK_BYTES);
+    expect(record.cancelled).toBe(true);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // Mutants: DRAIN_UNCONDITIONALLY (the declared header is a lie, so only the
+  // streaming ceiling catches this one).
+  it("stops reading a delivery whose Content-Length lies low once the body crosses 25 MiB, answering 413", async () => {
+    const { stream, record } = trackedBodyStream(CHUNK_COUNT);
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(streamRequest(stream, {
+      "content-length": "1024",
+      "x-github-event": "pull_request",
+      "x-github-delivery": "oversize-lying-content-length",
+      "x-hub-signature-256": "sha256=not-a-signature",
+    }));
+    expect(response.status).toBe(413);
+    expect(record.handedOutBytes).toBeLessThanOrEqual(WEBHOOK_BODY_LIMIT_BYTES + CHUNK_BYTES);
+    expect(record.handedOutBytes).toBeLessThan(CHUNK_COUNT * CHUNK_BYTES);
+    expect(record.cancelled).toBe(true);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // Mutants: any ordering that verifies the signature before enforcing the
+  // limit (the signature check cannot run without buffering the whole body).
+  it("answers 413, not 401, for an oversize delivery with an invalid signature", async () => {
+    const { stream, record } = trackedBodyStream(CHUNK_COUNT);
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(streamRequest(stream, {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "oversize-invalid-signature",
+      "x-hub-signature-256": "sha256=not-a-signature",
+    }));
+    expect(response.status).toBe(413);
+    expect(record.handedOutBytes).toBeLessThanOrEqual(WEBHOOK_BODY_LIMIT_BYTES + CHUNK_BYTES);
+    expect(record.cancelled).toBe(true);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // A null request.body (no body at all) flows down the same path as an empty
+  // body: the signature over the empty byte string verifies, then the empty
+  // JSON document answers 400 rather than throwing.
+  it("treats a null request body as empty: a correctly signed empty body answers 400", async () => {
+    const signature = createHmac("sha256", secret).update("").digest("hex");
+    const processWebhookMock = vi.fn();
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(new Request("https://overflow.test/api/github/webhooks", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "null-body",
+        "x-hub-signature-256": `sha256=${signature}`,
+      },
+    }));
+    expect(response.status).toBe(400);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid signature before constructing production persistence dependencies", async () => {
     const originalSecret = process.env.GITHUB_WEBHOOK_SECRET;
     const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -320,4 +419,52 @@ function request(
     },
     body,
   });
+}
+
+// Reads are tracked on the stream itself with highWaterMark 0: pull runs only
+// when the consumer actually reads (zero pulls at construction or on
+// getReader), so handedOutBytes counts bytes the handler delivered and never
+// a queue refill it never asked for — "zero bytes pulled" stays exact.
+function trackedBodyStream(chunkCount: number): {
+  stream: ReadableStream<Uint8Array>;
+  record: { handedOutBytes: number; cancelled: boolean };
+} {
+  const record = { handedOutBytes: 0, cancelled: false };
+  let chunksSent = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (chunksSent >= chunkCount) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK_BYTES));
+        chunksSent += 1;
+        record.handedOutBytes += CHUNK_BYTES;
+      },
+      cancel() {
+        record.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { stream, record };
+}
+
+function streamRequest(
+  stream: ReadableStream<Uint8Array>,
+  headers: Record<string, string>,
+): Request {
+  return new Request("https://overflow.test/api/github/webhooks", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: stream,
+    // A Request with a stream body requires declaring the duplex direction;
+    // undici sets no Content-Length for a stream body, which is exactly the
+    // no-Content-Length case under test.
+    duplex: "half",
+  } as RequestInit);
 }
