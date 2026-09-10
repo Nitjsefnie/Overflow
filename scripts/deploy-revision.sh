@@ -122,11 +122,11 @@ set -a; . "$env_file"; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
-# Before the build: a failed build still records what was being built.
-printf '%s\n' "$full_sha" > "$release/REVISION"
-printf 'Source revision: %s\n' "$full_sha"
 node scripts/release.ts prepare "$tree" "$release"
 NEXT_DIST_DIR="$release" pnpm build
+# After the build: its clean step wipes the release directory (everything outside cache|dev|lock|trace), so the record must be written after it — and it still names the exact tree the gates attested and the build consumed.
+printf '%s\n' "$full_sha" > "$release/REVISION"
+printf 'Source revision: %s\n' "$full_sha"
 previous_release=$(readlink -f "$tree/.next")
 serving_cache="$previous_release/cache"
 test -d "$serving_cache"
