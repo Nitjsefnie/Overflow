@@ -839,6 +839,9 @@ describe("reconciliation budget holds under the repository lock", () => {
     vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class {} }));
     vi.doMock("@/lib/fold/reconcile-as-sponsor", () => ({ reconcileRepositoryAsSponsor: vi.fn() }));
     const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    // register() checks the runtime literally, before any mocked predicate is
+    // reachable, so the test presents the Node.js runtime it wires for.
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
     const { register } = await import("@/instrumentation");
     await register();
     const schedule = startWorker.mock.calls[0][0] as { drain(): Promise<unknown> };
