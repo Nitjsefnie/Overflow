@@ -3,6 +3,9 @@
 #
 # Build:  docker build -t overflow-app .
 # Run:    docker compose --profile app up --build
+#         On older Docker installs whose compose cannot build (buildx below
+#         0.17.0), tag the built image <project>-app instead and run:
+#         docker compose --profile app up -d --no-build
 # The app container applies pending migrations (scripts/migrate.ts) before the
 # server starts, and serves on port 3000.
 
