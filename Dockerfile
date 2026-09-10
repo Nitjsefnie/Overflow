@@ -27,5 +27,6 @@ COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/db ./db
+COPY --from=build /app/src/lib/db ./src/lib/db
 COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
 CMD ["sh", "-c", "node --env-file-if-exists=.env scripts/migrate.ts && exec node node_modules/next/dist/bin/next start"]

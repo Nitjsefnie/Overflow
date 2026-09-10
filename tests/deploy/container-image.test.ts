@@ -37,6 +37,10 @@ describe("Dockerfile", () => {
   it("installs dependencies with the frozen lockfile", () => {
     expect(dockerfile).toContain("--frozen-lockfile");
   });
+
+  it("ships the migration step's database client into the runtime stage", () => {
+    expect(dockerfile).toContain("COPY --from=build /app/src/lib/db ./src/lib/db");
+  });
 });
 
 describe(".dockerignore", () => {
