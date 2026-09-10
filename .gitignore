@@ -229,6 +229,7 @@ db/migrations/*
 !deploy/
 deploy/*
 !deploy/*.service
+!deploy/*.timer
 !deploy/*.md
 
 !patches/
@@ -243,6 +244,8 @@ public/*
 !scripts/
 scripts/*
 !scripts/deploy-revision.sh
+!scripts/db-backup.sh
+!scripts/db-restore.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
