@@ -313,6 +313,8 @@ describe("authentication discovery for a credential-less request", () => {
     expect(body).toEqual({
       error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
     });
+    // The challenge belongs to a 401 only; the 403 CSRF defense stays bare.
+    expect(response.headers.get("www-authenticate")).toBeNull();
     expect(dependencies.defineTools).not.toHaveBeenCalled();
   });
 
@@ -340,6 +342,70 @@ describe("authentication discovery for a credential-less request", () => {
       },
     });
     expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("authentication discovery on the member gate's 401 answers", () => {
+  it("carries the WWW-Authenticate challenge on the sign-in refusal for a cookie-less request", async () => {
+    // The gate's "Sign in is required." 401 surfaces here as a bare Response.
+    // RFC 7235 section 3.1 makes a challenge on a 401 a MUST, and this route
+    // is where attaching it serves discovery — a client whose token was
+    // rotated or revoked re-discovers the scheme from the challenge. A
+    // browser-facing member route's sign-in redirect does that job instead.
+    const dependencies = endpointDependencies({
+      getSession: vi.fn().mockResolvedValue(null),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(mcpRequest(rpc(1, "ping")));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+    expect(response.headers.get("www-authenticate")).toBe(
+      `Bearer resource_metadata="${trustedOrigin}/.well-known/oauth-protected-resource"`,
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+
+  it("carries the same challenge on the bearer rejection for a token that authenticates no account", async () => {
+    // The bearer path skips the origin guard by design, so an unknown token
+    // reaches the gate's own rejection; the challenge rides it the same way.
+    const dependencies = endpointDependencies();
+
+    const response = await createMcpPostHandler(dependencies)(
+      mcpRequest(rpc(1, "ping"), { authorization: `Bearer ${TOKEN}` }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
+    });
+    expect(response.headers.get("www-authenticate")).toBe(
+      `Bearer resource_metadata="${trustedOrigin}/.well-known/oauth-protected-resource"`,
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+
+  it("leaves the bearer rejection challenge-less when no origin is available to advertise", async () => {
+    // The fail-closed arm, mirroring the probe answer above: the bearer path
+    // still reaches the gate's 401 with an unparsable APP_URL (the origin
+    // guard is not consulted for a deliberately attached credential), but no
+    // origin exists to advertise, so the 401 goes out unchanged.
+    vi.stubEnv("APP_URL", "");
+    const dependencies = endpointDependencies();
+
+    const response = await createMcpPostHandler(dependencies)(
+      mcpRequest(rpc(1, "ping"), { authorization: `Bearer ${TOKEN}` }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
+    });
+    expect(response.headers.get("www-authenticate")).toBeNull();
   });
 });
 
@@ -427,5 +493,8 @@ describe("the route module's surface", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
     });
+    expect(response.headers.get("www-authenticate")).toBe(
+      `Bearer resource_metadata="${trustedOrigin}/.well-known/oauth-protected-resource"`,
+    );
   });
 });
