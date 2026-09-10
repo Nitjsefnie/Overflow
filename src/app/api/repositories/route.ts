@@ -366,6 +366,11 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
       return errorResponse(502, error.code, error.message);
     case "NOT_FOUND":
       return errorResponse(404, error.code, error.message);
+    // The registration save failed and the compensating webhook deletion failed too
+    // (issue 451): the orphaned webhook is the actionable state, so it is surfaced as
+    // its own answer rather than folded into the save failure that started it.
+    case "ROLLBACK_INCOMPLETE":
+      return errorResponse(503, error.code, error.message);
   }
 }
 

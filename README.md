@@ -174,6 +174,7 @@ status and code, then use the message to distinguish causes:
 | 502 | `UPSTREAM_FAILURE` | `Unable to read the repository difficulty labels on GitHub.` | Reading the repository's existing labels failed after the repository itself was found; check GitHub access and availability. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to create the repository webhook on GitHub.` | Creating the webhook failed after the repository was found and its labels verified; check GitHub access and availability. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Database lookup or saving the registration failed; check service health before retrying. |
+| 503 | `ROLLBACK_INCOMPLETE` | `The repository registration could not be saved, and the webhook Overflow created for it could not be deleted on GitHub. Nothing was registered; retry the registration, and a later successful registration or unregistration removes the abandoned webhook.` | The save failed and the compensating webhook deletion failed too, so a webhook Overflow created still exists on GitHub. Nothing was registered and nothing is lost by retrying; the recorded webhook is cleaned up by a later successful registration or unregistration. |
 
 Angle-bracketed text in the `Exact message` column is a value substituted at runtime.
 

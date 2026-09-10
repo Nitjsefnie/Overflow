@@ -228,6 +228,7 @@ describe("initial PostgreSQL materialization", () => {
       "034_repository_unregistration.sql",
       "035_moderation_credit_adjustments.sql",
       "036_override_reconciliation_reason.sql",
+      "037_abandoned_webhook_cleanups.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
