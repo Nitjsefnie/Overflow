@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 type Workflow = {
-  on: Record<string, { branches?: string[]; paths?: string[]; types?: string[] } | null>;
+  on: Record<
+    string,
+    { branches?: string[]; paths?: string[]; types?: string[] } | Array<{ cron: string }> | null
+  >;
   permissions: Record<string, string>;
   concurrency: { group: string; "cancel-in-progress": boolean | string };
   jobs: Record<string, {
@@ -136,9 +139,67 @@ describe("GitHub Actions release gates", () => {
     expect(steps.some((step) => step.run === "zizmor --no-progress .github/workflows/")).toBe(true);
   });
 
+  it("parses a scheduled lockfile audit whose gate is the bare audit command's exit code", async () => {
+    const workflow = await readWorkflow("dependency-audit.yml");
+    expect(workflow.on).toEqual({
+      schedule: [{ cron: "37 6 * * 1" }],
+      workflow_dispatch: null,
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.concurrency).toEqual({
+      group: "dependency-audit-${{ github.event.pull_request.number || github.ref }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    });
+
+    const audit = workflow.jobs.audit!;
+    expect(audit["runs-on"]).toBe("ubuntu-latest");
+    expect(audit.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
+    expect(audit.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
+      .toEqual(expect.objectContaining({ "persist-credentials": false }));
+    expect(audit.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
+      .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));
+
+    const runs = audit.steps.map((step) => step.run).filter(Boolean);
+    expect(runs.some((run) => run?.includes("corepack install --global pnpm@10.33.0"))).toBe(true);
+    // The gate is the audit command's own exit code, exactly as verified
+    // against pnpm 10.33.0: bare `pnpm audit` exits 1 iff advisories exist.
+    // No flag may narrow or widen that semantics, and no install or build may
+    // precede it — pnpm audit reads pnpm-lock.yaml directly.
+    expect(audit.steps.find((step) => step.run === "pnpm audit")).toBeDefined();
+    expect(runs.some((run) => run?.includes("pnpm install"))).toBe(false);
+    expect(runs.some((run) => run?.includes("pnpm build"))).toBe(false);
+  });
+
+  it("keeps the dependabot update policy excluding the locally patched postgres", async () => {
+    const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
+      version: number;
+      updates: Array<{
+        "package-ecosystem": string;
+        directory: string;
+        schedule: { interval: string };
+        "open-pull-requests-limit": number;
+        ignore?: Array<{ "dependency-name": string }>;
+      }>;
+    };
+
+    expect(config.version).toBe(2);
+    expect(config.updates).toHaveLength(1);
+    const [update] = config.updates;
+    expect(update["package-ecosystem"]).toBe("npm");
+    expect(update.directory).toBe("/");
+    expect(update.schedule).toEqual({ interval: "weekly" });
+    expect(update["open-pull-requests-limit"]).toBe(5);
+    // An automated postgres bump invalidates patches/postgres@3.4.9.patch and
+    // its pnpm-lock.yaml patchedDependencies hash, breaking
+    // `pnpm install --frozen-lockfile` — bumps stay by-hand.
+    expect(update.ignore).toEqual([{ "dependency-name": "postgres" }]);
+  });
+
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
     expect(checkIgnore(".github/workflows/ci.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
+    expect(checkIgnore(".github/dependabot.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);
   });

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    ignore:
+      # postgres is pinned by a deliberate local-patch regime: patches/postgres@3.4.9.patch
+      # is maintained on purpose (not filed upstream, by standing maintainer decision) and
+      # pnpm-lock.yaml pins its content hash under patchedDependencies.postgres@3.4.9.
+      # An automated version bump invalidates the patch and breaks `pnpm install
+      # --frozen-lockfile`. Bump postgres by hand only — extend the patch and update the
+      # lockfile hash together.
+      - dependency-name: "postgres"

@@ -1,0 +1,54 @@
+name: dependency audit
+
+# Weekly lockfile-aware vulnerability audit: a detection signal, not a fix
+# pipeline. pnpm audit reads pnpm-lock.yaml and queries the registry's
+# advisory endpoint, so there is deliberately no install and no build.
+#
+# Exit-code semantics, verified empirically against pnpm 10.33.0: the bare
+# `pnpm audit` exits 1 exactly when the lockfile carries advisories, and 0
+# when it is clean. Do not add --audit-level: in 10.33.0 it gates neither the
+# exit code nor the printed advisories (with a critical bar set, every
+# moderate advisory still printed and the run exited 0). Do not add
+# --ignore-registry-errors either: a registry outage also exits 1, so a red
+# run means "advisories found, or the registry could not answer" — either way
+# a human looks, which is what a detection signal is for.
+on:
+  schedule:
+    # Mondays 06:37 UTC, off the top of the hour where the Actions queue is
+    # busiest.
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Same shape as ci.yml: per-ref group, cancellation gated on an event this
+  # workflow never receives — so scheduled and manual runs are never cancelled.
+  group: dependency-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      # Reads pnpm-lock.yaml directly — no pnpm install, no build. A nonzero
+      # exit here is the signal: advisories were found, or the registry could
+      # not answer.
+      - name: Audit lockfile advisories
+        run: pnpm audit
