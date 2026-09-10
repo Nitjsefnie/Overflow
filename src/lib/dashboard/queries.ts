@@ -538,6 +538,9 @@ type ModerationRepositoryRow = {
 /**
  * The member dashboard: one projection, one database snapshot.
  *
+ * Loads materialized ledger and reservation values; overcommitment remains
+ * visible as negative headroom.
+ *
  * The six reads below all describe the same committed instant. Each is its own
  * autocommit statement, so without a shared snapshot a commit landing after the
  * first read splits the projection across two states of the ledger — a balance
