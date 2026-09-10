@@ -255,6 +255,115 @@ describe("PostgreSQL settlement override requests", () => {
     ).resolves.toEqual({ kind: "not_found" });
   });
 
+  // The grant is the missing link between the decision and the ledger: the
+  // materializer already applies granted overrides at fold time, so the only
+  // thing a grant still owes is the job that makes the fold happen now.
+  it("schedules ledger materialization exactly when a decision grants a correction", async () => {
+    const store = new PostgresSettlementOverrideStore(sql);
+    const moderator = await insertUser("scheduling-moderator");
+
+    const granted = await insertSettlement();
+    const grantedRequest = await store.createRequest({
+      requesterId: granted.creditorId,
+      target: { kind: "settlement", settlementId: granted.settlementId },
+      reason: "The settled points are too low.",
+    });
+    if (grantedRequest.kind !== "ok") {
+      throw new Error("Expected the grant-path request to open.");
+    }
+    await store.decideRequest({
+      actorId: moderator,
+      requestId: grantedRequest.value.id,
+      decision: "GRANT",
+      settledPoints: 8,
+      reason: "The delivered diff carries eight points of work.",
+    });
+
+    const grantedRepositoryId = await repositoryIdForIssue(granted.issueId);
+    await expect(jobRows(grantedRepositoryId)).resolves.toEqual([
+      {
+        id: expect.any(String),
+        reason: "OVERRIDE",
+        state: "PENDING",
+        follow_up_requested: false,
+        attempt_count: 0,
+        lease_token: null,
+      },
+    ]);
+
+    // A grant landing while a job is RUNNING must not break its lease or queue
+    // a second row: the fold in flight may predate the grant, so the row
+    // records a follow-up instead — the same conflict semantics every enqueue uses.
+    const followUpRequest = await store.createRequest({
+      requesterId: granted.debtorId,
+      target: { kind: "settlement", settlementId: granted.settlementId },
+      reason: "A second correction for the same settlement.",
+    });
+    if (followUpRequest.kind !== "ok") {
+      throw new Error("Expected the follow-up request to open after the first was decided.");
+    }
+    await sql`
+      update repository_reconciliation_jobs
+      set state = 'RUNNING',
+          lease_token = gen_random_uuid(),
+          lease_duration_ms = 20000,
+          lease_expires_at = now() + interval '1 minute'
+      where repository_id = ${grantedRepositoryId}
+    `;
+    // The grant itself must touch neither the lease columns nor the attempt
+    // count: only the follow-up flag moves, because the fold in flight may
+    // have read GitHub before the grant happened.
+    const [runningJob] = await jobRows(grantedRepositoryId);
+    await store.decideRequest({
+      actorId: moderator,
+      requestId: followUpRequest.value.id,
+      decision: "GRANT",
+      settledPoints: 5,
+      reason: "The follow-up grant lands mid-fold.",
+    });
+    await expect(jobRows(grantedRepositoryId)).resolves.toEqual([
+      {
+        id: runningJob.id,
+        reason: "OVERRIDE",
+        state: "RUNNING",
+        follow_up_requested: true,
+        attempt_count: 0,
+        lease_token: runningJob.lease_token,
+      },
+    ]);
+
+    // DECLINE enqueues nothing: nothing was granted, so there is nothing to
+    // materialize.
+    const declined = await insertSettlement();
+    const declinedRequest = await store.createRequest({
+      requesterId: declined.creditorId,
+      target: { kind: "settlement", settlementId: declined.settlementId },
+      reason: "This correction will be refused.",
+    });
+    if (declinedRequest.kind !== "ok") {
+      throw new Error("Expected the decline-path request to open.");
+    }
+    await store.decideRequest({
+      actorId: moderator,
+      requestId: declinedRequest.value.id,
+      decision: "DECLINE",
+      reason: "The recorded evidence stands.",
+    });
+    const declinedRepositoryId = await repositoryIdForIssue(declined.issueId);
+    await expect(jobRows(declinedRepositoryId)).resolves.toEqual([]);
+
+    // The conflict path — a decision against a request that is no longer OPEN —
+    // moved no row, so it schedules nothing either.
+    await store.decideRequest({
+      actorId: moderator,
+      requestId: declinedRequest.value.id,
+      decision: "GRANT",
+      settledPoints: 3,
+      reason: "A late decision against an already-decided request.",
+    });
+    await expect(jobRows(declinedRepositoryId)).resolves.toEqual([]);
+  });
+
   it("queues open requests with the settlement evidence a moderator needs, and drops them once decided", async () => {
     const store = new PostgresSettlementOverrideStore(sql);
     const settlement = await insertSettlement({ reviewRounds: 2 });
@@ -466,6 +575,23 @@ type Scaffold = {
   pullRequestTitle: string;
   pullRequestUrl: string;
 };
+
+async function repositoryIdForIssue(issueId: string): Promise<string> {
+  const [row] = await sql<{ repository_id: string }[]>`
+    select repository_id from issues where id = ${issueId}
+  `;
+  return row.repository_id;
+}
+
+async function jobRows(repositoryId: string) {
+  return sql<{ id: string; reason: string; state: string; follow_up_requested: boolean; attempt_count: number; lease_token: string | null }[]>`
+    select
+      id::text as id, reason, state::text as state, follow_up_requested, attempt_count,
+      lease_token::text as lease_token
+    from repository_reconciliation_jobs
+    where repository_id = ${repositoryId}
+  `;
+}
 
 async function insertSettlement(options: { reviewRounds?: number } = {}): Promise<{
   settlementId: string;
