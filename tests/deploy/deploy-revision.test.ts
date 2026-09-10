@@ -9,6 +9,14 @@ import { afterEach, describe, expect, it } from "vitest";
 const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 const readme = fileURLToPath(new URL("../../deploy/README.md", import.meta.url));
 
+/** Returns deploy/README.md's section 10, failing the surrounding test if the heading is gone. */
+async function section10(): Promise<string> {
+  const markdown = await readFile(readme, "utf8");
+  const section = markdown.split("## 10. Deploying a new revision")[1];
+  expect(section, "the section 10 heading").toBeDefined();
+  return section!;
+}
+
 /**
  * The refusal the procedure's serialization notes mandate, byte for byte, with
  * the lock spelled as configured. Production defaults to /run/overflow-deploy.lock;
@@ -328,7 +336,12 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("defaults the deploy verification curl to the readiness endpoint", async () => {
     const source = await readFile(script, "utf8");
-    expect(source).toContain("OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/api/readiness");
+    const defaultUrl = "http://127.0.0.1:3000/api/readiness";
+    expect(source).toContain(`OVERFLOW_DEPLOY_URL:-${defaultUrl}`);
+
+    // deploy/README.md section 10 restates the same default in its env
+    // listing; pin the pair so neither side can drift from the other.
+    expect(await section10()).toContain(`OVERFLOW_DEPLOY_URL\` (default \`${defaultUrl}\`)`);
   });
 
   it("refuses at the fence without invoking git, pnpm or node when the lock is taken", async () => {
@@ -780,13 +793,6 @@ describe("scripts/deploy-revision.sh", () => {
 });
 
 describe("deploy/README.md section 10 pins the committed script as the procedure", () => {
-  async function section10(): Promise<string> {
-    const markdown = await readFile(readme, "utf8");
-    const section = markdown.split("## 10. Deploying a new revision")[1];
-    expect(section, "the section 10 heading").toBeDefined();
-    return section!;
-  }
-
   it("names scripts/deploy-revision.sh as the procedure to run", async () => {
     expect(await section10()).toContain("bash scripts/deploy-revision.sh");
   });
