@@ -75,6 +75,16 @@ describe("webhook delivery classification", () => {
     })).toEqual({ status: "ignored" });
   });
 
+  it("classifies a subject-less ready_for_review envelope as ignored, not invalid", () => {
+    // The unmaterialized-action guard fires before subject parsing, so the
+    // envelope's missing pull_request subject cannot reclassify the
+    // deliberate drop as a rejection.
+    expect(parseGitHubWebhookDeliveryDetailed("pull_request", "delivery", {
+      action: "ready_for_review",
+      repository: { id: 42, full_name: "octo/example" },
+    })).toEqual({ status: "ignored" });
+  });
+
   it.each([
     { label: "a PR field that is not an object", action: "edited", issue: { ...issue, pull_request: "not-an-object" } },
     { label: "a malformed action", issue: { ...issue }, action: "  " },
