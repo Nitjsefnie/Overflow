@@ -150,9 +150,13 @@ describe("the verify workflow's concurrency group", () => {
  * checks when main moves underneath them, so the tree GitHub actually lands
  * (its rebase onto current main) was never tested by a required check (PR 290
  * is the worked example). The base-freshness step is the automated form of the
- * manual final-gate check: as the LAST step of each required job it compares
- * the base SHA the run was built against with the current head of the base
- * branch, failing the already-required context on a mismatch (issue 441).
+ * manual final-gate check: as the LAST step of each required job it issues the
+ * freshness certificate only when the advance from the tested base to main's
+ * current tip is disjoint from the files the pull request changes (issue 510's
+ * relevant-advance condition, replacing issue 441's unsatisfiable
+ * main-frozen-for-the-whole-run demand). The step delegates to the committed
+ * script scripts/ci-base-freshness.sh, whose behavior tests/ci/
+ * base-freshness.test.ts covers against a stubbed gh.
  *
  * Assertions are made on the parsed YAML data (step.name / step.run), never on
  * the raw bytes, so reformatting or reordering unrelated steps does not
@@ -297,19 +301,21 @@ describe("the required workflows' base-freshness step", () => {
       REPO_SLUG: "${{ github.repository }}",
       BASE_SHA: "${{ github.event.pull_request.base.sha }}",
       BASE_REF: "${{ github.event.pull_request.base.ref }}",
+      PR_NUMBER: "${{ github.event.pull_request.number }}",
+      HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
     };
 
     expect(
       verifyStep.env,
-      "Base freshness must take exactly these four inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source and the freshness certificate is meaningless",
+      "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
     ).toEqual(expectedEnv);
     expect(
       actionlintStep.env,
-      "Base freshness must take exactly these four inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source and the freshness certificate is meaningless",
+      "Base freshness must take exactly these six inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source, and missing PR_NUMBER or HEAD_SHA leaves the script unable to fetch the PR's file list or to name the head on the certificate it issues",
     ).toEqual(expectedEnv);
   });
 
-  it("compares the fetched head against the base with inequality", () => {
+  it("invokes the committed freshness script", () => {
     const [verifyStep] = freshness(verifySteps);
     const [actionlintStep] = freshness(actionlintSteps);
 
@@ -319,20 +325,20 @@ describe("the required workflows' base-freshness step", () => {
       "the actionlint job must contain the Base freshness step",
     ).toBeDefined();
     expect(
-      verifyStep.run?.includes('[ "$current" != "$BASE_SHA" ]'),
-      "Base freshness must compare the fetched head with the base using != — an inverted operator (==) fails every fresh-base run and passes exactly the stale-base runs the gate exists for, landing green on required CI",
-    ).toBe(true);
+      verifyStep.run,
+      "Base freshness must carry a run block — the comparison is shell, not an actions expression",
+    ).toBeDefined();
     expect(
-      actionlintStep.run?.includes('[ "$current" != "$BASE_SHA" ]'),
-      "Base freshness must compare the fetched head with the base using != — an inverted operator (==) fails every fresh-base run and passes exactly the stale-base runs the gate exists for, landing green on required CI",
-    ).toBe(true);
+      actionlintStep.run,
+      "Base freshness must carry a run block — the comparison is shell, not an actions expression",
+    ).toBeDefined();
     expect(
-      verifyStep.run?.includes("--jq .sha"),
-      "the comparison must read the commit SHA itself (--jq .sha) — comparing any other response shape mismatches every run and the gate goes constant",
-    ).toBe(true);
+      verifyStep.run,
+      "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one",
+    ).toBe("bash scripts/ci-base-freshness.sh");
     expect(
-      actionlintStep.run?.includes("--jq .sha"),
-      "the comparison must read the commit SHA itself (--jq .sha) — comparing any other response shape mismatches every run and the gate goes constant",
-    ).toBe(true);
+      actionlintStep.run,
+      "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one",
+    ).toBe("bash scripts/ci-base-freshness.sh");
   });
 });

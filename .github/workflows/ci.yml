@@ -92,12 +92,16 @@ jobs:
       # (its rebase onto current main) was never tested by a required check
       # (issue 441). LAST step, deliberately: the freshness certificate is
       # issued as late as the workflow can issue it, because an earlier step
-      # re-opens the whole run duration as the stale-base window. The step
-      # compares the base the run was built against with the CURRENT head of
-      # the base branch and fails the already-required context on a mismatch;
-      # the remedy is to update the branch so the required checks re-run
-      # against current main. Push and workflow_dispatch runs test main itself
-      # and skip the gate.
+      # re-opens the whole run duration as the stale-base window. The step runs
+      # scripts/ci-base-freshness.sh, which certifies when the base is
+      # unchanged OR advanced only disjointly from the files this pull request
+      # changes — an advance that touched none of them carried its own required
+      # checks, and only cross-file interaction goes unverified — and refuses
+      # on everything else: an overlapping advance, a failed or empty API
+      # response, an unrepresentative compare (issue 510; the first version
+      # demanded main frozen for the whole run, which no run could satisfy at
+      # the repository's merge cadence). Push and workflow_dispatch runs test
+      # main itself and skip the gate.
       - name: Base freshness
         if: ${{ github.event_name == 'pull_request' }}
         env:
@@ -105,9 +109,6 @@ jobs:
           REPO_SLUG: ${{ github.repository }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          current=$(gh api "repos/$REPO_SLUG/commits/$BASE_REF" --jq .sha)
-          if [ "$current" != "$BASE_SHA" ]; then
-            echo "::error::Base moved during the run: the required checks ran against $BASE_SHA but $BASE_REF is now at $current. Update the branch so the required checks re-run against current main."
-            exit 1
-          fi
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci-base-freshness.sh

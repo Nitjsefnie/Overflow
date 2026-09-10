@@ -254,6 +254,7 @@ scripts/*
 !scripts/db-backup.sh
 !scripts/db-restore.sh
 !scripts/container-build.sh
+!scripts/ci-base-freshness.sh
 !scripts/*.ts
 !scripts/upgrade-webhooks.ts
 !scripts/measure-header-geometry.mjs
