@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, mintSessionCookieValue, seedFixtureUsers, setSessionCookie } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -99,11 +99,38 @@ describe("setSessionCookie — the CDP delivery contract (issue 453)", () => {
     ]);
   });
 
-  it("throws, naming the cookie and the URL, when DevTools reports the set as failed", async () => {
+  it("throws, naming the cookie and the URL, when DevTools reported the set as failed", async () => {
     const client = fakeClient({ success: false });
 
-    await expect(setSessionCookie(client, "session-1", "the-jwe-value", "http://127.0.0.1:3219"))
+    await expect(setSessionCookie(client, "under-session", "the-jwe-value", "http://127.0.0.1:3219"))
       .rejects.toThrow(/authjs\.session-token.*127\.0\.0\.1:3219/s);
+  });
+});
+
+/**
+ * The server-side trust precondition the cookie delivery sits on top of
+ * (issue 453): NextAuth v5 refuses to honor a session cookie for a host it
+ * does not trust, and under `next start` (production) it grants that trust
+ * only from the environment. The spawned measurement server must therefore
+ * run with AUTH_TRUST_HOST=true, or every authed contract's request is
+ * answered UntrustedHost and bounces to / — reading exactly like a rejected
+ * session (measured live: the first gate run did exactly that). A caller
+ * that already carries an explicit AUTH_TRUST_HOST keeps it: the helper must
+ * never downgrade an explicit trust decision.
+ */
+describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () => {
+  it("grants the host trust a production server refuses to assume for itself", () => {
+    const env = spawnedServerEnv({ DATABASE_URL: "postgresql://example/db" });
+
+    expect(env.AUTH_TRUST_HOST).toBe("true");
+    // The run's own environment rides along unchanged.
+    expect(env.DATABASE_URL).toBe("postgresql://example/db");
+  });
+
+  it("preserves an explicit trust decision already in the environment", () => {
+    const env = spawnedServerEnv({ AUTH_TRUST_HOST: "false" });
+
+    expect(env.AUTH_TRUST_HOST).toBe("false");
   });
 });
 

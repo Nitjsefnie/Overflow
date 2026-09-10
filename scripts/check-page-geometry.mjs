@@ -376,6 +376,154 @@ const PAGE_CONTRACTS = [
       defaultRead: "inline-block",
     },
   },
+
+  /*
+   * The signed-in contracts (issue 453). Each row's renderRoot is the
+   * `<main id="main-content">` anchor AppShell renders on every authed page
+   * (src/components/app-shell.tsx) — present only when the page truly
+   * rendered, never on an error page or a bounce. `authAs` signs the run in
+   * as one of the seeded fixture users through the session fixture above;
+   * the database re-read in requireMemberPageSession is the role authority,
+   * so the seeded row, not the JWT's role claim, is what admits each page.
+   *
+   * Primary controls are derived from the page source, first match in
+   * document order; the style proof's defaultRead is the UA default for the
+   * element the selector actually lands on (`<a>` reads `inline`,
+   * `<button>` reads `inline-block`), so re-pointing a selector at a
+   * different element type means re-deriving it.
+   *
+   * Fold heights below are measured, not guessed (the same discipline as the
+   * landing row's 1280x700 comment): each is the clean page's measured
+   * action bottom plus ~30-40px of headroom, so a downward move past that
+   * turns the row red. The signed-in pages' heading block sits the primary
+   * action ~60-80px lower than the landing page's, which is why their
+   * 1280-wide fold is taller than the landing's 700. The rows pin the
+   * fixture's empty-ledger state — what CI's scratch database renders — not
+   * an arbitrary member's data.
+   */
+
+  // The ledger-note aside's "Register one repository" link (src/app/dashboard/page.tsx):
+  // the page's next move for a member with nothing registered yet, which is
+  // exactly the state the fixture user seeds. The link is an <a>, so an
+  // unstyled read is `inline` while .text-link sets `inline-block`.
+  {
+    page: "/dashboard",
+    authAs: "member",
+    renderRoot: "#main-content",
+    viewports: [
+      [1440, 800],
+      // Measured, not guessed: the ledger-note link's bottom sits at 775.6px
+      // on this width (the page-heading block is ~75px taller than the
+      // landing page's, so the landing's 700px fold would be red on the
+      // clean page). 810 pins today's layout with ~34px of headroom.
+      [1280, 810],
+      // Measured bottom 985.6px at this width — the 780px breakpoint stacks
+      // the dashboard grid, dropping the aside below the balance card.
+      // 1020 pins it with ~34px of headroom.
+      [780, 1020],
+      // Measured bottom 1121.7px at this width (the 520px breakpoint's
+      // narrower shell and single-column fields push it lower still).
+      // 1160 pins it with ~38px of headroom.
+      [520, 1160],
+    ],
+    primaryAction: ".ledger-note .text-link",
+    styleProof: {
+      property: "display",
+      stylesheetValue: "inline-block",
+      defaultRead: "inline",
+    },
+  },
+
+  // The filter form's "Apply filters" submit button (src/app/issues/page.tsx),
+  // rendered on every /issues view, empty list or not, so the contract holds
+  // however the ledger fills. The button is a <button>, unstyled read
+  // `inline-block`; .action-button sets `inline-flex`.
+  {
+    page: "/issues",
+    authAs: "member",
+    renderRoot: "#main-content",
+    viewports: [
+      [1440, 800],
+      // Measured bottom 724.4px on this width; 760 pins it with ~36px of
+      // headroom (the landing's 700px fold would be red on the clean page).
+      [1280, 760],
+      // Measured bottom 691.5px (the filter form's fields stack at the 780px
+      // breakpoint); 725 pins it with ~33px of headroom.
+      [780, 725],
+      // Measured bottom 719.6px; 755 pins it with ~35px of headroom.
+      [520, 755],
+    ],
+    primaryAction: ".surface .action-button",
+    styleProof: {
+      property: "display",
+      stylesheetValue: "inline-flex",
+      defaultRead: "inline-block",
+    },
+  },
+
+  // The empty-ledger state's "Find eligible issues" link (src/app/settlements/page.tsx).
+  // The fixture user has no settlements, so the page renders its empty state;
+  // this contract pins THAT view — a contract for the populated history card
+  // would need a fixture with settled rows. The link is an <a>, unstyled read
+  // `inline`; .text-link sets `inline-block`.
+  {
+    page: "/settlements",
+    authAs: "member",
+    renderRoot: "#main-content",
+    viewports: [
+      [1440, 800],
+      // Measured bottom 739.3px on this width; 775 pins it with ~36px of
+      // headroom (the landing's 700px fold would be red on the clean page).
+      [1280, 775],
+      // Measured bottom 621.6px; 655 pins it with ~33px of headroom.
+      [780, 655],
+      // Measured bottom 656px; 690 pins it with ~34px of headroom.
+      [520, 690],
+    ],
+    primaryAction: ".empty-state .text-link",
+    styleProof: {
+      property: "display",
+      stylesheetValue: "inline-block",
+      defaultRead: "inline",
+    },
+  },
+
+  // The audit form's "Open audit" button (src/components/open-audit-form.tsx,
+  // rendered by src/app/moderation/page.tsx's first action section) — the
+  // ladder's first rung and the page's primary control. Only a moderator's
+  // session renders the page at all; a member session bounces to /dashboard
+  // and the row fails as a render failure, which is its own cover. The
+  // button is a <button>, unstyled read `inline-block`; .action-button sets
+  // `inline-flex`.
+  {
+    page: "/moderation",
+    authAs: "moderator",
+    renderRoot: "#main-content",
+    viewports: [
+      // No consumer-scale fold holds this action: the audit form's five
+      // fields and its textarea all precede the button, putting its bottom
+      // at ~1275px on the desktop widths. The heights below pin the
+      // button's measured position with ~35-38px of headroom, so a downward
+      // move still turns the row red; what they give up is the
+      // above-the-fold claim a shorter fold would carry. The narrow rows'
+      // tighter folds (1190, 1345) remain the guard on the stacked layouts.
+      [1440, 1310],
+      [1280, 1310],
+      // Measured bottom 1152.8px (form-grid columns stay side by side at
+      // this width, but the stacked audit section sits lower); 1190 pins
+      // it with ~37px of headroom.
+      [780, 1190],
+      // Measured bottom 1308.9px (the 520px breakpoint stacks the form's
+      // fields single-column); 1345 pins it with ~36px of headroom.
+      [520, 1345],
+    ],
+    primaryAction: ".open-audit-form .action-button",
+    styleProof: {
+      property: "display",
+      stylesheetValue: "inline-flex",
+      defaultRead: "inline-block",
+    },
+  },
 ];
 
 /**
@@ -596,6 +744,28 @@ async function readFileHead(path) {
   }
 }
 
+/**
+ * The environment the spawned `next start` runs under. NextAuth v5 refuses
+ * to honor a session cookie for a host it does not trust, and under a
+ * production server (`next start`) it grants that trust only from the
+ * environment (installed @auth/core lib/utils/env.js: trustHost comes from
+ * AUTH_URL or AUTH_TRUST_HOST). Measured live (issue 453): without it, every
+ * authed contract's request is answered UntrustedHost and bounces to /,
+ * reading exactly like a rejected session. The gate's own server is a
+ * loopback measurement target, so it spawns with AUTH_TRUST_HOST=true unless
+ * the caller's environment already carries an explicit trust decision — the
+ * helper never downgrades one. A --base-url target's environment is not this
+ * process's business; its operator needs the same setting, and the
+ * auth-bounce failure message names it.
+ */
+export function spawnedServerEnv(env = process.env) {
+  const existing = env.AUTH_TRUST_HOST;
+  return {
+    ...env,
+    AUTH_TRUST_HOST: existing !== undefined && existing !== "" ? existing : "true",
+  };
+}
+
 /** SIGTERM, then SIGKILL once a grace elapses. */
 async function stopServer(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
@@ -627,7 +797,7 @@ async function startServer(workDir) {
   try {
     const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-p", String(PORT)], {
       cwd: repoRoot,
-      env: process.env,
+      env: spawnedServerEnv(process.env),
       stdio: ["ignore", logFile.fd, logFile.fd],
     });
 
@@ -966,7 +1136,10 @@ async function main() {
             failed = true;
             console.log(
               `${contract.page}: FAIL — signed-in page did not render (HTTP ${status}); ` +
-                `the session cookie was not accepted, the browser bounced to ${landedAt}`,
+                `the session cookie was not accepted, the browser bounced to ${landedAt} ` +
+                `(a server that does not trust the request host drops sessions silently: ` +
+                `the spawned server grants itself AUTH_TRUST_HOST=true; a --base-url ` +
+                `target must be started with it)`,
             );
             rows.push({ label: contract.page, failures: ["auth"] });
             continue;
