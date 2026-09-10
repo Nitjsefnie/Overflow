@@ -14,9 +14,10 @@ import { getSql } from "@/lib/db/client";
  * - Beneath the per-query timeout sits a structural hard cap
  *   (READINESS_HARD_CAP_MS) raced against the probe, so even a probe that
  *   never settles cannot hold a response open past the cap. The race's loser
- *   is deliberately not awaited — the query's own timeout still settles it —
- *   and its eventual settlement is consumed by the mapping below, so no
- *   unhandled rejection can take the process down.
+ *   is deliberately not awaited — a query that loses the race settles late
+ *   through the client, or not at all; the cap is what bounds the handler —
+ *   and its eventual settlement, if any, is consumed by the mapping below,
+ *   so no unhandled rejection can take the process down.
  *
  * The endpoint is reachable unauthenticated by anything that can reach the
  * deployment, so it is bounded against request floods: the single-flight and
