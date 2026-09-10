@@ -71,8 +71,28 @@ describe("migration 038: forge identities and provider columns", () => {
     const [user] = await sql<{ id: string }[]>`
       insert into users (github_user_id, github_login) values (910002, 'forge-typo') returning id
     `;
-    await expect(insertIdentity(user.id, { provider: "gitea" })).rejects.toThrow();
-    await expect(insertIdentity(user.id, { instanceUrl: "https://gitlab.com/group/project" })).rejects.toThrow();
+    // The partial message names the violated CHECK constraint, so the case
+    // cannot pass vacuously on some other rejection the insert could hit.
+    await expect(insertIdentity(user.id, { provider: "gitea" })).rejects.toThrow(
+      /user_forge_identities_provider_check/,
+    );
+    await expect(insertIdentity(user.id, { instanceUrl: "https://gitlab.com/group/project" })).rejects.toThrow(
+      /user_forge_identities_instance_url_check/,
+    );
+  });
+
+  it("keeps the identity foreign key on the house convention: no on-delete cascade", async () => {
+    // Migration 011's rule, the reason this table shape carries a bare
+    // `references users`: an account that still holds a credential is not
+    // deleted out from under it. `confdeltype` 'a' is NO ACTION; a cascade
+    // ('c') here is the regression this pin exists to catch.
+    const [foreignKey] = await sql<{ confdeltype: string }[]>`
+      select confdeltype from pg_constraint
+      where conrelid = 'user_forge_identities'::regclass and contype = 'f'
+        and conname = 'user_forge_identities_user_id_fkey'
+    `;
+    expect(foreignKey, "the user_id foreign key constraint exists").toBeDefined();
+    expect(foreignKey!.confdeltype).toBe("a");
   });
 
   it("defaults fresh GitHub-shaped registered_repositories and settlements rows to github and null", async () => {
@@ -81,8 +101,14 @@ describe("migration 038: forge identities and provider columns", () => {
       select provider, instance_url, forge_project_id from registered_repositories where id = ${fixture.repositoryId}
     `;
     expect(repository).toEqual({ provider: "github", instance_url: null, forge_project_id: null });
+    // Filtered to the fixture's own settlement by its pull request, not the
+    // first settlements row, so the case reads the row it created.
+    const fixturePullRequestId = fixture.fold.settlements[0]!.githubPullRequestId;
     const [settlement] = await sql<{ provider: string; instance_url: string | null }[]>`
-      select provider, instance_url from settlements
+      select settlements.provider, settlements.instance_url
+      from settlements
+      join pull_requests on pull_requests.id = settlements.pull_request_id
+      where pull_requests.github_pull_request_id = ${fixturePullRequestId}
     `;
     expect(settlement).toEqual({ provider: "github", instance_url: null });
   });
