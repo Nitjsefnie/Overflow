@@ -308,4 +308,31 @@ describe("the required workflows' base-freshness step", () => {
       "Base freshness must take exactly these four inputs from these sources — a rewired BASE_SHA (github.sha is the HEAD of the pull request, not the base) makes the gate compare the wrong SHA source and the freshness certificate is meaningless",
     ).toEqual(expectedEnv);
   });
+
+  it("compares the fetched head against the base with inequality", () => {
+    const [verifyStep] = freshness(verifySteps);
+    const [actionlintStep] = freshness(actionlintSteps);
+
+    expect(verifyStep, "the verify job must contain the Base freshness step").toBeDefined();
+    expect(
+      actionlintStep,
+      "the actionlint job must contain the Base freshness step",
+    ).toBeDefined();
+    expect(
+      verifyStep.run?.includes('[ "$current" != "$BASE_SHA" ]'),
+      "Base freshness must compare the fetched head with the base using != — an inverted operator (==) fails every fresh-base run and passes exactly the stale-base runs the gate exists for, landing green on required CI",
+    ).toBe(true);
+    expect(
+      actionlintStep.run?.includes('[ "$current" != "$BASE_SHA" ]'),
+      "Base freshness must compare the fetched head with the base using != — an inverted operator (==) fails every fresh-base run and passes exactly the stale-base runs the gate exists for, landing green on required CI",
+    ).toBe(true);
+    expect(
+      verifyStep.run?.includes("--jq .sha"),
+      "the comparison must read the commit SHA itself (--jq .sha) — comparing any other response shape mismatches every run and the gate goes constant",
+    ).toBe(true);
+    expect(
+      actionlintStep.run?.includes("--jq .sha"),
+      "the comparison must read the commit SHA itself (--jq .sha) — comparing any other response shape mismatches every run and the gate goes constant",
+    ).toBe(true);
+  });
 });
