@@ -993,14 +993,16 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atSha).toBeGreaterThanOrEqual(0);
     expect(atGate, "the gate after full_sha").toBeGreaterThan(atSha);
     expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
-    // The record must be written after the build: the build's clean step
-    // wipes the release directory (everything outside cache|dev|lock|trace),
-    // so a pre-build write is deleted by the build it precedes.
+    // The record must be written after the build — the build's clean step
+    // wipes the release directory (everything outside cache|dev|lock|trace) —
+    // and after the webhook upgrade's status test: it attests a fully
+    // deployed release, so a run that failed after the switch leaves no
+    // record and its retry re-runs everything.
     const atRevision = source.indexOf("printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"");
-    const atBuild = source.indexOf('NEXT_DIST_DIR="$release" pnpm build');
+    const atUpgradeGate = source.indexOf('test "$upgrade_status" -eq 0 || exit "$upgrade_status"');
     expect(atRevision, "the REVISION write present").toBeGreaterThan(-1);
-    expect(atBuild, "the build line present").toBeGreaterThan(-1);
-    expect(atRevision, "the REVISION write after the build").toBeGreaterThan(atBuild);
+    expect(atUpgradeGate, "the upgrade-status test present").toBeGreaterThan(-1);
+    expect(atRevision, "the REVISION write after the upgrade-status test").toBeGreaterThan(atUpgradeGate);
   });
 
   it("places the redundant-deploy skip after the CI-gate case and before the install", async () => {

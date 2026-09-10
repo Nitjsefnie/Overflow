@@ -123,6 +123,8 @@ esac
 # the migrations for HEAD are applied: the run that built this release ran
 # pnpm db:migrate at the same commit, immediately before building it. A
 # missing or unreadable REVISION (fresh host, pre-484 release) skips nothing.
+# The fresh read is deliberate: the pre-pull anchor can be repointed by an
+# off-procedure actor mid-deploy, so the skip compares against what serves now.
 serving_release=$(readlink -f "$tree/.next" || printf absent)
 if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   if [ "$(cat "$serving_release/REVISION")" = "$full_sha" ]; then
@@ -137,9 +139,6 @@ release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD
 mkdir "$release"
 node scripts/release.ts prepare "$tree" "$release"
 NEXT_DIST_DIR="$release" pnpm build
-# After the build: its clean step wipes the release directory (everything outside cache|dev|lock|trace), so the record must be written after it — and it still names the exact tree the gates attested and the build consumed.
-printf '%s\n' "$full_sha" > "$release/REVISION"
-printf 'Source revision: %s\n' "$full_sha"
 previous_release=$(readlink -f "$tree/.next")
 serving_cache="$previous_release/cache"
 test -d "$serving_cache"
@@ -163,6 +162,9 @@ pnpm --silent webhooks:upgrade > "$upgrade_log" 2>&1 || upgrade_status=$?
 cat "$upgrade_log"
 printf 'Webhook upgrade log: %s\nWebhook upgrade exit status: %s\n' "$upgrade_log" "$upgrade_status"
 test "$upgrade_status" -eq 0 || exit "$upgrade_status"
+# The record attests a fully deployed release — built (after whose clean step it must be written), switched, restarted, readiness-verified and webhook-upgraded — so a redundant deploy may trust it; a failed deploy leaves no record and its retry re-runs everything.
+printf '%s\n' "$full_sha" > "$release/REVISION"
+printf 'Source revision: %s\n' "$full_sha"
 
 # Retention listing, exactly as the README prints it, captured for the prune
 # guard below and then printed for the deploy record.
