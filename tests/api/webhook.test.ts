@@ -281,7 +281,9 @@ describe("GitHub webhook route", () => {
   // A delivery is rejected for size before its body is buffered, so an
   // oversized (or lying-about-size) request can never force the endpoint to
   // allocate its full length in memory before the signature check answers.
-  // Mutants: DROP_DECLARED_SIZE_CHECK, DRAIN_UNCONDITIONALLY.
+  // Mutants: DROP_DECLARED_SIZE_CHECK, DRAIN_UNCONDITIONALLY, and the
+  // off-by-one twins DECLARED_SIZE_AT_LEAST / STREAMING_SIZE_AT_LEAST
+  // (>= for >), killed by the exactly-at-ceiling delivery below.
   it("rejects a declared oversize delivery with 413 before reading any of the body", async () => {
     const { stream, record } = trackedBodyStream(CHUNK_COUNT);
     const processWebhookMock = vi.fn();
@@ -295,6 +297,40 @@ describe("GitHub webhook route", () => {
     expect(response.status).toBe(413);
     expect(record.handedOutBytes).toBe(0);
     expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // A delivery at EXACTLY GitHub's documented ceiling (Content-Length
+  // 26214400) must still dispatch: the limit comment promises strict-greater
+  // on both enforcement points, and an off-by-one here 413s legitimate
+  // traffic that GitHub is allowed to send.
+  // Mutants: DECLARED_SIZE_AT_LEAST and STREAMING_SIZE_AT_LEAST (>= for > on
+  // either path) — both turn this 202 into a 413.
+  it("accepts a correctly signed delivery at exactly the 25 MiB ceiling and dispatches it", async () => {
+    const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
+    const route = createGitHubWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    // JSON.parse ignores insignificant whitespace, so trailing spaces pad the
+    // envelope to exactly the limit's byte length without changing its
+    // meaning; the payload is ASCII, so string length equals byte length.
+    const paddedPayload = rawPayload.padEnd(WEBHOOK_BODY_LIMIT_BYTES, " ");
+    expect(paddedPayload.length).toBe(WEBHOOK_BODY_LIMIT_BYTES);
+    // Content-Length is set explicitly: undici auto-sets none on Request
+    // bodies (verified — even string bodies carry no content-length), and the
+    // declared-size fast path only sees one when the sender declares it, as
+    // GitHub does. The declared value is accurate, matching the bytes below.
+    const response = await route(request(paddedPayload, {
+      "content-length": String(WEBHOOK_BODY_LIMIT_BYTES),
+      "x-github-event": "pull_request",
+      "x-github-delivery": "delivery-at-ceiling",
+    }));
+    expect(response.status).toBe(202);
+    expect(processWebhookMock).toHaveBeenCalledWith({
+      action: "closed",
+      deliveryId: "delivery-at-ceiling",
+      event: "pull_request",
+      repositoryGitHubId: 42,
+      repositoryFullName: "octo/example",
+      subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
+    });
   });
 
   // Mutants: DRAIN_UNCONDITIONALLY (and any fix that only reads Content-Length).
