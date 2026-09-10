@@ -100,6 +100,9 @@ describe("repository re-derivation", () => {
     }));
     vi.doMock("@/lib/fold/sweep", () => ({ shouldStartReconciliationBackground: () => true, startReconciliationSweep: vi.fn() }));
     vi.spyOn(console, "info").mockImplementation(() => {});
+    // register() checks the runtime literally, before any mocked predicate is
+    // reachable, so the test presents the Node.js runtime it wires for.
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
     const { register } = await import("@/instrumentation");
     await register();
     await startWorker.mock.calls[0][0].drain();
