@@ -15,7 +15,6 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sentinel = "OVERFLOW_DB_MIGRATE_SENTINEL";
 const fromDotenvFile = "from-dotenv-file";
 const fromExportedEnvironment = "from-exported-environment";
-const databaseError = "DATABASE_URL must be configured before using the database.";
 
 function migrateCommand(): string {
   const manifest = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")) as {
@@ -111,7 +110,6 @@ describe("the db:migrate .env contract", () => {
     withFixture(`${sentinel}=${fromDotenvFile}\n`, (fixture) => {
       const { status, stdout, stderr } = runMigrateCommand(fixture);
       expect(status, stderr).toBe(0);
-      expect(stdout).not.toContain(databaseError);
       expect(JSON.parse(stdout)).toBe(fromDotenvFile);
     });
   });
