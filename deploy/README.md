@@ -583,10 +583,16 @@ the same guards the manual fallback below documents: the `flock` fence on
 `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
 with the serialization refusal when the lock is not acquired, the `.next`
 anchor taken before `git pull` and passed to `release:switch --expect-current`,
-the pull itself, the required-checks gate that must bless the exact deployed
-SHA before anything is installed (below), the copy-import install, the
-environment load, `db:migrate`, a
-grammar-named release directory created with a collision-aborting `mkdir`,
+the pull itself, the tree-cleanliness gate that refuses the deploy when the
+working tree deviates from the resolved SHA — tracked modifications, staged
+changes and untracked non-ignored files all survive a fast-forward pull, and a
+release is named for the commit it was built from, so the tree must be that
+commit; ignored operational files (`.next`, releases, `node_modules`,
+generated files) do not block — the required-checks gate that must bless the
+exact deployed SHA before anything is installed (below), the copy-import
+install, the environment load, `db:migrate`, a
+grammar-named release directory created with a collision-aborting `mkdir` and
+recording the exact source SHA in a `REVISION` file inside the release,
 generated-config preparation, the build, the ownership reset excluding the
 serving cache, the new cache handover to the service account, the conditional
 switch, the restart, the `is-active` and readiness-endpoint verification, the webhook

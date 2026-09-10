@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 const readme = fileURLToPath(new URL("../../deploy/README.md", import.meta.url));
+const repoGitignore = fileURLToPath(new URL("../../.gitignore", import.meta.url));
 
 /** Returns deploy/README.md's section 10, failing the surrounding test if the heading is gone. */
 async function section10(): Promise<string> {
@@ -177,8 +178,16 @@ if [ "$1" = pull ]; then
   fi
   exit 0
 fi
+if [ "$1" = status ]; then
+  printf '%s' "\${GIT_SHIM_STATUS:-}"
+  exit "\${GIT_SHIM_STATUS_RC:-0}"
+fi
 if [ "$1" = rev-parse ]; then
-  printf '%s\\n' "\${GIT_SHIM_HASH:-}"
+  if [ "$2" = "--short=7" ]; then
+    printf '%s\\n' "\${GIT_SHIM_HASH:-}"
+    exit 0
+  fi
+  printf '%s\\n' "\${GIT_SHIM_HASH_FULL:-\${GIT_SHIM_HASH:-}}"
   exit 0
 fi
 if [ "$1" = config ]; then
@@ -381,6 +390,7 @@ describe("scripts/deploy-revision.sh", () => {
       `flock -w 900 9`,
       `git pull --ff-only origin main`,
       `git rev-parse HEAD`,
+      `git status --porcelain=v1 -uall`,
       `git config --get remote.origin.url`,
       `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
       `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
@@ -789,6 +799,118 @@ describe("scripts/deploy-revision.sh", () => {
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+  });
+
+  /**
+   * The tree-cleanliness gate's refusals are pre-mutation: nothing after the
+   * gate — install, migrate, prepare, build, switch, restart, upgrade, prune —
+   * may start, and the CI gate must not run either, since a dirty tree fails
+   * fast without waiting on GitHub.
+   */
+  function expectNoDeployStepRan(entries: ShimLogEntry[], label: string): void {
+    const started = entries.filter(
+      (entry) =>
+        entry.cmd === "pnpm" &&
+        ["install", "db:migrate", "build", "release:switch", "release:prune"].includes(entry.args[0]!),
+    );
+    expect(started, label).toEqual([]);
+    expect(entries.some((entry) => entry.cmd === "node" && entry.args[1] === "scripts/release.ts"), label).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "systemctl"), label).toBe(false);
+    expect(entries.some((entry) => entry.args.includes("webhooks:upgrade")), label).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "gh"), label).toBe(false);
+  }
+
+  it("refuses before the CI gate when the tree deviates from HEAD, for every dirt class", async () => {
+    for (const [label, dirt] of [
+      ["staged", "M  src/x.ts\n"],
+      ["modified", " M src/x.ts\n"],
+      ["untracked", "?? scratch.txt\n"],
+    ] as const) {
+      const fixture = await makeFixture();
+      const result = await runDeploy(fixture, { GIT_SHIM_STATUS: dirt });
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain(
+        `The working tree in ${fixture.tree} deviates from HEAD (${FIXTURE_HASH})`,
+      );
+      expect(result.stderr).toContain("refusing to build one from a tree that is not that commit");
+      expect(result.stdout, label).toContain(dirt.trimEnd());
+      expectNoDeployStepRan(await readLog(fixture.shimLog), label);
+    }
+  });
+
+  it("refuses fail-closed when the working-tree state itself cannot be read", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GIT_SHIM_STATUS_RC: "1" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`Could not read the working-tree state in ${fixture.tree}`);
+    expect(result.stderr).toContain("refusing to build a release whose source identity cannot be attested");
+    expectNoDeployStepRan(await readLog(fixture.shimLog), "unreadable status");
+  });
+
+  it("records the exact source SHA in the release's REVISION and prints it to the deploy record", async () => {
+    const fixture = await makeFixture();
+    const fullSha = "0123456789abcdef0123456789abcdef01234567";
+    const result = await runDeploy(fixture, { GIT_SHIM_HASH_FULL: fullSha });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${fullSha}\n`);
+    expect(result.stdout).toContain(`Source revision: ${fullSha}`);
+  });
+
+  it("matches real git: silent on a production-shaped ignored tree, loud once a tracked file changes", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "overflow-deploy-revision-git-"));
+    try {
+      const git = (...args: string[]): string => {
+        const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout;
+      };
+      const status = (): string =>
+        spawnSync("git", ["status", "--porcelain=v1", "-uall"], { cwd: repo, encoding: "utf8" }).stdout;
+      git("init");
+      // The repo's .gitignore is tracked, so the fixture commits its copy:
+      // the clean assertion below must read as the command's real semantics
+      // (ignored operational state is silent), not as the ignore file's own
+      // untracked status — the file unignores itself.
+      await writeFile(path.join(repo, ".gitignore"), await readFile(repoGitignore, "utf8"));
+      git("add", ".gitignore");
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "gitignore");
+      const releaseDir = ".next-release-20260908T000000Z-abc1234";
+      await mkdir(path.join(repo, releaseDir, "cache"), { recursive: true });
+      await writeFile(path.join(repo, releaseDir, "BUILD_ID"), releaseDir);
+      await symlink(releaseDir, path.join(repo, ".next"));
+      await mkdir(path.join(repo, "node_modules", "x"), { recursive: true });
+      await writeFile(path.join(repo, "node_modules", "x", "y"), "y");
+      await writeFile(path.join(repo, "next-env.d.ts"), "regenerated\n");
+      await writeFile(path.join(repo, `${releaseDir}.tsconfig.json`), "{}\n");
+      expect(status()).toBe("");
+
+      // README.md is a path the ignore file names back, as every tracked file
+      // in the repo must be, so the mutation is the natural tracked shape.
+      await writeFile(path.join(repo, "README.md"), "one\n");
+      git("add", "README.md");
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "readme");
+      await writeFile(path.join(repo, "README.md"), "two\n");
+      expect(status()).not.toBe("");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("places the tree-cleanliness gate after the SHA resolution and before the CI gate, and writes REVISION from the full SHA", async () => {
+    const source = await readFile(script, "utf8");
+    expect(source).toContain("git status --porcelain=v1 -uall");
+    expect(source).toContain("printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"");
+    const atSha = source.indexOf("full_sha=$(git rev-parse HEAD)");
+    const atGate = source.indexOf("git status --porcelain=v1 -uall");
+    const atCiGate = source.indexOf('case "${OVERFLOW_DEPLOY_CI_GATE:-}"');
+    expect(atSha).toBeGreaterThanOrEqual(0);
+    expect(atGate, "the gate after full_sha").toBeGreaterThan(atSha);
+    expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
   });
 });
 

@@ -91,6 +91,20 @@ flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing t
 expected_serving=$(readlink -f "$tree/.next" || printf absent)
 git pull --ff-only origin main
 full_sha=$(git rev-parse HEAD)
+# Tree-cleanliness gate: a release is named for the commit it was built from,
+# so the tree must BE that commit. Tracked modifications, staged changes and
+# untracked non-ignored files all survive a fast-forward pull; ignored files
+# (.next, releases, node_modules, generated files) are operational state and
+# do not block. Refuses before the CI gate, install, migrate or build.
+tree_status=$(git status --porcelain=v1 -uall) || {
+  printf 'Could not read the working-tree state in %s; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' "$tree" >&2
+  exit 1
+}
+if [ -n "$tree_status" ]; then
+  printf '%s\n' "$tree_status"
+  printf 'The working tree in %s deviates from HEAD (%s). A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
+  exit 1
+fi
 case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
   skip)
     printf 'OVERFLOW_DEPLOY_CI_GATE=skip is set; skipping the required-checks gate for %s; CI is NOT verified for this deploy.\n' "$full_sha" >&2
@@ -108,6 +122,8 @@ set -a; . "$env_file"; set +a
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
+printf '%s\n' "$full_sha" > "$release/REVISION"
+printf 'Source revision: %s\n' "$full_sha"
 node scripts/release.ts prepare "$tree" "$release"
 NEXT_DIST_DIR="$release" pnpm build
 previous_release=$(readlink -f "$tree/.next")
