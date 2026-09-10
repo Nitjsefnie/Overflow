@@ -52,6 +52,14 @@ export function createSettlementProofGetHandler(dependencies: SettlementProofRou
 
     const { id: settlementId } = await context.params;
 
+    // A malformed settlement id is client input, not a backing-store failure:
+    // PostgreSQL rejects a non-UUID in the id comparison and the catch below
+    // would report it as an outage (issue 440). Malformed and unknown are the
+    // same refusal — the documented not-found, before any query runs.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(settlementId)) {
+      return errorResponse(404, "NOT_FOUND", "Settlement proof is not available.");
+    }
+
     let settlement: SettlementProofProjection | null;
     try {
       settlement = await dependencies.getSettlementProof(session.user.id, settlementId);
