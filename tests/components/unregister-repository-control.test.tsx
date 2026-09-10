@@ -24,6 +24,14 @@ describe("unregister repository control", () => {
     expect(button.textContent).toBe("Unregister");
   });
 
+  it("does not steal focus when it renders", () => {
+    render(<UnregisterRepositoryControl ownerName="co-op/harbour" />);
+
+    // The focus effect is guarded against the initial mount, so a page that
+    // merely renders the control leaves the reader's focus where it was.
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("shows a confirm step before anything is sent", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
