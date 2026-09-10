@@ -679,6 +679,49 @@ describe("scripts/deploy-revision.sh", () => {
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
 
+  it("refuses fail-closed when the gh binary is missing entirely", async () => {
+    const fixture = await makeFixture();
+    // A PATH that reaches no gh anywhere: the shims minus gh itself, plus
+    // symlinks for the only real binaries the script touches before the gate
+    // (bash for spawnSync and the shims' shebangs, readlink for the anchor).
+    // On this host gh also lives in /usr/bin, so dropping that directory is
+    // required, not just /usr/local/bin.
+    const noGhBins = path.join(fixture.dir, "bins-no-gh");
+    await mkdir(noGhBins);
+    for (const name of ALL_SHIMS.filter((name) => name !== "gh")) {
+      const { envKeys, dispatch } = SHIM_DISPATCH[name]!;
+      const file = path.join(noGhBins, name);
+      await writeFile(file, shimBody(name, envKeys, dispatch));
+      await chmod(file, 0o755);
+    }
+    for (const [link, target] of [
+      ["bash", "/bin/bash"],
+      ["env", "/usr/bin/env"],
+      ["readlink", "/usr/bin/readlink"],
+    ] as const) {
+      await symlink(target, path.join(noGhBins, link));
+    }
+    const gatePath = `${noGhBins}:${fixture.dir}`;
+    // The premise: with exactly this PATH, nothing named gh is reachable.
+    expect(
+      spawnSync("sh", ["-c", "command -v gh"], { encoding: "utf8", env: { ...process.env, PATH: gatePath } }).status,
+    ).not.toBe(0);
+
+    const result = await runDeploy(fixture, { PATH: gatePath });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("could not determine required checks");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(0);
+    const started = entries.filter(
+      (entry) =>
+        entry.cmd === "pnpm" &&
+        ["install", "db:migrate", "build", "release:switch", "release:prune"].includes(entry.args[0]!),
+    );
+    expect(started).toEqual([]);
+    expect(entries.some((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart")).toBe(false);
+  });
+
   it("refuses when main's protection reads but declares no required checks", async () => {
     const fixture = await makeFixture();
     const empty = path.join(fixture.dir, "protection-empty.txt");
