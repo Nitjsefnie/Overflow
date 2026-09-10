@@ -285,8 +285,19 @@ export type ModerationRepositoryProjection = {
   ownerName: string;
 };
 
+/**
+ * A scope that runs a whole projection's reads against one database snapshot.
+ *
+ * `getDashboard` hands its callback every read the projection makes, so a
+ * commit landing mid-projection cannot show the callback two different
+ * committed states (issue 443). Tests supply their own to observe or replace
+ * the transaction boundary without a database.
+ */
+export type DashboardBegin = <T>(run: (sql: DashboardSql) => Promise<T>) => Promise<T>;
+
 export type DashboardQueryDependencies = {
   sql?: DashboardSql;
+  begin?: DashboardBegin;
 };
 
 type DashboardRow = {
@@ -524,12 +535,29 @@ type ModerationRepositoryRow = {
   owner_name: string;
 };
 
-/** Loads materialized ledger and reservation values; overcommitment remains visible as negative headroom. */
+/**
+ * The member dashboard: one projection, one database snapshot.
+ *
+ * The six reads below all describe the same committed instant. Each is its own
+ * autocommit statement, so without a shared snapshot a commit landing after the
+ * first read splits the projection across two states of the ledger — a balance
+ * from before it beside a settlement history from after it (issue 443). The
+ * snapshot scope closes that tear.
+ */
 export async function getDashboard(
   accountId: string,
   dependencies: DashboardQueryDependencies = {},
 ): Promise<DashboardProjection> {
   const sql = resolveSql(dependencies);
+  const snapshotScope = dependencies.begin ?? defaultSnapshotScope(sql);
+  return snapshotScope((txSql) => readDashboardProjection(txSql, accountId));
+}
+
+/** Reads the dashboard's six queries and builds their projection, all through one sql. */
+async function readDashboardProjection(
+  sql: DashboardSql,
+  accountId: string,
+): Promise<DashboardProjection> {
   const [row] = await sql<DashboardRow[]>`
     select
       coalesce((
@@ -1449,6 +1477,41 @@ export async function listModerationRepositories(
 
 function resolveSql(dependencies: Pick<DashboardQueryDependencies, "sql">): DashboardSql {
   return dependencies.sql ?? (getSql() as unknown as DashboardSql);
+}
+
+/**
+ * The transaction options that give a projection one snapshot to read.
+ *
+ * `repeatable read` is the point: in `read committed` — PostgreSQL's default —
+ * every statement takes its own snapshot, so a transaction there would still
+ * tear. `read only` because a projection never writes, and `read only`
+ * transactions neither assign an xid nor hold write locks. SERIALIZABLE would
+ * buy nothing beyond that one snapshot and would charge dashboards
+ * serialization-failure retries for it.
+ */
+const SNAPSHOT_SCOPE_OPTIONS = "read only isolation level repeatable read";
+
+/**
+ * The default snapshot scope for a resolved sql.
+ *
+ * The real postgres client carries a `begin`, so the projection's reads run
+ * inside one read-only repeatable-read transaction on it. An injected seam
+ * without a `begin` — the unit-test fakes — keeps its current behavior and
+ * reads autocommit, unchanged.
+ */
+function defaultSnapshotScope(sql: DashboardSql): DashboardBegin {
+  // Held in a const so the typeof narrowing survives into the returned closure;
+  // narrowing a property access does not.
+  const begin = (
+    sql as {
+      begin?: (options: string, run: (sql: DashboardSql) => Promise<unknown>) => Promise<unknown>;
+    }
+  ).begin;
+  if (typeof begin === "function") {
+    return <T>(run: (sql: DashboardSql) => Promise<T>): Promise<T> =>
+      begin(SNAPSHOT_SCOPE_OPTIONS, run) as Promise<T>;
+  }
+  return (run) => run(sql);
 }
 
 function toCalibrationPair(row: CalibrationRow): CalibrationPair {

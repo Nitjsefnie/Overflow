@@ -18,6 +18,7 @@ import {
   listUnwritableClosures,
   SELF_WORK_CALIBRATION_HISTORY_LIMIT,
   SETTLEMENT_HISTORY_LIMIT,
+  type DashboardBegin,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
@@ -665,6 +666,31 @@ describe("dashboard projections", () => {
       enforcementNotices: [],
       openAudit: null,
     });
+  });
+
+  it("routes every read through the snapshot scope supplied as dependencies.begin", async () => {
+    const { sql, captures } = sqlHarness([
+      [{ settled_balance: -4, earned_total: 2, given_total: 6, reserved_points: 5 }],
+      [],
+      [],
+      [],
+      [],
+      [],
+    ]);
+    const events: string[] = [];
+    const begin: DashboardBegin = async (run) => {
+      events.push("begin");
+      const result = await run(sql);
+      events.push("end");
+      return result;
+    };
+
+    const dashboard = await getDashboard("member-1", { sql, begin });
+
+    expect(events).toEqual(["begin", "end"]);
+    expect(dashboard.settledBalance).toBe(-4);
+    // All six reads ran inside the supplied scope, through the sql it handed on.
+    expect(captures).toHaveLength(6);
   });
 
   it("projects the account's open audit, and null when none is open", async () => {
