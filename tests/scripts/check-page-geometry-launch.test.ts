@@ -28,12 +28,23 @@ const launchChrome = launchChromeWithRetry as ChromeLauncher;
 const DEVTOOLS_URL = "ws://127.0.0.1:39991/devtools/browser/issue-447";
 
 /**
+ * A stderr stand-in: an EventEmitter plus the Readable drain API the launch
+ * path calls after a successful attempt.
+ */
+class FakeStderr extends EventEmitter {
+  resume(): this {
+    return this;
+  }
+}
+
+/**
  * A child-process double with exactly the surface the launch path touches: a
- * stderr stream, exit events and kill. No real Chrome is spawned; the tests
- * script what each fake child does the moment the launcher starts listening.
+ * stderr stream, exit events, spawn errors and kill. No real Chrome is
+ * spawned; the tests script what each fake child does the moment the
+ * launcher starts listening.
  */
 class FakeChromeChild extends EventEmitter {
-  readonly stderr = new EventEmitter();
+  readonly stderr = new FakeStderr();
 
   /** Every kill call, in order, signal included. */
   readonly killCalls: Array<string | undefined> = [];
@@ -56,6 +67,11 @@ class FakeChromeChild extends EventEmitter {
   /** Simulate the process exiting. */
   exitWith(code: number): void {
     this.emit("exit", code);
+  }
+
+  /** Simulate the process object failing to spawn at all — no exit follows. */
+  emitSpawnError(message: string): void {
+    this.emit("error", new Error(message));
   }
 }
 
@@ -139,6 +155,26 @@ describe("the page-geometry Chrome launch (issue 447)", () => {
     expect(children).toHaveLength(2);
     expect(children[0].killCalls).toEqual(["SIGKILL"]); // the silent attempt is killed before relaunch
     expect(children[1].killCalls).toEqual([]); // the live attempt is left running for the caller
+    // The returned child must not keep the accumulating stderr collector.
+    expect(children[1].stderr.listenerCount("data")).toBe(0);
+  });
+
+  it("gives each attempt a fresh budget: a slow endpoint inside attempt 2's own window still resolves", async () => {
+    const { spawnChild, children } = scriptedSpawn([
+      // Attempt 1: silent for its whole budget, then killed.
+      () => {},
+      // Attempt 2: prints 50ms into ITS OWN window. An instant (microtask)
+      // answer cannot tell a fresh per-attempt budget from one deadline
+      // shared across tries — the shared shape leaves attempt 2 a 0ms
+      // remnant, and only a genuinely delayed print catches it.
+      (child) => setTimeout(() => child.printDevToolsEndpoint(DEVTOOLS_URL), 50),
+    ]);
+
+    const launched = await launchChrome({ ...LAUNCH_OPTIONS, spawnChild });
+
+    expect(launched.browserUrl).toBe(DEVTOOLS_URL);
+    expect(launched.child).toBe(children[1]);
+    expect(children[0].killCalls).toEqual(["SIGKILL"]);
   });
 
   it("retries across failure classes: attempt 1 exits, attempt 2 resolves", async () => {
@@ -203,6 +239,70 @@ describe("the page-geometry Chrome launch (issue 447)", () => {
 
     for (const line of stderrLines) {
       expect(failure.message).toContain(line);
+    }
+  });
+
+  it("retries when Chrome cannot be spawned at all: attempt 1 errors, attempt 2 resolves", async () => {
+    const { spawnChild, children } = scriptedSpawn([
+      (child) => child.emitSpawnError("spawn EACCES: permission denied"),
+      (child) => child.printDevToolsEndpoint(DEVTOOLS_URL),
+    ]);
+
+    const launched = await launchChrome({ ...LAUNCH_OPTIONS, spawnChild });
+
+    expect(launched.browserUrl).toBe(DEVTOOLS_URL);
+    expect(launched.child).toBe(children[1]);
+    expect(children).toHaveLength(2);
+  });
+
+  it("rejects after every attempt fails to spawn, naming the error and the captured stderr", async () => {
+    const { spawnChild } = scriptedSpawn([
+      (child) => {
+        child.writeStderr("nothing reached the pipe\n");
+        child.emitSpawnError("spawn EACCES: permission denied");
+      },
+      (child) => child.emitSpawnError("spawn EACCES: permission denied"),
+      (child) => child.emitSpawnError("spawn EACCES: permission denied"),
+    ]);
+
+    const failure = await rejectionOf(launchChrome({ ...LAUNCH_OPTIONS, spawnChild }));
+
+    expect(failure.message).toContain("could not be spawned");
+    expect(failure.message).toContain("spawn EACCES: permission denied");
+    expect(failure.message).toContain("after 3 attempt(s)");
+    expect(failure.message).toContain("nothing reached the pipe");
+  });
+
+  it("refuses a non-positive attempt count with a clear error, spawning nothing", async () => {
+    const { spawnChild, children } = scriptedSpawn([
+      (child) => child.printDevToolsEndpoint(DEVTOOLS_URL),
+    ]);
+
+    const failure = await rejectionOf(launchChrome({ ...LAUNCH_OPTIONS, spawnChild, attempts: 0 }));
+
+    expect(failure).toBeInstanceOf(TypeError);
+    expect(failure.message).toContain("attempts");
+    expect(children).toHaveLength(0);
+  });
+
+  it("caps the captured stderr in a rejection at its last 15 lines", async () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `noise line ${index + 1} of 20`);
+    const block = lines.join("\n") + "\n";
+    const { spawnChild } = scriptedSpawn([
+      (child) => child.writeStderr(block),
+      (child) => child.writeStderr(block),
+      (child) => child.writeStderr(block),
+    ]);
+
+    const failure = await rejectionOf(launchChrome({ ...LAUNCH_OPTIONS, spawnChild }));
+
+    // Three 20-line attempts accumulate 60 lines; exactly the last 15 (the
+    // third attempt's lines 6-20) may survive into the message.
+    for (let index = 0; index < 5; index++) {
+      expect(failure.message).not.toContain(lines[index]);
+    }
+    for (let index = 5; index < 20; index++) {
+      expect(failure.message).toContain(lines[index]);
     }
   });
 });
