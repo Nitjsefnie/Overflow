@@ -1,3 +1,19 @@
+diff --git a/cjs/src/index.js b/cjs/src/index.js
+index f09c61c7e998f411560b95c9a8e1ed6a97972c11..93fae6d0b0c111c7e4e8d8f2fe2f0a3bc81f9d69 100644
+--- a/cjs/src/index.js
++++ b/cjs/src/index.js
+@@ -1,3 +1,11 @@
++// Removed by this repository's patch (patches/postgres@3.4.9.patch): the prebuilt
++// CJS build is NOT the patched surface — the patch rewrites the ESM build in src/.
++// Any require('postgres') would silently run the unpatched client, so it must fail
++// loudly instead. Load postgres through import (the ESM build) — see patches/README.md.
++throw new Error(
++  "postgres's prebuilt CJS build is removed by this repository's patch; " +
++  "import the ESM build (src/) instead — see patches/README.md",
++)
+ const os = require('os')
+ const fs = require('fs')
+ 
 diff --git a/src/connection.js b/src/connection.js
 index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..59c571e85725ee9caa957a7ed81161f1c9de5fa8 100644
 --- a/src/connection.js
@@ -11,7 +27,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..59c571e85725ee9caa957a7ed81161f1
      , incomings = null
      , results = null
      , initial = null
-@@ -111,7 +113,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -112,7 +114,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      idleTimer,
      connect(query) {
        initial = query
@@ -187,10 +203,15 @@ diff --git a/src/index.js b/src/index.js
 index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e21511d4c 100644
 --- a/src/index.js
 +++ b/src/index.js
-@@ -53,1 +53,2 @@ function Postgres(a, b) {
+@@ -51,6 +51,7 @@ function Postgres(a, b) {
+       , subscribe = options.no_subscribe || Subscribe(Postgres, { ...options })
+ 
    let ending = false
 +    , endRequested = false
-@@ -201,23 +202,53 @@ function Postgres(a, b) {
+ 
+   const queries = Queue()
+       , connecting = Queue()
+@@ -201,25 +202,55 @@ function Postgres(a, b) {
    }
  
    async function reserve() {
@@ -247,8 +268,9 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e
 +      // leaves that shutdown with no future event to settle it. Overflow issue 226.
 +      ending ? c.terminate() : onopen(c)
      }
-@@ -365,9 +396,30 @@ function Postgres(a, b) {
-   async function end({ timeout = null } = {}) {
+ 
+     return sql
+@@ -366,8 +397,29 @@ function Postgres(a, b) {
      if (ending)
        return ending
  

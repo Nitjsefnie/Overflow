@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,7 +21,7 @@ import { describe, expect, it } from "vitest";
  * whether or not the patch is applied; and a `_patch_hash=` suffix proves *a*
  * patch, not *this* one — the store keeps one directory per patch revision.
  *
- * So this guard pins all three links of the chain, each with a failure message
+ * So this guard pins all four links of the chain, each with a failure message
  * that names its own mismatch, so a drifted install is distinguishable at a
  * glance from a db-suite timeout:
  *
@@ -31,12 +32,19 @@ import { describe, expect, it } from "vitest";
  *    directory whose name carries `_patch_hash=<that hash>` (catches an
  *    unpatched or wrong-build resolution);
  * 3. the installed surface — every hunk of the patch's post-image is present,
- *   verbatim, in the installed `src/` file it names (catches a drifted
- *   `node_modules` even when the directory name looks right).
+ *   verbatim, in the installed file it names (catches a drifted
+ *   `node_modules` even when the directory name looks right);
+ * 4. the CJS entry — `node -e "require('postgres')"` must exit nonzero with
+ *    output naming the guard. The exports map routes every CommonJS load
+ *    through `cjs/src/index.js`, which the patch makes throw, so a require
+ *    that succeeds is the unpatched stock client loading silently — the
+ *    end-to-end shape checks 1-3 exist to prevent.
  *
- * The patch only ever named `src/` (ESM), and the file set here is derived
- * from the patch itself, so the guard reads only files the patch names — never
- * the unpatched `cjs/` and `cf/` copies that ship in the same package.
+ * The patch now also names `cjs/src/index.js` — the guard hunk — so check 3
+ * verifies the installed `cjs/src/index.js` carries it too. The file set of
+ * check 3 is derived from the patch itself, so it reads only files the patch
+ * names; the `cf/` copy — the `workerd` export condition, unreachable in
+ * Node — stays unpatched and unread.
  *
  * The reverse is deliberate too: drift in the between-hunks regions of those
  * files — text the patch never touches, such as `terminate()`'s stock copy of
@@ -294,5 +302,32 @@ describe("postgres@3.4.9 patch guard", () => {
         });
       });
     }
+  });
+
+  describe("cjs load guard", () => {
+    it("require('postgres') fails loudly instead of silently loading the unpatched CJS build", () => {
+      const probe = spawnSync(process.execPath, ["-e", "require('postgres')"], {
+        cwd: process.cwd(), // the tree root, so the probe resolves this tree's node_modules
+        encoding: "utf8",
+      });
+
+      const output = (probe.stdout ?? "") + (probe.stderr ?? "");
+
+      expect(
+        probe.status,
+        `node -e "require('postgres')" exited ${probe.status} with output ` +
+          `${JSON.stringify(output.trim())} — the stock CJS build loaded silently, so any ` +
+          "CommonJS consumer would run the unpatched client; patches/postgres@3.4.9.patch " +
+          "must make cjs/src/index.js throw at load (pnpm patch postgres@3.4.9, then " +
+          "pnpm patch-commit)",
+      ).not.toBe(0);
+
+      expect(
+        output,
+        `the CJS load failed as required (exit ${probe.status}) but its output does not name ` +
+          "the guard — a consumer would see an error it cannot act on; the throw in " +
+          "cjs/src/index.js must state the constraint and the fix",
+      ).toContain("prebuilt CJS build is removed");
+    });
   });
 });
