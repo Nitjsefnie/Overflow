@@ -119,6 +119,21 @@ export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFil
 }
 
 /**
+ * The refusal message for a run whose required environment is unsatisfied,
+ * composed from the missing names and the .env-family list (issue 471).
+ * Extracted so a test can pin the message's content — both remedies and the
+ * variable name — against the same composition the script prints, the way a
+ * mutant that drops a remedy cannot slip past the suite.
+ */
+export function missingEnvMessage(missing) {
+  return (
+    `${missing.join(", ")} is not set — the spawned server cannot render any page without it. ` +
+    `Set it in the environment, or write it to a repo-root .env file ` +
+    `(${ENV_FILE_NAMES.join(", ")}), then rerun.`
+  );
+}
+
+/**
  * The page contracts, the table this check exists to keep extensible: a new
  * page's geometry cover is one more entry, not one more test file.
  *
@@ -642,11 +657,7 @@ async function main() {
   if (spawned) {
     const missing = missingRequiredEnv();
     if (missing.length > 0) {
-      console.error(
-        `${missing.join(", ")} is not set — the spawned server cannot render any page without it. ` +
-          `Set it in the environment, or write it to a repo-root .env file ` +
-          `(${ENV_FILE_NAMES.join(", ")}), then rerun.`,
-      );
+      console.error(missingEnvMessage(missing));
       process.exit(2);
     }
   }
