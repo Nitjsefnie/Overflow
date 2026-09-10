@@ -201,6 +201,17 @@ exit 0
     envKeys: ["NEXT_DIST_DIR", "npm_config_package_import_method", "OVERFLOW_FIXTURE_ENV_MARKER"],
     dispatch: `
 if [ "$1" = "--silent" ]; then shift; fi
+if [ "$1" = build ]; then
+  dist="\${NEXT_DIST_DIR:?}"
+  for entry in "$dist"/* "$dist"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    case "\${entry##*/}" in
+      cache|dev|lock|trace) ;;
+      *) rm -rf "$entry" ;;
+    esac
+  done
+  exit 0
+fi
 if [ "$1" = webhooks:upgrade ]; then
   printf '{"upgradeFixture":true}\\n'
   exit "\${UPGRADE_STATUS:-0}"
@@ -849,7 +860,11 @@ describe("scripts/deploy-revision.sh", () => {
     expectNoDeployStepRan(await readLog(fixture.shimLog), "unreadable status");
   });
 
-  it("records the exact source SHA in the release's REVISION and prints it to the deploy record", async () => {
+  it("records the exact source SHA in the release's REVISION, surviving the build's clean step, and prints it to the deploy record", async () => {
+    // The shim's build branch wipes the release directory the way Next's
+    // clean step does (everything outside cache|dev|lock|trace), so this is a
+    // wipe-survival assertion: a record written before the build is deleted
+    // before this reads it.
     const fixture = await makeFixture();
     const fullSha = "0123456789abcdef0123456789abcdef01234567";
     const result = await runDeploy(fixture, { GIT_SHIM_HASH_FULL: fullSha });
@@ -911,13 +926,14 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atSha).toBeGreaterThanOrEqual(0);
     expect(atGate, "the gate after full_sha").toBeGreaterThan(atSha);
     expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
-    // The record must be written before the build: a failed build still
-    // records what was being built.
+    // The record must be written after the build: the build's clean step
+    // wipes the release directory (everything outside cache|dev|lock|trace),
+    // so a pre-build write is deleted by the build it precedes.
     const atRevision = source.indexOf("printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"");
     const atBuild = source.indexOf('NEXT_DIST_DIR="$release" pnpm build');
     expect(atRevision, "the REVISION write present").toBeGreaterThan(-1);
     expect(atBuild, "the build line present").toBeGreaterThan(-1);
-    expect(atRevision, "the REVISION write before the build").toBeLessThan(atBuild);
+    expect(atRevision, "the REVISION write after the build").toBeGreaterThan(atBuild);
   });
 });
 
