@@ -126,7 +126,7 @@ describe("GitHub Actions release gates", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
       group: "actionlint-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": true,
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
     const steps = workflow.jobs.actionlint!.steps;
     expect(steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
