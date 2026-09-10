@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, mintSessionCookieValue, seedFixtureUsers } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, mintSessionCookieValue, seedFixtureUsers, setSessionCookie } from "../../scripts/check-page-geometry.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -63,6 +63,50 @@ describe("mintSessionCookieValue — the @auth/core interop pin (issue 453)", ()
   });
 });
 
+/**
+ * The CDP delivery half of the fixture (issue 453): the helper that sets the
+ * session cookie must send exactly Network.setCookie with the session's
+ * cookie name and the run's base URL, and must treat a DevTools-level
+ * {success: false} as a hard error — a silently swallowed failure would leave
+ * every authed contract reading as a bounce instead of surfacing the
+ * delivery refusal. The fake client mirrors the DevTools.send surface the
+ * script's own client exposes.
+ */
+describe("setSessionCookie — the CDP delivery contract (issue 453)", () => {
+  /** A DevTools client double that records sends and scripts the response. */
+  function fakeClient(response: unknown) {
+    const calls: Array<{ method: string; params: unknown; sessionId: string | undefined }> = [];
+    return {
+      calls,
+      send: async (method: string, params?: unknown, sessionId?: string) => {
+        calls.push({ method, params, sessionId });
+        return response;
+      },
+    };
+  }
+
+  it("sends the session cookie for the run's base URL and accepts an explicit success", async () => {
+    const client = fakeClient({ success: true });
+
+    await setSessionCookie(client, "session-1", "the-jwe-value", "http://127.0.0.1:3219");
+
+    expect(client.calls).toEqual([
+      {
+        method: "Network.setCookie",
+        params: { name: SESSION_COOKIE_NAME, value: "the-jwe-value", url: "http://127.0.0.1:3219" },
+        sessionId: "session-1",
+      },
+    ]);
+  });
+
+  it("throws, naming the cookie and the URL, when DevTools reports the set as failed", async () => {
+    const client = fakeClient({ success: false });
+
+    await expect(setSessionCookie(client, "session-1", "the-jwe-value", "http://127.0.0.1:3219"))
+      .rejects.toThrow(/authjs\.session-token.*127\.0\.0\.1:3219/s);
+  });
+});
+
 describe("seedFixtureUsers (issue 453)", () => {
   let container: StartedTestContainer | undefined;
   let sql: Sql;
@@ -103,8 +147,19 @@ describe("seedFixtureUsers (issue 453)", () => {
       moderatorUserId: MODERATOR_FIXTURE_USER_ID,
     });
 
+    const createdAtAfterFirst = await sql<{ id: string; createdAt: Date }[]>`
+      select id, created_at as "createdAt" from users order by id
+    `;
+
     const second = await seedFixtureUsers({ databaseUrl });
     expect(second).toEqual(first);
+
+    // The never-deletes half of the seeding constraint: an upsert keeps each
+    // row's created_at, where a delete-and-recreate would reset it to now().
+    const createdAtAfterSecond = await sql<{ id: string; createdAt: Date }[]>`
+      select id, created_at as "createdAt" from users order by id
+    `;
+    expect(createdAtAfterSecond).toEqual(createdAtAfterFirst);
 
     // A fresh container holds nothing but the fixture rows, so the count pins
     // both the insert and the no-op second call.
