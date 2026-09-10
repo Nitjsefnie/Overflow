@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     restart: unless-stopped
     environment:
       POSTGRES_DB: overflow
@@ -19,7 +19,12 @@ services:
       start_period: 5s
 
   app:
-    build: .
+    build:
+      context: "."
+      args:
+        # Plumbs the image's provenance through compose builds: export
+        # SOURCE_SHA="$(git rev-parse HEAD)" first (deploy/container.md).
+        SOURCE_SHA: "${SOURCE_SHA:-}"
     profiles: [app]
     restart: unless-stopped
     depends_on:
