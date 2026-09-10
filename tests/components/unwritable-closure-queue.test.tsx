@@ -184,19 +184,22 @@ function isShown(element: HTMLElement): boolean {
 }
 
 /**
- * Every child node of a paragraph, flattened to its kind and text: a text
- * node as `{ text }`, an element as `{ tag, text }`. Enumerating the child
- * nodes — not `children`, which is elements only — is what makes a bare
- * text node appended inside the paragraph fail, and pinning each node's
- * kind is what makes an element fabricated around or beside the paragraph's
- * own content fail even when it adds no wording; the exact texts mean any
- * added, removed or replaced wording fails too.
+ * Every child node of a paragraph, flattened to its kind and text: the node
+ * type always, a text node as `{ nodeType, text }`, an element as
+ * `{ nodeType, tag, text }`. Dispatching on `nodeType` — never on the
+ * presence of a tag key — keeps a comment or other non-text node from
+ * folding into a text node's shape. Enumerating the child nodes — not
+ * `children`, which is elements only — is what makes a bare text node
+ * appended inside the paragraph fail, and pinning each node's kind is what
+ * makes an element fabricated around or beside the paragraph's own content
+ * fail even when it adds no wording; the exact texts mean any added,
+ * removed or replaced wording fails too.
  */
-function paragraphChildNodes(paragraph: Element): Array<{ text: string | null; tag?: string }> {
+function paragraphChildNodes(paragraph: Element): Array<{ nodeType: number; text: string | null; tag?: string }> {
   return Array.from(paragraph.childNodes).map((node) =>
     node.nodeType === Node.TEXT_NODE
-      ? { text: node.textContent }
-      : { text: node.textContent, tag: (node as Element).tagName },
+      ? { nodeType: node.nodeType, text: node.textContent }
+      : { nodeType: node.nodeType, text: node.textContent, tag: (node as Element).tagName },
   );
 }
 
@@ -255,25 +258,51 @@ describe("unwritable closure queue", () => {
     expect(parties).toBeVisible();
     expect(Array.from(parties!.querySelectorAll("code"), (code) => code.textContent)).toEqual(["mira", "quinn"]);
     // With no correction requested, the entry must not communicate a
-    // correction anywhere: a fabricated one displayed inside either
-    // class-carrying paragraph is a correction the moderator would act on.
-    // Each paragraph's full text content is pinned against the projection's
-    // own fields, and every child node is enumerated — `children` is
+    // correction anywhere: a fabricated one displayed inside any of its six
+    // paragraphs is a correction the moderator would act on. Every
+    // paragraph's full text content is pinned against the projection's own
+    // fields, and every child node of each is enumerated — `children` is
     // elements only, so a bare appended text node is invisible to it, and
-    // an element fabricated around or beside the paragraph's own content
+    // an element fabricated around or beside a paragraph's own content
     // changes a node's kind without changing the text — so a correction
-    // displayed inside either paragraph fails wherever it is placed.
+    // displayed inside any paragraph fails wherever it is placed.
+    const repositoryParagraph = repository.closest("p")!;
+    const issueParagraph = issue.closest("p")!;
+    const pullRequestParagraph = pullRequest.closest("p")!;
+    const correctionPathParagraph = correctionPath!.closest("p")!;
+    expect(repositoryParagraph.textContent).toBe(
+      `${uncorrected.repositoryName} · recorded ${uncorrected.recordedAt}`,
+    );
+    expect(issueParagraph.textContent).toBe(`#${uncorrected.issueNumber} ${uncorrected.issueTitle}`);
+    expect(pullRequestParagraph.textContent).toBe(
+      `#${uncorrected.pullRequest!.number} ${uncorrected.pullRequest!.title}`,
+    );
     expect(reason!.textContent).toBe(uncorrected.reason);
-    expect(paragraphChildNodes(reason!)).toEqual([{ text: uncorrected.reason }]);
+    expect(correctionPathParagraph.textContent).toBe("Open the settlement to request a correction");
     expect(parties!.textContent).toBe(
       `Only a party can request a correction: ${uncorrected.settlementParties!.creditorLogin} or ${uncorrected.settlementParties!.debtorLogin}.`,
     );
+    expect(paragraphChildNodes(repositoryParagraph)).toEqual([
+      { nodeType: Node.ELEMENT_NODE, tag: "STRONG", text: uncorrected.repositoryName },
+      { nodeType: Node.TEXT_NODE, text: " · recorded " },
+      { nodeType: Node.TEXT_NODE, text: uncorrected.recordedAt },
+    ]);
+    expect(paragraphChildNodes(issueParagraph)).toEqual([
+      { nodeType: Node.ELEMENT_NODE, tag: "A", text: `#${uncorrected.issueNumber} ${uncorrected.issueTitle}` },
+    ]);
+    expect(paragraphChildNodes(pullRequestParagraph)).toEqual([
+      { nodeType: Node.ELEMENT_NODE, tag: "A", text: `#${uncorrected.pullRequest!.number} ${uncorrected.pullRequest!.title}` },
+    ]);
+    expect(paragraphChildNodes(reason!)).toEqual([{ nodeType: Node.TEXT_NODE, text: uncorrected.reason }]);
+    expect(paragraphChildNodes(correctionPathParagraph)).toEqual([
+      { nodeType: Node.ELEMENT_NODE, tag: "A", text: "Open the settlement to request a correction" },
+    ]);
     expect(paragraphChildNodes(parties!)).toEqual([
-      { text: `Only a party can request a correction: ` },
-      { tag: "CODE", text: uncorrected.settlementParties!.creditorLogin },
-      { text: " or " },
-      { tag: "CODE", text: uncorrected.settlementParties!.debtorLogin },
-      { text: "." },
+      { nodeType: Node.TEXT_NODE, text: `Only a party can request a correction: ` },
+      { nodeType: Node.ELEMENT_NODE, tag: "CODE", text: uncorrected.settlementParties!.creditorLogin },
+      { nodeType: Node.TEXT_NODE, text: " or " },
+      { nodeType: Node.ELEMENT_NODE, tag: "CODE", text: uncorrected.settlementParties!.debtorLogin },
+      { nodeType: Node.TEXT_NODE, text: "." },
     ]);
     expect(entry.querySelector("data")).toBeNull();
     expect(entry.querySelector("time")).toBeNull();
