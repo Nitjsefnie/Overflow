@@ -998,6 +998,37 @@ describe("draining the abandoned webhook cleanup records", () => {
     expect(harness.deletedWebhookIds).toEqual([]);
     expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
   });
+
+  // The wiring itself is pinned here, not just the drain's branches: a seeded
+  // record whose webhook id the flow never touches (777, against the flow's own
+  // 501) can only be deleted and cleared by the drain the success path runs.
+  it("drains a seeded cleanup record through a successful registration", async () => {
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(777, "2020-01-01T00:00:00.000Z")],
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).resolves.toMatchObject({
+      id: "registered-repository-id",
+      githubWebhookId: 501,
+    });
+    expect(harness.deletedWebhookIds).toEqual([777]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 777 }]);
+  });
+
+  it("drains a seeded cleanup record through a successful unregistration", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      abandonedRecords: [cleanupRecord(777, "2020-01-01T00:00:00.000Z")],
+    });
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    // The flow deleted the registration's own webhook 501; only the drain touches 777.
+    expect(harness.deletedWebhookIds).toEqual([501, 777]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 777 }]);
+  });
 });
 
 type HarnessOptions = {
