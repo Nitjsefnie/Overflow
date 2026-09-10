@@ -1536,20 +1536,24 @@ function successfulDependencies(
   },
   options: SuccessfulDependenciesOptions = {},
 ): RepositoryRegistrationDependencies {
+  const resolvedRepository = {
+    id: 42,
+    owner: "octo",
+    ownerType: "USER" as const,
+    name: "overflow",
+    fullName: "octo/overflow",
+    visibility: "PUBLIC" as const,
+    url: "https://github.com/octo/overflow",
+    canAdminister: options.canAdminister ?? true,
+  };
   return {
     actor,
     github: {
       async getRepository() {
-        return {
-          id: 42,
-          owner: "octo",
-          ownerType: "USER",
-          name: "overflow",
-          fullName: "octo/overflow",
-          visibility: "PUBLIC",
-          url: "https://github.com/octo/overflow",
-          canAdminister: options.canAdminister ?? true,
-        };
+        return resolvedRepository;
+      },
+      async getRepositoryById() {
+        return resolvedRepository;
       },
       async listRepositoryLabels() {
         return new Set([...validInput().openingLabels, ...validInput().actualLabels].map(({ label }) => label));
