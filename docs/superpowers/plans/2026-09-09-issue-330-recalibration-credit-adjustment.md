@@ -1,8 +1,7 @@
 # Plan — issue 330: a moderator cannot see or act on a sponsor's outsider miscalibration, and a recalibration plan changes no points
 
-Repository `Nitjsefnie/Overflow`. Branch `overflow-330`, worktree
-`/tmp/overflow-wt-16cf61e0/overflow-330`, BASE `4100839`.
-Repository contract: `/root/overflow/.claude/rules/overflow-session.md`.
+Repository `Nitjsefnie/Overflow`. Branch `overflow-330`, BASE `4100839`.
+Repository contract: the repository's session rules.
 Issue claimed (comment 5606126382, assigned via /claim workflow).
 
 ## What the issue needs
@@ -336,9 +335,8 @@ re-run on the unchanged SHA before calling it a defect).
 
 - Per-task review: task-reviewer with a writable disposable checkout named in
   the brief; it plants and RUNS mutants in real modules (both guard and
-  runtime verdicts) and reads the feedback corpus at
-  `/root/daedalus-public/review-references/` (method/, claims/, contributing/
-  apply to every review; append what recurred; push). Containment scoped to
+  runtime verdicts) and reads the shared feedback corpus (method/, claims/,
+  contributing/ apply to every review; append what recurred; push). Containment scoped to
   scratch/report files; the corpus is the exception.
 - Final whole-branch review: code-reviewer, same corpus rules, tests
   backgrounded at review start.
