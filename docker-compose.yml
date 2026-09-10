@@ -18,5 +18,23 @@ services:
       retries: 12
       start_period: 5s
 
+  app:
+    build: .
+    profiles: [app]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Deliberate override of any loopback DATABASE_URL in .env: inside the
+      # compose network the app reaches postgres by service name, not loopback.
+      DATABASE_URL: postgresql://overflow:overflow_local_only@postgres:5432/overflow
+    ports:
+      # Loopback only by default, like postgres; set APP_HOST_BIND to widen.
+      # APP_URL must still name the address users browse to.
+      - "${APP_HOST_BIND:-127.0.0.1}:3000:3000"
+
 volumes:
   overflow-postgres-data:
