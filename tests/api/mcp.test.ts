@@ -315,6 +315,32 @@ describe("authentication discovery for a credential-less request", () => {
     });
     expect(dependencies.defineTools).not.toHaveBeenCalled();
   });
+
+  it("answers the misconfiguration refusal, not a discovery 401, when APP_URL is unset", async () => {
+    // The fail-closed arm: with no parsable APP_URL the guard has already
+    // refused with its own 500 before any discovery answer exists, and no
+    // origin is available to advertise in WWW-Authenticate anyway.
+    vi.stubEnv("APP_URL", "");
+    const dependencies = endpointDependencies();
+    const request = new Request(`${trustedOrigin}/api/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: rpc(1, "initialize"),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("www-authenticate")).toBeNull();
+    expect(body).toEqual({
+      error: {
+        code: "MISCONFIGURED",
+        message: "The server is not configured to accept this request.",
+      },
+    });
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
 });
 
 describe("transport-to-wrapped-route composition", () => {
