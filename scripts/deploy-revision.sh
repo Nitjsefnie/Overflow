@@ -4,8 +4,11 @@
 #
 # Every knob is overridable ONLY through the OVERFLOW_DEPLOY_* env names below,
 # which exist for the test suite; production sets none of them and runs on the
-# defaults. Under production defaults the script must be run as root from the
-# tree root.
+# defaults, where the deploy proceeds only when every required check on the
+# exact deployed SHA is green. The one operator-facing exception is
+# OVERFLOW_DEPLOY_CI_GATE=skip, reserved for rollback/recovery deploys when
+# main's CI is red. Under production defaults the script must be run as root
+# from the tree root.
 set -euo pipefail
 
 tree="${OVERFLOW_DEPLOY_TREE:-/srv/overflow}"
@@ -15,11 +18,91 @@ unit="${OVERFLOW_DEPLOY_UNIT:-overflow.service}"
 url="${OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/}"
 log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 
+# The CI gate: refuse to ship a SHA that main's required checks have not
+# blessed. Runs after the pull and before install, migrations, build, switch
+# or restart, so every refusal below leaves the tree untouched. Per required
+# context, only the latest check run decides: completed + success passes;
+# completed + any other conclusion refuses immediately; a status that is not
+# completed is pending and waits; absent refuses, because absent is not
+# passed.
+required_checks_gate() {
+  local remote_url repo required check_runs check name status conclusion pending timeout deadline
+  remote_url=$(git config --get remote.origin.url)
+  repo=
+  case "$remote_url" in
+    git@github.com:*) repo="${remote_url#git@github.com:}" ;;
+    https://github.com/*) repo="${remote_url#https://github.com/}" ;;
+  esac
+  repo="${repo%.git}"
+  if ! [[ "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+    printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "$remote_url" >&2
+    exit 1
+  fi
+  if ! required=$(gh api "repos/$repo/branches/main/protection" \
+      --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]') \
+    || [ -z "$required" ]; then
+    printf 'could not determine required checks for main; refusing to deploy\n' >&2
+    exit 1
+  fi
+  timeout="${OVERFLOW_DEPLOY_CI_TIMEOUT:-900}"
+  deadline=$((SECONDS + timeout))
+  while :; do
+    if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?per_page=100" --paginate \
+        --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv'); then
+      printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
+      exit 1
+    fi
+    pending=
+    while IFS= read -r check; do
+      [ -n "$check" ] || continue
+      name=
+      while IFS=$'\t' read -r name status conclusion; do
+        [ "$name" = "$check" ] && break
+      done <<EOF
+$check_runs
+EOF
+      if [ "$name" != "$check" ]; then
+        printf 'Required check %s has no check run on %s; absent is not passed; refusing to deploy.\n' "$check" "$full_sha" >&2
+        exit 1
+      fi
+      if [ "$status" != completed ]; then
+        pending+="${pending:+, }$check ($status)"
+        continue
+      fi
+      if [ "$conclusion" != success ]; then
+        printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "$conclusion" "$full_sha" >&2
+        exit 1
+      fi
+    done <<EOF
+$required
+EOF
+    [ -z "$pending" ] && break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      printf 'Required checks still pending after %ss: %s. The deploy was refused; nothing has been mutated.\n' "$timeout" "$pending" >&2
+      exit 1
+    fi
+    sleep 15
+  done
+}
+
 cd "$tree"
 exec 9>"$lock"
 flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 expected_serving=$(readlink -f "$tree/.next" || printf absent)
 git pull --ff-only origin main
+full_sha=$(git rev-parse HEAD)
+case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
+  skip)
+    printf 'OVERFLOW_DEPLOY_CI_GATE=skip is set; skipping the required-checks gate for %s; CI is NOT verified for this deploy.\n' "$full_sha" >&2
+    ;;
+  '')
+    required_checks_gate
+    ;;
+  *)
+    printf 'OVERFLOW_DEPLOY_CI_GATE=%s is not a supported value; unset it to enforce the gate, or set it to exactly skip for a rollback/recovery deploy when main'"'"'s CI is red.\n' "${OVERFLOW_DEPLOY_CI_GATE}" >&2
+    exit 1
+    ;;
+esac
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . "$env_file"; set +a
 pnpm db:migrate
