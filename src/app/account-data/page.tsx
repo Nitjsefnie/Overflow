@@ -32,7 +32,7 @@ export function AccountDataNotice() {
       <section className="surface" aria-labelledby="account-data-usage-heading">
         <h2 id="account-data-usage-heading">What the token is used for</h2>
         <p>
-          When you register or change a repository, the token creates or deletes Overflow&apos;s webhook on it, and
+          When you register or unregister a repository, the token creates or deletes Overflow&apos;s webhook on it, and
           a labels lookup runs on any GitHub repository path you submit during registration or catalog flows.
           Overflow&apos;s reconciliation re-reads the registered repository&apos;s issues, pull requests, reviews,
           and diffs — when you register or change a repository, and unattended, as a periodic sweep keeps the
