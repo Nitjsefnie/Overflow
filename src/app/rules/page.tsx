@@ -18,11 +18,11 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
         <h2 id="rules-maintainers-heading">Maintainers</h2>
         <ul className="rules-list">
           <li>
-            Have a claim system in place —{" "}
+            Have a claim system in place — build your own, or use{" "}
             <a href="https://github.com/Nitjsefnie-Actions/claim" rel="noreferrer">
               Nitjsefnie-Actions/claim
-            </a>{" "}
-            provides /claim, /unclaim and /release for any repository.
+            </a>
+            , which provides /claim, /unclaim and /release for any repository.
           </li>
           <li>Apply the label and rationale comment within 15 minutes of merge.</li>
         </ul>
