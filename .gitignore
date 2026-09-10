@@ -2,6 +2,7 @@
 !.gitignore
 !.env.example
 !README.md
+!CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !LICENSE
 !docker-compose.yml
