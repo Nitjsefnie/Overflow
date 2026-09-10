@@ -11,6 +11,12 @@
  * profile, so an outage or rate limit is distinguishable in the sign-in
  * diagnostics from a client-side cause (invalid identity, missing token).
  *
+ * The request also carries an application-owned deadline — the same 10
+ * seconds the GitHub REST and GraphQL clients apply. Expiry aborts the
+ * transport and fails the call through this same diagnostic, so a transport
+ * that never settles (or ignores the abort signal) cannot hold sign-in open
+ * past the deadline.
+ *
  * The stock fallback this override routes around is defective as installed.
  * When the profile has no public email, `@auth/core` 0.41.3
  * (`providers/github.js`) reads `(emails.find((e) => e.primary) ?? emails[0]).email`
@@ -31,6 +37,9 @@ import type { Profile } from "next-auth";
 import { SIGN_IN_REFUSAL_REASONS } from "@/lib/auth/sign-in-decision";
 
 const GITHUB_API_USER_URL = "https://api.github.com/user";
+
+/** The same deadline the GitHub REST and GraphQL clients give every request. */
+const defaultTimeoutMs = 10_000;
 
 /** Longest snippet of GitHub's error message embedded in the diagnostic. */
 const UPSTREAM_MESSAGE_SNIPPET_LIMIT = 200;
@@ -64,16 +73,48 @@ export class GitHubUserinfoStatusError extends Error {
 export async function requestGitHubPublicIdentity({
   tokens,
 }: GitHubUserinfoContext): Promise<Profile> {
-  const response = await fetch(GITHUB_API_USER_URL, {
-    headers: {
-      Authorization: `Bearer ${tokens.access_token}`,
-      "User-Agent": "authjs",
-    },
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  // One absolute deadline covers the response headers and the body read: the
+  // expiry aborts the transport, and the race below settles the call even
+  // against a transport that ignores the abort signal.
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error("GitHub /user request timed out.");
+      controller.abort(error);
+      reject(error);
+    }, defaultTimeoutMs);
   });
-  if (!response.ok) {
-    throw await refuseUpstreamFailure(response);
+  try {
+    const response = await Promise.race([
+      fetch(GITHUB_API_USER_URL, {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          "User-Agent": "authjs",
+        },
+        signal: controller.signal,
+      }),
+      deadline,
+    ]);
+    if (!response.ok) {
+      throw await refuseUpstreamFailure(response);
+    }
+    return await response.json();
+  } catch (error) {
+    // A deadline expiry the transport honored surfaces here as an abort
+    // rejection; one that ignored it surfaces as the deadline's own
+    // rejection. Either way the call fails through the existing
+    // upstream-unavailable diagnostic — unless the failure was already
+    // refused with one (the non-2xx path below), which logged as it threw.
+    if (controller.signal.aborted && !(error instanceof GitHubUserinfoStatusError)) {
+      console.error(
+        `GitHub sign-in refused: ${SIGN_IN_REFUSAL_REASONS.upstream} timeout after ${defaultTimeoutMs}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return await response.json();
 }
 
 /**

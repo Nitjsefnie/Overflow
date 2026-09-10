@@ -20,10 +20,12 @@ export const SIGN_IN_REFUSAL_REASONS = {
   persistence: "SIGNIN_PERSIST_FAILED",
   /**
    * GitHub's /user endpoint answered non-2xx during sign-in (rate limit,
-   * outage). Emitted by the userinfo override at the fetch site — that
-   * failure fails the sign-in before the `signIn` callback runs, so it never
-   * passes through `decideGitHubSignIn`. The status and a bounded snippet of
-   * GitHub's message are logged alongside.
+   * outage), or the request blew its application deadline. Emitted by the
+   * userinfo override at the fetch site — that failure fails the sign-in
+   * before the `signIn` callback runs, so it never passes through
+   * `decideGitHubSignIn`. The status and a bounded snippet of GitHub's
+   * message are logged alongside; a deadline expiry logs the timeout
+   * instead.
    */
   upstream: "SIGNIN_UPSTREAM_UNAVAILABLE",
 } as const;
