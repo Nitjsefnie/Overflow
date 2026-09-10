@@ -57,6 +57,9 @@ const otherShellLines = new Set([
   "systemctl daemon-reload",
   "systemctl enable overflow.service",
   "systemctl is-active overflow.service",
+  // Sections 7, 9 and 10 verify through the readiness endpoint (issue 439);
+  // section 8's old-unit rollback test keeps the landing-page URL on purpose.
+  "curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/api/readiness",
   "curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/",
   "printf 'MainPID before the switch: %s\\nMainPID now:               %s\\n'   \"$(cat /run/overflow-preswitch-mainpid)\"   \"$(systemctl show overflow.service -p MainPID --value)\"",
   "systemctl show overflow.service   -p MainPID -p User -p Group -p NoNewPrivileges -p ProtectSystem",
