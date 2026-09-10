@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "test:watch": "vitest --watch",
-    "db:migrate": "node scripts/migrate.ts",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
     "release:switch": "node scripts/release.ts switch",
     "release:prune": "node scripts/release.ts prune",
     "reconcile": "node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/reconcile.ts",
