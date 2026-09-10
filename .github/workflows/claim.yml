@@ -1,48 +1,28 @@
 name: claim
 
-# Lets a contributor take an issue without repository write access. GitHub's
-# built-in slash commands do not include assignment, so self-assignment
-# otherwise needs someone with write access to use the assignee control.
-#
-# This is the whole claiming mechanic for Overflow, not a convenience. Overflow
-# reads claim state from the GitHub assignee and never writes it, and available
-# headroom is settled balance minus the reserve points of open issues assigned
-# to outside contributors — so the assignee field is what reserves a sponsor's
-# credit. Without this, the people Overflow calls outside contributors are
-# exactly the people who cannot perform the action it prices.
-#
-# The assignment fires an `issues` `assigned` webhook, which Overflow already
-# accepts and reconciles, so the claim reaches the ledger with no further
-# wiring.
-#
-# `/claim` assigns the commenter to an unassigned open issue. `/unclaim` and
-# `/release` are the same command under two names — both remove the
-# commenter's OWN assignment and nobody else's, leaving other assignees in place.
-#
-# The `if:` below is only a cheap prefilter; the shared action checks the exact
-# command using its event-default inputs.
+# GitHub has no built-in self-assignment; in Overflow the assignee field is what reserves a
+# sponsor's credit, and the assignment fires the `issues` `assigned` webhook Overflow already
+# reconciles, so the claim reaches the ledger with no further wiring. `/claim` assigns the commenter
+# to an open, unassigned issue; `/unclaim` and `/release` are one command under two names removing
+# only the commenter's OWN assignment.
 
 on:
   issue_comment:
     types: [created]
 
-# The narrowest token that can assign. Nothing here reads the tree, so there
-# is no contents: read and no checkout: the job talks to the API only.
+# Narrowest token: nothing reads the tree, so no checkout and no contents: read.
 permissions:
   issues: write
 
 concurrency:
-  # Per issue, and NOT cancel-in-progress. Two people claiming at once must
-  # both get an answer: cancelling the first would leave the loser of the race
-  # with silence, and cancelling the second would leave it unanswered.
+  # Per issue, NOT cancel-in-progress: two racers must both get an answer.
   group: claim-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   claim:
-    # A pull request is an issue to this event, and its assignees mean
-    # something else. A closed issue cannot be worked. A bot's comment is
-    # never a claim.
+    # A PR is an issue to this event (its assignees mean something else); a closed issue can't be worked;
+    # a bot's comment is never a claim. Cheap prefilter only — the shared action enforces the exact body.
     if: >-
       github.event.issue.pull_request == null
       && github.event.issue.state == 'open'
