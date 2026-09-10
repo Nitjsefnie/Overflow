@@ -66,27 +66,29 @@ describe("eligible issues query shape against PostgreSQL", () => {
     // reference: the parity check only proves shipped == reference, and both
     // could share a misreading. These pins are independent of both.
     const allBoard = await listEligibleIssues(seeded.viewerId, { claimState: "ALL" });
-    expect(new Map(allBoard.map((row) => [row.title, row.availableHeadroom]))).toEqual(
-      new Map([
-        // Aurora: no balances row at all (coalesce to 0); 3 + 6 reserved (the
-        // self-claimed four-pointer does NOT reserve; the archived six-pointer
-        // in the INACTIVE repository does) → -9.
-        ["aurora open five", -9],
-        ["aurora claimed three", -9],
-        ["aurora second eight", -9],
-        ["aurora self claimed four", -9],
-        // Borealis: no balances row, nothing reserved → 0; the closed claimed
-        // five-pointer neither shows nor reserves.
-        ["borealis open two", 0],
-        ["borealis open seven", 0],
-        // Cascade: balance +20 from settled credits; 10 + 10 + 10 reserved
-        // (the unreconciled null-id assignee DOES count) → -10, visible.
-        ["cascade unreconciled ten", -10],
-        ["cascade outsider ten one", -10],
-        ["cascade outsider ten two", -10],
-        ["cascade open one", -10],
-      ]),
-    );
+    // Compared as an ordered list, not a title-keyed map: a map would silently
+    // mask a duplicate-titled fixture row, while the list pins board order
+    // (all rows land in the balanced tier, so reserve desc then created_at
+    // asc decides) as well as every value.
+    expect(allBoard.map((row) => [row.title, row.availableHeadroom])).toEqual([
+      // Cascade: balance +20 from settled credits; 10 + 10 + 10 reserved
+      // (the unreconciled null-id assignee DOES count) → -10, visible.
+      ["cascade unreconciled ten", -10],
+      ["cascade outsider ten one", -10],
+      ["cascade outsider ten two", -10],
+      // Aurora: no balances row at all (coalesce to 0); 3 + 6 reserved (the
+      // self-claimed four-pointer does NOT reserve; the archived six-pointer
+      // in the INACTIVE repository does) → -9. Borealis: nothing reserved,
+      // no balances row → 0; the closed claimed five-pointer neither shows
+      // nor reserves.
+      ["aurora second eight", -9],
+      ["borealis open seven", 0],
+      ["aurora open five", -9],
+      ["aurora self claimed four", -9],
+      ["aurora claimed three", -9],
+      ["borealis open two", 0],
+      ["cascade open one", -10],
+    ]);
 
     const openBoard = await listEligibleIssues(seeded.viewerId);
     // Default claim state shows only unclaimed issues, ordered by tier (all
