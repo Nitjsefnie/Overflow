@@ -589,8 +589,11 @@ changes and untracked non-ignored files all survive a fast-forward pull, and a
 release is named for the commit it was built from, so the tree must be that
 commit; ignored operational files (`.next`, releases, `node_modules`,
 generated files) do not block — the required-checks gate that must bless the
-exact deployed SHA before anything is installed (below), the copy-import
-install, the environment load, `db:migrate`, a
+exact deployed SHA before anything is installed (below), the redundant-deploy
+skip that compares the resolved SHA against the serving release's `REVISION`
+record and, on a match — the run that built the serving release migrated at
+that same commit — exits without installing, migrating or building, the
+copy-import install, the environment load, `db:migrate`, a
 grammar-named release directory created with a collision-aborting `mkdir`,
 generated-config preparation, the build, after whose clean step — it wipes the
 release directory, everything outside `cache|dev|lock|trace` — the exact source

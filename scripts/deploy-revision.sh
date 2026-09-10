@@ -117,6 +117,19 @@ case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
     exit 1
     ;;
 esac
+# Redundant-deploy skip: the serving release records the exact commit it was
+# built from (REVISION, written after the build), so a pull that left HEAD at
+# that commit means production already serves this source. A match also means
+# the migrations for HEAD are applied: the run that built this release ran
+# pnpm db:migrate at the same commit, immediately before building it. A
+# missing or unreadable REVISION (fresh host, pre-484 release) skips nothing.
+serving_release=$(readlink -f "$tree/.next" || printf absent)
+if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
+  if [ "$(cat "$serving_release/REVISION")" = "$full_sha" ]; then
+    printf 'Already serving %s (%s); the tree pulled to the serving commit, so install, migrate and build are skipped and the existing release stays.\n' "$serving_release" "$full_sha"
+    exit 0
+  fi
+fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . "$env_file"; set +a
 pnpm db:migrate
