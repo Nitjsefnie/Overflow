@@ -36,6 +36,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const USAGE = `usage: node scripts/check-page-geometry.mjs [--base-url URL] [--help]
 
@@ -198,25 +199,105 @@ class DevTools {
   }
 }
 
-function waitForDevToolsUrl(child) {
-  return new Promise((res, rej) => {
+/**
+ * Wait for one Chrome attempt to print its DevTools endpoint. An attempt
+ * fails one of two ways: the child exits (rejects immediately, the error
+ * carrying `exitCode`), or the attempt's budget expires while the child is
+ * still alive and silent (tagged `silentStart`, so the retry loop can tell
+ * the two classes apart). Its rejection messages carry no retry context —
+ * the launcher owns that.
+ */
+function waitForDevToolsUrl(child, budgetMs = 20000) {
+  return new Promise((resolve, reject) => {
     let buffer = "";
-    const timer = setTimeout(() => rej(new Error("chrome never printed a DevTools endpoint")), 20000);
     const onData = (chunk) => {
       buffer += chunk;
       const match = buffer.match(/DevTools listening on (ws:\/\/\S+)/);
       if (match) {
-        clearTimeout(timer);
-        child.stderr.off("data", onData);
-        res(match[1]);
+        finish();
+        resolve(match[1]);
       }
     };
-    child.stderr.on("data", onData);
-    child.on("exit", (code) => {
+    const onExit = (code) => {
+      finish();
+      const error = new Error(`chrome exited early with code ${code}`);
+      error.exitCode = code;
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      finish();
+      const error = new Error(`chrome alive but silent for ${budgetMs}ms`);
+      error.silentStart = true;
+      reject(error);
+    }, budgetMs);
+    const finish = () => {
       clearTimeout(timer);
-      rej(new Error(`chrome exited early with code ${code}`));
-    });
+      child.stderr.off("data", onData);
+      child.off("exit", onExit);
+    };
+    child.stderr.on("data", onData);
+    child.on("exit", onExit);
   });
+}
+
+/** The stderr tail carried in every launch-failure message. */
+const STDERR_TAIL_LINES = 15;
+
+/** The captured stderr's tail, for failure messages. */
+function stderrTail(text) {
+  const trimmed = text.trimEnd();
+  if (trimmed === "") return "(no chrome stderr captured)";
+  return trimmed.split("\n").slice(-STDERR_TAIL_LINES).join("\n");
+}
+
+/**
+ * Launch Chrome and wait for its DevTools endpoint, retrying the whole launch
+ * while attempts remain (issue 447): a slow Chrome start on a loaded runner
+ * used to get one flat 20s budget and fail the required check, so the budget
+ * is now per attempt and each failed attempt is retried with a fresh one. A
+ * silent attempt's child is killed (SIGKILL) before relaunching so nothing
+ * leaks. Every rejection carries the captured stderr tail, so a genuine
+ * launch failure is diagnosable from the CI log alone, and the two failure
+ * classes are named distinctly. `spawnChild`, `attempts` and `budgetMs` are
+ * injectable so tests drive this with fake children and reduced budgets.
+ */
+export async function launchChromeWithRetry({
+  command,
+  args,
+  spawnChild = spawn,
+  attempts = 3,
+  budgetMs = 20000,
+}) {
+  const stderrChunks = [];
+  let lastFailure = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const child = spawnChild(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const collect = (chunk) => stderrChunks.push(chunk.toString());
+    child.stderr.on("data", collect);
+
+    try {
+      const browserUrl = await waitForDevToolsUrl(child, budgetMs);
+      return { child, browserUrl };
+    } catch (error) {
+      // A failed attempt must not leak its child, and its stderr listener is
+      // retired with it; chunks captured so far stay in stderrChunks.
+      child.kill("SIGKILL");
+      child.stderr.off("data", collect);
+      lastFailure = error.silentStart
+        ? { kind: "silent" }
+        : { kind: "exit", code: error.exitCode };
+    }
+  }
+
+  const attemptNote = ` after ${attempts} attempt(s)`;
+  const tail = stderrTail(stderrChunks.join(""));
+  if (lastFailure.kind === "silent") {
+    throw new Error(
+      `chrome alive but silent (no "DevTools listening on" line within ${budgetMs}ms)${attemptNote}\n${tail}`,
+    );
+  }
+  throw new Error(`chrome exited early with code ${lastFailure.code}${attemptNote}\n${tail}`);
 }
 
 /** The server log's tail, for error messages. */
@@ -494,21 +575,25 @@ async function main() {
   try {
     if (spawned) server = await startServer(workDir);
 
-    const child = spawn(chrome, [
-      "--headless=new",
-      "--remote-debugging-port=0",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--hide-scrollbars",
-      "--no-first-run",
-      "--no-default-browser-check",
-      `--user-data-dir=${join(workDir, "profile")}`,
-      "about:blank",
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-    child.stderr.resume();
+    // The launch retries itself (issue 447): a failed attempt is killed and
+    // relaunched inside launchChromeWithRetry, so reaching this line means
+    // the child is alive and its DevTools endpoint is known.
+    const { child, browserUrl } = await launchChromeWithRetry({
+      command: chrome,
+      args: [
+        "--headless=new",
+        "--remote-debugging-port=0",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--hide-scrollbars",
+        "--no-first-run",
+        "--no-default-browser-check",
+        `--user-data-dir=${join(workDir, "profile")}`,
+        "about:blank",
+      ],
+    });
 
     try {
-      const browserUrl = await waitForDevToolsUrl(child);
       const client = new DevTools(await openSocket(browserUrl));
       const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
       const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
@@ -598,7 +683,11 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+// Run only when invoked as a script (node scripts/check-page-geometry.mjs);
+// importing the module — the tests do — must not spawn a server or Chrome.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
