@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- untyped .mjs script module
-import { launchChromeWithRetry } from "../../scripts/check-page-geometry.mjs";
+import { launchChromeWithRetry, missingRequiredEnv } from "../../scripts/check-page-geometry.mjs";
 
 /**
  * The options launchChromeWithRetry takes, declared locally because the .mjs
@@ -304,5 +304,41 @@ describe("the page-geometry Chrome launch (issue 447)", () => {
     for (let index = 5; index < 20; index++) {
       expect(failure.message).toContain(lines[index]);
     }
+  });
+});
+
+/**
+ * The signature missingRequiredEnv takes, declared locally because the .mjs
+ * script ships no type declarations (the same reason as LaunchOptions). The
+ * env-file predicate is injectable so both branches — env-satisfied and
+ * env-file-satisfied — are testable without a real repo root.
+ */
+interface MissingRequiredEnvFn {
+  (env?: Record<string, string | undefined>, envFileExists?: () => boolean): string[];
+}
+
+const missingEnv = missingRequiredEnv as MissingRequiredEnvFn;
+
+describe("the spawned-server environment preflight (issue 471)", () => {
+  it("reports nothing missing when DATABASE_URL is set to a value", () => {
+    expect(missingEnv({ DATABASE_URL: "postgresql://postgres:x@127.0.0.1:5432/postgres" }, () => false))
+      .toEqual([]);
+  });
+
+  it("reports DATABASE_URL missing when it is set to the empty string", () => {
+    expect(missingEnv({ DATABASE_URL: "" }, () => false)).toEqual(["DATABASE_URL"]);
+  });
+
+  it("reports nothing missing when the env lacks DATABASE_URL but a repo-root .env file exists", () => {
+    // Next.js loads repo-root .env files at server startup, so a developer
+    // whose DATABASE_URL lives only there has a working flow that must keep
+    // working: the file's presence satisfies the preflight.
+    expect(missingEnv({}, () => true)).toEqual([]);
+  });
+
+  it("reports DATABASE_URL missing when neither the env nor a repo-root .env file has it", () => {
+    // The case the script turns into the exit-2 refusal before spawning
+    // anything: the run would otherwise fail as a false layout regression.
+    expect(missingEnv({}, () => false)).toEqual(["DATABASE_URL"]);
   });
 });

@@ -50,6 +50,9 @@ does not overflow sideways. Exits 1 on any failure.
                    spawning one from .next on 127.0.0.1:3219
   --help           this text
 
+A spawned server (no --base-url) needs DATABASE_URL, from the environment or
+a repo-root .env file; the run refuses to launch anything without it.
+
 Chrome is discovered from LAYOUT_CHECK_CHROME, then google-chrome-stable,
 google-chrome, chromium, chromium-browser (PATH and /usr/bin).
 `;
@@ -74,6 +77,46 @@ function flaggedValue(flag) {
 const repoRoot = resolve(import.meta.dirname, "..");
 const PORT = 3219;
 const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).replace(/\/+$/, "");
+
+/**
+ * The environment a spawned `next start` needs, verified BEFORE anything is
+ * launched (issue 471): the production server cannot render any page without
+ * a database, and a missing one used to surface only after the spawn as
+ * "page did not render (HTTP 500)", which reads as a layout regression.
+ * Empty string counts as missing — the server cannot connect with it either.
+ */
+const REQUIRED_ENV = ["DATABASE_URL"];
+
+/**
+ * Next.js loads repo-root .env files at server startup, so a developer whose
+ * DATABASE_URL lives only in one of these has a working flow today; its
+ * presence satisfies the preflight even when the variable is absent from the
+ * environment. Exactly the production set Next.js loads (issue 471).
+ */
+const ENV_FILE_NAMES = [".env", ".env.local", ".env.production", ".env.production.local"];
+
+/** Whether any repo-root .env file Next.js would load exists. */
+function repoEnvFileExists() {
+  return ENV_FILE_NAMES.some((name) => existsSync(join(repoRoot, name)));
+}
+
+/**
+ * The required names this run's environment leaves unsatisfied: a name is
+ * missing when it is absent or empty from `env` AND no repo-root .env file
+ * would supply it at server startup. `env` defaults to process.env and the
+ * .env-file check is injectable so both branches are unit-testable without a
+ * real repo root, the way the launch tests drive launchChromeWithRetry with
+ * a fake spawn. Exported for those tests; the script calls it on the spawn
+ * path only — with --base-url the target server's environment is not this
+ * process's business (issue 471).
+ */
+export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFileExists) {
+  return REQUIRED_ENV.filter((name) => {
+    const value = env[name];
+    if (value !== undefined && value !== "") return false;
+    return !envFileExists();
+  });
+}
 
 /**
  * The page contracts, the table this check exists to keep extensible: a new
@@ -590,9 +633,26 @@ async function probeStatus(page) {
 }
 
 async function main() {
+  const spawned = BASE_URL === `http://127.0.0.1:${PORT}`;
+
+  // The environment preflight (issue 471) runs only when this run spawns its
+  // own server, and before mkdtemp, startServer and launchChromeWithRetry, so
+  // a refusal leaves nothing spawned and nothing listening on the port — the
+  // same convention as the chrome-not-found and .next-not-found refusals.
+  if (spawned) {
+    const missing = missingRequiredEnv();
+    if (missing.length > 0) {
+      console.error(
+        `${missing.join(", ")} is not set — the spawned server cannot render any page without it. ` +
+          `Set it in the environment, or write it to a repo-root .env file ` +
+          `(${ENV_FILE_NAMES.join(", ")}), then rerun.`,
+      );
+      process.exit(2);
+    }
+  }
+
   const chrome = discoverChrome();
   const workDir = await mkdtemp(join(tmpdir(), "page-geometry-"));
-  const spawned = BASE_URL === `http://127.0.0.1:${PORT}`;
   let server = null;
   let failed = false;
   let hardFailure = null;
