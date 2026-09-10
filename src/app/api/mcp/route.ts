@@ -58,6 +58,18 @@ function withPathId(handler: (request: Request, context: PathIdContext) => Promi
 }
 
 /**
+ * The discovery header pair every 401 this route answers with carries: the
+ * challenge names the accepted scheme and points at this resource's RFC 9728
+ * protected-resource metadata, and the answer is never cached.
+ */
+function discoveryHeaders(origin: string): Record<string, string> {
+  return {
+    "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+    "Cache-Control": "no-store",
+  };
+}
+
+/**
  * The ten wrapped route handlers, wired from the same factories and stores the
  * route files wire their own exports from. One deliberate exception the whole
  * record shares: every handler takes the member gate's production session
@@ -150,12 +162,19 @@ export type McpRouteDependencies = MemberRouteDependencies & {
  * The MCP transport: one JSON-RPC request per POST, gated exactly like the
  * routes it fronts. The credential guard runs first (a bearer request is
  * exempt from the origin check, a cookie request is not), then the member
- * gate; a refusal from either surfaces as-is, with one exception: a request
- * that carries neither a bearer credential nor a session cookie nor an allowed
- * Origin is a programmatic client's unauthenticated probe, so its 403 is
- * replaced by a 401 whose WWW-Authenticate points at this resource's
- * RFC 9728 metadata. JSON-RPC results and errors go out in-band at HTTP 200,
- * and a notification — no id, nothing to answer — is HTTP 202 with no body.
+ * gate. A refusal from either surfaces as-is, with two discovery exceptions
+ * on this route: a request that carries neither a bearer credential nor a
+ * session cookie nor an allowed Origin is a programmatic client's
+ * unauthenticated probe, so its 403 is replaced by a 401 whose
+ * WWW-Authenticate points at this resource's RFC 9728 metadata; and the
+ * member gate's own 401 arms — the cookie-less "Sign in is required."
+ * refusal and the bearer rejection "The supplied API token was not
+ * accepted." — carry the same challenge where they surface here, so a client
+ * whose token was rotated or revoked can re-discover the scheme (RFC 7235
+ * section 3.1 makes the challenge on a 401 a MUST). An unparsable APP_URL
+ * leaves any 401 unchanged — no origin to advertise, fail closed. JSON-RPC
+ * results and errors go out in-band at HTTP 200, and a notification — no id,
+ * nothing to answer — is HTTP 202 with no body.
  */
 export function createMcpPostHandler(dependencies: McpRouteDependencies) {
   return async function postMcp(request: Request): Promise<Response> {
@@ -179,13 +198,7 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
                 message: "Provide a bearer API token.",
               },
             },
-            {
-              status: 401,
-              headers: {
-                "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
-                "Cache-Control": "no-store",
-              },
-            },
+            { status: 401, headers: discoveryHeaders(origin) },
           );
         }
       }
@@ -194,7 +207,24 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
 
     const session = await requiredMemberSession(request, dependencies);
     if (session instanceof Response) {
-      return session;
+      // Both of the gate's 401 arms surface here as bare responses, so this
+      // return point is where the route attaches the same challenge the probe
+      // answer carries. The other refusals pass through untouched: the 403 is
+      // the CSRF or role defense and the 502 is an outage, and neither is a
+      // scheme discovery moment. An unparsable APP_URL fails closed — no
+      // origin to advertise, so the 401 goes out unchanged.
+      if (session.status !== 401) {
+        return session;
+      }
+      const origin = readTrustedOrigin();
+      if (origin === null) {
+        return session;
+      }
+      const headers = new Headers(session.headers);
+      for (const [name, value] of Object.entries(discoveryHeaders(origin))) {
+        headers.set(name, value);
+      }
+      return new Response(session.body, { status: session.status, headers });
     }
 
     let raw: string;
