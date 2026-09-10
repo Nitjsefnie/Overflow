@@ -202,6 +202,52 @@ describe("requestGitHubPublicIdentity", () => {
     expect(logged).toContain("503");
     expect(logged).not.toContain("message=");
   });
+
+  it("aborts a never-settling /user transport at the 10-second deadline and fails through the upstream-unavailable diagnostic", async () => {
+    vi.useFakeTimers();
+    try {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let suppliedSignal: AbortSignal | undefined;
+      // An abort-ignoring transport: it records the signal the request
+      // supplied and never settles, so only an application-owned deadline
+      // can end the call.
+      vi.stubGlobal("fetch", vi.fn((_url: unknown, init?: RequestInit): Promise<Response> => {
+        suppliedSignal = init?.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      }));
+
+      const settled = requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } }).then(
+        () => "resolved" as const,
+        (rejection: unknown) => ({ rejected: rejection }),
+      );
+
+      // The deadline is the same 10 seconds the other GitHub clients use:
+      // nothing may reject the call before it.
+      await vi.advanceTimersByTimeAsync(9_999);
+      const beforeDeadline = await Promise.race([settled, Promise.resolve("still-pending" as const)]);
+      expect(beforeDeadline).toBe("still-pending");
+
+      // At the deadline the call rejects — it never stays pending against a
+      // transport that ignores the abort signal.
+      await vi.advanceTimersByTimeAsync(1);
+      const outcome = await Promise.race([settled, Promise.resolve("still-pending" as const)]);
+      expect(outcome).not.toBe("still-pending");
+
+      const rejection = (outcome as { rejected: unknown }).rejected;
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toContain("timed out");
+      expect(suppliedSignal).toBeDefined();
+      expect(suppliedSignal?.aborted).toBe(true);
+
+      // The timeout failure routes through the existing upstream-unavailable
+      // diagnostic, exactly once.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const logged = errorSpy.mock.calls.flat().map(String).join("\n");
+      expect(logged).toContain("SIGNIN_UPSTREAM_UNAVAILABLE");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("GitHub provider wiring", () => {
