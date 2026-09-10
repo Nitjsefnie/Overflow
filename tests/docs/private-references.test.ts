@@ -13,15 +13,23 @@ import { describe, expect, it } from "vitest";
  * so they are rejected at token level, with no judgement about the surrounding
  * prose.
  *
- * Each entry pairs the reported token with its matcher. `/tmp` is matched with
- * a word boundary so the bare form — `under /tmp`, no trailing slash — fires
- * exactly like `/tmp/`, while a longer word such as `/temporary` still does
- * not.
+ * `nitjsefni.eu` is banned as one domain token, with a single exemption: the
+ * product's public instance `overflow.nitjsefni.eu` — the host `README.md`
+ * and `CONTRIBUTING.md` present as where the product runs, serving the public
+ * API surface including `/api/mcp`. The exemption is a negative lookbehind on
+ * the `overflow.` prefix, so the token stays one domain and an internal
+ * hostname added later is still caught by default; the `\b` inside the
+ * lookbehind stops a longer prefix such as `xoverflow.` from being exempted.
+ *
+ * Each entry pairs the reported token with its matcher. The machine paths are
+ * matched with a word boundary so the bare form — `under /root`, no trailing
+ * slash — fires exactly like `/root/`, while a longer word such as `/rooted`
+ * still does not.
  */
 const FORBIDDEN_PATTERNS: readonly { token: string; pattern: RegExp }[] = [
-  { token: "nitjsefni.eu", pattern: /nitjsefni\.eu/ }, // private hostnames
-  { token: "/etc/", pattern: /\/etc\// }, // machine config paths
-  { token: "/root/", pattern: /\/root\// }, // machine home paths
+  { token: "nitjsefni.eu", pattern: /(?<!\boverflow\.)nitjsefni\.eu/ }, // private hostnames, `overflow.` exempt
+  { token: "/etc", pattern: /\/etc\b/ }, // machine config paths, bare or trailing-slash form
+  { token: "/root", pattern: /\/root\b/ }, // machine home paths, bare or trailing-slash form
   { token: "/tmp", pattern: /\/tmp\b/ }, // machine scratch paths, bare or trailing-slash form
 ];
 
