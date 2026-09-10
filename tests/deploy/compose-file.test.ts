@@ -10,6 +10,7 @@ interface ComposeService {
   env_file?: Array<string | { path: string; required?: boolean }>;
   environment?: Record<string, string>;
   ports?: string[];
+  user?: string;
   healthcheck?: Record<string, unknown>;
 }
 
@@ -45,6 +46,11 @@ describe("docker-compose.yml", () => {
     expect(app.restart).toBe("unless-stopped");
     expect(app.depends_on?.postgres?.condition).toBe("service_healthy");
     expect(app.ports).toEqual(["${APP_HOST_BIND:-127.0.0.1}:3000:3000"]);
+  });
+
+  it("leaves the app service's runtime user to the image instead of overriding it", () => {
+    const app = compose.services.app;
+    expect(app.user).toBeUndefined();
   });
 
   it("feeds the app .env and pins DATABASE_URL at the compose layer", () => {

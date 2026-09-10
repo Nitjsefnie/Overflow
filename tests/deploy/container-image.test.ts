@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const dockerfile = readFileSync(
@@ -52,6 +54,40 @@ describe("Dockerfile", () => {
   it("ships the migration step's database client into the runtime stage", () => {
     expect(dockerfile).toContain("COPY --from=build /app/src/lib/db ./src/lib/db");
   });
+});
+
+// The assertion is against an actually-built image, not the Dockerfile text:
+// a text-only guard could not tell a USER line the build ignores from one the
+// image carries. The build is slow, so this test owns a long timeout.
+describe("built image", () => {
+  it(
+    "selects a non-root runtime user",
+    { timeout: 1_200_000 },
+    () => {
+      const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+      execFileSync("docker", ["build", "-t", "overflow-444-configuser", "."], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const configUser = JSON.parse(
+        execFileSync(
+          "docker",
+          [
+            "image",
+            "inspect",
+            "--format",
+            "{{json .Config.User}}",
+            "overflow-444-configuser",
+          ],
+          { encoding: "utf8" },
+        ),
+      ) as string;
+      expect(configUser, "the built image's Config.User").not.toBe("");
+      const [uid] = configUser.split(":");
+      expect(uid.toLowerCase(), "the image runtime user").not.toBe("root");
+      expect(uid, "the image runtime uid").not.toBe("0");
+    },
+  );
 });
 
 describe(".dockerignore", () => {
