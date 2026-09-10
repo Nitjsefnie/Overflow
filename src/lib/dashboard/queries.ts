@@ -1100,19 +1100,31 @@ export async function listSelfWorkCalibrations(
 }
 
 /**
- * The two cohort selections both calibration comparisons read: the account's
- * own calibrated closures, and the outsider settlements the account owes on.
- * The predicates live here once — getCalibrationComparison pools the pairs,
- * getCalibrationComparisonByRepository groups them per repository — so the
- * breakdown reads the pooled comparison's own rows by construction, and the
- * page and the route together run two selections where four ran before.
+ * The one cohort selection both calibration projections derive from: the
+ * account's own calibrated closures, and the outsider settlements the account
+ * owes on. One selection per request — the projections are pure derivations
+ * of this result (getCalibrationComparison pools the pairs,
+ * getCalibrationComparisonByRepository groups them per repository), so a
+ * caller cannot project without loading, and a reconciliation commit landing
+ * between two independent selections can no longer make the breakdown stop
+ * being a partition of the pooled comparison (issue 435).
  * `repository_name` is carried for the grouping reader; the pooled one ignores
  * it.
  */
-async function selectCalibrationRows(
-  sql: DashboardSql,
+export type CalibrationCohorts = {
+  selfWorkRows: RepositoryCalibrationRow[];
+  outsiderRows: RepositoryCalibrationRow[];
+};
+
+/**
+ * The one cohort read per request: load the account's two cohorts once and
+ * hand the result to both projections. Neither projection selects.
+ */
+export async function loadCalibrationCohorts(
   accountId: string,
-): Promise<{ selfWorkRows: RepositoryCalibrationRow[]; outsiderRows: RepositoryCalibrationRow[] }> {
+  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
+): Promise<CalibrationCohorts> {
+  const sql = resolveSql(dependencies);
   const selfWorkRows = await sql<RepositoryCalibrationRow[]>`
     select
       repositories.github_repository_id,
@@ -1156,18 +1168,23 @@ async function selectCalibrationRows(
   return { selfWorkRows, outsiderRows };
 }
 
-export async function getCalibrationComparison(
-  accountId: string,
-  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
-): Promise<CalibrationComparison> {
-  const sql = resolveSql(dependencies);
-  const { selfWorkRows, outsiderRows } = await selectCalibrationRows(sql, accountId);
-  return compareCalibration(selfWorkRows.map(toCalibrationPair), outsiderRows.map(toCalibrationPair));
+/**
+ * The pooled calibration comparison over one loaded cohort pair. A pure
+ * derivation: the selection ran once in loadCalibrationCohorts, so this and
+ * the per-repository breakdown read the same rows by construction.
+ */
+export function getCalibrationComparison(cohorts: CalibrationCohorts): CalibrationComparison {
+  return compareCalibration(
+    cohorts.selfWorkRows.map(toCalibrationPair),
+    cohorts.outsiderRows.map(toCalibrationPair),
+  );
 }
 
 /**
  * The same comparison as getCalibrationComparison, split one entry per
- * repository.
+ * repository, derived from the same one loaded cohort pair: neither
+ * projection reads, so the breakdown cannot straddle a commit the pooled
+ * figure did not see.
  *
  * The registered repositories do not offer the same opening scale — a uniform
  * 1..10 in one, five rungs in another — so the pooled figure above averages two
@@ -1179,12 +1196,10 @@ export async function getCalibrationComparison(
  * cohort the member has, and compareCalibration already declines to report a
  * difference there.
  */
-export async function getCalibrationComparisonByRepository(
-  accountId: string,
-  dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
-): Promise<RepositoryCalibrationEntry[]> {
-  const sql = resolveSql(dependencies);
-  const { selfWorkRows, outsiderRows } = await selectCalibrationRows(sql, accountId);
+export function getCalibrationComparisonByRepository(
+  cohorts: CalibrationCohorts,
+): RepositoryCalibrationEntry[] {
+  const { selfWorkRows, outsiderRows } = cohorts;
 
   const groups = new Map<number, { repositoryName: string; selfWork: CalibrationPair[]; outsider: CalibrationPair[] }>();
   const collect = (rows: readonly RepositoryCalibrationRow[], cohort: "selfWork" | "outsider") => {
@@ -1415,7 +1430,7 @@ export async function listAuditCandidates(
   dependencies: Pick<DashboardQueryDependencies, "sql"> = {},
 ): Promise<AuditCandidateProjection[]> {
   const sql = resolveSql(dependencies);
-  // These cohort predicates are shared with selectCalibrationRows above and with
+  // These cohort predicates are shared with loadCalibrationCohorts above and with
   // listSelfWorkPairs/listOutsiderSettlementPairs in src/lib/moderation/postgres-store.ts; change all three together.
   // Each side aggregates once and joins on the account, rather than re-aggregating per account row:
   // neither self_work_calibrations.user_id nor settlements.debtor_id is indexed. Inside the outsider

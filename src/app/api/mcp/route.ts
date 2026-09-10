@@ -35,6 +35,7 @@ import {
   getCalibrationComparison,
   getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
+  loadCalibrationCohorts,
   getDashboard,
   listOpenAudits,
 } from "@/lib/dashboard/queries";
@@ -106,6 +107,7 @@ const productionToolDependencies: McpToolDependencies = {
     getCalibrationComparison,
     getCalibrationComparisonByRepository,
     listSelfWorkCalibrations,
+    loadCalibrationCohorts,
   }),
   dashboardSummary: createDashboardGetHandler({
     getSession: getProductionSession,

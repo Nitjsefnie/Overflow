@@ -6,6 +6,8 @@ import {
   getCalibrationComparison,
   getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
+  loadCalibrationCohorts,
+  type CalibrationCohorts,
   type SelfWorkCalibrationProjection,
 } from "@/lib/dashboard/queries";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
@@ -18,8 +20,9 @@ import {
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 export type CalibrationRouteDependencies = MemberRouteDependencies & {
-  getCalibrationComparison: (accountId: string) => Promise<CalibrationComparison>;
-  getCalibrationComparisonByRepository: (accountId: string) => Promise<RepositoryCalibrationEntry[]>;
+  loadCalibrationCohorts: (accountId: string) => Promise<CalibrationCohorts>;
+  getCalibrationComparison: (cohorts: CalibrationCohorts) => CalibrationComparison;
+  getCalibrationComparisonByRepository: (cohorts: CalibrationCohorts) => RepositoryCalibrationEntry[];
   listSelfWorkCalibrations: (accountId: string) => Promise<SelfWorkCalibrationProjection[]>;
 };
 
@@ -35,17 +38,16 @@ export function createCalibrationGetHandler(dependencies: CalibrationRouteDepend
     }
 
     // The comparison is what the route is for: its failure leaves nothing to
-    // answer with, so it takes the route's 502. The per-repository breakdown is
-    // the same comparison read on each repository's own opening scale, so a
-    // failure there is the same failure: answering without it would hand back a
-    // figure the member cannot place.
+    // answer with, so it takes the route's 502. Both views derive from the one
+    // cohort selection, so a failure anywhere in that — the load or a
+    // derivation — is the same failure: answering without the breakdown would
+    // hand back a figure the member cannot place.
     let comparison: CalibrationComparison;
     let byRepository: RepositoryCalibrationEntry[];
     try {
-      [comparison, byRepository] = await Promise.all([
-        dependencies.getCalibrationComparison(session.user.id),
-        dependencies.getCalibrationComparisonByRepository(session.user.id),
-      ]);
+      const cohorts = await dependencies.loadCalibrationCohorts(session.user.id);
+      comparison = dependencies.getCalibrationComparison(cohorts);
+      byRepository = dependencies.getCalibrationComparisonByRepository(cohorts);
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load the calibration comparison.");
     }
@@ -70,4 +72,5 @@ export const GET = createCalibrationGetHandler({
   getCalibrationComparison,
   getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
+  loadCalibrationCohorts,
 });

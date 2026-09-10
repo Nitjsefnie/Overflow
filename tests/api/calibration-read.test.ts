@@ -7,7 +7,7 @@ import type {
   CalibrationComparison,
   RepositoryCalibrationEntry,
 } from "@/lib/calibration/statistics";
-import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import type { CalibrationCohorts, SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 
@@ -48,14 +48,33 @@ const selfWorkCalibration: SelfWorkCalibrationProjection = {
   mergedAt: "2026-09-09T00:00:00.000Z",
 };
 
+// The one cohort pair the loader returns and both projections derive from.
+// Passed by reference through the handler, so the assertions below can pin
+// that both projections consumed this exact load.
+const cohorts: CalibrationCohorts = {
+  selfWorkRows: [
+    {
+      github_repository_id: 92731604,
+      repository_name: "Nitjsefnie-Harness-Commons/daedalus",
+      github_issue_id: 1101,
+      github_pull_request_id: 2201,
+      merged_at: "2026-09-01T00:00:00.000Z",
+      proof_sha256: "a".repeat(64),
+      offered_difficulty: 5,
+      settled_difficulty: 4,
+    },
+  ],
+  outsiderRows: [],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 /**
- * Direct-call harness: both calibration queries are mocks on the injected
- * dependencies, so each case drives one arm of the route against the member
- * gate.
+ * Direct-call harness: the calibration reads and derivations are mocks on the
+ * injected dependencies, so each case drives one arm of the route against the
+ * member gate.
  */
 type CalibrationDependencyMocks = {
   [K in keyof CalibrationRouteDependencies]: Mock;
@@ -66,8 +85,9 @@ function calibrationDependencies(overrides: Partial<CalibrationDependencyMocks> 
     getSession: vi.fn().mockResolvedValue({ user: { id: memberId, role: "MEMBER" } }),
     findAccountByTokenHash: vi.fn().mockResolvedValue(null),
     getCurrentRole: vi.fn().mockResolvedValue("MEMBER"),
-    getCalibrationComparison: vi.fn().mockResolvedValue(comparison),
-    getCalibrationComparisonByRepository: vi.fn().mockResolvedValue(byRepository),
+    loadCalibrationCohorts: vi.fn().mockResolvedValue(cohorts),
+    getCalibrationComparison: vi.fn().mockReturnValue(comparison),
+    getCalibrationComparisonByRepository: vi.fn().mockReturnValue(byRepository),
     listSelfWorkCalibrations: vi.fn().mockResolvedValue([selfWorkCalibration]),
     ...overrides,
   };
@@ -89,8 +109,7 @@ describe("GET /api/calibration", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
     });
-    expect(dependencies.getCalibrationComparison).not.toHaveBeenCalled();
-    expect(dependencies.getCalibrationComparisonByRepository).not.toHaveBeenCalled();
+    expect(dependencies.loadCalibrationCohorts).not.toHaveBeenCalled();
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
@@ -105,8 +124,7 @@ describe("GET /api/calibration", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "FORBIDDEN", message: "A member account is required." },
     });
-    expect(dependencies.getCalibrationComparison).not.toHaveBeenCalled();
-    expect(dependencies.getCalibrationComparisonByRepository).not.toHaveBeenCalled();
+    expect(dependencies.loadCalibrationCohorts).not.toHaveBeenCalled();
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
@@ -121,53 +139,29 @@ describe("GET /api/calibration", () => {
       byRepository,
       selfWork: [selfWorkCalibration],
     });
-    expect(dependencies.getCalibrationComparison).toHaveBeenCalledExactlyOnceWith(memberId);
-    expect(dependencies.getCalibrationComparisonByRepository).toHaveBeenCalledExactlyOnceWith(memberId);
+    expect(dependencies.loadCalibrationCohorts).toHaveBeenCalledExactlyOnceWith(memberId);
+    expect(dependencies.getCalibrationComparison).toHaveBeenCalledExactlyOnceWith(cohorts);
+    expect(dependencies.getCalibrationComparisonByRepository).toHaveBeenCalledExactlyOnceWith(cohorts);
     expect(dependencies.listSelfWorkCalibrations).toHaveBeenCalledExactlyOnceWith(memberId);
   });
 
-  // The two comparison queries read independent rows, so they are issued
-  // together: awaiting the first before asking for the second puts two
-  // unindexed scans back to back on every request. Both are left in flight
-  // while the issue order is read, then the first is released. Either
-  // rejection still takes the route's 502 — the cases below pin that.
-  it("issues both calibration queries together, while the first is still unanswered", async () => {
-    const started: string[] = [];
-    let releaseComparison: (value: CalibrationComparison) => void = () => {};
-    const dependencies = calibrationDependencies({
-      getCalibrationComparison: vi.fn(() => {
-        started.push("comparison");
-        return new Promise<CalibrationComparison>((resolve) => {
-          releaseComparison = resolve;
-        });
-      }),
-      getCalibrationComparisonByRepository: vi.fn(() => {
-        started.push("byRepository");
-        return Promise.resolve(byRepository);
-      }),
-    });
+  // Both views derive from the one cohort load: the handler reads once and
+  // hands the same result to each projection, so a second selection — or two
+  // loads that could straddle a commit — has no path into the response.
+  it("derives both projections from the single cohort load", async () => {
+    const dependencies = calibrationDependencies();
 
-    const handled = createCalibrationGetHandler(dependencies)(calibrationRequest());
-    await vi.waitFor(() => expect(started).toContain("comparison"));
+    const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());
 
-    expect(started).toEqual(["comparison", "byRepository"]);
-
-    releaseComparison(comparison);
-    const response = await handled;
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      comparison,
-      byRepository,
-      selfWork: [selfWorkCalibration],
-    });
+    expect(dependencies.loadCalibrationCohorts).toHaveBeenCalledExactlyOnceWith(memberId);
+    expect(dependencies.getCalibrationComparison).toHaveBeenCalledExactlyOnceWith(cohorts);
+    expect(dependencies.getCalibrationComparisonByRepository).toHaveBeenCalledExactlyOnceWith(cohorts);
   });
 
-  // The breakdown is part of the answer, not a decoration on it: a member
-  // reading one repository's figure must never be shown a page that silently
-  // dropped the repository it could not read.
-  it("answers a breakdown query failure with the route's 502, without reading the calibrations", async () => {
+  it("answers a cohort load failure with the route's 502, without reading the calibrations", async () => {
     const dependencies = calibrationDependencies({
-      getCalibrationComparisonByRepository: vi.fn().mockRejectedValue(new Error("ledger outage")),
+      loadCalibrationCohorts: vi.fn().mockRejectedValue(new Error("ledger outage")),
     });
 
     const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());
@@ -179,9 +173,16 @@ describe("GET /api/calibration", () => {
     expect(dependencies.listSelfWorkCalibrations).not.toHaveBeenCalled();
   });
 
-  it("answers a comparison query failure with the route's 502, without reading the calibrations", async () => {
+  // The breakdown is part of the answer, not a decoration on it: a member
+  // reading one repository's figure must never be shown a page that silently
+  // dropped the repository it could not read. A derivation throwing is the
+  // same failure as the load failing — the route answers without either view
+  // rather than answering with half of the measurement.
+  it("answers a derivation failure with the route's 502, without reading the calibrations", async () => {
     const dependencies = calibrationDependencies({
-      getCalibrationComparison: vi.fn().mockRejectedValue(new Error("ledger outage")),
+      getCalibrationComparisonByRepository: vi.fn(() => {
+        throw new Error("breakdown outage");
+      }),
     });
 
     const response = await createCalibrationGetHandler(dependencies)(calibrationRequest());

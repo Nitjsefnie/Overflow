@@ -1102,7 +1102,8 @@ describe("dashboard projections", () => {
       ],
     ]);
 
-    const comparison = await getCalibrationComparison("member-1", { sql });
+    const cohorts = await loadCalibrationCohorts("member-1", { sql });
+    const comparison = getCalibrationComparison(cohorts);
 
     expect(comparison).toEqual({
       selfWork: { count: 2, meanDelta: -0.5, medianDelta: -0.5 },
@@ -1262,7 +1263,8 @@ describe("calibration comparison per repository", () => {
       [selfWorkRow(2, harbour, 12, 4, 7)],
     ]);
 
-    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+    const cohorts = await loadCalibrationCohorts("member-1", { sql });
+    const entries = getCalibrationComparisonByRepository(cohorts);
 
     expect(entries.map((entry) => entry.repositoryName)).toEqual([harbour, lighthouse, anchor]);
   });
@@ -1280,7 +1282,8 @@ describe("calibration comparison per repository", () => {
       ],
     ]);
 
-    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+    const cohorts = await loadCalibrationCohorts("member-1", { sql });
+    const entries = getCalibrationComparisonByRepository(cohorts);
 
     expect(entries).toEqual([
       {
@@ -1313,7 +1316,8 @@ describe("calibration comparison per repository", () => {
       [selfWorkRow(2, harbour, 12, 4, 7)],
     ]);
 
-    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+    const cohorts = await loadCalibrationCohorts("member-1", { sql });
+    const entries = getCalibrationComparisonByRepository(cohorts);
 
     const lighthouseEntry = entries.find((entry) => entry.repositoryName === lighthouse);
     expect(lighthouseEntry?.comparison.outsider.count).toBe(0);
@@ -1327,7 +1331,8 @@ describe("calibration comparison per repository", () => {
       [selfWorkRow(7, lighthouse, 20, 4, 7)],
     ]);
 
-    const entries = await getCalibrationComparisonByRepository("member-1", { sql });
+    const cohorts = await loadCalibrationCohorts("member-1", { sql });
+    const entries = getCalibrationComparisonByRepository(cohorts);
 
     const lighthouseEntry = entries.find((entry) => entry.repositoryName === lighthouse);
     expect(lighthouseEntry?.comparison.selfWork.count).toBe(0);
@@ -1338,8 +1343,8 @@ describe("calibration comparison per repository", () => {
   // The breakdown is a partition of the pooled comparison, not a second
   // selection: every pooled pair belongs to exactly one repository entry, and
   // the pooled mean is the per-repository means weighted by their counts. Both
-  // hold only while the two functions read the same rows under the same
-  // predicates, which is what these two properties pin.
+  // views derive from the one selection, so these properties pin the
+  // derivation arithmetic itself.
   describe("as a partition of the pooled comparison", () => {
     const selfWorkRows = [
       selfWorkRow(2, harbour, 10, 5, 6),
@@ -1354,12 +1359,11 @@ describe("calibration comparison per repository", () => {
     ];
 
     async function bothViews() {
-      const pooled = await getCalibrationComparison("member-1", {
+      const cohorts = await loadCalibrationCohorts("member-1", {
         sql: sqlHarness([selfWorkRows, outsiderRows]).sql,
       });
-      const entries = await getCalibrationComparisonByRepository("member-1", {
-        sql: sqlHarness([selfWorkRows, outsiderRows]).sql,
-      });
+      const pooled = getCalibrationComparison(cohorts);
+      const entries = getCalibrationComparisonByRepository(cohorts);
       return { pooled, entries };
     }
 
@@ -1388,15 +1392,15 @@ describe("calibration comparison per repository", () => {
     });
   });
 
-  // The breakdown and the pooled comparison read one shared selection, so the
-  // predicates are identical by construction. What a pin can still lose is the
-  // account the selection binds: placeholder-rendered SQL text cannot see a
-  // bound value — the harness records strings.join("?") — so the captured bound
-  // values are asserted outright. The member's own account id is bound once in
-  // the self-work query (user_id = account) and twice in the outsider one
-  // (debtor_id = account and creditor_id <> account); a selection reading
-  // another member's rows fails here.
-  it("selects both cohorts under the pooled comparison's own predicates", async () => {
+  // The projections derive from the one selection loadCalibrationCohorts
+  // runs, so the predicates are identical by construction. What a pin can
+  // still lose is the account the selection binds: placeholder-rendered SQL
+  // text cannot see a bound value — the harness records strings.join("?") —
+  // so the captured bound values are asserted outright. The member's own
+  // account id is bound once in the self-work query (user_id = account) and
+  // twice in the outsider one (debtor_id = account and creditor_id <>
+  // account); a selection reading another member's rows fails here.
+  it("selects both cohorts under the account's own predicates", async () => {
     const capturedValues = async (
       run: (accountId: string, dependencies: { sql: DashboardSql }) => Promise<unknown>,
     ) => {
@@ -1405,11 +1409,7 @@ describe("calibration comparison per repository", () => {
       return captures.map((capture) => capture.values);
     };
 
-    expect(await capturedValues(getCalibrationComparisonByRepository)).toEqual([
-      ["member-1"],
-      ["member-1", "member-1"],
-    ]);
-    expect(await capturedValues(getCalibrationComparison)).toEqual([
+    expect(await capturedValues(loadCalibrationCohorts)).toEqual([
       ["member-1"],
       ["member-1", "member-1"],
     ]);
