@@ -1,0 +1,67 @@
+# Overflow database backup.
+#
+# Started once per day by overflow-backup.timer. Install as
+# /etc/systemd/system/overflow-backup.service. deploy/backup-restore.md is the
+# procedure: it stands up the least-privilege backup role, the
+# /etc/overflow/backup.env environment file this unit reads, the backup
+# directory and the restore and drill steps.
+
+[Unit]
+Description=Overflow database backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+
+# Runs as root, like the deploy procedure: the backup directory is root-only
+# and the environment file is read by systemd as PID 1, before any drop. The
+# sandbox below is what a root oneshot can afford while still reading the
+# environment file, sh, the client tools and the backup directory.
+EnvironmentFile=/etc/overflow/backup.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/bin/sh /srv/overflow/scripts/db-backup.sh
+
+# Dump files are created 0600 inside the 0700 backup directory.
+UMask=0077
+
+# No privilege elevation, no capabilities: the unit writes one directory and
+# speaks to Postgres, and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only except the backup directory; home
+# directories are unreachable and /tmp and /dev are private.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/backups/overflow
+
+# The host itself is off limits, as in overflow.service.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# May speak IP and local sockets, on this architecture only, with the same
+# EPERM-instead-of-kill seccomp posture as the web service.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow-backup

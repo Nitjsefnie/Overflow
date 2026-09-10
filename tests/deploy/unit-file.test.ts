@@ -304,8 +304,15 @@ describe("Overflow production unit", () => {
     const files = await readdir(resolve("deploy"), { withFileTypes: true });
 
     expect(files.map((file) => file.name).sort(),
-      "deploy/ may contain only README.md, container.md and overflow.service; review additions alongside the install procedure",
-    ).toEqual(["README.md", "container.md", "overflow.service"]);
+      "deploy/ may contain only README.md, backup-restore.md, container.md, overflow.service, overflow-backup.service and overflow-backup.timer; review additions alongside the install procedure",
+    ).toEqual([
+      "README.md",
+      "backup-restore.md",
+      "container.md",
+      "overflow-backup.service",
+      "overflow-backup.timer",
+      "overflow.service",
+    ]);
     expect(files.filter((file) => !file.isFile()).map((file) => file.name),
       "the reviewed deployment artifacts must be regular files",
     ).toEqual([]);
