@@ -678,21 +678,21 @@ describe("PostgreSQL account moderation transitions", () => {
     // sleep trigger below exists, so it does not inherit the pause.
     await sql`update users set role = 'MEMBER' where role = 'MODERATOR' and id not in (${aliceId}, ${bobId})`;
 
-    await sql`
-      create function overflow_test_role_sleep() returns trigger as $$
-      begin
-        perform pg_sleep(1);
-        return new;
-      end
-      $$ language plpgsql
-    `;
-    await sql`
-      create trigger widen_moderator_race before update of role on users
-      for each row when (old.role is distinct from new.role)
-      execute function overflow_test_role_sleep()
-    `;
     let outcomes: PromiseSettledResult<Awaited<ReturnType<typeof store.setModeratorRole>>>[] = [];
     try {
+      await sql`
+        create function overflow_test_role_sleep() returns trigger as $$
+        begin
+          perform pg_sleep(1);
+          return new;
+        end
+        $$ language plpgsql
+      `;
+      await sql`
+        create trigger widen_moderator_race before update of role on users
+        for each row when (old.role is distinct from new.role)
+        execute function overflow_test_role_sleep()
+      `;
       outcomes = await Promise.allSettled([
         store.setModeratorRole({ actorId: aliceId, targetAccountId: bobId, moderator: false }),
         store.setModeratorRole({ actorId: bobId, targetAccountId: aliceId, moderator: false }),
@@ -711,8 +711,8 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(kinds.sort()).toEqual(["invalid_state", "ok"]);
 
     const roster = await store.listModerators();
-    const survivors = roster.filter((entry) => entry.accountId === aliceId || entry.accountId === bobId);
-    expect(survivors).toHaveLength(1);
+    expect(roster).toHaveLength(1);
+    expect([aliceId, bobId]).toContain(roster[0]?.accountId);
   });
 });
 
