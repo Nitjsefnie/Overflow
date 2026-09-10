@@ -28,14 +28,22 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("NODE_ENV=production");
   });
 
-  it("applies migrations before the server starts", () => {
-    expect(dockerfile.indexOf("scripts/migrate.ts")).toBeLessThan(
-      dockerfile.indexOf("next start"),
-    );
+  it("applies migrations before the server starts inside the CMD that executes", () => {
+    const cmd = dockerfile.split("\n").find((line) => line.startsWith("CMD ["));
+    expect(cmd, "the CMD exec-array line").toBeDefined();
+    const migration = "node --env-file-if-exists=.env scripts/migrate.ts";
+    const server = "node node_modules/next/dist/bin/next start";
+    expect(cmd).toContain(migration);
+    expect(cmd).toContain(server);
+    expect(cmd!.indexOf(migration)).toBeLessThan(cmd!.indexOf(server));
   });
 
   it("installs dependencies with the frozen lockfile", () => {
     expect(dockerfile).toContain("--frozen-lockfile");
+  });
+
+  it("builds the bundle on top of the locked dependency stage", () => {
+    expect(dockerfile).toContain("FROM deps AS build");
   });
 
   it("ships the migration step's database client into the runtime stage", () => {

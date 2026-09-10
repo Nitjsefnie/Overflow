@@ -32,6 +32,11 @@ Or let compose build it and bring up the database and app together:
 docker compose --profile app up --build
 ```
 
+On older Docker installs whose compose cannot build (buildx below 0.17.0),
+build the image yourself, tag it `<project>-app` for the project name compose
+derives from the directory, and start with `docker compose --profile app up -d
+--no-build` instead.
+
 The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
 `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `TOKEN_ENCRYPTION_KEY`, `APP_URL`,
