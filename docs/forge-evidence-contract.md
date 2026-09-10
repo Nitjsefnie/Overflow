@@ -19,6 +19,24 @@ a literal key check, that artifact refuted this document's own first description
 the item-16 live leg — the regrade below (five consistent negatives) rests on the
 artifact, not the description.
 
+Amendment, 2026-09-11: item 30 is graded by a follow-up probe and is NOT SUPPLIED. The
+canonical `CI_PIPELINE_SOURCE` table (`doc/ci/jobs/job_rules.md`, fetched live from
+`gitlab-org/gitlab@master` through the repository-files API) enumerates every GitLab CI
+pipeline trigger — `api`, `chat`, `external`, `external_pull_request_event`,
+`merge_request_event`, `ondemand_dast_scan`, `ondemand_dast_validation`, `parent_pipeline`,
+`pipeline`, `push`, `schedule`, `security_orchestration_policy`, `trigger`, `web`, `webide` —
+and none reacts to issue comments; `chat` is ChatOps slash commands over a chat integration,
+not issue comments. Comment events reach only outbound webhooks, delivered to an external
+receiver (`doc/user/project/integrations/webhooks.md`), and receiver configuration is not
+publicly readable (`GET /projects/:id/hooks` unauthenticated returns 401, live). A live raw
+read of `gitlab-org/gitlab`'s own `.gitlab-ci.yml` confirms the in-repo CI-config read
+surface works while offering nothing to detect. Claim automation on GitLab therefore
+necessarily lives outside the repository, and no public, re-fetchable, in-repo artifact can
+evidence it. A GitLab gateway's claim-path verdict is permanently `NOT_CHECKED`: the sponsor
+warning is GitHub-only, recorded on the same terms as decision 2's pricing asymmetry.
+Probe boundary: gitlab.com SaaS and master docs — the step-1 probe's own boundary; the
+pipeline-source grammar is core GitLab, not tier-gated.
+
 Every capability claim in this document matches that probe. Nothing here upgrades a
 DOC verdict to LIVE, and nothing asserts what the probe marks UNVERIFIED.
 
@@ -113,7 +131,7 @@ one.
 | # | Ledger needs | GitHub supplier today | GitLab supplier | Verdict | Access |
 |---|---|---|---|---|---|
 | 29 | Repository lookup, label-catalog existence, webhook create/delete | `src/lib/repositories/register.ts:58-67` gateway seam → `registered_repositories` (001:26-36) | Project lookup live-verified; label-catalog listing returned 401 on one public project while issues returned 200 (unexplained instance policy — gap 8); webhook creation is a maintainer configuration step (DOC) | PARTIAL | Public (lookup); label catalog potentially auth-gated; webhook setup maintainer-only |
-| 30 | Claim-path workflow evidence (assignment automation detection) | `src/lib/github/client.ts:374-468` + `src/lib/domain/claim-path.ts:36-77` (GitHub Actions syntax) | The Actions-YAML detection cannot port as-is (structural); whether GitLab offers equivalent evidence was not probed | UNVERIFIED (GitLab-side equivalent) | — |
+| 30 | Claim-path workflow evidence (assignment automation detection) | `src/lib/github/client.ts:374-468` + `src/lib/domain/claim-path.ts:36-77` (GitHub Actions syntax) | No in-repo evidence surface: the CI_PIPELINE_SOURCE table (fetched live) has no issue-comment pipeline source; comment events are outbound webhooks to external receivers (webhooks doc); receiver configuration is not publicly readable (live 401 on GET /projects/:id/hooks); the .gitlab-ci.yml read surface works (live) and has nothing to detect. Claim automation necessarily lives outside the repository | NOT SUPPLIED (in-repo evidence surface) — a GitLab gateway reports claimPath NOT_CHECKED; the sponsor warning is GitHub-only | — |
 
 ### 2f. Access model (probe, live-verified across four projects)
 
@@ -319,9 +337,10 @@ Numbered for reference from later steps.
     have occurred.
 11. **Claim-path workflow detection is GitHub Actions-specific and cannot port
     as-is** (item 30). The detection's Actions-YAML matching is structural and
-    unportable; whether GitLab offers equivalent evidence is UNVERIFIED.
-    Assignment-automation detection needs a GitLab-native re-derivation, and the
-    assignment-event evidence itself is item 10's gap.
+    unportable, and the 2026-09-11 probe graded the GitLab side NOT SUPPLIED: no
+    in-repo evidence surface for claim automation exists at all. The claim-path
+    check is GitHub-only — a GitLab gateway reports NOT_CHECKED, which warns
+    nothing — and the assignment-event evidence itself is item 10's gap.
 12. **Diff representation differs between forges, so settlement proof hashes are
     never comparable cross-forge.** `proof_sha256` provenance is forge-local by
     construction.
@@ -363,9 +382,14 @@ partially, and any later step designs around them rather than discovering them:
 - **Label-catalog listing is auth-gated on at least one public project** where
   issues answer 200 — unexplained, stable, and a hazard for registration checks
   (item 29, gap 8).
-- **Claim-path workflow detection has no verified GitLab equivalent** (item 30,
-  gap 11): the Actions-YAML matching cannot port structurally, and whether GitLab
-  offers equivalent evidence is UNVERIFIED.
+- **Claim-path workflow detection has no GitLab equivalent** (item 30,
+  gap 11, graded NOT SUPPLIED by the 2026-09-11 probe): the Actions-YAML
+  matching cannot port structurally, and GitLab offers no in-repo evidence
+  surface at all — CI has no issue-comment pipeline source, comment events
+  reach only external webhook receivers, and receiver configuration is not
+  publicly readable. The claim-path check is GitHub-only; a GitLab gateway
+  reports NOT_CHECKED, which warns nothing, exactly as a transient GitHub read
+  failure behaves today.
 - **`GET /users/:id` is sign-in-required** (403, documented): the id→username
   direction is not publicly queryable on gitlab.com, though embedded actor objects
   make it unnecessary for evidence captured at event time.
