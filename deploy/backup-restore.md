@@ -60,7 +60,10 @@ backup role owns nothing and creates nothing.
 
 Its credentials live only in `/etc/overflow/backup.env`
 (root:root `0600`, section (c)). Generate the password with
-`openssl rand -base64 24` and never reuse the application role's password.
+`openssl rand -hex 24` and never reuse the application role's password.
+Hex, not base64: base64 output contains a raw `/` in a large share of
+draws, and a raw `/` in the userinfo ends the authority section of a
+`postgresql://` URL, so the parse garbles; hex characters are URL-safe.
 One accepted exposure: the scripts pass the connection string to the client
 tools as a command-line argument, which is briefly visible in the process
 list to other local processes. The file it is sourced from is `0600` and the
@@ -93,6 +96,10 @@ Put one line in it:
 ```bash
 DATABASE_URL=postgresql://overflow_backup:<password>@127.0.0.1:5432/overflow
 ```
+
+`<password>` is the hex string generated above: hex embeds in the URL
+safely, which is one reason the recipe is `rand -hex` and not `rand
+-base64`.
 
 Then install and enable the units:
 
@@ -217,11 +224,43 @@ bash scripts/db-restore.sh overflow_replacement \
   /var/backups/overflow/overflow-<stamp>.dump
 ```
 
+The restore carries no privileges: `--no-privileges` skips every ACL the
+dump recorded, so the replacement database has neither section (b)'s
+backup-role table SELECT nor its DEFAULT PRIVILEGES, and the first nightly
+backup after the swap would fail with "permission denied" for
+`overflow_backup`. Re-apply section (b)'s grants to the replacement before
+the rename (as superuser, connected to the replacement):
+
+```bash
+sudo -u postgres psql -d overflow_replacement <<'SQL'
+GRANT CONNECT ON DATABASE overflow_replacement TO overflow_backup;
+GRANT USAGE ON SCHEMA public TO overflow_backup;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO overflow_backup;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO overflow_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE overflow_app IN SCHEMA public
+  GRANT SELECT ON TABLES TO overflow_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE overflow_app IN SCHEMA public
+  GRANT SELECT ON SEQUENCES TO overflow_backup;
+SQL
+```
+
+CONNECT is usually already effective — it is granted to `PUBLIC` by default
+and `--no-privileges` revokes nothing — so that line only matters where a
+cluster has revoked it; every statement is idempotent.
+
 The target (`overflow_replacement`) differs from the database the URL names
 (`overflow`), so no `--allow-live` is needed. Verify as in (e.1), with
-`overflow_replacement` in the scratch's place — and exercise the application
-against the replacement before renaming, by pointing a throwaway
-`DATABASE_URL` at it. Then swap the names and start the service:
+`overflow_replacement` in the scratch's place. The smallest real check that
+the replacement serves before the rename — the app role can authenticate,
+and the restored tables answer a read — with the environment already
+loaded from the restore block above:
+
+```bash
+psql "${DATABASE_URL%/*}/overflow_replacement" -tAc "select count(*) from issues"
+```
+
+It must print a row count, not an error. Then swap the names and start the
+service:
 
 ```bash
 sudo -u postgres psql -c "alter database overflow rename to overflow_old_<epoch>"
@@ -257,8 +296,12 @@ END $$;
 ```
 
 plus, if the restoring role is not already the database owner:
-`ALTER DATABASE <name> OWNER TO overflow_app;`. The replacement path (e.2) needs
-none of this.
+`ALTER DATABASE <name> OWNER TO overflow_app;`. Ownership is not the only
+thing a `--no-privileges` restore leaves behind: ACLs are skipped too, so a
+database restored on this path also needs section (b)'s grants re-applied —
+exactly what (e.2) does before its rename — or the nightly backup fails
+with "permission denied" for `overflow_backup`. The replacement path (e.2)
+needs neither repair.
 
 ## (f) RPO and RTO
 
