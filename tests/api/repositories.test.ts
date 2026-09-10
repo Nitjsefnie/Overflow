@@ -9,6 +9,7 @@ import {
   useTrustedOrigin,
 } from "../support/trusted-origin";
 import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
+import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -46,12 +47,19 @@ beforeEach(() => {
   }
 });
 
+// A test whose subject legitimately emits server-side output (the abandoned-webhook
+// diagnostic, issue 451) names the method here before acting and the teardown skips it.
+const consoleOutputAllowed = new Set<string>();
+
 afterEach(() => {
   try {
     for (const method of ["log", "info", "warn", "error", "debug"] as const) {
-      expect(console[method]).not.toHaveBeenCalled();
+      if (!consoleOutputAllowed.has(method)) {
+        expect(console[method]).not.toHaveBeenCalled();
+      }
     }
   } finally {
+    consoleOutputAllowed.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -167,6 +175,31 @@ describe("POST /api/repositories", () => {
       },
     });
     expect(JSON.stringify(body)).not.toContain("access-token-should-not-leak");
+  });
+
+  it("returns a structured 503 when the save failed and the compensating webhook deletion failed too", async () => {
+    consoleOutputAllowed.add("error");
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async (session) =>
+        successfulDependencies(session.user, {
+          createRepositoryError: new Error("database connectivity failure"),
+          deleteWebhookError: new GitHubApiError(500),
+        }),
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "ROLLBACK_INCOMPLETE",
+        message: "The repository registration could not be saved, and the webhook Overflow created for it "
+          + "could not be deleted on GitHub. Nothing was registered; retry the registration, and a later "
+          + "successful registration or unregistration removes the abandoned webhook.",
+      },
+    });
   });
 
   it("returns actionable JSON with HTTP 403 when GitHub denies organization webhook access", async () => {
@@ -1490,6 +1523,10 @@ type SuccessfulDependenciesOptions = {
   unregisterOutcome?: RepositoryUnregisterOutcome;
   /** The error the fake unregister write raises instead of answering. */
   unregisterStoreError?: RepositoryRegistrationError;
+  /** The error the fake registration write raises instead of answering. */
+  createRepositoryError?: unknown;
+  /** The error the fake webhook deletion raises instead of answering. */
+  deleteWebhookError?: unknown;
 };
 
 function successfulDependencies(
@@ -1524,7 +1561,11 @@ function successfulDependencies(
         }
         return { id: 501 };
       },
-      async deleteWebhook() {},
+      async deleteWebhook() {
+        if (options.deleteWebhookError !== undefined) {
+          throw options.deleteWebhookError;
+        }
+      },
     },
     store: {
       async findRepositoryByGitHubId() {
@@ -1575,6 +1616,9 @@ function successfulDependencies(
         return options.catalogChange ?? { changed: false, versionNumber: null, effectiveFrom: null };
       },
       async createRepository(repository) {
+        if (options.createRepositoryError !== undefined) {
+          throw options.createRepositoryError;
+        }
         return {
           id: "repository-id",
           githubRepositoryId: 42,
@@ -1584,6 +1628,11 @@ function successfulDependencies(
           githubWebhookId: 501,
         };
       },
+      async saveAbandonedWebhookCleanup() {},
+      async listAbandonedWebhookCleanups() {
+        return [];
+      },
+      async clearAbandonedWebhookCleanup() {},
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",

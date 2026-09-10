@@ -629,11 +629,93 @@ describe("unregistering a repository against the real registered_repositories co
   // version history for a reactivation's append to continue.
   async function registeredViaStore(scheme: DifficultyScheme = difficultyScheme()): Promise<NewRegisteredRepository> {
     const submission = newRepository({ sponsorId: await sponsor(), difficultyScheme: scheme });
+
     await expect(store.createRepository(submission)).resolves.toMatchObject({
       githubRepositoryId: submission.githubRepositoryId,
     });
     return submission;
   }
+
+  describe("the abandoned webhook cleanup records the drain reads", () => {
+    // The cleanup table is shared across the file's tests, so every assertion here scopes
+    // to the rows its own repository ids produced and every test leaves its rows cleared.
+    it("stores, lists oldest first, and clears a cleanup record against the migrated schema", async () => {
+      const githubRepositoryId = externalId++;
+      const webhookId = externalId++;
+      await store.saveAbandonedWebhookCleanup({
+        githubRepositoryId,
+        ownerName: "drain/repo",
+        webhookId,
+        createdAt: "2020-01-02T03:04:05.000Z",
+      });
+      await store.saveAbandonedWebhookCleanup({
+        githubRepositoryId: githubRepositoryId + 1,
+        ownerName: "drain/repo-2",
+        webhookId,
+        createdAt: "2020-01-01T00:00:00.000Z",
+      });
+
+      const records = await store.listAbandonedWebhookCleanups();
+      expect(records.filter(({ githubRepositoryId: id }) => id >= githubRepositoryId)).toEqual([
+        {
+          githubRepositoryId: githubRepositoryId + 1,
+          ownerName: "drain/repo-2",
+          webhookId,
+          createdAt: "2020-01-01T00:00:00.000Z",
+        },
+        {
+          githubRepositoryId,
+          ownerName: "drain/repo",
+          webhookId,
+          createdAt: "2020-01-02T03:04:05.000Z",
+        },
+      ]);
+
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+      const remaining = await store.listAbandonedWebhookCleanups();
+      expect(remaining.filter(({ githubRepositoryId: id }) => id >= githubRepositoryId)).toEqual([
+        {
+          githubRepositoryId: githubRepositoryId + 1,
+          ownerName: "drain/repo-2",
+          webhookId,
+          createdAt: "2020-01-01T00:00:00.000Z",
+        },
+      ]);
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId + 1, webhookId);
+    });
+
+    it("upserts on the same repository and webhook id and tolerates clearing an absent record", async () => {
+      const githubRepositoryId = externalId++;
+      const webhookId = externalId++;
+      const record = {
+        githubRepositoryId,
+        ownerName: "drain/repo",
+        webhookId,
+        createdAt: "2020-01-02T03:04:05.000Z",
+      };
+      await store.saveAbandonedWebhookCleanup(record);
+      await store.saveAbandonedWebhookCleanup({
+        ...record,
+        ownerName: "drain/renamed",
+        createdAt: "2021-02-03T04:05:06.000Z",
+      });
+
+      const records = await store.listAbandonedWebhookCleanups();
+      expect(records.filter(({ githubRepositoryId: id }) => id === githubRepositoryId)).toEqual([
+        {
+          githubRepositoryId,
+          ownerName: "drain/renamed",
+          webhookId,
+          createdAt: "2021-02-03T04:05:06.000Z",
+        },
+      ]);
+
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+      const remaining = await store.listAbandonedWebhookCleanups();
+      expect(remaining.filter(({ githubRepositoryId: id }) => id === githubRepositoryId)).toEqual([]);
+      await expect(store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId)).resolves.toBeUndefined();
+    });
+  });
 });
 
 type UnregistrationRow = {

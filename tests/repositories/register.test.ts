@@ -15,6 +15,7 @@ import {
   RepositoryRegistrationError,
   RepositoryWebhookIdConflictError,
   changeRepositoryCatalog,
+  drainAbandonedWebhooks,
   parseGitHubRepository,
   registerRepository,
   unregisterRepository,
@@ -839,6 +840,166 @@ describe("unregistering a registered repository", () => {
   });
 });
 
+describe("abandoning the webhook a failed registration created", () => {
+  // The compensating delete is no longer best-effort: the cleanup record is
+  // written durably BEFORE the deletion is attempted, so even a webhook whose
+  // deletion never completes stays known to Overflow and reachable by the drain.
+  it("records the cleanup before attempting the deletion when both the save and the delete fail", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      databaseFailure: true,
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+    ]);
+    const diagnostic = String(consoleError.mock.calls[0]?.[0]);
+    expect(diagnostic).toContain("octo/overflow");
+    expect(diagnostic).toContain("501");
+    expect(diagnostic).toContain("retained");
+  });
+
+  it("surfaces ROLLBACK_INCOMPLETE in place of the conflict when the deletion of the abandoned webhook fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      storeClaimedOwnerName: "octo/overflow",
+      deleteWebhookFailure: new GitHubApiError(403),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+    ]);
+    const diagnostic = String(consoleError.mock.calls[0]?.[0]);
+    expect(diagnostic).toContain("octo/overflow");
+    expect(diagnostic).toContain("501");
+    expect(diagnostic).toContain("retained");
+  });
+
+  it("clears the cleanup record and surfaces the original conflict when the compensating deletion succeeds", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({ storeClaimedOwnerName: "octo/overflow" });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+      "clearAbandonedWebhookCleanup:501",
+    ]);
+    expect(harness.deletedWebhookIds).toEqual([501]);
+  });
+
+  it("keeps the original mapping and reports the missing record when saving the cleanup record fails but the deletion succeeds", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      databaseFailure: true,
+      saveAbandonedFailure: new Error("the cleanup insert failed"),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message: "Unable to save the repository registration.",
+    });
+    expect(harness.deletedWebhookIds).toEqual([501]);
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+      "clearAbandonedWebhookCleanup:501",
+    ]);
+    const diagnostic = String(consoleError.mock.calls[0]?.[0]);
+    expect(diagnostic).toContain("octo/overflow");
+    expect(diagnostic).toContain("501");
+    expect(diagnostic).toContain("could not be saved");
+  });
+
+  it("surfaces ROLLBACK_INCOMPLETE when the absent-row conflict's compensating deletion fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      storeRejectsAsDuplicateId: true,
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+    ]);
+    const diagnostic = String(consoleError.mock.calls[0]?.[0]);
+    expect(diagnostic).toContain("octo/overflow");
+    expect(diagnostic).toContain("501");
+    expect(diagnostic).toContain("retained");
+  });
+});
+
+describe("draining the abandoned webhook cleanup records", () => {
+  function cleanupRecord(webhookId: number, createdAt: string) {
+    return {
+      githubRepositoryId: 42,
+      ownerName: "octo/overflow",
+      webhookId,
+      createdAt,
+    };
+  }
+
+  it("clears a record whose active registration holds the same webhook id without deleting anything", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.deleteWebhookReferences).toEqual([]);
+  });
+
+  it("deletes the recorded webhook through the stored owner path and clears the record when the registration is unregistered", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      existingUnregistered: true,
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.deletedWebhookIds).toEqual([501]);
+    expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "overflow" }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+  });
+
+  it("keeps the record when the deletion fails without a proven 404", async () => {
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      deleteWebhookFailure: new GitHubApiError(403),
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.abandonedClears).toEqual([]);
+  });
+
+  it("reads a proven 404 as deleted and clears the record", async () => {
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z")],
+      deleteWebhookFailure: new GitHubApiError(404),
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+  });
+});
+
 type HarnessOptions = {
   actorRole?: "MEMBER" | "MODERATOR";
   actorEnforcementState?: "ACTIVE" | "UNDER_AUDIT" | "WARNED" | "RECALIBRATING" | "BANNED";
@@ -858,6 +1019,17 @@ type HarnessOptions = {
   stateLookupFailure?: unknown;
   /** The rejection the fake webhook deletion raises (after recording the call). */
   deleteWebhookFailure?: unknown;
+  /** What the store answers for the drain's list of abandoned-webhook cleanup records. */
+  abandonedRecords?: Array<{
+    githubRepositoryId: number;
+    ownerName: string;
+    webhookId: number;
+    createdAt: string;
+  }>;
+  /** The rejection the fake cleanup-record write raises (after recording the call). */
+  saveAbandonedFailure?: unknown;
+  /** The rejection the fake cleanup-record clear raises (after recording the call). */
+  clearAbandonedFailure?: unknown;
   /** The label names the fake GitHub answers `listRepositoryLabels` with. */
   repositoryLabels?: readonly string[];
   webhookFailure?: boolean;
@@ -876,6 +1048,7 @@ type HarnessOptions = {
 function createHarness(options: HarnessOptions = {}) {
   const githubCalls: string[] = [];
   const deletedWebhookIds: number[] = [];
+  const deleteWebhookReferences: Array<{ owner: string; name: string }> = [];
   const duplicateLookupIds: number[] = [];
   const stateLookupIds: number[] = [];
   const stateLookupsByOwnerName: string[] = [];
@@ -883,6 +1056,13 @@ function createHarness(options: HarnessOptions = {}) {
   const callOrder: string[] = [];
   const scheduledRepositoryIds: string[] = [];
   const workflowReadRepositoryCounts: number[] = [];
+  const abandonedSaves: Array<{
+    githubRepositoryId: number;
+    ownerName: string;
+    webhookId: number;
+    createdAt: string;
+  }> = [];
+  const abandonedClears: Array<{ githubRepositoryId: number; webhookId: number }> = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const existingState = (): RepositoryRegistrationState | null =>
@@ -927,8 +1107,9 @@ function createHarness(options: HarnessOptions = {}) {
         }
         return { id: 501 };
       },
-      async deleteWebhook(_repository, webhookId) {
+      async deleteWebhook(repository, webhookId) {
         callOrder.push(`deleteWebhook:${webhookId}`);
+        deleteWebhookReferences.push(repository);
         if (options.deleteWebhookFailure !== undefined) {
           throw options.deleteWebhookFailure;
         }
@@ -969,6 +1150,23 @@ function createHarness(options: HarnessOptions = {}) {
       },
       async appendDifficultySchemeVersion() {
         return null;
+      },
+      async saveAbandonedWebhookCleanup(record) {
+        callOrder.push(`saveAbandonedWebhookCleanup:${record.webhookId}`);
+        if (options.saveAbandonedFailure !== undefined) {
+          throw options.saveAbandonedFailure;
+        }
+        abandonedSaves.push(record);
+      },
+      async listAbandonedWebhookCleanups() {
+        return options.abandonedRecords ?? [];
+      },
+      async clearAbandonedWebhookCleanup(githubRepositoryId, webhookId) {
+        callOrder.push(`clearAbandonedWebhookCleanup:${webhookId}`);
+        if (options.clearAbandonedFailure !== undefined) {
+          throw options.clearAbandonedFailure;
+        }
+        abandonedClears.push({ githubRepositoryId, webhookId });
       },
       async createRepository(repository) {
         createdRepositories.push(repository);
@@ -1015,12 +1213,15 @@ function createHarness(options: HarnessOptions = {}) {
     dependencies,
     githubCalls,
     deletedWebhookIds,
+    deleteWebhookReferences,
     duplicateLookupIds,
     stateLookupIds,
     stateLookupsByOwnerName,
     unregisterInputs,
     callOrder,
     createdRepositories,
+    abandonedSaves,
+    abandonedClears,
     scheduledRepositoryIds,
     workflowReadRepositoryCounts,
   };

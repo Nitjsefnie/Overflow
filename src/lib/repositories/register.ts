@@ -66,6 +66,19 @@ export type RepositoryRegistrationGateway = {
   listWorkflowFiles(repository: GitHubRepositoryReference): Promise<ClaimPathEvidence[]>;
 };
 
+/**
+ * One webhook on GitHub that Overflow may have orphaned: a registration created
+ * it and then failed to store the registration. The record is written before the
+ * compensating deletion is attempted, so the webhook id survives every failure
+ * combination, and the drain works from it until the hook is proven gone.
+ */
+export type AbandonedWebhookCleanup = {
+  githubRepositoryId: number;
+  ownerName: string;
+  webhookId: number;
+  createdAt: string;
+};
+
 export type RepositoryRegistrationStore = {
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null>;
   createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null>;
@@ -96,6 +109,16 @@ export type RepositoryRegistrationStore = {
    * for the whole decision, so a concurrent reactivation cannot interleave.
    */
   unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome>;
+  /**
+   * Durably records a webhook Overflow created and may have orphaned, before the
+   * compensating deletion is attempted. Re-saving the same GitHub repository and
+   * webhook pair rewrites the earlier record.
+   */
+  saveAbandonedWebhookCleanup(record: AbandonedWebhookCleanup): Promise<void>;
+  /** Every recorded abandoned webhook, oldest first, so a drain works through them in order. */
+  listAbandonedWebhookCleanups(): Promise<AbandonedWebhookCleanup[]>;
+  /** Removes the record once the webhook is proven gone; clearing an absent record resolves. */
+  clearAbandonedWebhookCleanup(githubRepositoryId: number, webhookId: number): Promise<void>;
 };
 
 export type RepositoryCatalogChange = {
@@ -129,7 +152,7 @@ export type RepositoryUnregisterApiResult = {
 
 export class RepositoryRegistrationError extends Error {
   public constructor(
-    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "UPSTREAM_FAILURE",
+    public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "ROLLBACK_INCOMPLETE" | "UPSTREAM_FAILURE",
     message: string,
   ) {
     super(message);
@@ -246,11 +269,22 @@ export async function registerRepository(
     });
   } catch (error) {
     // Every route out of this catch abandons the registration, so the webhook this call
-    // created has no repository to deliver to. The try holds only the store call, so deleting
-    // the webhook once here covers every failure it can raise, including one raised as a
-    // RepositoryRegistrationError by a store, decorator or retry wrapper the interface does
-    // not constrain.
-    await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
+    // created has no repository to deliver to. The try holds only the store call, so
+    // compensating for the webhook once here covers every failure the store can raise,
+    // including one raised as a RepositoryRegistrationError by a store, decorator or retry
+    // wrapper the interface does not constrain. The cleanup record is written before the
+    // deletion is attempted (issue 451), so even a webhook whose deletion never completes
+    // stays known to Overflow and reachable by the drain.
+    const abandonment = await abandonCreatedWebhook(
+      dependencies,
+      submittedRepository,
+      repository.id,
+      repository.fullName,
+      webhook.id,
+    );
+    if (!abandonment.proven) {
+      throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
+    }
 
     // The submitted repository is genuinely absent from the table: another registration holds
     // the owner/name path, so the insert failed on that unique constraint rather than on the
@@ -299,7 +333,18 @@ export async function registerRepository(
   // moderation reactivation may bring back, never a resubmission. Both are the same
   // answer to the sponsor: this GitHub repository is already registered.
   if (created === null) {
-    await deleteWebhookBestEffort(dependencies.github, submittedRepository, webhook.id);
+    // The registration did not complete, so the webhook just created has no repository to
+    // deliver to; the same durable-before-delete compensation applies as in the catch above.
+    const abandonment = await abandonCreatedWebhook(
+      dependencies,
+      submittedRepository,
+      repository.id,
+      repository.fullName,
+      webhook.id,
+    );
+    if (!abandonment.proven) {
+      throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
+    }
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
@@ -321,7 +366,75 @@ export async function registerRepository(
     claimPath = "NOT_CHECKED";
   }
 
+  // The registration stands, so this is the moment a webhook recorded for cleanup by an
+  // earlier failed registration can be retired: drain the cleanup table best-effort before
+  // answering, so a retry the sponsor makes after a ROLLBACK_INCOMPLETE also cleans up.
+  await drainAbandonedWebhooks(dependencies);
+
   return { ...created, initialImportScheduled, claimPath };
+}
+
+/**
+ * Best-effort cleanup of webhooks Overflow created and may have orphaned — a
+ * registration created the hook and then failed to store the registration.
+ * Every record the cleanup table holds is worked through: one whose active
+ * registration came back holding the same webhook id only has its record
+ * cleared (the hook is wanted again), every other one is deleted through the
+ * stored owner path — a GitHub 404 counts as proven, the hook is already gone
+ * — and its record cleared. A webhook that cannot be proven deleted keeps its
+ * record for the next drain. Never throws: the drain must never disturb the
+ * registration or unregistration that just succeeded.
+ */
+export async function drainAbandonedWebhooks(
+  dependencies: Pick<RepositoryRegistrationDependencies, "github" | "store">,
+): Promise<void> {
+  let records: AbandonedWebhookCleanup[];
+  try {
+    records = await dependencies.store.listAbandonedWebhookCleanups();
+  } catch {
+    return;
+  }
+
+  for (const record of records) {
+    try {
+      const state = await dependencies.store.findRepositoryRegistrationState(record.githubRepositoryId);
+      if (
+        state !== null &&
+        state.unregisteredAt === null &&
+        state.repository.githubWebhookId === record.webhookId
+      ) {
+        // An active registration came back holding this exact hook: it is wanted again.
+        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.webhookId);
+        continue;
+      }
+
+      let reference: GitHubRepositoryReference;
+      try {
+        reference = parseGitHubRepository(record.ownerName);
+      } catch {
+        // Nothing can address a hook recorded under a path GitHub cannot hand back; keep the
+        // record so the failure stays visible in the table rather than silently dropped.
+        continue;
+      }
+
+      try {
+        await dependencies.github.deleteWebhook(reference, record.webhookId);
+      } catch (error) {
+        if (!(error instanceof GitHubApiError && error.status === 404)) {
+          // Not proven — keep the record and let a later drain retry the deletion.
+          continue;
+        }
+      }
+
+      try {
+        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.webhookId);
+      } catch {
+        // The record staying is safe: the next drain re-checks the registration state first.
+      }
+    } catch {
+      // One record's failure must not stop the drain from working through the rest.
+    }
+  }
 }
 
 /**
@@ -402,6 +515,11 @@ export async function unregisterRepository(
   if (outcome.kind === "FORBIDDEN") {
     throw new RepositoryRegistrationError("FORBIDDEN", "Only the repository's sponsor can unregister it.");
   }
+
+  // The unregistration stands, so this is the other moment the cleanup table can be
+  // drained best-effort (issue 451): any webhook an earlier failed registration recorded
+  // is retired here, and the drain never disturbs the answer that unregistration gave.
+  await drainAbandonedWebhooks(dependencies);
 
   return {
     repository: outcome.repository,
@@ -751,14 +869,79 @@ async function findExistingRepository(
   }
 }
 
-async function deleteWebhookBestEffort(
-  github: RepositoryRegistrationGateway,
+const rollbackIncompleteMessage =
+  "The repository registration could not be saved, and the webhook Overflow created for it "
+  + "could not be deleted on GitHub. Nothing was registered; retry the registration, and a later "
+  + "successful registration or unregistration removes the abandoned webhook.";
+
+/**
+ * The abandonment sequence for a webhook a failed registration created (issue 451).
+ *
+ * The cleanup record is written FIRST — durably, before anything can forget the id. Only
+ * then is the deletion attempted; a GitHub 404 counts as proven, the hook is already gone.
+ * When the deletion is proven, the record is cleared (a clear failure is tolerable: the
+ * record stays and the drain re-checks before deleting). When the deletion is not proven,
+ * or the record itself could not be saved, a bounded diagnostic names the owner, the hook
+ * id, and whether the cleanup record is retained — and the caller answers
+ * ROLLBACK_INCOMPLETE instead of the original save failure, because the orphaned webhook
+ * is the actionable state.
+ */
+async function abandonCreatedWebhook(
+  dependencies: RepositoryRegistrationDependencies,
   repository: GitHubRepositoryReference,
+  githubRepositoryId: number,
+  ownerName: string,
   webhookId: number,
-): Promise<void> {
+): Promise<{ proven: boolean; recordSaved: boolean }> {
+  const record: AbandonedWebhookCleanup = {
+    githubRepositoryId,
+    ownerName,
+    webhookId,
+    createdAt: new Date().toISOString(),
+  };
+  let recordSaved = true;
   try {
-    await github.deleteWebhook(repository, webhookId);
+    await dependencies.store.saveAbandonedWebhookCleanup(record);
   } catch {
-    // The database error remains the safe response; a later reconciliation can retry deletion.
+    recordSaved = false;
   }
+
+  let proven = false;
+  try {
+    await dependencies.github.deleteWebhook(repository, webhookId);
+    proven = true;
+  } catch (error) {
+    if (error instanceof GitHubApiError && error.status === 404) {
+      proven = true;
+    }
+  }
+
+  if (!proven || !recordSaved) {
+    if (recordSaved) {
+      console.error(
+        `The webhook ${webhookId} created for ${ownerName} could not be proven deleted; `
+          + "the cleanup record is retained for a later drain.",
+      );
+    } else if (proven) {
+      console.error(
+        `The cleanup record for the webhook ${webhookId} created for ${ownerName} could not be saved; `
+          + "the webhook was deleted, but nothing records it for a later drain.",
+      );
+    } else {
+      console.error(
+        `The cleanup record for the webhook ${webhookId} created for ${ownerName} could not be saved, `
+          + "and the webhook could not be proven deleted; nothing records it for a later drain.",
+      );
+    }
+  }
+
+  if (proven) {
+    try {
+      await dependencies.store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+    } catch {
+      // The record staying is safe: the drain re-checks the registration state before deleting.
+    }
+  }
+
+  return { proven, recordSaved };
 }

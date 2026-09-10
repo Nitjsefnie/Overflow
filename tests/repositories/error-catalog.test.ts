@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GitHubApiError } from "@/lib/github/errors";
 import type { GitHubRepository } from "@/lib/github/types";
 import type {
@@ -15,6 +15,12 @@ import {
 } from "@/lib/repositories/register";
 
 const claimedOwnerName = "octo/overflow";
+
+// The abandonment path logs a bounded diagnostic when the webhook cannot be proven
+// deleted, which is server-side state no catalog reader consumes; keep the run output clean.
+beforeEach(() => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
 
 // The section publishing what POST /api/repositories answers. Scoping to it is half of what makes
 // this a control: a string the token-minting catalog publishes documents a different endpoint.
@@ -40,6 +46,9 @@ const invalidInputStatus = "400";
 
 // src/app/api/repositories/route.ts answers an error coded UPSTREAM_FAILURE with this status.
 const upstreamFailureStatus = "502";
+
+// src/app/api/repositories/route.ts answers an error coded ROLLBACK_INCOMPLETE with this status.
+const rollbackIncompleteStatus = "503";
 
 // The gateway calls a GitHub failure can interrupt before the store is touched, and the step text
 // each surfaced message names — the value the published row carries as <step>.
@@ -314,6 +323,21 @@ const registrationRefusals: RegistrationFailure[] = [
     raise: (dependencies) => {
       dependencies.store.createRepository = async () => {
         throw new Error("the store is unreachable");
+      };
+    },
+    publishes: (surfaced: string) => (cell: string) => cell === surfaced,
+  },
+  {
+    // Issue 451: the save failure triggers a compensating webhook deletion, and the
+    // surfaced answer names the incomplete rollback, not the save failure that started it.
+    what: "a store that cannot save the registration and a GitHub that will not delete the abandoned webhook",
+    status: rollbackIncompleteStatus,
+    raise: (dependencies) => {
+      dependencies.store.createRepository = async () => {
+        throw new Error("the store is unreachable");
+      };
+      dependencies.github.deleteWebhook = async () => {
+        throw new GitHubApiError(500);
       };
     },
     publishes: (surfaced: string) => (cell: string) => cell === surfaced,
@@ -637,6 +661,11 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async appendDifficultySchemeVersion() {
         return null;
       },
+      async saveAbandonedWebhookCleanup() {},
+      async listAbandonedWebhookCleanups() {
+        return [];
+      },
+      async clearAbandonedWebhookCleanup() {},
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",

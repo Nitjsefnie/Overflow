@@ -6,6 +6,7 @@ import {
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
+  AbandonedWebhookCleanup,
   NewRegisteredRepository,
   RegisteredRepository,
   RepositoryCatalogChange,
@@ -38,6 +39,13 @@ type RepositoryStateRow = RepositoryRow & {
 
 type OAuthTokenRow = {
   encrypted_oauth_token: Buffer | null;
+};
+
+type AbandonedWebhookCleanupRow = {
+  github_repository_id: number | string;
+  owner_name: string;
+  webhook_id: number | string;
+  created_at: Date | string;
 };
 
 type EnforcementStateRow = {
@@ -390,6 +398,43 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
     return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), tokenEncryptionKey);
   }
+
+  // The abandoned-webhook cleanup surface (issue 451): the record written before
+  // the compensating delete is attempted, the queue the drain reads, and the
+  // removal once the hook is proven gone. Kept as one contiguous block so a
+  // concurrent edit of this file lands beside it, not inside it.
+
+  public async saveAbandonedWebhookCleanup(record: AbandonedWebhookCleanup): Promise<void> {
+    await this.sql`
+      insert into abandoned_webhook_cleanups
+        (github_repository_id, owner_name, webhook_id, created_at)
+      values
+        (${record.githubRepositoryId}, ${record.ownerName}, ${record.webhookId}, ${record.createdAt}::timestamptz)
+      on conflict (github_repository_id, webhook_id) do update set
+        owner_name = excluded.owner_name,
+        created_at = excluded.created_at
+    `;
+  }
+
+  public async listAbandonedWebhookCleanups(): Promise<AbandonedWebhookCleanup[]> {
+    const rows = await this.sql<AbandonedWebhookCleanupRow[]>`
+      select
+        github_repository_id,
+        owner_name,
+        webhook_id,
+        created_at
+      from abandoned_webhook_cleanups
+      order by created_at asc, github_repository_id asc, webhook_id asc
+    `;
+    return rows.map(toAbandonedWebhookCleanup);
+  }
+
+  public async clearAbandonedWebhookCleanup(githubRepositoryId: number, webhookId: number): Promise<void> {
+    await this.sql`
+      delete from abandoned_webhook_cleanups
+      where github_repository_id = ${githubRepositoryId} and webhook_id = ${webhookId}
+    `;
+  }
 }
 
 function toRegisteredRepository(row: RepositoryRow): RegisteredRepository {
@@ -407,6 +452,15 @@ function toRegistrationState(row: RepositoryStateRow): RepositoryRegistrationSta
   return {
     repository: toRegisteredRepository(row),
     unregisteredAt: row.unregistered_at === null ? null : timestampToIso(row.unregistered_at),
+  };
+}
+
+function toAbandonedWebhookCleanup(row: AbandonedWebhookCleanupRow): AbandonedWebhookCleanup {
+  return {
+    githubRepositoryId: toSafeInteger(row.github_repository_id),
+    ownerName: row.owner_name,
+    webhookId: toSafeInteger(row.webhook_id),
+    createdAt: timestampToIso(row.created_at),
   };
 }
 
