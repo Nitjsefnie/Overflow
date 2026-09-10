@@ -15,8 +15,10 @@ taken back; the sixth lets a shutdown report itself finished while work the
 pool accepted is neither run nor refused. The shutdown and reconnect repairs
 share the first section below; the remaining groups each have their own.
 
-`git` renders the patch as fourteen hunks: nine in `src/connection.js`, four
-in `src/index.js`, and one in `src/queue.js`. Some carry several repairs:
+`git` renders the patch as fifteen hunks: nine in `src/connection.js`, four
+in `src/index.js`, one in `src/queue.js`, and one in `cjs/src/index.js` — the
+CJS load guard, which repairs nothing and has its own section below. Some
+`src/` hunks carry several repairs:
 `reserve()`'s refusal and rejection wrapper share a hunk with `release()`'s
 ownership guard and shutdown termination branch. The synchronous
 `endRequested` assignment shares a hunk with the backlog drain in `end()`;
@@ -669,9 +671,54 @@ not a check. A future edit that queues work after `end()` has drained would
 bring it back, and the only route that still can is `reserve()`, which the hunk
 above closes.
 
+### `require('postgres')` throws instead of silently running the stock client
+
+One hunk, in the package's prebuilt CommonJS entry `cjs/src/index.js` — the
+first hunk in the patch that repairs nothing. The package's `exports` map
+routes its two consumer languages to different builds: `import` takes the
+`import` condition to `src/index.js`, the build every repair above rewrites,
+while `require('postgres')` takes the `default` condition to the stock
+transpiled copy in `cjs/src/index.js`. Until this hunk such a require
+**succeeded**: it loaded the stock client with every repair above absent, and
+told nobody. Nothing in this repository loads postgres through `require` —
+the tree is `"type": "module"` and the only occurrence on it is the guard
+suite's probe — but the hazard was never a crash. It was a silent wrong
+client: a dependency, a tool, or a one-off script reaching postgres through
+`require` would have run unpatched, with nothing to notice but behaviour that
+contradicts the db suites.
+
+The throw beats the two alternatives. Deleting the prebuilt entry — removing
+the file or aiming the `default` condition at nothing — fails a consumer with
+a `MODULE_NOT_FOUND` that says nothing about the patch, the constraint, or the
+fix; the thrown error says all three, and points at this README. Patching the
+repairs into the CJS copy instead would commit a second, transpiled copy of
+every `src/` hunk above and hold it in byte-for-byte agreement with the
+originals — a second surface to drift, guarded by nothing, since every db
+suite imports the ESM build. The `cf/` copy stays untouched: its `workerd`
+export condition is unreachable in Node, so there is no route to it from any
+consumer this repository could run — not the accidental route `require` was —
+and the same second-copy argument applies to it.
+
+`tests/deploy/postgres-patch.test.ts` holds the chain, updated for this hunk.
+The installed-surface check derives its file set from the patch, so it pins
+the guard hunk against the installed `cjs/src/index.js` exactly as it pins the
+`src/` repairs; the end-to-end probe requires the CJS entry to fail loudly:
+`node -e "require('postgres')"` must exit nonzero with output naming the
+guard. The correct-proof recipe, updated:
+
+- `readlink -f node_modules/postgres` resolves into a store directory whose
+  `_patch_hash=` equals the `hash:` under `patchedDependencies` in
+  `pnpm-lock.yaml`, which equals the patch file's sha256;
+- the hunks — fifteen — are present verbatim in the installed files the patch
+  names; and
+- the require probe throws.
+
+A `_patch_hash=` suffix alone still proves *a* patch, not this one.
+
 ### Housekeeping
 
-- **Only the ESM build is patched.** All fourteen hunks land in `src/`. The package
+- **The repairs land only in the ESM build.** Fourteen of the fifteen hunks
+  land in `src/`; the fifteenth is the CJS load guard (the section above). The package
   also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
   query in the slot in `error()`, leave `closed()` without the settle and with
   the stale `errorResponse`, still take the connect-phase early return above
@@ -688,10 +735,10 @@ above closes.
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
   into every server chunk that reaches the `postgres` client, the edge chunk
-  included. Reaching `postgres` through `require` (`default` →
-  `cjs/src/index.js`) or under the `workerd` condition (`cf/src/index.js`)
-  would silently get the unpatched client, so re-check this before moving
-  anything that talks to the database onto either route.
+  included. A `require('postgres')` now throws by the guard above instead of
+  silently running the stock client. The `workerd` route (`cf/src/index.js`)
+  would still silently get the unpatched client — unreachable in Node, so
+  re-check this before moving anything that talks to the database onto it.
 - **The patch file and `pnpm-lock.yaml` move together.** The lockfile pins the
   patch by content hash, so hand-editing the patch without re-running
   `pnpm patch-commit` makes `pnpm install --frozen-lockfile` fail.
