@@ -138,10 +138,10 @@ stays empty until an image is pushed, so the registry digest — the strongest
 immutable identity — exists only after a maintainer publishes one; until
 then the image ID is the identity rollback selects. **Signatures and
 attestations**: nothing here signs an image or attaches build attestations.
-**Digest updates**: these pins go stale the moment a base image is rebuilt
-upstream, and refreshing them mechanically (automated digest bumps, CI-side
-base pinning beyond the verify job's pinned service image) is pending
-coordination, tracked in the pull request that landed these pins.
+**Automated digest bumps**: these pins go stale the moment a base image is
+rebuilt upstream, and nothing here refreshes them mechanically — bumping a
+digest is a deliberate hand edit of the Dockerfile, the compose file, or the
+CI service image until an automated digest-bump workflow exists.
 
 ## The default path
 
