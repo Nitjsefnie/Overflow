@@ -267,6 +267,56 @@ describe("POST /api/mcp", () => {
   });
 });
 
+describe("authentication discovery for a credential-less request", () => {
+  it("answers a POST with no Origin header and no Cookie with 401 pointing at the protected-resource metadata", async () => {
+    const dependencies = endpointDependencies();
+    // A real MCP client sends no Origin header and no credential on its first
+    // probe, which used to surface only the origin guard's bare 403. The
+    // discovery answer replaces that 403, and nothing downstream may run.
+    const request = new Request(`${trustedOrigin}/api/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: rpc(1, "initialize"),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe(
+      `Bearer resource_metadata="${trustedOrigin}/.well-known/oauth-protected-resource"`,
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Provide a bearer API token." },
+    });
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+
+  it("keeps the origin guard's 403 for the same request when it carries a session cookie", async () => {
+    const dependencies = endpointDependencies();
+    // The cookie is what a browser attaches for its own session, so the origin
+    // guard's 403 is the CSRF defense and the discovery answer must not replace it.
+    const request = new Request(`${trustedOrigin}/api/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "authjs.session-token=x",
+      },
+      body: rpc(1, "initialize"),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+});
+
 describe("transport-to-wrapped-route composition", () => {
   it("surfaces the wrapped moderation route's origin refusal as a failed tool result for a cookie-authenticated write", async () => {
     const { endpoint } = auditOpenComposition();
