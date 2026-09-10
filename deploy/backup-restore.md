@@ -6,6 +6,14 @@ held no backup of that database anywhere, and no restore had ever been
 performed. The `overflow.service` unit and the deployment procedure live in
 [README.md](README.md); this file is only about the database.
 
+Values used throughout: the database is `overflow` (the name in the app's
+`DATABASE_URL`); the application **role** on this host is `overflow_app` —
+not `overflow`, which is only the database's name. The role name is
+host-specific: it is whichever login role owns the application's tables,
+the one whose credentials the app's `DATABASE_URL` carries. On another
+host substitute that role everywhere below; every command and SQL block
+here runs verbatim on this one.
+
 ## (a) What is backed up
 
 The whole `overflow` database, dumped with `pg_dump --format=custom` by
@@ -39,13 +47,13 @@ then, connected to the `overflow` database (`\c overflow`):
 GRANT USAGE ON SCHEMA public TO overflow_backup;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO overflow_backup;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO overflow_backup;
-ALTER DEFAULT PRIVILEGES FOR ROLE overflow IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE overflow_app IN SCHEMA public
   GRANT SELECT ON TABLES TO overflow_backup;
-ALTER DEFAULT PRIVILEGES FOR ROLE overflow IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE overflow_app IN SCHEMA public
   GRANT SELECT ON SEQUENCES TO overflow_backup;
 ```
 
-The default privileges name `FOR ROLE overflow` because migrations create new
+The default privileges name `FOR ROLE overflow_app` because migrations create new
 tables as the application role, so grants that only cover existing objects go
 stale at the next migration; the `FOR ROLE` form covers future objects. The
 backup role owns nothing and creates nothing.
@@ -200,7 +208,7 @@ application role**, using its own `DATABASE_URL`:
 production shape, so this path needs no ownership fixups at all.
 
 ```bash
-sudo -u postgres createdb -O overflow overflow_replacement
+sudo -u postgres createdb -O overflow_app overflow_replacement
 set -a; . /etc/overflow/overflow.env; set +a
 bash scripts/db-restore.sh overflow_replacement \
   /var/backups/overflow/overflow-<stamp>.dump
@@ -237,16 +245,16 @@ DO $$
 DECLARE r record;
 BEGIN
   FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-    EXECUTE format('ALTER TABLE public.%I OWNER TO overflow', r.tablename);
+    EXECUTE format('ALTER TABLE public.%I OWNER TO overflow_app', r.tablename);
   END LOOP;
   FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
-    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO overflow', r.sequencename);
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO overflow_app', r.sequencename);
   END LOOP;
 END $$;
 ```
 
 plus, if the restoring role is not already the database owner:
-`ALTER DATABASE <name> OWNER TO overflow;`. The replacement path (e.2) needs
+`ALTER DATABASE <name> OWNER TO overflow_app;`. The replacement path (e.2) needs
 none of this.
 
 ## (f) RPO and RTO
