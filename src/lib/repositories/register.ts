@@ -403,7 +403,9 @@ export async function drainAbandonedWebhooks(
         state.unregisteredAt === null &&
         state.repository.githubWebhookId === record.webhookId
       ) {
-        // An active registration came back holding this exact hook: it is wanted again.
+        // unregistered_at is null both while the sponsor holds the registration and
+        // after a moderation deactivation (which owns `active` alone), so any row
+        // still holding this exact webhook id spares the deletion: the hook is wanted.
         await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.webhookId);
         continue;
       }
