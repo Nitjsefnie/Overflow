@@ -235,6 +235,45 @@ describe("GET /api/settlements/[id]", () => {
     expect(dependencies.getSettlementProof).not.toHaveBeenCalled();
   });
 
+  it("answers an uppercase canonical uuid with the 200 proof response, forwarding the id as given", async () => {
+    // The other fixtures are all digits, whose uppercase form is identical,
+    // so this id carries hex letters: uppercasing them must not reject it.
+    const uppercaseId = "00000000-0000-4ABC-8DEF-000000000002";
+    const dependencies = proofDependencies();
+
+    const response = await createSettlementProofGetHandler(dependencies)(
+      settlementProofRequest(),
+      proofContext(uppercaseId),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      settlement: proof,
+      corrections: [correction],
+    });
+    expect(dependencies.getSettlementProof).toHaveBeenCalledExactlyOnceWith(
+      memberId,
+      uppercaseId,
+    );
+  });
+
+  it("answers a malformed settlement id behind a failed member gate with the 401 sign-in refusal, before the query runs", async () => {
+    const dependencies = proofDependencies({
+      getSession: vi.fn().mockResolvedValue(null),
+    });
+
+    const response = await createSettlementProofGetHandler(dependencies)(
+      settlementProofRequest(),
+      proofContext("not-a-uuid"),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+    expect(dependencies.getSettlementProof).not.toHaveBeenCalled();
+  });
+
   it("answers an anonymous request with the 401 sign-in refusal, before the query runs", async () => {
     const dependencies = proofDependencies({
       getSession: vi.fn().mockResolvedValue(null),
