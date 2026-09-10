@@ -122,7 +122,10 @@ and that a dump file appeared in `/var/backups/overflow`.
 ## (d) Backup location and retention
 
 Backups land in `/var/backups/overflow`, root:root `0700`, created by the
-script on first use; dump files inside are `0600` (the unit's `UMask=0077`).
+script on first use; dump files inside are `0600` because the script sets
+`umask 077` before creating anything — a manual drill run has no unit
+involved and produces `0600` all the same. The unit's `UMask=0077` is
+defense in depth for the same property, not the mechanism.
 `db-backup.sh` prunes `overflow-*.dump` files older than 14 days
 (`--retention-days`, default 14) after each successful dump — 14 daily dumps
 are retained at the steady state, and nothing not matching `overflow-*.dump`
