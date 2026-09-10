@@ -366,6 +366,9 @@ describe("authentication discovery on the member gate's 401 answers", () => {
       `Bearer resource_metadata="${trustedOrigin}/.well-known/oauth-protected-resource"`,
     );
     expect(response.headers.get("cache-control")).toBe("no-store");
+    // The challenge is added to the gate's response, not swapped in: the
+    // re-issued refusal keeps the headers the gate set, content-type included.
+    expect(response.headers.get("content-type")?.startsWith("application/json")).toBe(true);
     expect(dependencies.defineTools).not.toHaveBeenCalled();
   });
 
@@ -406,6 +409,43 @@ describe("authentication discovery on the member gate's 401 answers", () => {
       error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
     });
     expect(response.headers.get("www-authenticate")).toBeNull();
+  });
+});
+
+describe("the challenge's 401-only boundary", () => {
+  it("answers the gate's role refusal with 403 and no challenge", async () => {
+    // A 403 is an authorization answer, not a scheme-discovery moment: the
+    // account exists but holds no member role. The attach branch must leave
+    // every non-401 refusal of the gate untouched.
+    const dependencies = endpointDependencies({
+      getCurrentRole: vi.fn().mockResolvedValue(null),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(mcpRequest(rpc(1, "ping")));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(response.headers.get("www-authenticate")).toBeNull();
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
+  });
+
+  it("answers a session-reader outage with 502 and no challenge", async () => {
+    // Same boundary on the outage arm: a 502 is not where a client learns the
+    // accepted scheme, so the 502 goes out exactly as the gate built it.
+    const dependencies = endpointDependencies({
+      getSession: vi.fn().mockRejectedValue(new Error("database unavailable")),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(mcpRequest(rpc(1, "ping")));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to authorize the member request." },
+    });
+    expect(response.headers.get("www-authenticate")).toBeNull();
+    expect(dependencies.defineTools).not.toHaveBeenCalled();
   });
 });
 
