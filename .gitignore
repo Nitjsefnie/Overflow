@@ -32,6 +32,16 @@ src/app/*
 !src/app/*.ts
 !src/app/*.tsx
 !src/app/*.css
+!src/app/.well-known/
+src/app/.well-known/*
+!src/app/.well-known/oauth-protected-resource/
+src/app/.well-known/oauth-protected-resource/*
+!src/app/.well-known/oauth-protected-resource/*.ts
+!src/app/.well-known/oauth-protected-resource/api/
+src/app/.well-known/oauth-protected-resource/api/*
+!src/app/.well-known/oauth-protected-resource/api/mcp/
+src/app/.well-known/oauth-protected-resource/api/mcp/*
+!src/app/.well-known/oauth-protected-resource/api/mcp/*.ts
 !src/app/api/
 src/app/api/*
 !src/app/api/auth/
