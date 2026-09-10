@@ -4,6 +4,7 @@ import { githubWebhookEvents } from "@/lib/github/webhook-schema";
 import { collectCursorPages, GitHubGraphqlClient, type GitHubGraphqlPage } from "@/lib/github/graphql";
 import { checkGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { classifyGitHubRateLimit, GitHubApiError } from "@/lib/github/errors";
+import type { ForgeGateway } from "@/lib/forge/gateway";
 import type { GitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 export { GitHubApiError } from "@/lib/github/errors";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
@@ -71,7 +72,7 @@ type GitHubRestResponse = {
   body: string;
 };
 
-export class GitHubGateway {
+export class GitHubGateway implements ForgeGateway {
   private readonly accessToken: string;
   private readonly apiUrl: string;
   private readonly fetchImplementation: typeof fetch;
