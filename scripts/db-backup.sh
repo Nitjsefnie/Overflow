@@ -18,6 +18,11 @@
 # version always matches the server; the default is the host's own tools.
 set -eu
 
+# The dump carries the database's entire contents, so its mode is the
+# script's business, not the caller's: under a default umask of 022 the
+# shell redirect below would create a world-readable archive.
+umask 077
+
 program="db-backup.sh"
 
 fail() {

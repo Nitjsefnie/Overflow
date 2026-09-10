@@ -111,17 +111,29 @@ describe("the backup and restore procedure", () => {
     writeFileSync(keptFile, "keep");
     utimesSync(keptFile, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
 
-    const result = runScript(
-      backupScript,
-      ["--output-dir", backupDir, "--retention-days", "14"],
-      scriptEnv(),
-    );
+    const result = (() => {
+      // A caller's umask cannot be relied on: under a default 022 the dump
+      // would land world-readable, and the archive carries the database's
+      // contents. Force the hostile umask so the assertion below proves the
+      // script constrains the file's mode itself.
+      const callerUmask = process.umask(0o022);
+      try {
+        return runScript(
+          backupScript,
+          ["--output-dir", backupDir, "--retention-days", "14"],
+          scriptEnv(),
+        );
+      } finally {
+        process.umask(callerUmask);
+      }
+    })();
 
     expect(result.status, result.stderr).toBe(0);
     dumpPath = printedDumpPath(result.stdout);
     expect(dumpPath, `stdout was: ${result.stdout}`).toBeDefined();
     expect(existsSync(dumpPath!)).toBe(true);
     expect(statSync(dumpPath!).size).toBeGreaterThan(0);
+    expect(statSync(dumpPath!).mode & 0o777, "the dump file's mode").toBe(0o600);
     expect(existsSync(staleDump)).toBe(false);
     expect(existsSync(keptFile)).toBe(true);
 
@@ -134,10 +146,11 @@ describe("the backup and restore procedure", () => {
   });
 
   it("refuses to restore onto the database DATABASE_URL names without --allow-live", async () => {
+    const dump = await ensureDump();
     const [before] = await sql`select count(*)::int as count from issues`;
     const result = runScript(
       restoreScript,
-      [DATABASE, dumpPath!],
+      [DATABASE, dump],
       scriptEnv(),
     );
 
@@ -148,9 +161,10 @@ describe("the backup and restore procedure", () => {
   });
 
   it("restores the dump into a scratch database reproducing the seeded rows", async () => {
-    // Mutate the source after the dump exists: deleted and changed rows prove
-    // the restore reads the archive, and an added row proves it carries
-    // nothing else.
+    // The dump must predate the mutations below: what comes back is the
+    // archive's seed, not the live rows. When the whole file runs, this
+    // reuses test 2's dump; alone, it produces one here first.
+    const dump = await ensureDump();
     await sql`update users set github_login = ${"mutated-owner"} where github_user_id = ${7_300_002}`;
     await sql`delete from issues where github_issue_id = ${7_500_004}`;
     const [repo] = await sql<{ id: string }[]>`select id from registered_repositories where github_repository_id = ${7_400_001}`;
@@ -161,7 +175,7 @@ describe("the backup and restore procedure", () => {
 
     const result = runScript(
       restoreScript,
-      [DRILL_DATABASE, dumpPath!],
+      [DRILL_DATABASE, dump],
       scriptEnv(),
     );
 
@@ -179,6 +193,29 @@ describe("the backup and restore procedure", () => {
     expect(issueCount.count).toBe(4);
   });
 });
+
+/**
+ * Tests 3 and 4 consume the dump test 2 produces, and each must also pass
+ * alone under a filtered -t run, so a missing dump is produced here on
+ * demand instead of assumed.
+ */
+async function ensureDump(): Promise<string> {
+  if (dumpPath !== undefined) {
+    return dumpPath;
+  }
+  const result = runScript(
+    backupScript,
+    ["--output-dir", backupDir, "--retention-days", "14"],
+    scriptEnv(),
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const printed = printedDumpPath(result.stdout);
+  if (printed === undefined) {
+    throw new Error(`db-backup.sh printed no dump path; stdout was: ${result.stdout}`);
+  }
+  dumpPath = printed;
+  return dumpPath;
+}
 
 /** Environment for a script run: container-internal DATABASE_URL, exec'd client tools. */
 function scriptEnv(): NodeJS.ProcessEnv {
