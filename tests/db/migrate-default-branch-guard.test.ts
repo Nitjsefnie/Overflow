@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,11 +139,19 @@ describe("resolving the default branch from local refs alone", () => {
 
 describe("the CLI against a real database", () => {
   const fakeMigrationName = "999_test_only.sql";
-  const fakeMigrationPath = path.join(migrationsDirectory, fakeMigrationName);
   const fakeMigrationContent = "select 1;\n";
 
   let containerUrl = "";
   let stopContainer: () => Promise<void> = () => Promise.resolve();
+  let privateWorktreeRoot: string | undefined;
+
+  /** The tree the fake migration is planted in; nothing here touches the shared db/migrations/. */
+  function worktreeRoot(): string {
+    if (privateWorktreeRoot === undefined) {
+      throw new Error("The private worktree was not created.");
+    }
+    return privateWorktreeRoot;
+  }
 
   beforeAll(async () => {
     const started = await startPostgresContainer({
@@ -155,15 +163,42 @@ describe("the CLI against a real database", () => {
     stopContainer = async () => {
       await started.container.stop();
     };
-    writeFileSync(fakeMigrationPath, fakeMigrationContent);
+
+    // The fake migration lives in a private linked worktree rather than the shared
+    // db/migrations/: vitest runs test files in parallel workers, every other suite seeds
+    // through the unguarded runMigrations(), which enumerates that directory, and a file left
+    // there for this suite's window lands in other suites' ledgers (tests/db/schema.test.ts
+    // pins exact ledger contents). A linked worktree shares the refs, so the guard's
+    // default-branch resolution and listing behave identically to the real tree's.
+    privateWorktreeRoot = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-worktree-"));
+    git(repositoryRoot, "worktree", "add", privateWorktreeRoot, "HEAD");
+    // The linked worktree carries no node_modules of its own; the symlink keeps the spawned
+    // runner's imports resolvable without copying the store. Only node runs from here, so the
+    // symlink is enough — nothing builds in this tree.
+    symlinkSync(
+      path.join(repositoryRoot, "node_modules"),
+      path.join(worktreeRoot(), "node_modules"),
+      "dir",
+    );
+    writeFileSync(
+      path.join(worktreeRoot(), "db/migrations", fakeMigrationName),
+      fakeMigrationContent,
+    );
   });
 
   afterAll(async () => {
-    rmSync(fakeMigrationPath, { force: true });
+    if (privateWorktreeRoot !== undefined) {
+      // Proper removal first, tolerating its failure so the fallbacks still run: the raw delete
+      // keeps a crashed add from stranding the directory, and the prune keeps a half-removed
+      // registration from stranding the repository's worktree list.
+      gitQuietly(repositoryRoot, "worktree", "remove", "--force", privateWorktreeRoot);
+      rmSync(privateWorktreeRoot, { recursive: true, force: true });
+      gitQuietly(repositoryRoot, "worktree", "prune");
+    }
     await stopContainer();
   });
 
-  /** Runs the migrate runner exactly as `pnpm db:migrate` does, in this worktree. */
+  /** Runs the migrate runner exactly as `pnpm db:migrate` does, in the private worktree. */
   function runCli(guard: "skip" | undefined): ReturnType<typeof spawnSync> {
     const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: containerUrl };
     if (guard === "skip") {
@@ -172,8 +207,8 @@ describe("the CLI against a real database", () => {
       delete env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
     }
 
-    return spawnSync(process.execPath, ["scripts/migrate.ts"], {
-      cwd: repositoryRoot,
+    return spawnSync(process.execPath, [path.join(worktreeRoot(), "scripts/migrate.ts")], {
+      cwd: worktreeRoot(),
       env,
       encoding: "utf8",
     });
@@ -232,7 +267,7 @@ describe("the CLI against a real database", () => {
   });
 
   it("runs clean once the tree carries nothing foreign", async () => {
-    rmSync(fakeMigrationPath, { force: true });
+    rmSync(path.join(worktreeRoot(), "db/migrations", fakeMigrationName), { force: true });
 
     const clean = runCli(undefined);
 
@@ -277,6 +312,11 @@ function git(root: string, ...args: string[]): void {
   if (result.status !== 0 || result.error !== undefined) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   }
+}
+
+/** Runs git without failing the caller when it does — cleanup paths run whether or not git can. */
+function gitQuietly(root: string, ...args: string[]): void {
+  spawnSync("git", args, { cwd: root, encoding: "utf8" });
 }
 
 function gitOutput(root: string, ...args: string[]): string {
