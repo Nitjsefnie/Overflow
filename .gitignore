@@ -307,6 +307,9 @@ tests/deploy/*
 !tests/deploy/*.ts
 !tests/deploy/webhook-upgrade-cli.test.ts
 !tests/deploy/webhook-upgrade-order.test.ts
+!tests/docs/
+tests/docs/*
+!tests/docs/*.ts
 !tests/domain/
 tests/domain/*
 !tests/domain/*.ts
