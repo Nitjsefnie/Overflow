@@ -20,6 +20,7 @@ import {
   registerRepository,
   type RepositoryRegistrationDependencies,
   type RepositoryRegistrationInput,
+  type RepositoryUnregisterInput,
 } from "@/lib/repositories/register";
 
 const registrationSchema = z
@@ -149,9 +150,12 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
 }
 
 /**
- * The sponsor-unregistration handler (issue 48). The submission is only the
- * repository reference, and the flow is idempotent: an already-unregistered
- * row answers success with `alreadyUnregistered`, so the dashboard control can
+ * The sponsor-unregistration handler (issue 48). The submission is either a
+ * GitHub repository reference or, for a GitLab registration (issue 549), the
+ * instance URL plus the project id or path — the forge identity the row is
+ * resolved by, since a nested group's path is not expressible as a GitHub
+ * owner/name reference. The flow is idempotent: an already-unregistered row
+ * answers success with `alreadyUnregistered`, so the dashboard control can
  * stay rendered on every row without a repeat press ever being an error.
  */
 export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDependencies) {
@@ -305,9 +309,19 @@ async function parseInput(request: Request): Promise<RepositoryRegistrationInput
   }
 }
 
-const unregisterSchema = z.object({ repositoryUrl: z.string() }).strict();
+// The GitHub form sends exactly `repositoryUrl`; a GitLab submission selects
+// itself with `provider: "gitlab"` and carries the instance URL plus the
+// project id or path instead (issue 549).
+const unregisterSchema = z
+  .object({
+    repositoryUrl: z.string().optional(),
+    provider: z.enum(["gitlab"]).optional(),
+    instanceUrl: z.string().optional(),
+    project: z.string().optional(),
+  })
+  .strict();
 
-async function parseUnregisterInput(request: Request): Promise<{ repositoryUrl: string } | null> {
+async function parseUnregisterInput(request: Request): Promise<RepositoryUnregisterInput | null> {
   try {
     const result = unregisterSchema.safeParse(await request.json());
     return result.success ? result.data : null;

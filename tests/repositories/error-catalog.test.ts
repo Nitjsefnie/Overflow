@@ -885,6 +885,9 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async findRepositoryRegistrationStateByOwnerName() {
         return null;
       },
+      async findRepositoryRegistrationStateByForgeIdentity() {
+        return null;
+      },
       async findRepositoryRegistrationState() {
         return null;
       },

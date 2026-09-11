@@ -120,6 +120,58 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     return row === undefined ? null : toRegistrationState(row);
   }
 
+  // Exactly one of forgeProjectId and ownerName is set by the caller. The
+  // partial index on (provider, instance_url, forge_project_id) serves the id
+  // form; the path form matches the stored owner_name, which carries the
+  // path_with_namespace.
+  public async findRepositoryRegistrationStateByForgeIdentity(
+    input: { provider: string; instanceUrl: string; forgeProjectId?: number; ownerName?: string },
+  ): Promise<RepositoryRegistrationState | null> {
+    if (input.forgeProjectId !== undefined) {
+      const [row] = await this.sql<RepositoryStateRow[]>`
+        select
+          id,
+          github_repository_id,
+          owner_name,
+          sponsor_id,
+          visibility,
+          github_webhook_id,
+          unregistered_at
+        from registered_repositories
+        where provider = ${input.provider}
+          and instance_url = ${input.instanceUrl}
+          and forge_project_id = ${input.forgeProjectId}
+        limit 1
+      `;
+      return row === undefined ? null : toRegistrationState(row);
+    }
+
+    // The interface contract names exactly one of the two keys, so an input
+    // with neither is a caller bug; the guard exists to keep the tagged
+    // template's parameter honest, never to answer a lookup.
+    const ownerName = input.ownerName;
+    if (ownerName === undefined) {
+      throw new Error("The forge identity names neither a project id nor a project path.");
+    }
+
+    const [row] = await this.sql<RepositoryStateRow[]>`
+      select
+        id,
+        github_repository_id,
+        owner_name,
+        sponsor_id,
+        visibility,
+        github_webhook_id,
+        unregistered_at
+      from registered_repositories
+      where provider = ${input.provider}
+        and instance_url = ${input.instanceUrl}
+        and owner_name = ${ownerName}
+      limit 1
+    `;
+    return row === undefined ? null : toRegistrationState(row);
+  }
+
   public async unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome> {
     return await this.sql.begin(async (transaction) => {
       // The row lock holds to the end of the transaction, so the sponsor
