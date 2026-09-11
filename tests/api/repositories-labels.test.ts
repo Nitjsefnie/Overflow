@@ -2,12 +2,40 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as labelsRoute from "@/app/api/repositories/labels/route";
 
-const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
+const {
+  readSession,
+  getForgeToken,
+  GitLabGateway,
+  listRepositoryLabels,
+  GitLabApiError,
+} = vi.hoisted(() => {
+  class GitLabApiError extends Error {
+    public constructor(public readonly status: number) {
+      super(`GitLab API request failed with status ${status}.`);
+    }
+  }
+  return {
+    readSession: vi.fn(),
+    getForgeToken: vi.fn(),
+    GitLabGateway: vi.fn(),
+    listRepositoryLabels: vi.fn(),
+    GitLabApiError,
+  };
+});
 vi.mock("@/auth", () => ({ auth: readSession }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+vi.mock("@/lib/forge/postgres-identities-store", () => ({
+  PostgresForgeIdentityStore: class {
+    public getForgeToken = getForgeToken;
+  },
+}));
+vi.mock("@/lib/gitlab/client", () => ({ GitLabGateway, GitLabApiError }));
 
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue(null);
+  getForgeToken.mockReset();
+  GitLabGateway.mockReset();
+  listRepositoryLabels.mockReset();
   for (const method of ["log", "info", "warn", "error", "debug"] as const) {
     vi.spyOn(console, method).mockImplementation(() => {});
   }
@@ -330,6 +358,134 @@ describe("GET /api/repositories/labels", () => {
     expect(response.status).toBe(200);
   });
 });
+
+describe("GET /api/repositories/labels (GitLab)", () => {
+  it("reads the GitLab project's labels through the linked identity's token", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity("gitlab-pat");
+    stubGitLabGatewayLabels(["bug", "feature"]);
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ labels: ["bug", "feature"] });
+    expect(JSON.stringify(body)).not.toContain("gitlab-pat");
+    expect(getForgeToken).toHaveBeenCalledTimes(1);
+    expect(getForgeToken).toHaveBeenCalledWith("sponsor-id", "https://gitlab.example");
+    expect(GitLabGateway).toHaveBeenCalledTimes(1);
+    expect(GitLabGateway).toHaveBeenCalledWith({ instanceUrl: "https://gitlab.example", token: "gitlab-pat" });
+    expect(listRepositoryLabels).toHaveBeenCalledTimes(1);
+    expect(listRepositoryLabels).toHaveBeenCalledWith({ owner: "group", name: "proj" });
+  });
+
+  it("answers a structured 404 when no GitLab identity is linked for the instance", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    getForgeToken.mockResolvedValue(null);
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("NOT_FOUND");
+    expect(body.error.message).toContain("https://gitlab.example");
+    expect(body.error.message.endsWith("Link one on the dashboard's Forge identities page, then retry.")).toBe(true);
+  });
+
+  it.each([
+    ["only two keys", "?provider=gitlab&instance=https://gitlab.example"],
+    ["four keys", "?provider=gitlab&instance=https://gitlab.example&project=group/proj&extra=1"],
+    ["a non-gitlab provider", "?provider=github&instance=https://gitlab.example&project=group/proj"],
+  ])("returns a structured 400 for a GitLab query carrying %s", async (_what, query) => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+
+    const response = await labelsRoute.GET(labelsRequest(query));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid repository labels request." },
+    });
+    expect(getForgeToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [401, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 401). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
+    [403, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 403). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
+    [404, 404, "NOT_FOUND", "No GitLab project with that id or path is visible through your linked identity. Check the project id or path and that the identity still has access, then retry."],
+    [429, 429, "RATE_LIMITED", "GitLab rate-limited the labels read (HTTP 429). Please retry later."],
+    [500, 502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitLab."],
+  ])("maps a GitLab HTTP %s upstream failure to %s %s", async (upstreamStatus, expectedStatus, expectedCode, expectedMessage) => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    stubGitLabGatewayFailure(new GitLabApiError(upstreamStatus));
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(expectedStatus);
+    expect(body).toEqual({ error: { code: expectedCode, message: expectedMessage } });
+  });
+
+  it("returns a structured 400 carrying the normalization refusal for a malformed instance URL", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+
+    const response = await labelsRoute.GET(labelsRequest("?provider=gitlab&instance=not%20a%20url&project=group%2Fproj"));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({
+      error: { code: "INVALID_REQUEST", message: "The instance URL must be an absolute URL." },
+    });
+    expect(getForgeToken).not.toHaveBeenCalled();
+  });
+
+  it("answers a structured 503 when token encryption is not configured", async () => {
+    readSession.mockResolvedValue(memberSession());
+    // TOKEN_ENCRYPTION_KEY is unset in the test environment, so no stub here:
+    // stubbing it would silence the gate this case exists to pin.
+    stubGitLabGatewayLabels(["bug"]);
+    getForgeToken.mockResolvedValue("gitlab-pat");
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body).toEqual({
+      error: { code: "CONFIGURATION", message: "Token encryption is not configured." },
+    });
+    expect(getForgeToken).not.toHaveBeenCalled();
+  });
+});
+
+function gitlabLabelsRequest(project = "group/proj"): Request {
+  return labelsRequest(`?provider=gitlab&instance=https://gitlab.example&project=${project}`);
+}
+
+function stubLinkedIdentity(token = "gitlab-pat"): void {
+  vi.stubEnv("TOKEN_ENCRYPTION_KEY", "token-encryption-key");
+  getForgeToken.mockResolvedValue(token);
+}
+
+function stubGitLabGatewayLabels(labels: string[]): void {
+  // The implementation must be a `function` (not an arrow): the route calls
+  // `new GitLabGateway(...)`, and vitest refuses to construct a mock whose
+  // implementation is not a constructor — returning the instance object from
+  // a plain function is the supported shape.
+  GitLabGateway.mockImplementation(function () {
+    return { listRepositoryLabels };
+  });
+  listRepositoryLabels.mockResolvedValue(new Set(labels));
+}
+
+function stubGitLabGatewayFailure(error: Error): void {
+  GitLabGateway.mockImplementation(function () {
+    return { listRepositoryLabels };
+  });
+  listRepositoryLabels.mockRejectedValue(error);
+}
 
 function memberSession() {
   return { user: { id: "sponsor-id", role: "MEMBER" as const } };
