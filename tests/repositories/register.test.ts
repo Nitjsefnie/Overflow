@@ -114,6 +114,39 @@ describe("explicit repository registration", () => {
     expect(harness.deletedWebhookIds).toEqual([]);
   });
 
+  it("refuses a GitHub-shaped catalog change whose forge id a GitLab registration holds", async () => {
+    const harness = createHarness({ existing: registeredRepository() });
+    harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
+    const append = vi.spyOn(harness.dependencies.store, "appendDifficultySchemeVersion");
+
+    const error = await changeRepositoryCatalog(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    const message = (error as Error).message;
+    expect(message).toMatch(/collides with forge id/);
+    expect(message).toContain("provider 'gitlab'");
+    expect(message).toContain("catalog change refused");
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("carries a catalog change past the forge guard when the stored provider is github", async () => {
+    const harness = createHarness({ existing: registeredRepository() });
+    harness.dependencies.store.findRepositoryProviderById = async () => "github";
+    const append = vi.spyOn(harness.dependencies.store, "appendDifficultySchemeVersion")
+      .mockResolvedValue({ changed: true, versionNumber: 2, effectiveFrom: "2026-09-12T00:00:00.000Z" });
+
+    await expect(changeRepositoryCatalog(harness.dependencies, createInput())).resolves.toMatchObject({
+      changed: true,
+      versionNumber: 2,
+      repository: { id: "registered-repository-id" },
+    });
+    expect(append).toHaveBeenCalledExactlyOnceWith({
+      githubRepositoryId: 42,
+      sponsorId: "moderator-id",
+      scheme: toDifficultyScheme(createInput()),
+      effectiveFrom: expect.any(Date),
+    });
+  });
+
   it("allows a signed-in member who has GitHub administrator permission for the submitted repository", async () => {
     const harness = createHarness({ actorRole: "MEMBER" });
 
@@ -228,6 +261,21 @@ describe("explicit repository registration", () => {
       code: "CONFLICT",
     });
     expect(harness.stateLookupIds).toEqual([42]);
+  });
+
+  it("refuses a GitHub registration whose forge id an active GitLab registration holds", async () => {
+    // Pin of the existing registration-arm guard (issue 567): an ACTIVE GitLab
+    // row (no unregisteredAt) holding the id must refuse a GitHub registration,
+    // naming the holding provider.
+    const harness = createHarness();
+    harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
+
+    const error = await registerRepository(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    const message = (error as Error).message;
+    expect(message).toMatch(/collides with forge id .* provider 'gitlab'/);
+    expect(message).toContain("registration refused");
+    expect(harness.createdRepositories).toEqual([]);
   });
 
   it("reactivates a sponsor-unregistered registration through webhook creation and persistence", async () => {
@@ -781,6 +829,36 @@ describe("unregistering a registered repository", () => {
     });
     expect(harness.stateLookupsByOwnerName).toEqual(["octo/overflow"]);
     expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses a GitHub-shaped unregistration whose forge id a GitLab registration holds, before any webhook or store write", async () => {
+    // The target lookup matches the stored owner name, which is not
+    // forge-qualified, so a GitLab row resolves here; the guard must refuse
+    // before the webhook block and before the store write (issue 567).
+    const harness = createHarness({ existing: registeredRepository() });
+    harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
+
+    const error = await unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    const message = (error as Error).message;
+    expect(message).toMatch(/collides with forge id .* provider 'gitlab'/);
+    expect(message).toContain("unregistration refused");
+    expect(harness.callOrder).toEqual([]);
+    expect(harness.unregisterInputs).toEqual([]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.deleteWebhookReferences).toEqual([]);
+  });
+
+  it("carries an unregistration past the forge guard when the stored provider is github", async () => {
+    const harness = createHarness({ existing: registeredRepository() });
+    harness.dependencies.store.findRepositoryProviderById = async () => "github";
+
+    await expect(unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" })).resolves.toMatchObject({
+      repository: { id: "registered-repository-id" },
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
   });
 
   it("refuses someone other than the repository's sponsor before contacting GitHub", async () => {
