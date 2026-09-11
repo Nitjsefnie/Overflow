@@ -636,6 +636,27 @@ describe("unregistering a repository against the real registered_repositories co
     return submission;
   }
 
+  // A GitLab registration carries no webhook and stores the forge identity the
+  // forge-identity finder matches on: provider 'gitlab', the normalized instance
+  // URL, and the numeric project id, with the path-with-namespace owner name.
+  async function registeredGitLabViaStore(
+    overrides: Partial<NewRegisteredRepository> = {},
+  ): Promise<NewRegisteredRepository> {
+    const submission = newRepository({
+      sponsorId: await sponsor(),
+      githubWebhookId: null,
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example.com",
+      forgeProjectId: externalId++,
+      ...overrides,
+    });
+
+    await expect(store.createRepository(submission)).resolves.toMatchObject({
+      githubRepositoryId: submission.githubRepositoryId,
+    });
+    return submission;
+  }
+
   describe("the abandoned webhook cleanup records the drain reads", () => {
     // The cleanup table is shared across the file's tests, so every assertion here scopes
     // to the rows its own repository ids produced and every test leaves its rows cleared.
@@ -714,6 +735,76 @@ describe("unregistering a repository against the real registered_repositories co
       const remaining = await store.listAbandonedWebhookCleanups();
       expect(remaining.filter(({ githubRepositoryId: id }) => id === githubRepositoryId)).toEqual([]);
       await expect(store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("finding a registration state by forge identity", () => {
+    it("returns the registration holding the provider, instance, and numeric forge project id", async () => {
+      const submission = await registeredGitLabViaStore();
+      expect(submission.forgeProjectId).not.toBeNull();
+
+      await expect(store.findRepositoryRegistrationStateByForgeIdentity({
+        provider: "gitlab",
+        instanceUrl: submission.instanceUrl!,
+        forgeProjectId: submission.forgeProjectId!,
+      })).resolves.toMatchObject({
+        repository: {
+          githubRepositoryId: submission.githubRepositoryId,
+          ownerName: submission.ownerName,
+          sponsorId: submission.sponsorId,
+          visibility: "PUBLIC",
+          githubWebhookId: null,
+        },
+        unregisteredAt: null,
+      });
+    });
+
+    it("returns the registration holding the provider, instance, and the project's path with namespace", async () => {
+      const submission = await registeredGitLabViaStore({ ownerName: `group/subgroup/project-${externalId}` });
+
+      await expect(store.findRepositoryRegistrationStateByForgeIdentity({
+        provider: "gitlab",
+        instanceUrl: submission.instanceUrl!,
+        ownerName: submission.ownerName,
+      })).resolves.toMatchObject({
+        repository: {
+          githubRepositoryId: submission.githubRepositoryId,
+          ownerName: submission.ownerName,
+          sponsorId: submission.sponsorId,
+          githubWebhookId: null,
+        },
+        unregisteredAt: null,
+      });
+    });
+
+    it("answers null when no registration holds the instance", async () => {
+      const submission = await registeredGitLabViaStore();
+      expect(submission.forgeProjectId).not.toBeNull();
+
+      await expect(store.findRepositoryRegistrationStateByForgeIdentity({
+        provider: "gitlab",
+        instanceUrl: "https://other.example.com",
+        forgeProjectId: submission.forgeProjectId!,
+      })).resolves.toBeNull();
+    });
+
+    // The forge-identity finder reads the row regardless of registration state: an
+    // unregistered row resolves so the same flow can answer its idempotent repeat.
+    it("reads an unregistered GitLab row with its unregistration instant", async () => {
+      const submission = await registeredGitLabViaStore();
+      await expect(store.unregisterRepository({
+        ownerName: submission.ownerName,
+        sponsorId: submission.sponsorId,
+      })).resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+      await expect(store.findRepositoryRegistrationStateByForgeIdentity({
+        provider: "gitlab",
+        instanceUrl: submission.instanceUrl!,
+        forgeProjectId: submission.forgeProjectId!,
+      })).resolves.toMatchObject({
+        repository: { githubRepositoryId: submission.githubRepositoryId },
+        unregisteredAt: expect.any(String),
+      });
     });
   });
 });

@@ -631,6 +631,14 @@ function validUnregisterInput() {
   return { repositoryUrl: "https://github.com/octo/overflow.git" };
 }
 
+function validGitlabUnregisterInput() {
+  return {
+    provider: "gitlab",
+    instanceUrl: "https://gitlab.example.com",
+    project: "group/subgroup/project",
+  };
+}
+
 function registeredTarget(sponsorId = "moderator-id"): RegisteredRepository {
   return {
     id: "repository-id",
@@ -639,6 +647,17 @@ function registeredTarget(sponsorId = "moderator-id"): RegisteredRepository {
     sponsorId,
     visibility: "PUBLIC",
     githubWebhookId: 501,
+  };
+}
+
+function gitlabTarget(sponsorId = "moderator-id"): RegisteredRepository {
+  return {
+    id: "gitlab-repository-id",
+    githubRepositoryId: 4242,
+    ownerName: "group/subgroup/project",
+    sponsorId,
+    visibility: "PUBLIC",
+    githubWebhookId: null,
   };
 }
 
@@ -1351,6 +1370,62 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
+  it("returns a structured 400 when the body carries neither a repository reference nor a GitLab provider", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest({}, "DELETE"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INVALID_INPUT",
+        message: "Submit one GitHub repository as owner/name or a canonical GitHub URL.",
+      },
+    });
+  });
+
+  it("resolves a GitLab unregistration by instance and project and answers 200 with the result", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(undefined, {
+        unregisterForgeTarget: gitlabTarget(),
+        unregisterOutcome: { kind: "UNREGISTERED", repository: gitlabTarget() },
+      }),
+    });
+
+    const response = await handler(jsonRequest(validGitlabUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      repository: gitlabTarget(),
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+    });
+  });
+
+  it("returns a structured 404 when no GitLab registration matches the instance and project", async () => {
+    const handler = createRepositoryDeleteHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+
+    const response = await handler(jsonRequest(validGitlabUnregisterInput(), "DELETE"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "NOT_FOUND",
+        message: "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+      },
+    });
+  });
+
   it("passes a store-raised conflict through the shared error mapping unchanged", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
@@ -1522,6 +1597,8 @@ type SuccessfulDependenciesOptions = {
   catalogChange?: RepositoryCatalogChange | Error;
   /** The registration the by-owner-name lookup holds; absent when nothing holds the path. */
   unregisterTarget?: RegisteredRepository;
+  /** The registration the by-forge-identity lookup holds; absent when nothing holds it. */
+  unregisterForgeTarget?: RegisteredRepository;
   /** The outcome the fake unregister write answers with. */
   unregisterOutcome?: RepositoryUnregisterOutcome;
   /** The error the fake unregister write raises instead of answering. */
@@ -1592,6 +1669,11 @@ function successfulDependencies(
         return options.unregisterTarget === undefined
           ? null
           : { repository: options.unregisterTarget, unregisteredAt: null };
+      },
+      async findRepositoryRegistrationStateByForgeIdentity() {
+        return options.unregisterForgeTarget === undefined
+          ? null
+          : { repository: options.unregisterForgeTarget, unregisteredAt: null };
       },
       async findRepositoryRegistrationState() {
         return options.existingRepository

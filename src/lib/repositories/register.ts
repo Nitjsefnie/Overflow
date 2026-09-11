@@ -136,6 +136,19 @@ export type RepositoryRegistrationStore = {
    * sponsor unregistered it, or null when no row holds the path.
    */
   findRepositoryRegistrationStateByOwnerName(ownerName: string): Promise<RepositoryRegistrationState | null>;
+  /**
+   * The registration holding this forge identity — the stored provider plus
+   * normalized instance URL, matched on either the numeric forge project id or
+   * the project's path_with_namespace (stored as the owner name) — with the
+   * instant its sponsor unregistered it, or null when no row holds the
+   * identity. Exactly one of `forgeProjectId` and `ownerName` is set.
+   */
+  findRepositoryRegistrationStateByForgeIdentity(input: {
+    provider: string;
+    instanceUrl: string;
+    forgeProjectId?: number;
+    ownerName?: string;
+  }): Promise<RepositoryRegistrationState | null>;
   /** The registration holding the GitHub identity, or null when no row holds it. */
   findRepositoryRegistrationState(githubRepositoryId: number): Promise<RepositoryRegistrationState | null>;
   /**
@@ -185,6 +198,17 @@ export type RepositoryRegistrationDependencies = {
 export type RepositoryRegistrationResult = RegisteredRepository & {
   initialImportScheduled: boolean;
   claimPath: ClaimPathVerdict;
+};
+
+export type RepositoryUnregisterInput = {
+  /** Required for the GitHub form: the repository as owner/name or a canonical GitHub URL. */
+  repositoryUrl?: string;
+  /** Present selects the forge-specific form; absent means GitHub, as in registration. */
+  provider?: "gitlab";
+  /** Required for GitLab: the origin base URL, matched against the stored normalized value. */
+  instanceUrl?: string;
+  /** Required for GitLab: the numeric project id or the project's path_with_namespace. */
+  project?: string;
 };
 
 export type RepositoryUnregisterApiResult = {
@@ -696,13 +720,21 @@ export async function drainAbandonedWebhooks(
 /**
  * Unregisters a repository on its sponsor's behalf (issue 48).
  *
- * The flow is GitHub-first: the webhook Overflow created at registration is
- * deleted before the local row is touched, so a GitHub refusal leaves the
- * registration exactly as it stood. A GitHub 404 reads as the hook — or its
- * repository — already gone, the desired end state, so the flow continues
- * with `webhookDeleted: false`. Any other GitHub failure maps through the
- * same error catalog registration uses, with the local store untouched, and
- * a retry converges: the dashboard control persists because the row remains.
+ * A GitHub submission (`repositoryUrl`, no `provider`) runs the GitHub-first
+ * flow: the webhook Overflow created at registration is deleted before the
+ * local row is touched, so a GitHub refusal leaves the registration exactly as
+ * it stood. A GitHub 404 reads as the hook — or its repository — already gone,
+ * the desired end state, so the flow continues with `webhookDeleted: false`.
+ * Any other GitHub failure maps through the same error catalog registration
+ * uses, with the local store untouched, and a retry converges: the dashboard
+ * control persists because the row remains.
+ *
+ * A GitLab submission (`provider: "gitlab"` plus `instanceUrl` and `project`)
+ * resolves the row by forge identity instead of a GitHub-shaped path, because a
+ * nested group's path_with_namespace is not expressible as a two-segment
+ * owner/name reference (issue 549). GitLab rows carry no webhook, so the flow
+ * makes no forge call of any kind; the details are on
+ * `unregisterGitLabRepository`.
  *
  * Unregistration runs no participation gate and no public/admin pre-checks:
  * it removes ledger activity rather than creating it (gating would trap a
@@ -712,8 +744,19 @@ export async function drainAbandonedWebhooks(
  */
 export async function unregisterRepository(
   dependencies: RepositoryRegistrationDependencies,
-  input: { repositoryUrl: string },
+  input: RepositoryUnregisterInput,
 ): Promise<RepositoryUnregisterApiResult> {
+  if (input.provider === "gitlab") {
+    return unregisterGitLabRepository(dependencies, input);
+  }
+
+  if (input.repositoryUrl === undefined) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit one GitHub repository as owner/name or a canonical GitHub URL.",
+    );
+  }
+
   let submittedRepository: GitHubRepositoryReference;
   try {
     submittedRepository = parseGitHubRepository(input.repositoryUrl);
@@ -785,6 +828,116 @@ export async function unregisterRepository(
   return {
     repository: outcome.repository,
     webhookDeleted,
+    alreadyUnregistered: outcome.kind === "ALREADY_UNREGISTERED",
+  };
+}
+
+/**
+ * Unregisters a GitLab registration by forge identity (issue 549).
+ *
+ * The submission names the normalized instance URL plus the numeric project id
+ * or the project's path_with_namespace, and the store resolves the row
+ * directly — never through `parseGitHubRepository`, which a nested group's
+ * path cannot survive, and with no forge API call at all: the identity is
+ * already stored on the row. A sponsor with no linked identity on the instance
+ * can still unregister a row they sponsor.
+ *
+ * GitLab rows carry `githubWebhookId: null`, so the GitHub webhook block is
+ * skipped entirely — there is no hook to delete and no parsed GitHub reference
+ * to pass one — and the result honestly reports `webhookDeleted: false`. The
+ * sponsor check, the idempotent outcome handling, and the abandoned-webhook
+ * drain run exactly as the GitHub flow runs them.
+ */
+async function unregisterGitLabRepository(
+  dependencies: RepositoryRegistrationDependencies,
+  input: RepositoryUnregisterInput,
+): Promise<RepositoryUnregisterApiResult> {
+  if (input.instanceUrl === undefined || input.project === undefined || input.instanceUrl === "" || input.project === "") {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "A GitLab unregistration requires the instance URL and the project id or path.",
+    );
+  }
+
+  // The same normalization the link flow stores under: one input cannot be
+  // valid here and invalid there (or vice versa).
+  let instanceUrl: string;
+  try {
+    instanceUrl = normalizeInstanceUrl(input.instanceUrl);
+  } catch (error) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      error instanceof Error ? error.message : "The instance URL is malformed.",
+    );
+  }
+  if (/^\d+$/.test(input.project)) {
+    const numericProject = Number(input.project);
+    if (!Number.isSafeInteger(numericProject) || numericProject <= 0) {
+      throw new RepositoryRegistrationError(
+        "INVALID_INPUT",
+        "The GitLab project id must be a positive integer.",
+      );
+    }
+  } else if (!input.project.includes("/")) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit the GitLab project as a positive numeric id or a path with namespace.",
+    );
+  }
+
+  // The row is resolved from the forge identity alone. Exactly one key is set:
+  // a numeric id matches the stored forge_project_id, a path matches the
+  // stored owner name.
+  let state: RepositoryRegistrationState | null;
+  try {
+    state = await dependencies.store.findRepositoryRegistrationStateByForgeIdentity(
+      /^\d+$/.test(input.project)
+        ? { provider: "gitlab", instanceUrl, forgeProjectId: Number(input.project) }
+        : { provider: "gitlab", instanceUrl, ownerName: input.project },
+    );
+  } catch {
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to unregister the repository.");
+  }
+  if (state === null) {
+    throw new RepositoryRegistrationError(
+      "NOT_FOUND",
+      "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+    );
+  }
+
+  // The sponsor check precedes the write, keeping the common refusal free of
+  // side effects; the store re-checks inside its transaction.
+  if (state.repository.sponsorId !== dependencies.actor.id) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only the repository's sponsor can unregister it.",
+    );
+  }
+
+  const outcome = await unregisterThroughStore(dependencies.store, {
+    ownerName: state.repository.ownerName,
+    sponsorId: dependencies.actor.id,
+  });
+  if (outcome.kind === "NOT_REGISTERED") {
+    // The row vanished between the lookup and the write. The registration is
+    // gone either way, so NOT_FOUND is the honest answer.
+    throw new RepositoryRegistrationError(
+      "NOT_FOUND",
+      "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+    );
+  }
+  if (outcome.kind === "FORBIDDEN") {
+    throw new RepositoryRegistrationError("FORBIDDEN", "Only the repository's sponsor can unregister it.");
+  }
+
+  // The unregistration stands, so this is the other moment the cleanup table can be
+  // drained best-effort (issue 451): any webhook an earlier failed registration recorded
+  // is retired here, and the drain never disturbs the answer that unregistration gave.
+  await drainAbandonedWebhooks(dependencies);
+
+  return {
+    repository: outcome.repository,
+    webhookDeleted: false,
     alreadyUnregistered: outcome.kind === "ALREADY_UNREGISTERED",
   };
 }

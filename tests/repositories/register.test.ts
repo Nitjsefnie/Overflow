@@ -842,6 +842,239 @@ describe("unregistering a registered repository", () => {
   });
 });
 
+describe("unregistering a GitLab registration by forge identity", () => {
+  const instanceUrl = "https://gitlab.example.com";
+
+  it("unregisters a nested-group project submitted as a path with namespace, addressed by the row's stored owner name", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
+    });
+
+    // The submission's instance URL is not stored verbatim: the lookup runs
+    // against the normalized form the link flow stores under.
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl: "https://GitLab.example.com/",
+      project: "group/subgroup/project",
+    })).resolves.toMatchObject({
+      repository: {
+        id: "registered-gitlab-repository-id",
+        githubRepositoryId: 4242,
+        ownerName: "group/subgroup/project",
+        sponsorId: "moderator-id",
+        visibility: "PUBLIC",
+        githubWebhookId: null,
+      },
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+    });
+    expect(harness.forgeIdentityLookups).toEqual([
+      { provider: "gitlab", instanceUrl: "https://gitlab.example.com", ownerName: "group/subgroup/project" },
+    ]);
+    // Never the GitHub-shaped path finder: a nested group's path is not a
+    // two-segment owner/name reference.
+    expect(harness.stateLookupsByOwnerName).toEqual([]);
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id" }]);
+    expect(harness.callOrder).toEqual(["unregisterRepository:group/subgroup/project"]);
+    expect(harness.githubCalls).toEqual([]);
+  });
+
+  it("resolves a numeric project id by forge project id with no forge or GitHub gateway call", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "4242",
+    })).resolves.toMatchObject({
+      repository: { id: "registered-gitlab-repository-id", githubWebhookId: null },
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+    });
+    expect(harness.forgeIdentityLookups).toEqual([
+      { provider: "gitlab", instanceUrl, forgeProjectId: 4242 },
+    ]);
+    expect(harness.callOrder).toEqual(["unregisterRepository:group/subgroup/project"]);
+    expect(harness.githubCalls).toEqual([]);
+  });
+
+  it.each([
+    { name: "a missing instance URL", input: { provider: "gitlab" as const, project: "group/subgroup/project" } },
+    { name: "a missing project", input: { provider: "gitlab" as const, instanceUrl } },
+    { name: "an empty instance URL", input: { provider: "gitlab" as const, instanceUrl: "", project: "group/subgroup/project" } },
+    { name: "an empty project", input: { provider: "gitlab" as const, instanceUrl, project: "" } },
+  ])("refuses $name with the missing-fields message", async ({ input }) => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, input)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "A GitLab unregistration requires the instance URL and the project id or path.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses a project that is neither a positive numeric id nor a path with namespace", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "project-without-namespace",
+    })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "Submit the GitLab project as a positive numeric id or a path with namespace.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses a numeric id that is not a positive integer, as registration does", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "0",
+    })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "The GitLab project id must be a positive integer.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses a malformed instance URL with the same message the link flow uses", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl: "not a url",
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "The instance URL must be an absolute URL.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("answers NOT_FOUND when no registration holds the submitted path on any instance", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([
+      { provider: "gitlab", instanceUrl, ownerName: "group/subgroup/project" },
+    ]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("answers NOT_FOUND for an unregistered forge id", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "4242",
+    })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+    });
+    expect(harness.forgeIdentityLookups).toEqual([
+      { provider: "gitlab", instanceUrl, forgeProjectId: 4242 },
+    ]);
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("refuses someone other than the repository's sponsor before the write and without contacting any forge", async () => {
+    const harness = createHarness({ existing: { ...registeredGitLabRepository(), sponsorId: "someone-else-id" } });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Only the repository's sponsor can unregister it.",
+    });
+    expect(harness.unregisterInputs).toEqual([]);
+    expect(harness.callOrder).toEqual([]);
+    expect(harness.githubCalls).toEqual([]);
+  });
+
+  it("maps a failing forge-identity lookup to UPSTREAM_FAILURE and exposes nothing of the store error", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      forgeStateLookupFailure: new Error("database connectivity secret"),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+      message: "Unable to unregister the repository.",
+    });
+    expect(harness.callOrder).toEqual([]);
+  });
+
+  it("reports an idempotent repeat as already unregistered with the GitLab row carried", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "ALREADY_UNREGISTERED", repository: registeredGitLabRepository() },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).resolves.toMatchObject({
+      repository: { id: "registered-gitlab-repository-id" },
+      webhookDeleted: false,
+      alreadyUnregistered: true,
+    });
+    expect(harness.callOrder).toEqual(["unregisterRepository:group/subgroup/project"]);
+  });
+
+  it("surfaces NOT_FOUND when the registration vanishes between the lookup and the write", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "NOT_REGISTERED" },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(harness.callOrder).toEqual(["unregisterRepository:group/subgroup/project"]);
+  });
+
+  it("refuses a submission with neither a repository reference nor a GitLab provider", async () => {
+    const harness = createHarness();
+
+    await expect(unregisterRepository(harness.dependencies, {})).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "Submit one GitHub repository as owner/name or a canonical GitHub URL.",
+    });
+    expect(harness.callOrder).toEqual([]);
+  });
+});
+
 describe("abandoning the webhook a failed registration created", () => {
   // The compensating delete is no longer best-effort: the cleanup record is
   // written durably BEFORE the deletion is attempted, so even a webhook whose
@@ -1213,6 +1446,8 @@ type HarnessOptions = {
   storeUnregisterFailure?: unknown;
   /** The rejection the by-owner-name state lookup raises. */
   stateLookupFailure?: unknown;
+  /** The rejection the by-forge-identity state lookup raises. */
+  forgeStateLookupFailure?: unknown;
   /** The rejection the fake webhook deletion raises (after recording the call). */
   deleteWebhookFailure?: unknown;
   /** What the store answers for the drain's list of abandoned-webhook cleanup records. */
@@ -1253,6 +1488,7 @@ function createHarness(options: HarnessOptions = {}) {
   const duplicateLookupIds: number[] = [];
   const stateLookupIds: number[] = [];
   const stateLookupsByOwnerName: string[] = [];
+  const forgeIdentityLookups: Array<{ provider: string; instanceUrl: string; forgeProjectId?: number; ownerName?: string }> = [];
   const unregisterInputs: Array<{ ownerName: string; sponsorId: string }> = [];
   const callOrder: string[] = [];
   const scheduledRepositoryIds: string[] = [];
@@ -1355,6 +1591,13 @@ function createHarness(options: HarnessOptions = {}) {
         stateLookupIds.push(githubRepositoryId);
         return existingState();
       },
+      async findRepositoryRegistrationStateByForgeIdentity(input) {
+        forgeIdentityLookups.push(input);
+        if (options.forgeStateLookupFailure !== undefined) {
+          throw options.forgeStateLookupFailure;
+        }
+        return existingState();
+      },
       async unregisterRepository(input) {
         callOrder.push(`unregisterRepository:${input.ownerName}`);
         unregisterInputs.push(input);
@@ -1436,6 +1679,7 @@ function createHarness(options: HarnessOptions = {}) {
     duplicateLookupIds,
     stateLookupIds,
     stateLookupsByOwnerName,
+    forgeIdentityLookups,
     unregisterInputs,
     callOrder,
     createdRepositories,
@@ -1492,6 +1736,18 @@ function registeredRepository(): RegisteredRepository {
     sponsorId: "moderator-id",
     visibility: "PUBLIC",
     githubWebhookId: 501,
+  };
+}
+
+/** A GitLab registration row: a nested group's path, no webhook, its own id. */
+function registeredGitLabRepository(): RegisteredRepository {
+  return {
+    id: "registered-gitlab-repository-id",
+    githubRepositoryId: 4242,
+    ownerName: "group/subgroup/project",
+    sponsorId: "moderator-id",
+    visibility: "PUBLIC",
+    githubWebhookId: null,
   };
 }
 
