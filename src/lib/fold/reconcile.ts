@@ -3,6 +3,7 @@ import type { GitHubIssueListOptions } from "@/lib/github/client";
 import { DEFAULT_GRAPHQL_BUDGET_RESERVE, type GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import { mapWithConcurrency } from "@/lib/async/map-with-concurrency";
 import { GitHubApiError, isGitHubRateLimitError, isGitHubSubjectNotFoundError } from "@/lib/github/errors";
+import { GitLabApiError } from "@/lib/gitlab/client";
 import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphql-request-budget";
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -310,7 +311,7 @@ async function reconcileRepositoryWhileCoordinated(
               try {
                 issue = await dependencies.github.getIssue(reference, subject);
               } catch (error) {
-                if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id)))) {
+                if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), isIssueSubjectGone))) {
                   throw error;
                 }
                 continue;
@@ -433,6 +434,18 @@ async function reconcileRepositoryWhileCoordinated(
 // NOT_FOUND for that pull request — 404 and nothing else.
 function isPullRequestEvidenceGone(error: unknown): boolean {
   return isGitHubSubjectNotFoundError(error) || (error instanceof GitHubApiError && error.status === 404);
+}
+
+// The ISSUE per-subject read draws the same definitive arm on either forge:
+// the GraphQL shape answers the flattened NOT_FOUND message the default
+// classifier matches, GitHub's REST read answers its fixed 404 error, and a
+// GitLab read that loses the issue between endpoints throws GitLabApiError
+// 404. Any of the three is gone for good — a deleted issue can never
+// resolve — and anything else keeps whole-run retry semantics.
+function isIssueSubjectGone(error: unknown): boolean {
+  return isGitHubSubjectNotFoundError(error)
+    || (error instanceof GitHubApiError && error.status === 404)
+    || (error instanceof GitLabApiError && error.status === 404);
 }
 
 // A pull request's evidence read draws the same subject-alone arm the
