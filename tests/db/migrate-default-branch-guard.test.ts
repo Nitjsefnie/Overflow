@@ -307,7 +307,9 @@ describe("the CLI against a real database", () => {
     const clean = runCli(undefined);
 
     expect(clean.status).toBe(0);
-    expect(clean.stderr).not.toContain("issue 511");
+    // The fail-open skip line cites the issue too, so the refusal phrase — not the issue
+    // number — is what marks a refusal here.
+    expect(clean.stderr).not.toContain("is frozen there under its name");
     expect(clean.stderr).not.toContain(fakeMigrationName);
 
     // The ledger keeps recording what the overridden run applied — the whole reason a
