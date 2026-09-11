@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
 
 /**
@@ -504,6 +504,64 @@ describe("GitLabGateway", () => {
     ]));
     await expect(client.listIssues({ owner: "gitlab-org", name: "gitlab" }))
       .rejects.toMatchObject({ name: "GitLabApiError", status: 403 });
+  });
+
+  // Issue 563: a GitLab issue deleted between the listing request and its
+  // per-issue evidence reads answers 404 on the evidence endpoint. That is
+  // definitive for that issue alone — the listing resolves without it and the
+  // reconciliation run completes for the remaining issues. The repository
+  // itself is not gone, so the run must not be recorded as failed.
+  it("resolves the listing without an issue whose evidence read answers 404 mid-pass", async () => {
+    const client = gateway(jsonRouter([
+      ["/issues/12/resource_label_events", []],
+      ["/issues/12/notes", []],
+      ["/issues/12/closed_by", []],
+      ["/issues/13/resource_label_events", { message: "404 Not Found" }, 404],
+      ["/issues/13/notes", []],
+      ["/issues/13/closed_by", []],
+      ["/issues?", [issue, { ...issue, iid: 13, id: 6_600_002 }]],
+    ]));
+    // The skip is logged, never silent: on a list endpoint a silent skip is
+    // easy to misread as "no issues".
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ id: 6_600_001, number: 12 });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain("gitlab-org/gitlab");
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain("13");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  // The boundary the omission must not widen: the listing request's own 404
+  // keeps its repository-level meaning (the repository is gone), so it still
+  // fails the listing.
+  it("fails the whole listing when the issues listing itself answers 404", async () => {
+    const client = gateway(jsonRouter([
+      ["/issues?", { message: "404 Not Found" }, 404],
+    ]));
+    await expect(client.listIssues({ owner: "gitlab-org", name: "gitlab" }))
+      .rejects.toMatchObject({ name: "GitLabApiError", status: 404 });
+  });
+
+  // Negative control for the catch being 404-only: a server error on an
+  // issue's evidence read is an upstream problem, not a deletion witness, so
+  // it still propagates and fails the run.
+  it("propagates a 500 from an issue's evidence read instead of omitting the issue", async () => {
+    const client = gateway(jsonRouter([
+      ["/issues/12/resource_label_events", []],
+      ["/issues/12/notes", []],
+      ["/issues/12/closed_by", []],
+      ["/issues/13/resource_label_events", { message: "500 Internal Server Error" }, 500],
+      ["/issues/13/notes", []],
+      ["/issues/13/closed_by", []],
+      ["/issues?", [issue, { ...issue, iid: 13, id: 6_600_002 }]],
+    ]));
+    await expect(client.listIssues({ owner: "gitlab-org", name: "gitlab" }))
+      .rejects.toMatchObject({ name: "GitLabApiError", status: 500 });
   });
 
   it("walks a second page of a per-issue collection on the x-next-page header", async () => {

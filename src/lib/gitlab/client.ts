@@ -213,7 +213,23 @@ export class GitLabGateway {
     );
     const issues: GitHubIssue[] = [];
     for (const object of objects) {
-      issues.push(await this.issueWithEvidence(repository, object));
+      try {
+        issues.push(await this.issueWithEvidence(repository, object));
+      } catch (error) {
+        // Only 404 answers "this issue is gone": definitive for that issue
+        // alone (issue 563), so the listing omits it and the run completes
+        // for the remaining issues. The repository itself is not gone — any
+        // other status is an upstream problem and still fails the run. The
+        // skip is logged because a silent skip on a list endpoint is easy to
+        // misread as "no issues".
+        if (error instanceof GitLabApiError && error.status === 404) {
+          console.error(
+            `GitLab issue ${object.iid} in ${repository.owner}/${repository.name} disappeared between the listing and its evidence reads; omitting it from the listing.`,
+          );
+          continue;
+        }
+        throw error;
+      }
     }
     return issues;
   }
