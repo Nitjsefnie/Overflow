@@ -477,10 +477,20 @@ describe("GitLabGateway", () => {
     );
     // The targeting controls select embedded-timeline refreshes on GitHub;
     // GitLab embeds no timeline, so the per-issue reads happen either way.
-    expect(optionedRequests.filter((path) => path.endsWith("/resource_label_events")))
-      .toEqual(bareRequests.filter((path) => path.endsWith("/resource_label_events")));
-    expect(optionedRequests.filter((path) => path.endsWith("/notes")))
-      .toEqual(bareRequests.filter((path) => path.endsWith("/notes")));
+    // The equalities are only meaningful against non-empty records: assert
+    // the per-issue reads happened on BOTH sides before comparing them, so
+    // an empty sweep (a mutant that returns empty slices without fetching)
+    // can no longer satisfy the differential.
+    const bareLabelEventPaths = bareRequests.filter((path) => path.endsWith("/resource_label_events"));
+    const optionedLabelEventPaths = optionedRequests.filter((path) => path.endsWith("/resource_label_events"));
+    expect(bareLabelEventPaths).toHaveLength(1);
+    expect(optionedLabelEventPaths).toHaveLength(1);
+    expect(optionedLabelEventPaths).toEqual(bareLabelEventPaths);
+    const bareNotePaths = bareRequests.filter((path) => path.endsWith("/notes"));
+    const optionedNotePaths = optionedRequests.filter((path) => path.endsWith("/notes"));
+    expect(bareNotePaths).toHaveLength(1);
+    expect(optionedNotePaths).toHaveLength(1);
+    expect(optionedNotePaths).toEqual(bareNotePaths);
     expect(bare).toHaveLength(1);
     expect(optioned).toHaveLength(1);
   });
