@@ -440,7 +440,11 @@ function toGitHubRepository(project: GitLabProject): GitHubRepository {
   return {
     id: project.id,
     owner,
-    name: project.name,
+    // GitLab's `name` is the display name and may differ from the path slug,
+    // while every project endpoint is addressed owner/name. `name` is
+    // therefore the last path segment, so owner/name joined always equals
+    // path_with_namespace (issue 543).
+    name: pathParts[pathParts.length - 1],
     ownerType: project.namespace?.kind === "group" ? "ORGANIZATION" : "USER",
     fullName: project.path_with_namespace,
     visibility: project.visibility === "public" ? "PUBLIC" : "PRIVATE",
