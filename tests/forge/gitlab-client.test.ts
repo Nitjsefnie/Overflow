@@ -82,6 +82,14 @@ const deletedLabelEvent = {
   label: null,
 };
 
+// The length-0 name arm: an event whose label object carries an empty name
+// carries no readable evidence either, so the mapping must skip it.
+const emptyNameLabelEvent = {
+  ...addedLabelEvent,
+  id: 145,
+  label: { id: 75, name: "" },
+};
+
 // Live-verified notes shape: activity records carry `system: true` on the
 // same endpoint, and `updated_at` is the only edit witness a note carries.
 const systemNote = {
@@ -114,6 +122,16 @@ const editedNote = {
   body: "corrected after the merge",
   created_at: "2026-09-10T10:00:00Z",
   updated_at: "2026-09-11T09:00:00Z",
+};
+
+// A note that omits the `system` field entirely: only `system: true` marks
+// an activity record, so an unmarked note is a human comment.
+const unmarkedNote = {
+  id: 307,
+  body: "posted before the system flag existed",
+  author: { id: 2, username: "contributor" },
+  created_at: "2026-09-10T11:00:00Z",
+  updated_at: "2026-09-10T11:00:00Z",
 };
 
 function gateway(fetchImplementation: typeof fetch): GitLabGateway {
@@ -476,6 +494,87 @@ describe("GitLabGateway", () => {
     ]));
     await expect(client.listIssues({ owner: "gitlab-org", name: "gitlab" }))
       .rejects.toMatchObject({ name: "GitLabApiError", status: 403 });
+  });
+
+  it("walks a second page of a per-issue collection on the x-next-page header", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      requests.push(request.url);
+      if (request.url.includes("/notes")) {
+        if (request.url.includes("page=2")) {
+          return new Response(JSON.stringify([editedNote]), {
+            status: 200, headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify([note]), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-next-page": "2" },
+        });
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const comments = await client.listIssueComments({ owner: "gitlab-org", name: "gitlab" }, 12);
+    expect(comments.map((comment) => comment.id)).toEqual(["305", "306"]);
+    const notePages = requests.filter((url) => url.includes("/notes"));
+    expect(notePages).toHaveLength(2);
+    expect(notePages[0]).toContain("page=1");
+    expect(notePages[1]).toContain("page=2");
+  });
+
+  it("throws loudly on a malformed x-next-page header instead of looping or truncating", async () => {
+    // A bounded mock: under the guard deleted, a malformed header would loop
+    // the walk forever; the mock 503s after three requests so the mutant
+    // fails fast on a non-matching error instead of burning the test timeout.
+    const serve = (header: string) => {
+      let hits = 0;
+      return gateway(async () => {
+        hits += 1;
+        if (hits > 3) return new Response("pagination loop", { status: 503 });
+        return new Response(JSON.stringify([note]), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-next-page": header },
+        });
+      });
+    };
+    const repository = { owner: "gitlab-org", name: "gitlab" };
+    // Non-numeric, and non-advancing: neither may loop the walk nor end it.
+    await expect(serve("abc").listIssueComments(repository, 12))
+      .rejects.toThrow(/invalid x-next-page/);
+    await expect(serve("1").listIssueComments(repository, 12))
+      .rejects.toThrow(/invalid x-next-page/);
+  });
+
+  it("skips a label event whose label name is empty", async () => {
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      if (request.url.includes("/resource_label_events")) {
+        return new Response(JSON.stringify([addedLabelEvent, emptyNameLabelEvent, deletedLabelEvent]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const history = await client.listIssueLabelEvents({ owner: "gitlab-org", name: "gitlab" }, 12);
+    // The union carries ASSIGNED/UNASSIGNED arms without a label field, so
+    // the assertion matches on whole events rather than projecting .label.
+    expect(history).toEqual([
+      expect.objectContaining({ kind: "LABELED", id: "142", label: "delivered::6" }),
+    ]);
+  });
+
+  it("keeps a note that omits the system field entirely; only system true drops", async () => {
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      if (request.url.includes("/notes")) {
+        return new Response(JSON.stringify([systemNote, unmarkedNote]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const comments = await client.listIssueComments({ owner: "gitlab-org", name: "gitlab" }, 12);
+    expect(comments.map((comment) => comment.id)).toEqual(["307"]);
   });
 
   it("returns no reviews, ever, per contract decision 2", async () => {
