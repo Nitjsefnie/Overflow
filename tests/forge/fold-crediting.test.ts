@@ -423,9 +423,6 @@ describe("linking claims past GitLab work (decision 3 retroactivity)", () => {
 
   it("moves a self-work GitLab settlement into its calibration and deletes the row", async () => {
     const scenario = await createGitLabScenario({ linked: false });
-    // Self-work: the debtor IS the linking contributor. Seed a second
-    // settlement whose debtor is the linked user, via the same fold publish
-    // plus a raw copy with the debtor re-pointed.
     await publish(scenario, foldOf(scenario));
     // Self-work: the debtor IS the linking contributor. The existing row is
     // re-pointed to the contributor as its debtor, keeping its identity.
@@ -459,11 +456,23 @@ describe("linking claims past GitLab work (decision 3 retroactivity)", () => {
       insert into users (github_user_id, github_login) values (960001, 'github-claimer') returning id
     `;
     // A GitHub sign-in whose numeric id collides with the GitLab forge id:
-    // without the provider scope this would steal the GitLab settlement.
+    // without the provider scopes this would steal the GitLab settlement AND
+    // stamp the GitLab MR's author with the claiming account.
     await claimGitHubIdentity(sql, contributor.id, FORGE_USER_ID);
     expect(await settlementRows(scenario.repositoryId)).toEqual([
       expect.objectContaining({ status: "UNCLAIMED", creditor_id: null }),
     ]);
+    // The MR-stamp scope: the GitLab MR's author columns stay untouched.
+    const [mergeRequest] = await sql`
+      select author_id::text as author_id, author_github_login, author_github_user_id::text as author_github_user_id
+      from pull_requests
+      where repository_id = ${scenario.repositoryId}
+    `;
+    expect(mergeRequest).toMatchObject({
+      author_id: null,
+      author_github_login: "gitlabber",
+      author_github_user_id: String(FORGE_USER_ID),
+    });
   });
 
   it("a GitLab identity claim never touches GitHub settlements", async () => {
