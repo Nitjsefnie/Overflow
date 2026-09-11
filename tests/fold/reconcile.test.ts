@@ -13,6 +13,7 @@ import { GitHubGateway } from "@/lib/github/client";
 import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
 import { createHash } from "node:crypto";
 import { GitHubApiError } from "@/lib/github/errors";
+import { GitLabApiError } from "@/lib/gitlab/client";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
@@ -705,6 +706,58 @@ describe("reconcileRepository", () => {
       expect(foldedIds).not.toContain(999);
       expect(materializeInput.synchronization?.dirtySubjects).toEqual([poison, good]);
       expect(vi.mocked(dependencies.github.getIssue).mock.calls.map(([, subject]) => subject.number)).toEqual([42, 43]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("completes the run when a dirty GitLab issue is gone upstream, discarding only that subject", async () => {
+    // A GitLab issue can vanish between the pass that journaled its dirty row
+    // and the per-subject read of the next pass; the gateway's per-issue reads
+    // then answer GitLab's fixed 404, which the GitHub-shaped classifier never
+    // matched. The discard is keyed with the subject's generation, so a
+    // genuine re-enqueue (bumped generation) still reconciles.
+    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
+    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
+    const notFound = new GitLabApiError(404);
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssue: vi.fn(async (_reference: GitHubRepositoryReference, subject: GitHubSubject) => {
+          if (subject.number === poison.number) throw notFound;
+          return { ...reconciliationIssue({ id: subject.id, number: subject.number }), closingPullRequests: [] };
+        }),
+      },
+    });
+    const repository = await dependencies.store.getRepository("repository");
+    repository!.provider = "gitlab";
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
+    const discard = vi.fn().mockResolvedValue(undefined);
+    dependencies.store.discardDirtyReconciliationSubject = discard;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(discard).toHaveBeenCalledWith({
+        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: 7,
+      });
+      expect(dependencies.store.failRun).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=42 reason=NOT_FOUND",
+      );
+      const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
+      const foldedIds = materializeInput.fold.issues.map((issue) => issue.githubIssueId);
+      expect(foldedIds).toContain(555);
+      expect(foldedIds).not.toContain(999);
     } finally {
       errorLog.mockRestore();
     }
