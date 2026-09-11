@@ -1575,6 +1575,7 @@ function successfulDependencies(
       },
     },
     store: {
+      findRepositoryProviderById: async () => null,
       async findRepositoryByGitHubId() {
         return options.existingRepository
           ? {

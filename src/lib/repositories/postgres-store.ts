@@ -58,6 +58,18 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
   ) {}
 
+  public async findRepositoryProviderById(githubRepositoryId: number): Promise<string | null> {
+    const [row] = await this.sql<{ provider: string | null }[]>`
+      select provider
+      from registered_repositories
+      where github_repository_id = ${githubRepositoryId}
+      limit 1
+    `;
+    // No row holds the id: no provider to collide with. Rows that predate
+    // migration 038 carry the default 'github'.
+    return row === undefined ? null : row.provider;
+  }
+
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null> {
     const [row] = await this.sql<RepositoryRow[]>`
       select

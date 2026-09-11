@@ -1341,6 +1341,9 @@ function createHarness(options: HarnessOptions = {}) {
         duplicateLookupIds.push(githubRepositoryId);
         return options.existing ?? null;
       },
+      async findRepositoryProviderById() {
+        return null;
+      },
       async findRepositoryRegistrationStateByOwnerName(ownerName: string) {
         stateLookupsByOwnerName.push(ownerName);
         if (options.stateLookupFailure !== undefined) {
