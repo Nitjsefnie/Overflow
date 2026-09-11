@@ -62,8 +62,9 @@ export type RepositoryRegistrationGateway = {
    * resolution primitive (issue 516). The id survives a rename and an owner
    * transfer (see the parallel note on `GitHubPullRequest.repositoryGitHubId`),
    * while an owner/name path stored earlier does not. Answers null only when
-   * GitHub reports no repository for the id (HTTP 404); every other failure is
-   * rethrown so a transient outage is never read as a deleted repository.
+   * GitHub 404s the id — no repository visible to this token; every other
+   * failure is rethrown so a transient outage is never read as a deleted
+   * repository.
    */
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>>;
@@ -393,8 +394,8 @@ export async function registerRepository(
  * repository's immutable id to the owner/name GitHub serves now — the id
  * survives renames and owner transfers while a stored path does not (issue
  * 516) — and the hook is deleted through that current path, where a GitHub 404
- * counts as proven. A repository the id no longer resolves to is deleted
- * itself, and its webhooks are gone with it, so the record clears without a
+ * counts as proven. A null resolution — the repository deleted, or hidden
+ * from this credential since registration — clears the record without a
  * deletion call. A webhook that cannot be proven deleted keeps its record for
  * the next drain. Never throws: the drain must never disturb the registration
  * or unregistration that just succeeded.
@@ -426,9 +427,7 @@ export async function drainAbandonedWebhooks(
 
       // The hook is addressed through the repository's immutable id, never the
       // stored owner/name: the id survives a rename and an owner transfer, so
-      // the resolution carries the path GitHub serves NOW. A 404 here is a
-      // deleted repository, whose webhooks are gone with it — proven without
-      // touching the webhook at all.
+      // the resolution carries the path GitHub serves NOW.
       let repository: GitHubRepository | null;
       try {
         repository = await dependencies.github.getRepositoryById(record.githubRepositoryId);
@@ -438,6 +437,11 @@ export async function drainAbandonedWebhooks(
         continue;
       }
 
+      // Null answers no repository visible to this token — deleted, or hidden
+      // from this credential since registration (a public repository can go
+      // private). Either way the hook can no longer be addressed, so the
+      // record clears below; a hook that somehow still lives is cleared
+      // unrecorded, the same decision the stored-name drain made in this case.
       if (repository !== null) {
         const reference: GitHubRepositoryReference = { owner: repository.owner, name: repository.name };
         try {
