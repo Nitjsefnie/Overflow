@@ -444,19 +444,101 @@ describe("GET /api/repositories/labels (GitLab)", () => {
 
   it("answers a structured 503 when token encryption is not configured", async () => {
     readSession.mockResolvedValue(memberSession());
-    // TOKEN_ENCRYPTION_KEY is unset in the test environment, so no stub here:
-    // stubbing it would silence the gate this case exists to pin.
-    stubGitLabGatewayLabels(["bug"]);
-    getForgeToken.mockResolvedValue("gitlab-pat");
+    // The pin controls the variable it pins: the verify job exports
+    // TOKEN_ENCRYPTION_KEY for every test it runs, so absence cannot be read
+    // from the ambient environment — it is deleted here and restored whatever
+    // the case answers.
+    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
+    delete process.env.TOKEN_ENCRYPTION_KEY;
+    try {
+      stubGitLabGatewayLabels(["bug"]);
+      getForgeToken.mockResolvedValue("gitlab-pat");
 
-    const response = await labelsRoute.GET(gitlabLabelsRequest());
+      const response = await labelsRoute.GET(gitlabLabelsRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body).toEqual({
+        error: { code: "CONFIGURATION", message: "Token encryption is not configured." },
+      });
+      expect(getForgeToken).not.toHaveBeenCalled();
+    } finally {
+      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+    }
+  });
+
+  it("answers the shared 404 when a numeric project id resolves to no project", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity("gitlab-pat");
+    const getRepositoryById = vi.fn();
+    GitLabGateway.mockImplementation(function () {
+      return { getRepositoryById, listRepositoryLabels };
+    });
+    getRepositoryById.mockResolvedValue(null);
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest("4242"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "NOT_FOUND",
+        message: "No GitLab project with that id or path is visible through your linked identity. Check the project id or path and that the identity still has access, then retry.",
+      },
+    });
+    expect(getRepositoryById).toHaveBeenCalledTimes(1);
+    expect(getRepositoryById).toHaveBeenCalledWith(4242);
+    expect(listRepositoryLabels).not.toHaveBeenCalled();
+  });
+
+  it("resolves a numeric project id through the gateway before reading its labels", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity("gitlab-pat");
+    const getRepositoryById = vi.fn();
+    GitLabGateway.mockImplementation(function () {
+      return { getRepositoryById, listRepositoryLabels };
+    });
+    getRepositoryById.mockResolvedValue({ id: 4242, owner: "group", name: "proj" });
+    listRepositoryLabels.mockResolvedValue(new Set(["bug"]));
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest("4242"));
     const body = await response.json();
 
-    expect(response.status).toBe(503);
-    expect(body).toEqual({
-      error: { code: "CONFIGURATION", message: "Token encryption is not configured." },
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ labels: ["bug"] });
+    expect(getRepositoryById).toHaveBeenCalledTimes(1);
+    expect(getRepositoryById).toHaveBeenCalledWith(4242);
+    expect(listRepositoryLabels).toHaveBeenCalledTimes(1);
+    expect(listRepositoryLabels).toHaveBeenCalledWith({ owner: "group", name: "proj" });
+  });
+
+  it("answers a GitLab-worded 502 when the identity store read fails", async () => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+    getForgeToken.mockRejectedValue(new Error("identity store exploded"));
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to read the repository labels on GitLab." },
     });
-    expect(getForgeToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a zero id", "0", "The GitLab project id must be a positive integer."],
+    ["an id beyond the safe-integer range", "99999999999999999999999999999999", "The GitLab project id must be a positive integer."],
+    ["a bare word with no namespace", "justaproject", "Submit the GitLab project as a positive numeric id or a path with namespace, like group/project."],
+  ])("returns a structured 400 for %s", async (_what, project, expectedMessage) => {
+    readSession.mockResolvedValue(memberSession());
+    stubLinkedIdentity();
+
+    const response = await labelsRoute.GET(gitlabLabelsRequest(project));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: expectedMessage },
+    });
   });
 });
 
