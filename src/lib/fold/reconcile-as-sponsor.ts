@@ -3,7 +3,8 @@ import {
   reconcileRepository,
   type ReconciliationSummary,
 } from "@/lib/fold/reconcile";
-import { resolveGateway } from "@/lib/forge/gateway";
+import { ForgeCredentialRejectedError, resolveGateway } from "@/lib/forge/gateway";
+import { GitLabApiError } from "@/lib/gitlab/client";
 
 /**
  * Folds one repository with its own sponsor's forge credentials.
@@ -32,6 +33,12 @@ export type ReconcileAsSponsorOptions = {
   rederive?: boolean;
   /** Decrypts the linked identity's PAT for a GitLab repository's instance. */
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
+  /**
+   * Records a rejected credential on the linked identity (the re-link
+   * signal). Best-effort: a failure here is logged and the fold's own error
+   * stands — see the credential guard in `sponsorGateway`.
+   */
+  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>;
 };
 
 export function reconcileRepositoryAsSponsor(
@@ -47,7 +54,16 @@ export function reconcileRepositoryAsSponsor(
   options?: ReconcileAsSponsorOptions,
 ): Promise<ReconciliationSummary> {
   return reconcileRepository(
-    { store, github: sponsorGateway(store, repositoryId, createGateway, options?.resolveForgeToken) },
+    {
+      store,
+      github: sponsorGateway(
+        store,
+        repositoryId,
+        createGateway,
+        options?.resolveForgeToken,
+        options?.markCredentialRejected,
+      ),
+    },
     repositoryId,
     { rederive: options?.rederive },
   );
@@ -66,13 +82,18 @@ export function reconcileRepositoryAsSponsor(
  * GitLab repositories resolve the linked identity's decrypted PAT on the
  * repository's instance and are FAIL-CLOSED: a missing or unverified identity
  * — or an unwired resolver — throws, failing that repository's reconciliation,
- * rather than reading with the wrong credential or silently skipping.
+ * rather than reading with the wrong credential or silently skipping. Every
+ * read a GitLab fold makes is additionally guarded: a 401/403 from the
+ * instance marks the linked identity as needing re-verification (through the
+ * injected marker, best-effort) and surfaces as `ForgeCredentialRejectedError`,
+ * whose fixed message is what the run failure records.
  */
 export function sponsorGateway(
   store: ReconciliationStore,
   repositoryId: string,
   createGateway: (accessToken: string, owner: string) => ReconciliationGateway,
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>,
+  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>,
 ): ReconciliationGateway {
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
@@ -99,12 +120,17 @@ export function sponsorGateway(
             "No verified GitLab identity is linked for this repository's instance, so the reconciliation failed closed.",
           );
         }
-        return resolveGateway({
-          provider: "gitlab",
+        return guardGitLabCredential(
+          resolveGateway({
+            provider: "gitlab",
+            instanceUrl,
+            github: { accessToken: token },
+            gitlab: { instanceUrl, token },
+          }) as ReconciliationGateway,
+          repository.sponsor.id,
           instanceUrl,
-          github: { accessToken: token },
-          gitlab: { instanceUrl, token },
-        }) as ReconciliationGateway;
+          markCredentialRejected,
+        );
       }
       const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
       if (accessToken === null) {
@@ -124,5 +150,57 @@ export function sponsorGateway(
       (await gateway()).getPullRequestReviews(repository, pullRequestNumber),
     getPullRequestDiff: async (repository, pullRequestNumber) =>
       (await gateway()).getPullRequestDiff(repository, pullRequestNumber),
+  };
+}
+
+/**
+ * The credential guard around a GitLab fold's reads: an instance refusing a
+ * read made through the linked identity with 401 (the token is gone) or 403
+ * (its scope no longer suffices) is the one failure class that will repeat on
+ * every retry, so it is recorded — the injected marker stamps the identity's
+ * re-verification signal — and rethrown as `ForgeCredentialRejectedError`,
+ * whose message is a fixed sentence the run failure can store. Marking is
+ * best-effort: when the mark itself fails, the original error is rethrown so
+ * the fold's own failure path still runs. Every other failure class — a 404,
+ * a 5xx, a transport failure — is rethrown untouched and marks nothing, and
+ * a healthy read passes through unchanged.
+ */
+function guardGitLabCredential(
+  gateway: ReconciliationGateway,
+  userId: string,
+  instanceUrl: string,
+  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>,
+): ReconciliationGateway {
+  const guarded = async <T>(read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      if (!(error instanceof GitLabApiError) || (error.status !== 401 && error.status !== 403)) {
+        throw error;
+      }
+      if (markCredentialRejected !== undefined) {
+        try {
+          await markCredentialRejected(userId, instanceUrl);
+        } catch (markError) {
+          console.error(
+            `Marking the rejected GitLab credential failed for user ${userId} on ${instanceUrl}.`,
+            markError,
+          );
+          throw error;
+        }
+      }
+      throw new ForgeCredentialRejectedError();
+    }
+  };
+  return {
+    getRepositoryById: (githubRepositoryId) => guarded(() => gateway.getRepositoryById(githubRepositoryId)),
+    listIssues: (repository, options) => guarded(() => gateway.listIssues(repository, options)),
+    getIssue: (repository, subject) => guarded(() => gateway.getIssue(repository, subject)),
+    getPullRequestClosingIssues: (repository, subject) =>
+      guarded(() => gateway.getPullRequestClosingIssues(repository, subject)),
+    getPullRequestReviews: (repository, pullRequestNumber) =>
+      guarded(() => gateway.getPullRequestReviews(repository, pullRequestNumber)),
+    getPullRequestDiff: (repository, pullRequestNumber) =>
+      guarded(() => gateway.getPullRequestDiff(repository, pullRequestNumber)),
   };
 }

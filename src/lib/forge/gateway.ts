@@ -61,6 +61,22 @@ export class ForgeGatewayResolutionError extends Error {
   }
 }
 
+/**
+ * Raised when a read made through a linked identity is refused by the forge
+ * as an authentication or scope failure (GitLab 401/403). The sentence is a
+ * code constant and never carries upstream error text, because the fold
+ * stores this error's class of message where the product reads it; the
+ * upstream detail stays in the service log. The identity's row is marked as
+ * needing re-verification by the seam that raises this — see
+ * `sponsorGateway`'s credential guard.
+ */
+export class ForgeCredentialRejectedError extends Error {
+  public constructor() {
+    super("The linked GitLab credential was rejected by the instance, so the fold could not read through it. Re-link the identity to restore folding.");
+    this.name = "ForgeCredentialRejectedError";
+  }
+}
+
 export type ResolveGatewayInput = {
   /** The repository row's `provider`; null on rows that predate migration 038's columns. */
   provider: string | null;

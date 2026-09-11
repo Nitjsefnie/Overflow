@@ -27,10 +27,15 @@ export async function registerNodejs(): Promise<void> {
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
   const { getSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
-  // GitLab repositories fold with the sponsor's linked identity's PAT,
-  // resolved and decrypted at first read through the same memoization.
+  // GitLab repositories fold with the sponsor's linked identity's PAT, resolved
+  // and decrypted at first read through the same memoization, and a rejection
+  // of that credential stamps the identity's re-verification marker through the
+  // same store.
+  const identityStore = new PostgresForgeIdentityStore(getSql());
   const resolveForgeToken = (userId: string, instanceUrl: string) =>
-    new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
+    identityStore.getForgeToken(userId, instanceUrl);
+  const markCredentialRejected = (userId: string, instanceUrl: string) =>
+    identityStore.markTokenRejected(userId, instanceUrl);
 
   startReconciliationWorker({
     drain: async () => {
@@ -44,6 +49,7 @@ export async function registerNodejs(): Promise<void> {
           reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
             ...options,
             resolveForgeToken,
+            markCredentialRejected,
           }),
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of
