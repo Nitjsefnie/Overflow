@@ -237,6 +237,7 @@ describe("initial PostgreSQL materialization", () => {
       "038_forge_identities_and_provider_columns.sql",
       "039_forge_identity_user_fk.sql",
       "040_forge_repository_columns.sql",
+      "041_forge_identity_token_failed_at.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
