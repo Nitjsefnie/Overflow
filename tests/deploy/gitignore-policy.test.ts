@@ -10,10 +10,16 @@ const planningArtifacts = [
   "docs/superpowers/specs/2026-09-04-overflow-mvp-design.md",
 ];
 
+// Every docs/ probe must be ignored by the deny-by-default `*` on line 1 of
+// .gitignore and by nothing else: a docs-specific rule of either sign, at any
+// depth, changes the attributed source even when it is inert (a `!docs/`
+// re-include that the next `docs/*` line re-excludes leaves every path ignored
+// and `git ls-files docs/` empty, so only the attribution catches it).
 const docsProbes = [
   "docs/probe.md",
+  "docs/probe.html",
   "docs/reviews/probe.html",
-  "docs/reviews/2026-09-05-full-application-audit.html",
+  "docs/reviews/nested/probe.html",
   "docs/anything/deep/probe.md",
 ];
 
@@ -37,9 +43,12 @@ describe("docs/superpowers planning artifacts are untracked", () => {
 });
 
 describe("docs/ is denied as a prefix with no exemption beneath it", () => {
-  it("ignores every docs/** probe, including the formerly exempted audit path", () => {
+  it("ignores every docs/** probe by the line-1 `*` deny and no docs-specific rule", () => {
     for (const pathname of docsProbes) {
-      expect(checkIgnore(pathname), pathname).toBe(0);
+      expect(checkIgnoreVerbose(pathname), pathname).toStrictEqual({
+        status: 0,
+        attribution: `.gitignore:1:*\t${pathname}`,
+      });
     }
   });
 
@@ -62,12 +71,18 @@ describe("docs/forge-evidence-contract is untracked", () => {
       expect(checkIgnore(pathname), pathname).toBe(0);
     }
   });
-
-  it("ignores probe paths directly under docs/", () => {
-    expect(checkIgnore("docs/probe.md")).toBe(0);
-    expect(checkIgnore("docs/probe.html")).toBe(0);
-  });
 });
+
+function checkIgnoreVerbose(pathname: string): {
+  status: number | null;
+  attribution: string;
+} {
+  const result = spawnSync("git", ["check-ignore", "--verbose", "--no-index", pathname], {
+    cwd: resolve("."),
+    encoding: "utf8",
+  });
+  return { status: result.status, attribution: result.stdout.trimEnd() };
+}
 
 function checkIgnore(pathname: string): number | null {
   return spawnSync("git", ["check-ignore", "--no-index", "--quiet", pathname], {
