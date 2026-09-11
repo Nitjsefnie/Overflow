@@ -791,6 +791,19 @@ export async function unregisterRepository(
     );
   }
 
+  // The target lookup matches the stored owner name, which is not
+  // forge-qualified, so a GitLab row can resolve here; the guard runs before
+  // the webhook deletion and before the store write, so a GitHub-shaped
+  // unregistration never deactivates a registration another forge holds.
+  const storedProvider = await dependencies.store.findRepositoryProviderById(state.repository.githubRepositoryId);
+  if (storedProvider !== null && storedProvider !== "github") {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      `GitHub repository ${state.repository.githubRepositoryId} collides with forge id ${state.repository.githubRepositoryId} already registered as provider '${storedProvider}'. `
+        + "An id's forge history never migrates between forges; unregistration refused.",
+    );
+  }
+
   // The sponsor check precedes every GitHub request: an outsider asking for
   // an unregistration must not move anything on GitHub, and the stored
   // sponsor is already in hand from the lookup above. The store re-checks
@@ -1052,6 +1065,19 @@ export async function changeRepositoryCatalog(
     throw new RepositoryRegistrationError(
       "CONFLICT",
       "This GitHub repository is not registered, so there is no catalog to change.",
+    );
+  }
+
+  // The reverse cross-forge guard on the change path: a GitHub-shaped body may
+  // never move a row whose forge id a GitLab registration holds — the id's
+  // forge history (GitLab-era settlements folded against this id) never
+  // migrates between forges.
+  const storedProvider = await dependencies.store.findRepositoryProviderById(repository.id);
+  if (storedProvider !== null && storedProvider !== "github") {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      `GitHub repository ${repository.id} collides with forge id ${repository.id} already registered as provider '${storedProvider}'. `
+        + "An id's forge history never migrates between forges; catalog change refused.",
     );
   }
 
