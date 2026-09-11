@@ -183,10 +183,15 @@ async function gitlabLabelsResponse(
 
   const project = parseGitLabProjectReference(reference.project);
   if (project === null) {
+    // The same split the registration rule makes (register.ts): a numeric
+    // reference that is not a positive integer names the id rule, and only a
+    // non-numeric, slash-less reference reads as a malformed path.
     return errorResponse(
       400,
       "INVALID_REQUEST",
-      "Submit the GitLab project as a positive numeric id or a path with namespace, like group/project.",
+      /^\d+$/.test(reference.project)
+        ? "The GitLab project id must be a positive integer."
+        : "Submit the GitLab project as a positive numeric id or a path with namespace, like group/project.",
     );
   }
 
