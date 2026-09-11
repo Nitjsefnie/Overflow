@@ -176,10 +176,12 @@ describe("migration 038: forge identities and provider columns", () => {
       store: {
         listActiveRepositoryIds: async () => [created!.id],
         findActiveRepositoryById: async (id) => (created!.id === id ? { ...created! } : null),
+        findActiveRepositoryForgeById: async () => ({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" }),
         getGitHubAccessToken: async (sponsorId) => {
           credentialReads.push(sponsorId);
           return `token-${sponsorId}`;
         },
+        getForgeToken: async () => { throw new Error("must not read a forge identity for a webhook-less registration"); },
         requestRepositoryRederivation: async () => {
           throw new Error("no queue work may be requested for a webhook-less repository");
         },
@@ -187,6 +189,9 @@ describe("migration 038: forge identities and provider columns", () => {
       webhookSecret: "secret",
       createGateway: () => {
         throw new Error("no gateway may be built for a webhook-less repository");
+      },
+      createGitLabGateway: () => {
+        throw new Error("no GitLab gateway may be built for a webhook-less repository");
       },
       report: (outcome) => {
         outcomes.push(outcome);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitLabGateway } from "@/lib/gitlab/client";
 import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "@/lib/repositories/upgrade-webhooks";
 import type { RegisteredRepository } from "@/lib/repositories/register";
 
@@ -8,10 +9,11 @@ const registration: RegisteredRepository = {
   ownerName: "old-owner/old-name", sponsorId: "sponsor-1", visibility: "PUBLIC",
 };
 
-function fixture() {
+function fixture(options: { provider?: string; instanceUrl?: string | null } = {}) {
   const requests: Request[] = [];
   const queued: { repositoryId: string; reason: string }[] = [];
   const credentials: string[] = [];
+  const forgeCredentials: string[] = [];
   const outcomes: unknown[] = [];
   const registrations = [registration];
   const repository = {
@@ -27,7 +29,15 @@ function fixture() {
     store: {
       listActiveRepositoryIds: async () => registrations.map((entry) => entry.id),
       findActiveRepositoryById: async (id) => registrations.find((entry) => entry.id === id) ?? null,
+      findActiveRepositoryForgeById: async (id) =>
+        registrations.some((entry) => entry.id === id)
+          ? { provider: options.provider ?? "github", instanceUrl: options.instanceUrl ?? null }
+          : null,
       getGitHubAccessToken: async (sponsorId) => { credentials.push(sponsorId); return `token-${sponsorId}`; },
+      getForgeToken: async (sponsorId, instanceUrl) => {
+        forgeCredentials.push(`${sponsorId}@${instanceUrl}`);
+        return `glpat-${sponsorId}`;
+      },
       requestRepositoryRederivation: async (repositoryId) => { queued.push({ repositoryId, reason: "REDERIVATION" }); },
     },
     webhookSecret: "existing-secret",
@@ -40,9 +50,27 @@ function fixture() {
       }
       return Response.json(hook);
     } }),
+    // Host-sensitive: a GitLab gateway built on any other instance cannot
+    // satisfy the verification through this transport.
+    createGitLabGateway: (instanceUrl, token) => new GitLabGateway({ instanceUrl, token, fetch: async (input, init) => {
+      const request = new Request(input, init); requests.push(request);
+      if (new URL(request.url).origin !== "https://gitlab.example.com") {
+        return new Response("wrong instance", { status: 404 });
+      }
+      if (request.method === "PUT") return new Response(null, { status: 200 });
+      if (request.url.includes("/hooks/")) {
+        return Response.json({ id: 81, url: "https://overflow.example/api/gitlab/webhooks", push_events: false, issues_events: false, merge_requests_events: false });
+      }
+      return Response.json({
+        id: 42, name: "project", path: "project", path_with_namespace: "gl-group/project",
+        visibility: "public", web_url: "https://gitlab.example.com/gl-group/project",
+        namespace: { name: "gl-group", path: "gl-group", kind: "group" },
+        permissions: { project_access: { access_level: 40 } },
+      });
+    } }),
     report: (outcome) => { outcomes.push(outcome); },
   };
-  return { dependencies, requests, queued, credentials, outcomes, registrations, repository };
+  return { dependencies, requests, queued, credentials, forgeCredentials, outcomes, registrations, repository, hook };
 }
 
 describe("existing registration webhook upgrade", () => {
@@ -163,5 +191,66 @@ describe("existing registration webhook upgrade", () => {
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
     expect(f.queued).toEqual([]);
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "SUBSCRIPTION_FAILED" }]);
+  });
+
+  // The GitLab arm (issue 547): provider 'gitlab' + a webhook id verifies the
+  // hook through the sponsor's forge-identity token for the registration's
+  // own instance, then queues the same rederivation the GitHub arm queues.
+  it("verifies a GitLab registration's hook through the forge identity and queues repair", async () => {
+    const f = fixture({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" });
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 1, failed: 0 });
+    expect(f.forgeCredentials).toEqual(["sponsor-1@https://gitlab.example.com"]);
+    expect(f.credentials).toEqual([]);
+    expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "GET /api/v4/projects/42",
+      "GET /api/v4/projects/gl-group%2Fproject/hooks/81",
+      "PUT /api/v4/projects/gl-group%2Fproject/hooks/81",
+    ]);
+    expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null }]);
+    expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
+  });
+
+  it("answers CREDENTIALS_FAILED for a GitLab registration whose sponsor has no identity linked on the instance", async () => {
+    const f = fixture({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" });
+    f.dependencies.store.getForgeToken = async (sponsorId, instanceUrl) => {
+      f.forgeCredentials.push(`${sponsorId}@${instanceUrl}`);
+      return null;
+    };
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
+    expect(f.forgeCredentials).toEqual(["sponsor-1@https://gitlab.example.com"]);
+    expect(f.requests).toEqual([]);
+    expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "CREDENTIALS_FAILED" }]);
+  });
+
+  it("answers REGISTRATION_FAILED for a GitLab registration whose forge columns vanished", async () => {
+    const f = fixture({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" });
+    f.dependencies.store.findActiveRepositoryForgeById = async () => null;
+    expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
+    expect(f.requests).toEqual([]);
+    expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED" }]);
+  });
+
+  it("answers REPOSITORY_FAILED for a GitLab project that went private or lost maintainer", async () => {
+    for (const projectOverrides of [{ visibility: "private" }, { permissions: { project_access: { access_level: 30 } } }]) {
+      const f = fixture({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" });
+      f.dependencies.createGitLabGateway = (instanceUrl, token) => {
+        const gateway = new GitLabGateway({ instanceUrl, token, fetch: async () =>
+          Response.json({
+            id: 42, name: "project", path: "project", path_with_namespace: "gl-group/project",
+            ...projectOverrides,
+            web_url: "https://gitlab.example.com/gl-group/project",
+            namespace: { name: "gl-group", path: "gl-group", kind: "group" },
+          }),
+        });
+        return {
+          getRepositoryById: gateway.getRepositoryById.bind(gateway),
+          ensureWebhookEvents: async () => { throw new Error("the hook must not be read for a refused project"); },
+        };
+      };
+      expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1 });
+      expect(f.requests.filter((request) => request.method === "PUT")).toEqual([]);
+      expect(f.queued).toEqual([]);
+      expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_FAILED" }]);
+    }
   });
 });
