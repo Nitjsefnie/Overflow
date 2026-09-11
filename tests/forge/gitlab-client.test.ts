@@ -108,6 +108,52 @@ describe("GitLabGateway", () => {
     expect(requests.some((url) => url.includes("/projects/gitlab-org%2Fgitlab"))).toBe(true);
   });
 
+  it("maps name to the path slug, not the display name", async () => {
+    const displayNamed = {
+      ...project,
+      id: 42,
+      name: "My Project",
+      path: "my-project",
+      path_with_namespace: "group/my-project",
+      web_url: "https://gitlab.com/group/my-project",
+      namespace: { id: 2, name: "Group", path: "group", kind: "group" },
+    };
+    const client = gateway(async () => new Response(JSON.stringify(displayNamed), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const repository = await client.getRepository({ owner: "group", name: "my-project" });
+    expect(repository).toMatchObject({
+      id: 42,
+      owner: "group",
+      name: "my-project",
+      fullName: "group/my-project",
+      ownerType: "ORGANIZATION",
+    });
+  });
+
+  it("keeps the joined parent path as owner for a nested group, name as the slug", async () => {
+    const nested = {
+      ...project,
+      id: 43,
+      name: "My Project",
+      path: "my-project",
+      path_with_namespace: "group/sub/my-project",
+      web_url: "https://gitlab.com/group/sub/my-project",
+      namespace: { id: 3, name: "Sub", path: "sub", kind: "group" },
+    };
+    const client = gateway(async () => new Response(JSON.stringify(nested), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const repository = await client.getRepository({ owner: "group/sub", name: "my-project" });
+    expect(repository.owner).toBe("group/sub");
+    expect(repository.name).toBe("my-project");
+    // owner/name joined addresses the project: it must equal the full path.
+    expect(`${repository.owner}/${repository.name}`).toBe(repository.fullName);
+    expect(repository.ownerType).toBe("ORGANIZATION");
+  });
+
   it("captures the merge evidence and all three SHAs from the MR object", async () => {
     const client = gateway(jsonRouter([
       ["/merge_requests/17", mergeRequest],
