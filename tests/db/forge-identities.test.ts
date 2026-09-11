@@ -282,7 +282,7 @@ describe("migration 038: forge identities and provider columns", () => {
     expect(mine).toHaveLength(1);
     // The view's exact field set: no encrypted_token, no user_id, no envelope.
     expect(Object.keys(mine[0]!).sort()).toEqual([
-      "forgeLogin", "id", "instanceUrl", "provider", "verifiedAt",
+      "forgeLogin", "id", "instanceUrl", "provider", "tokenFailedAt", "verifiedAt",
     ]);
     expect(JSON.stringify(mine[0])).not.toContain("never-leak");
   });
@@ -303,5 +303,104 @@ describe("migration 038: forge identities and provider columns", () => {
     );
     expect(listSelect).toContain("select id, provider, instance_url, forge_login, verified_at");
     expect(listSelect).not.toContain("encrypted_token");
+  });
+});
+
+describe("migration 041: token re-verification marking", () => {
+  it("stamps token_failed_at on the owner's row for the normalized instance, and nowhere else", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930006, 'mark-owner') returning id
+    `;
+    const marked = await store.upsertIdentity({
+      userId: user!.id,
+      provider: "gitlab",
+      instanceUrl: "https://mark-test.example.com",
+      forgeUserId: 7010,
+      forgeLogin: "marker",
+      encryptedToken: "v1.test.envelope",
+    });
+    const elsewhere = await store.upsertIdentity({
+      userId: user!.id,
+      provider: "gitlab",
+      instanceUrl: "https://mark-other.example.com",
+      forgeUserId: 7011,
+      forgeLogin: "elsewhere",
+      encryptedToken: "v1.test.envelope",
+    });
+    expect(marked).not.toBeNull();
+    expect(elsewhere).not.toBeNull();
+
+    // The caller's spelling of the instance is normalized before the match,
+    // the same way the gateway's token read normalizes it.
+    await store.markTokenRejected(user!.id, "https://Mark-Test.Example.com/overspecified");
+
+    const listed = await store.listForUser(user!.id);
+    expect(listed.find((identity) => identity.instanceUrl === "https://mark-test.example.com")!.tokenFailedAt).not.toBeNull();
+    expect(listed.find((identity) => identity.instanceUrl === "https://mark-other.example.com")!.tokenFailedAt).toBeNull();
+  });
+
+  it("re-stamps the marker on a repeated failure, overwriting a stale stamp", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930007, 'restamp-owner') returning id
+    `;
+    const identity = await store.upsertIdentity({
+      userId: user!.id,
+      provider: "gitlab",
+      instanceUrl: "https://restamp-test.example.com",
+      forgeUserId: 7012,
+      forgeLogin: "restamper",
+      encryptedToken: "v1.test.envelope",
+    });
+    expect(identity).not.toBeNull();
+    await store.markTokenRejected(user!.id, "https://restamp-test.example.com");
+    // Backdate the stamp to stand in for an older failure, then let the next
+    // rejection overwrite it. The assertion reads the record — the new stamp
+    // is strictly later than the stale one — and never a wall-clock margin.
+    await sql`
+      update user_forge_identities set token_failed_at = now() - interval '2 hours'
+      where id = ${identity!.id}
+    `;
+    const [before] = await sql<{ token_failed_at: Date }[]>`
+      select token_failed_at from user_forge_identities where id = ${identity!.id}
+    `;
+    await store.markTokenRejected(user!.id, "https://restamp-test.example.com");
+    const [after] = await sql<{ token_failed_at: Date }[]>`
+      select token_failed_at from user_forge_identities where id = ${identity!.id}
+    `;
+    expect(after!.token_failed_at.getTime()).toBeGreaterThan(before!.token_failed_at.getTime());
+  });
+
+  it("marks nothing and refuses nothing when the user holds no identity on the instance", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    await expect(store.markTokenRejected("00000000-0000-0000-0000-000000000000", "https://gitlab.com")).resolves.toBeUndefined();
+  });
+
+  it("clears the marker when the owner re-links the identity, keeping verifiedAt", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930008, 'relink-owner') returning id
+    `;
+    const link = {
+      provider: "gitlab" as const,
+      instanceUrl: "https://relink-test.example.com",
+      forgeUserId: 7013,
+    };
+    const first = await store.upsertIdentity({
+      userId: user!.id, forgeLogin: "before", encryptedToken: "v1.old.envelope", ...link,
+    });
+    expect(first).not.toBeNull();
+    await store.markTokenRejected(user!.id, "https://relink-test.example.com");
+    expect((await store.listForUser(user!.id)).find((identity) => identity.instanceUrl === "https://relink-test.example.com")!.tokenFailedAt).not.toBeNull();
+
+    const refreshed = await store.upsertIdentity({
+      userId: user!.id, forgeLogin: "after", encryptedToken: "v1.new.envelope", ...link,
+    });
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!.tokenFailedAt).toBeNull();
+    expect(refreshed!.verifiedAt).not.toBeNull();
+    const listed = await store.listForUser(user!.id);
+    expect(listed.find((identity) => identity.instanceUrl === "https://relink-test.example.com")!.tokenFailedAt).toBeNull();
   });
 });

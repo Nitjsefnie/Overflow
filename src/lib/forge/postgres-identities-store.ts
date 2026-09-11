@@ -9,6 +9,7 @@ type IdentityRow = {
   instance_url: string;
   forge_login: string;
   verified_at: Date;
+  token_failed_at: Date | null;
 };
 
 /**
@@ -52,7 +53,7 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
 
   public async listForUser(userId: string): Promise<ForgeIdentityView[]> {
     const rows = await this.sql<IdentityRow[]>`
-      select id, provider, instance_url, forge_login, verified_at
+      select id, provider, instance_url, forge_login, verified_at, token_failed_at
       from user_forge_identities
       where user_id = ${userId}
       order by created_at
@@ -63,7 +64,25 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
       instanceUrl: row.instance_url,
       forgeLogin: row.forge_login,
       verifiedAt: row.verified_at.toISOString(),
+      tokenFailedAt: row.token_failed_at === null ? null : row.token_failed_at.toISOString(),
     }));
+  }
+
+  /**
+   * Marks the owner's identity on this instance as needing re-verification.
+   * The statement matches the exact normalized instance and the provider the
+   * gateway reads with, so a rejection made through one linked identity never
+   * marks another's. Rows that do not exist match nothing and the mark is
+   * silently done — the marker records a failure the fold already surfaced,
+   * so there is nothing to refuse here.
+   */
+  public async markTokenRejected(userId: string, instanceUrl: string): Promise<void> {
+    const normalized = normalizeInstanceUrl(instanceUrl);
+    await this.sql`
+      update user_forge_identities
+      set token_failed_at = now()
+      where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
+    `;
   }
 
   public async upsertIdentity(input: {
@@ -74,18 +93,19 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
     forgeLogin: string;
     encryptedToken: string;
   }): Promise<ForgeIdentityView | null> {
-    const [row] = await this.sql<(IdentityRow & { verified_at: Date })[]>`
+    const [row] = await this.sql<IdentityRow[]>`
       insert into user_forge_identities
-        (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token, verified_at)
+        (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token, verified_at, token_failed_at)
       values
         (${input.userId}, ${input.provider}, ${input.instanceUrl}, ${input.forgeUserId},
-         ${input.forgeLogin}, ${Buffer.from(input.encryptedToken, "utf8")}, now())
+         ${input.forgeLogin}, ${Buffer.from(input.encryptedToken, "utf8")}, now(), null)
       on conflict (provider, instance_url, forge_user_id) do update
         set forge_login = excluded.forge_login,
             encrypted_token = excluded.encrypted_token,
-            verified_at = now()
+            verified_at = now(),
+            token_failed_at = null
         where user_forge_identities.user_id = excluded.user_id
-      returning id, provider, instance_url, forge_login, verified_at
+      returning id, provider, instance_url, forge_login, verified_at, token_failed_at
     `;
     if (row === undefined) {
       return null;
@@ -96,6 +116,7 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
       instanceUrl: row.instance_url,
       forgeLogin: row.forge_login,
       verifiedAt: row.verified_at.toISOString(),
+      tokenFailedAt: row.token_failed_at === null ? null : row.token_failed_at.toISOString(),
     };
   }
 
