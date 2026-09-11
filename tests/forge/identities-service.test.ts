@@ -136,18 +136,35 @@ describe("linkForgeIdentity", () => {
       // read_user alone answers /user, which is the shape issue 529 is about.
       [SELF_URL]: { status: 200, body: { id: 7, name: "overflow", scopes: ["read_user"] } },
     });
-    await expect(linkForgeIdentity(
+    const rejection = await linkForgeIdentity(
       { store, tokenEncryptionKey: TEST_KEY, fetch: fetchImplementation },
       { userId: "user-1", instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
-    )).rejects.toMatchObject({
-      name: "ForgeIdentityError",
-      code: "UNVERIFIED",
-      message: expect.stringContaining("read_api"),
+    ).then(() => null, (error: unknown) => error);
+    expect(rejection).toMatchObject({ name: "ForgeIdentityError", code: "UNVERIFIED" });
+    expect((rejection as ForgeIdentityError).message).toContain("read_api");
+    expect((rejection as ForgeIdentityError).message).toContain("read_user");
+    expect(upserts).toEqual([]);
+  });
+
+  it("bounds the scopes echoed into the refusal", async () => {
+    const { store, upserts } = fakeStore();
+    const scopes = Array.from({ length: 20 }, (_, index) => `scope_${index}_${"x".repeat(100)}`);
+    const { fetchImplementation } = fetchStub({
+      [USER_URL]: FORGE_USER,
+      [SELF_URL]: { status: 200, body: { id: 7, name: "overflow", scopes } },
     });
-    await expect(linkForgeIdentity(
+    const rejection = await linkForgeIdentity(
       { store, tokenEncryptionKey: TEST_KEY, fetch: fetchImplementation },
       { userId: "user-1", instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
-    )).rejects.toMatchObject({ message: expect.stringContaining("read_user") });
+    ).then(() => null, (error: unknown) => error);
+    expect(rejection).toMatchObject({ name: "ForgeIdentityError", code: "UNVERIFIED" });
+    const message = (rejection as ForgeIdentityError).message;
+    // At most eight entries, each cut to 32 characters: the ninth never
+    // appears, and no echoed entry carries its full 100-character tail.
+    expect(message).toContain("scope_7_");
+    expect(message).not.toContain("scope_8_");
+    expect(message).not.toContain("x".repeat(33));
+    expect(message.length).toBeLessThan(8 * 40 + 200);
     expect(upserts).toEqual([]);
   });
 
@@ -182,6 +199,8 @@ describe("linkForgeIdentity", () => {
     it.each([
       ["404, an instance older than 16.0", 404],
       ["400, a token type the endpoint does not describe", 400],
+      ["401, any other refusal to describe it", 401],
+      ["500, an instance that cannot answer", 500],
     ])("falls back to a scope-gated probe on %s and links when it answers 200", async (_label, status) => {
       const { store, upserts } = fakeStore();
       const { fetchImplementation, requests } = fetchStub({
@@ -198,12 +217,12 @@ describe("linkForgeIdentity", () => {
       expect(upserts).toHaveLength(1);
     });
 
-    it.each([[401], [403]])("refuses when the probe answers %s, naming read_api and storing no row", async (status) => {
+    it("refuses when the probe answers 403, naming read_api and storing no row", async () => {
       const { store, upserts } = fakeStore();
       const { fetchImplementation } = fetchStub({
         [USER_URL]: FORGE_USER,
         [SELF_URL]: { status: 404, body: { message: "404 Not Found" } },
-        [PROBE_URL]: { status, body: { error: "insufficient_scope" } },
+        [PROBE_URL]: { status: 403, body: { error: "insufficient_scope" } },
       });
       await expect(linkForgeIdentity(
         { store, tokenEncryptionKey: TEST_KEY, fetch: fetchImplementation },
@@ -213,6 +232,25 @@ describe("linkForgeIdentity", () => {
         code: "UNVERIFIED",
         message: expect.stringContaining("read_api"),
       });
+      expect(upserts).toEqual([]);
+    });
+
+    it("refuses when the probe answers 401 as a rejected token, not a scope problem, storing no row", async () => {
+      const { store, upserts } = fakeStore();
+      const { fetchImplementation } = fetchStub({
+        [USER_URL]: FORGE_USER,
+        [SELF_URL]: { status: 404, body: { message: "404 Not Found" } },
+        // Revoked between /user and the probe: the instance no longer knows the token at all.
+        [PROBE_URL]: { status: 401, body: { message: "401 Unauthorized" } },
+      });
+      const rejection = await linkForgeIdentity(
+        { store, tokenEncryptionKey: TEST_KEY, fetch: fetchImplementation },
+        { userId: "user-1", instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
+      ).then(() => null, (error: unknown) => error);
+      expect(rejection).toMatchObject({ name: "ForgeIdentityError", code: "UNVERIFIED" });
+      const message = (rejection as ForgeIdentityError).message;
+      expect(message).toContain("did not accept");
+      expect(message).not.toContain("does not carry");
       expect(upserts).toEqual([]);
     });
 
@@ -231,12 +269,16 @@ describe("linkForgeIdentity", () => {
     });
   });
 
-  it("refuses on a transport failure reading the token's scopes, storing no row", async () => {
+  it.each([
+    ["the token's scopes", { [USER_URL]: FORGE_USER, [SELF_URL]: "transport-failure" as const }, [USER_URL, SELF_URL]],
+    [
+      "the fallback probe",
+      { [USER_URL]: FORGE_USER, [SELF_URL]: { status: 404, body: { message: "404 Not Found" } }, [PROBE_URL]: "transport-failure" as const },
+      [USER_URL, SELF_URL, PROBE_URL],
+    ],
+  ])("refuses on a transport failure reading %s, storing no row", async (_label, answers, expectedRequests) => {
     const { store, upserts } = fakeStore();
-    const { fetchImplementation, requests } = fetchStub({
-      [USER_URL]: FORGE_USER,
-      [SELF_URL]: "transport-failure",
-    });
+    const { fetchImplementation, requests } = fetchStub(answers);
     await expect(linkForgeIdentity(
       { store, tokenEncryptionKey: TEST_KEY, fetch: fetchImplementation },
       { userId: "user-1", instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
@@ -245,7 +287,7 @@ describe("linkForgeIdentity", () => {
       code: "UNVERIFIED",
       message: expect.stringContaining("reached"),
     });
-    expect(requests.map((request) => request.url)).toEqual([USER_URL, SELF_URL]);
+    expect(requests.map((request) => request.url)).toEqual(expectedRequests);
     expect(upserts).toEqual([]);
   });
 

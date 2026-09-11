@@ -87,24 +87,35 @@ const transportRefusal = () =>
     "The instance could not be reached to verify the token. Check the URL and try again.",
   );
 
+const rejectedTokenRefusal = () =>
+  new ForgeIdentityError(
+    "UNVERIFIED",
+    "The instance did not accept the token, so no identity was linked. Check that the token is valid for that instance and carries the read_api scope.",
+  );
+
 const upstreamShapeFailure = (missing: "identity fields" | "scope answer") =>
   new ForgeIdentityError(
     "UPSTREAM_FAILURE",
     `The instance answered without the ${missing} a link needs.`,
   );
 
+/** The echo of the token's scopes is bounded: the instance is the member's, not ours. */
+const echoedScopesLimit = 8;
+const echoedScopeLength = 32;
+
 /**
  * The refusal for a token the instance accepts but which cannot make the
  * reconciliation reads. It names the scope the member has to tick when
  * minting the token and, when the instance reported them, the scopes the
- * submitted token actually carries.
+ * submitted token actually carries (bounded, see above).
  */
 function scopeRefusal(carried?: string[]): ForgeIdentityError {
-  const carriedClause = carried === undefined
+  const echoed = carried?.slice(0, echoedScopesLimit).map((scope) => scope.slice(0, echoedScopeLength));
+  const carriedClause = echoed === undefined
     ? ""
-    : carried.length === 0
+    : echoed.length === 0
       ? " It carries no scopes."
-      : ` It carries only: ${carried.join(", ")}.`;
+      : ` It carries only: ${echoed.join(", ")}.`;
   return new ForgeIdentityError(
     "UNVERIFIED",
     `The token does not carry the read_api scope, so no identity was linked.${carriedClause} Create the token with the read_api scope (or api) and try again.`,
@@ -155,7 +166,7 @@ function parseJsonObject(bodyText: string): Record<string, unknown> | null {
  * instance cannot describe the token that way — 404 on an older instance, 400
  * for a token type the endpoint does not cover — one scope-gated read decides
  * instead: `GET /api/v4/projects?membership=true&per_page=1` answers 200 with
- * the scope and 401/403 without it.
+ * the scope, 403 without it, and 401 for a token the instance rejects.
  */
 async function verifyReadApiScope(
   fetchImplementation: typeof fetch,
@@ -189,8 +200,13 @@ async function verifyReadApiScope(
   if (probe.status === 200) {
     return;
   }
-  if (probe.status === 401 || probe.status === 403) {
+  if (probe.status === 403) {
     throw scopeRefusal();
+  }
+  if (probe.status === 401) {
+    // Not a scope problem: the instance no longer knows the token at all,
+    // as when it was revoked between the /user read and this one.
+    throw rejectedTokenRefusal();
   }
   throw upstreamShapeFailure("scope answer");
 }
@@ -215,10 +231,7 @@ export async function linkForgeIdentity(
   try {
     const user = await readUpstream(fetchImplementation, `${instanceUrl}/api/v4/user`, input.token, controller.signal);
     if (user.status !== 200) {
-      throw new ForgeIdentityError(
-        "UNVERIFIED",
-        "The instance did not accept the token, so no identity was linked. Check that the token is valid for that instance and carries the read_api scope.",
-      );
+      throw rejectedTokenRefusal();
     }
     const body = parseJsonObject(user.bodyText);
     const id = body?.id;
