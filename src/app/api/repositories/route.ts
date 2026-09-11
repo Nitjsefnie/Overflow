@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubGateway } from "@/lib/github/client";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
+import { getSql } from "@/lib/db/client";
+import { decryptToken } from "@/lib/security/token-cipher";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
 import {
@@ -21,6 +25,9 @@ import {
 const registrationSchema = z
   .object({
     repositoryUrl: z.string(),
+    provider: z.enum(["gitlab"]).optional(),
+    instanceUrl: z.string().optional(),
+    project: z.string().optional(),
     openingName: z.string(),
     actualName: z.string(),
     openingLabels: z.array(
@@ -52,6 +59,7 @@ export type RepositoryRouteDependencies = {
   findAccountByTokenHash: (hash: Buffer) => Promise<ApiTokenAccount | null>;
   createRegistrationDependencies: (
     session: RepositoryRouteSession,
+    input: Partial<RepositoryRegistrationInput>,
   ) => Promise<RepositoryRegistrationDependencies>;
 };
 
@@ -71,7 +79,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
       const { initialImportScheduled, claimPath, ...repository } = await registerRepository(
         registrationDependencies,
         input,
@@ -110,7 +118,7 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
       const change = await changeRepositoryCatalog(registrationDependencies, input);
       return Response.json(change, { status: 200 });
     } catch (error) {
@@ -145,7 +153,7 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
     }
 
     try {
-      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized);
+      const registrationDependencies = await dependencies.createRegistrationDependencies(authorized, input);
       const result = await unregisterRepository(registrationDependencies, input);
       return Response.json(result, { status: 200 });
     } catch (error) {
@@ -212,28 +220,12 @@ export const POST = createRepositoryPostHandler({
     }
     return { user: { id: user.id, role: user.role } };
   },
-  async createRegistrationDependencies(session) {
-    const store = new PostgresRepositoryStore();
-    const accessToken = await store.getGitHubAccessToken(session.user.id);
-    const enforcementState = await store.getEnforcementState(session.user.id);
-    if (accessToken === null) {
-      throw new Error("GitHub access token was unavailable.");
-    }
-    if (enforcementState === null) {
-      throw new Error("Account enforcement state was unavailable.");
-    }
-
-    return {
-      actor: { ...session.user, enforcementState },
-      github: new GitHubGateway({ accessToken, owner: session.user.id }),
-      store,
-      webhook: requiredWebhookConfiguration(),
-      // Existing issues predate the webhook this registration creates, so only a
-      // reconciliation can bring them in. See scheduleInitialImport in register.ts.
-      scheduleInitialImport(repositoryId) {
+  async createRegistrationDependencies(session, input) {
+    return buildRegistrationDependencies(session, input, {
+      scheduleInitialImport(repositoryId: string) {
         return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
-    };
+    });
   },
 });
 
@@ -253,28 +245,12 @@ export const PATCH = createRepositoryPatchHandler({
     }
     return { user: { id: user.id, role: user.role } };
   },
-  async createRegistrationDependencies(session) {
-    const store = new PostgresRepositoryStore();
-    const accessToken = await store.getGitHubAccessToken(session.user.id);
-    const enforcementState = await store.getEnforcementState(session.user.id);
-    if (accessToken === null) {
-      throw new Error("GitHub access token was unavailable.");
-    }
-    if (enforcementState === null) {
-      throw new Error("Account enforcement state was unavailable.");
-    }
-
-    return {
-      actor: { ...session.user, enforcementState },
-      github: new GitHubGateway({ accessToken, owner: session.user.id }),
-      store,
-      webhook: requiredWebhookConfiguration(),
-      // Existing issues predate the webhook this registration creates, so only a
-      // reconciliation can bring them in. See scheduleInitialImport in register.ts.
-      scheduleInitialImport(repositoryId) {
+  async createRegistrationDependencies(session, input) {
+    return buildRegistrationDependencies(session, input, {
+      scheduleInitialImport(repositoryId: string) {
         return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
-    };
+    });
   },
 });
 
@@ -294,23 +270,12 @@ export const DELETE = createRepositoryDeleteHandler({
     }
     return { user: { id: user.id, role: user.role } };
   },
-  async createRegistrationDependencies(session) {
-    const store = new PostgresRepositoryStore();
-    const accessToken = await store.getGitHubAccessToken(session.user.id);
-    const enforcementState = await store.getEnforcementState(session.user.id);
-    if (accessToken === null) {
-      throw new Error("GitHub access token was unavailable.");
-    }
-    if (enforcementState === null) {
-      throw new Error("Account enforcement state was unavailable.");
-    }
-
-    return {
-      actor: { ...session.user, enforcementState },
-      github: new GitHubGateway({ accessToken, owner: session.user.id }),
-      store,
-      webhook: requiredWebhookConfiguration(),
-    };
+  async createRegistrationDependencies(session, input) {
+    return buildRegistrationDependencies(session, input, {
+      scheduleInitialImport(repositoryId: string) {
+        return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
+      },
+    });
   },
 });
 
@@ -332,6 +297,51 @@ async function parseUnregisterInput(request: Request): Promise<{ repositoryUrl: 
   } catch {
     return null;
   }
+}
+
+/**
+ * One builder for all three handlers, so the forge wiring cannot drift between
+ * them: the GitHub OAuth token keeps powering the GitHub path, and a GitLab
+ * submission resolves the submitter's verified linked identity on the
+ * submitted instance — its decrypted PAT is the gateway credential. A GitLab
+ * submission without such an identity fails the registration's own
+ * verified-identity requirement with the same refusal it would get anywhere.
+ */
+async function buildRegistrationDependencies(
+  session: RepositoryRouteSession,
+  input: Partial<RepositoryRegistrationInput>,
+  extras: { scheduleInitialImport?: (repositoryId: string) => Promise<unknown> },
+): Promise<RepositoryRegistrationDependencies> {
+  const store = new PostgresRepositoryStore();
+  const accessToken = await store.getGitHubAccessToken(session.user.id);
+  const enforcementState = await store.getEnforcementState(session.user.id);
+  if (accessToken === null) {
+    throw new Error("GitHub access token was unavailable.");
+  }
+  if (enforcementState === null) {
+    throw new Error("Account enforcement state was unavailable.");
+  }
+
+  let forgeIdentity: { instanceUrl: string; token: string } | null = null;
+  if (input.provider === "gitlab") {
+    const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+    if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
+      throw new Error("Token encryption key must be configured.");
+    }
+    const normalized = normalizeInstanceUrl(input.instanceUrl ?? "");
+    const pat = await new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey)
+      .getForgeToken(session.user.id, normalized);
+    forgeIdentity = pat === null ? null : { instanceUrl: normalized, token: pat };
+  }
+
+  return {
+    actor: { ...session.user, enforcementState },
+    github: new GitHubGateway({ accessToken, owner: session.user.id }),
+    store,
+    webhook: requiredWebhookConfiguration(),
+    scheduleInitialImport: extras.scheduleInitialImport,
+    forgeIdentity,
+  };
 }
 
 function requiredWebhookConfiguration(): { callbackUrl: string; secret: string } {

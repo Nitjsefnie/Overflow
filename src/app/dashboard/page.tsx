@@ -7,6 +7,7 @@ import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/se
 import { plural } from "@/lib/plural";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { UnregisterRepositoryControl } from "@/components/unregister-repository-control";
+import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
 
 type DashboardContentProps = {
   memberName: string;
@@ -160,6 +161,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
           </ul>
         )}
       </section>
+      <ForgeIdentitiesPanel />
       {dashboard.openAudit ? (
         <section className="surface" aria-labelledby="account-audit-heading">
           <h2 id="account-audit-heading">Account audit</h2>
