@@ -8,10 +8,13 @@ function fixture() {
     store: {
       listActiveRepositoryIds: async () => ["repository-1", "repository-2"],
       findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
+      findActiveRepositoryForgeById: async () => ({ provider: "github", instanceUrl: null }),
       getGitHubAccessToken: async () => null,
+      getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },
       requestRepositoryRederivation: async () => { throw new Error("must not enqueue before verification"); },
     },
     createGateway: () => { throw new Error("must not access GitHub without credentials"); },
+    createGitLabGateway: () => { throw new Error("must not build a GitLab gateway for a GitHub registration"); },
     webhookSecret: "existing-secret",
     write: (line) => { lines.push(line); },
   };

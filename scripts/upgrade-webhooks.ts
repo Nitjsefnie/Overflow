@@ -1,7 +1,9 @@
 import { pathToFileURL } from "node:url";
-import { closeSql } from "../src/lib/db/client.ts";
+import { closeSql, getSql } from "../src/lib/db/client.ts";
 import { GitHubGateway } from "../src/lib/github/client.ts";
+import { GitLabGateway } from "../src/lib/gitlab/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
+import { PostgresForgeIdentityStore } from "../src/lib/forge/postgres-identities-store.ts";
 import { PostgresRepositoryStore } from "../src/lib/repositories/postgres-store.ts";
 import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "../src/lib/repositories/upgrade-webhooks.ts";
 
@@ -39,14 +41,22 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
   }
   const registrations = new PostgresRepositoryStore();
   const queue = new PostgresFoldStore();
+  const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+  if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
+    throw new Error("Token encryption key must be configured.");
+  }
+  const forgeIdentities = new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey);
   return {
     store: {
       listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
       findActiveRepositoryById: (id) => registrations.findActiveRepositoryById(id),
+      findActiveRepositoryForgeById: (id) => registrations.findActiveRepositoryForgeById(id),
       getGitHubAccessToken: (id) => registrations.getGitHubAccessToken(id),
+      getForgeToken: (sponsorId, instanceUrl) => forgeIdentities.getForgeToken(sponsorId, instanceUrl),
       requestRepositoryRederivation: (id, at) => queue.requestRepositoryRederivation(id, at),
     },
     createGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
+    createGitLabGateway: (instanceUrl, token) => new GitLabGateway({ instanceUrl, token }),
     webhookSecret,
     write,
   };

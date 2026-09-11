@@ -119,7 +119,9 @@ describe("upgrading actual persisted registrations", () => {
       store: {
         listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
         findActiveRepositoryById: (id: string) => registrations.findActiveRepositoryById(id),
+        findActiveRepositoryForgeById: (id: string) => registrations.findActiveRepositoryForgeById(id),
         getGitHubAccessToken: (id: string) => registrations.getGitHubAccessToken(id),
+        getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },
         requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
       },
       webhookSecret: "original-secret",
@@ -144,6 +146,7 @@ describe("upgrading actual persisted registrations", () => {
           config: { url: "https://overflow.example/api/github/webhooks", content_type: "json", insecure_ssl: "0", secret: "********" },
         });
       } }),
+      createGitLabGateway: () => { throw new Error("must not build a GitLab gateway for a GitHub registration"); },
       write: (line: string) => { lines.push(line); },
     };
     expect(await runWebhookUpgradeCli([], dependencies)).toBe(0);
