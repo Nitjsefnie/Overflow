@@ -661,9 +661,10 @@ describe("Overflow token registration", () => {
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
       expectedHash,
     );
-    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
-      user: { id: account.id, role: account.role },
-    });
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith(
+      { user: { id: account.id, role: account.role } },
+      validInput(),
+    );
     const body = await response.json();
     expect(body).toEqual({
       repository: {
@@ -722,9 +723,10 @@ describe("Overflow token registration", () => {
     expect(response.status).toBe(201);
     expect(fixture.getSession).toHaveBeenCalledTimes(1);
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledTimes(0);
-    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
-      user: { id: "cookie-account-id", role: "MODERATOR" },
-    });
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith(
+      { user: { id: "cookie-account-id", role: "MODERATOR" } },
+      validInput(),
+    );
   });
 
   it("sanitizes a token lookup failure without consulting the cookie or registration factory", async () => {
@@ -1440,9 +1442,10 @@ describe("DELETE /api/repositories", () => {
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
       createHash("sha256").update(apiToken).digest(),
     );
-    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith({
-      user: { id: tokenAccount.id, role: tokenAccount.role },
-    });
+    expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith(
+      { user: { id: tokenAccount.id, role: tokenAccount.role } },
+      { repositoryUrl: "https://github.com/octo/overflow.git" },
+    );
   });
 
   it("rejects an unknown bearer credential without being rescued by a valid cookie", async () => {

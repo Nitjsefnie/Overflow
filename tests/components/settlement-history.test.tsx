@@ -1,5 +1,12 @@
 /** @vitest-environment jsdom */
 
+import { vi } from "vitest";
+
+// The dashboard mounts the forge-identities panel, a client component that
+// navigates/refreshes through the app router; the page is rendered here
+// outside a router, so the hook is mocked like every component suite does.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
+
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
