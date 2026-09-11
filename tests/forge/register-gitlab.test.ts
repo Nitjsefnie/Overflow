@@ -239,6 +239,22 @@ describe("GitLab repository registration", () => {
     expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
   });
 
+  it("runs the maintainer refusal before the conflict checks", async () => {
+    // The maintainer half of the same ordering: a project the linked identity
+    // cannot maintain, whose forge id a GitHub row already holds, answers the
+    // maintainer refusal — not the cross-forge conflict the id would raise.
+    const f = fixture({
+      projectOverrides: { permissions: { project_access: { access_level: 30 } } },
+      existingProvider: "github",
+    });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "GitLab maintainer permission is required for the submitted project.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
   it("registers a public project whose Maintainer right is inherited from the group", async () => {
     // GitLab reports a group Maintainer as project_access null with the
     // Maintainer level on group_access; refusing that identity would be a
