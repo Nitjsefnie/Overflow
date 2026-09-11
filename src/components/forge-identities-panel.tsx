@@ -110,7 +110,7 @@ export function ForgeIdentitiesPanel() {
       ) : identities.length === 0 ? (
         <p className="empty-copy">No forge identity is linked to this account yet.</p>
       ) : (
-        <ul>
+        <ul className="facts-list">
           {identities.map((identity) => (
             <li key={identity.id}>
               <dl className="issue-facts">

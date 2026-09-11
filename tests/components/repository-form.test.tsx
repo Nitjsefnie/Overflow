@@ -1,10 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RepositoryForm, type RepositoryFormValues } from "@/components/repository-form";
+import { declarations, firstAtRule, pinnedRule, rem, stylesheet } from "../support/stylesheet-rules";
 
 const initialValues: RepositoryFormValues = {
   repositoryUrl: "co-op/harbour",
@@ -49,14 +48,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
-
-function declarations(block: string): Record<string, string> {
-  return Object.fromEntries([...block.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
-    ([, property, value]) => [property!, value!.trim()],
-  ));
-}
 
 function feedbackDeclarations(kind: string): Record<string, string> {
   const rule = stylesheet.match(new RegExp(`\\.feedback\\.${kind}\\s*\\{([^}]*)\\}`));
@@ -118,36 +109,6 @@ describe("feedback stylesheet", () => {
     expect(contrast).toBeGreaterThanOrEqual(4.5);
   });
 });
-
-/**
- * The stylesheet with comments stripped, so a selector is matched against the
- * rules themselves and never against prose describing them.
- */
-const strippedStylesheet = stylesheet.replace(/\/\*[\s\S]*?\*\//g, " ");
-
-/** Where the viewport-conditional part of the stylesheet begins. */
-const firstAtRule = strippedStylesheet.indexOf("@media");
-
-type PinnedRule = { declarations: Record<string, string>; index: number };
-
-/**
- * The rule the selector opens, matched only where the selector is the whole
- * prelude: `.field` is answered by its own rule and never by
- * `.catalog-row > .field`, and the returned index is what the source-order
- * assertions compare.
- */
-function pinnedRule(selector: string): PinnedRule {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
-  const match = strippedStylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
-  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
-  return { declarations: declarations(match![1]!), index: match!.index! };
-}
-
-/** A length in rem, so two of them can be compared as numbers. */
-function rem(value: string | undefined, what: string): number {
-  expect(value, what).toMatch(/^[\d.]+rem$/);
-  return Number.parseFloat(value!);
-}
 
 /**
  * Spacing in the registration form.
