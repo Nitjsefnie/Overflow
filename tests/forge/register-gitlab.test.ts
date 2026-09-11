@@ -50,6 +50,8 @@ function input(overrides: Partial<RepositoryRegistrationInput> = {}): Repository
 function fixture(options: {
   linkedIdentity?: { instanceUrl: string; token: string } | null;
   existingProvider?: string | null;
+  /** Merged over the served project payload, so a case varies exactly the fields its refusal is about. */
+  projectOverrides?: Record<string, unknown>;
 } = {}) {
   const calls: { op: string; args: unknown }[] = [];
   const store: RepositoryRegistrationStore = {
@@ -89,7 +91,10 @@ function fixture(options: {
       });
     }
     if (request.url.includes("/projects/gitlab-org%2Fgitlab")) {
-      return new Response(JSON.stringify(project), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ ...project, ...options.projectOverrides }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
     return new Response("no route", { status: 404 });
   };
@@ -165,6 +170,92 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "NOT_FOUND",
     });
+  });
+
+  it("refuses a private project as FORBIDDEN before anything is stored", async () => {
+    const f = fixture({ projectOverrides: { visibility: "private" } });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "Only public GitLab projects can be registered.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("refuses an internal project with the same refusal — the gateway maps internal to PRIVATE", async () => {
+    const f = fixture({ projectOverrides: { visibility: "internal" } });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "Only public GitLab projects can be registered.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("refuses a project the linked identity cannot maintain (direct access below Maintainer)", async () => {
+    const f = fixture({ projectOverrides: { permissions: { project_access: { access_level: 30 } } } });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "GitLab maintainer permission is required for the submitted project.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("refuses a member below Maintainer on both the project and its group", async () => {
+    const f = fixture({
+      projectOverrides: {
+        permissions: { project_access: { access_level: 30 }, group_access: { access_level: 30 } },
+      },
+    });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "GitLab maintainer permission is required for the submitted project.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("refuses a project reporting no access at all", async () => {
+    const f = fixture({ projectOverrides: { permissions: { project_access: null, group_access: null } } });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "GitLab maintainer permission is required for the submitted project.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("runs the visibility refusal before the conflict checks", async () => {
+    // A private project whose forge id a GitHub row already holds answers the
+    // visibility refusal, proving the checks sit before the conflict reads —
+    // and before anything is stored.
+    const f = fixture({ projectOverrides: { visibility: "private" }, existingProvider: "github" });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "FORBIDDEN",
+      message: "Only public GitLab projects can be registered.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("registers a public project whose Maintainer right is inherited from the group", async () => {
+    // GitLab reports a group Maintainer as project_access null with the
+    // Maintainer level on group_access; refusing that identity would be a
+    // false refusal of a real maintainer.
+    const f = fixture({
+      projectOverrides: { permissions: { project_access: null, group_access: { access_level: 40 } } },
+    });
+    const result = await registerRepository(f.dependencies, input());
+    expect(result.ownerName).toBe("gitlab-org/gitlab");
+    expect(f.calls.find((call) => call.op === "createRepository")).toBeDefined();
+  });
+
+  it("registers a public project where the identity holds direct Owner access", async () => {
+    const f = fixture({ projectOverrides: { permissions: { project_access: { access_level: 50 } } } });
+    const result = await registerRepository(f.dependencies, input());
+    expect(result.ownerName).toBe("gitlab-org/gitlab");
+    expect(f.calls.find((call) => call.op === "createRepository")).toBeDefined();
   });
 
   it("refuses a GitLab registration whose forge id is already held by a GitHub row", async () => {

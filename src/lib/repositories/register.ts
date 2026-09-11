@@ -527,6 +527,26 @@ async function registerGitLabRepository(
     });
   }
 
+  // The same two refusals the GitHub path makes before anything is stored
+  // (issue 550): a project that is not public is declined here rather than
+  // left for the sweep's NOT_PUBLIC reconciliation, and the linked identity
+  // must hold maintainer permission — a catalog whose labels the sponsor may
+  // not be able to apply must never be stored. The gateway maps GitLab's
+  // internal visibility to PRIVATE, so an internal project refuses here too.
+  if (repository.visibility !== "PUBLIC") {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only public GitLab projects can be registered.",
+    );
+  }
+
+  if (!repository.canAdminister) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "GitLab maintainer permission is required for the submitted project.",
+    );
+  }
+
   // An unregistered row reactivates (the store's conditional on-conflict
   // update), so only a row still holding the registration conflicts.
   const existing = await findExistingRepository(dependencies.store, repository.id);

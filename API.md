@@ -112,7 +112,10 @@ The same endpoint registers a GitLab project when the body carries
 `provider: "gitlab"`. Registration then reads the project with the personal
 access token of the GitLab identity you linked on the *Ledger* page (or over
 `POST /api/forge-identities`) for that instance; without a verified identity on
-that exact instance the request is refused. No webhook is installed and no
+that exact instance the request is refused. The project must be public, and the
+linked identity must hold maintainer permission on it — directly or inherited
+through its group; a project failing either is refused before anything is
+stored. No webhook is installed and no
 initial import is scheduled — the periodic reconciliation sweep picks the
 project up. The catalog labels must already exist on the project; the *Register a
 repository* form has no GitLab path, and neither has `PATCH`.
@@ -178,6 +181,8 @@ angle-bracketed text is substituted at runtime:
 | 400 | `INVALID_INPUT` | `Submit the GitLab project as a positive numeric id or a path with namespace.` | `project` is neither digits nor a path containing `/`. |
 | 400 | `INVALID_INPUT` | `The GitLab project does not carry these labels: <labels>. Create them, then register again.` | `<labels>` is the comma-separated list of catalog labels the project lacks. Create them on the project, then register again. |
 | 403 | `FORBIDDEN` | `A verified GitLab identity linked to this instance is required to register a GitLab repository.` | Link a GitLab identity for exactly this instance, then retry. |
+| 403 | `FORBIDDEN` | `Only public GitLab projects can be registered.` | Choose a public project. |
+| 403 | `FORBIDDEN` | `GitLab maintainer permission is required for the submitted project.` | Use an account with Maintainer permission for that project — held directly on the project or inherited through its group. |
 | 404 | `NOT_FOUND` | `No GitLab project with that id is visible through the linked identity.` | A numeric `project` the instance answered 404 for. Check the id and the token's access. |
 | 409 | `CONFLICT` | `This GitLab project is already registered.` | Use the existing registration. |
 | 409 | `CONFLICT` | `GitLab project <id> collides with forge id <id> already registered as provider '<provider>'. An id's forge history never migrates between forges; registration refused.` | A registration under another forge already holds that numeric id, so this id cannot become a GitLab registration. |
