@@ -10,6 +10,11 @@ const planningArtifacts = [
   "docs/superpowers/specs/2026-09-04-overflow-mvp-design.md",
 ];
 
+const forgeEvidenceContract = [
+  "docs/forge-evidence-contract.md",
+  "docs/forge-evidence-contract.html",
+];
+
 describe("docs/superpowers planning artifacts are untracked", () => {
   it("no longer ships the four removed planning artifacts", () => {
     for (const pathname of planningArtifacts) {
@@ -21,6 +26,23 @@ describe("docs/superpowers planning artifacts are untracked", () => {
     expect(checkIgnore("docs/superpowers/plans/probe.md")).toBe(0);
     expect(checkIgnore("docs/superpowers/specs/probe.md")).toBe(0);
     expect(checkIgnore("docs/superpowers/specs/probe.html")).toBe(0);
+  });
+
+  it("keeps the docs/reviews audit reachable by the ignore policy", () => {
+    expect(checkIgnore("docs/reviews/2026-09-05-full-application-audit.html")).toBe(1);
+  });
+});
+
+describe("docs/forge-evidence-contract is untracked", () => {
+  it("no longer ships the re-added forge-evidence contract", () => {
+    for (const pathname of forgeEvidenceContract) {
+      expect(existsSync(resolve(pathname)), pathname).toBe(false);
+    }
+  });
+
+  it("ignores probe paths directly under docs/", () => {
+    expect(checkIgnore("docs/probe.md")).toBe(0);
+    expect(checkIgnore("docs/probe.html")).toBe(0);
   });
 
   it("keeps the docs/reviews audit reachable by the ignore policy", () => {
