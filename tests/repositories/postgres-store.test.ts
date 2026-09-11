@@ -668,12 +668,16 @@ describe("unregistering a repository against the real registered_repositories co
         ownerName: "drain/repo",
         webhookId,
         createdAt: "2020-01-02T03:04:05.000Z",
+        provider: "github",
+        instanceUrl: null,
       });
       await store.saveAbandonedWebhookCleanup({
         githubRepositoryId: githubRepositoryId + 1,
         ownerName: "drain/repo-2",
         webhookId,
         createdAt: "2020-01-01T00:00:00.000Z",
+        provider: "github",
+        instanceUrl: null,
       });
 
       const records = await store.listAbandonedWebhookCleanups();
@@ -683,16 +687,20 @@ describe("unregistering a repository against the real registered_repositories co
           ownerName: "drain/repo-2",
           webhookId,
           createdAt: "2020-01-01T00:00:00.000Z",
+          provider: "github",
+          instanceUrl: null,
         },
         {
           githubRepositoryId,
           ownerName: "drain/repo",
           webhookId,
           createdAt: "2020-01-02T03:04:05.000Z",
+          provider: "github",
+          instanceUrl: null,
         },
       ]);
 
-      await store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, "github", webhookId);
       const remaining = await store.listAbandonedWebhookCleanups();
       expect(remaining.filter(({ githubRepositoryId: id }) => id >= githubRepositoryId)).toEqual([
         {
@@ -700,9 +708,11 @@ describe("unregistering a repository against the real registered_repositories co
           ownerName: "drain/repo-2",
           webhookId,
           createdAt: "2020-01-01T00:00:00.000Z",
+          provider: "github",
+          instanceUrl: null,
         },
       ]);
-      await store.clearAbandonedWebhookCleanup(githubRepositoryId + 1, webhookId);
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId + 1, "github", webhookId);
     });
 
     it("upserts on the same repository and webhook id and tolerates clearing an absent record", async () => {
@@ -713,6 +723,8 @@ describe("unregistering a repository against the real registered_repositories co
         ownerName: "drain/repo",
         webhookId,
         createdAt: "2020-01-02T03:04:05.000Z",
+        provider: "github" as const,
+        instanceUrl: null,
       };
       await store.saveAbandonedWebhookCleanup(record);
       await store.saveAbandonedWebhookCleanup({
@@ -728,13 +740,78 @@ describe("unregistering a repository against the real registered_repositories co
           ownerName: "drain/renamed",
           webhookId,
           createdAt: "2021-02-03T04:05:06.000Z",
+          provider: "github",
+          instanceUrl: null,
         },
       ]);
 
-      await store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, "github", webhookId);
       const remaining = await store.listAbandonedWebhookCleanups();
       expect(remaining.filter(({ githubRepositoryId: id }) => id === githubRepositoryId)).toEqual([]);
-      await expect(store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId)).resolves.toBeUndefined();
+      await expect(store.clearAbandonedWebhookCleanup(githubRepositoryId, "github", webhookId)).resolves.toBeUndefined();
+    });
+
+    it("stores a GitLab record with its instance URL and round-trips it", async () => {
+      const githubRepositoryId = externalId++;
+      const webhookId = externalId++;
+      await store.saveAbandonedWebhookCleanup({
+        githubRepositoryId,
+        ownerName: "gitlab-group/project",
+        webhookId,
+        createdAt: "2020-01-02T03:04:05.000Z",
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+      });
+
+      const records = await store.listAbandonedWebhookCleanups();
+      expect(records.filter(({ githubRepositoryId: id }) => id === githubRepositoryId)).toEqual([
+        {
+          githubRepositoryId,
+          ownerName: "gitlab-group/project",
+          webhookId,
+          createdAt: "2020-01-02T03:04:05.000Z",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.example.com",
+        },
+      ]);
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, "gitlab", webhookId);
+    });
+
+    it("holds a GitLab and a GitHub record under the same repository and webhook ids, and clearing one provider leaves the other", async () => {
+      // Migration 041 extended the primary key to (repository, provider,
+      // webhook): a GitLab orphan and a GitHub orphan can share both numeric
+      // ids, and the compensating cleanup of one forge must never retire the
+      // other forge's record.
+      const githubRepositoryId = externalId++;
+      const webhookId = externalId++;
+      await store.saveAbandonedWebhookCleanup({
+        githubRepositoryId,
+        ownerName: "octo/repo",
+        webhookId,
+        createdAt: "2020-01-02T03:04:05.000Z",
+        provider: "github",
+        instanceUrl: null,
+      });
+      await store.saveAbandonedWebhookCleanup({
+        githubRepositoryId,
+        ownerName: "gitlab-group/project",
+        webhookId,
+        createdAt: "2020-01-03T03:04:05.000Z",
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+      });
+
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, "github", webhookId);
+      expect(
+        (await store.listAbandonedWebhookCleanups())
+          .filter(({ githubRepositoryId: id }) => id === githubRepositoryId)
+          .map(({ provider, instanceUrl }) => ({ provider, instanceUrl })),
+      ).toEqual([{ provider: "gitlab", instanceUrl: "https://gitlab.example.com" }]);
+
+      await store.clearAbandonedWebhookCleanup(githubRepositoryId, "gitlab", webhookId);
+      expect(
+        (await store.listAbandonedWebhookCleanups()).filter(({ githubRepositoryId: id }) => id === githubRepositoryId),
+      ).toEqual([]);
     });
   });
 

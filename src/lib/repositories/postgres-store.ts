@@ -46,6 +46,8 @@ type AbandonedWebhookCleanupRow = {
   owner_name: string;
   webhook_id: number | string;
   created_at: Date | string;
+  provider: string;
+  instance_url: string | null;
 };
 
 type EnforcementStateRow = {
@@ -101,6 +103,33 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       limit 1
     `;
     return row === undefined ? null : toRegistrationState(row);
+  }
+
+  /**
+   * The GitLab registration holding this owner/name path, with the hook
+   * target fields the unregistration's forge-first deletion needs (issue
+   * 547). Null when no row holds the path AND when a GitHub registration
+   * holds it — the GitHub flow owns those rows' hook deletion.
+   */
+  public async findGitLabWebhookTargetByOwnerName(ownerName: string): Promise<{
+    sponsorId: string;
+    githubWebhookId: number | null;
+    instanceUrl: string | null;
+  } | null> {
+    const [row] = await this.sql<{ sponsor_id: string; github_webhook_id: number | string | null; instance_url: string | null }[]>`
+      select sponsor_id, github_webhook_id, instance_url
+      from registered_repositories
+      where owner_name = ${ownerName} and provider = 'gitlab'
+      limit 1
+    `;
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      sponsorId: row.sponsor_id,
+      githubWebhookId: row.github_webhook_id === null ? null : toSafeInteger(row.github_webhook_id),
+      instanceUrl: row.instance_url,
+    };
   }
 
   public async findRepositoryRegistrationState(githubRepositoryId: number): Promise<RepositoryRegistrationState | null> {
@@ -445,6 +474,23 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     return row === undefined ? null : toRegisteredRepository(row);
   }
 
+  /**
+   * The active registration's forge columns — the pair the webhook upgrade
+   * drain branches on (issue 547). Null when the row is gone or no longer
+   * active; the drain answers REGISTRATION_FAILED for that.
+   */
+  public async findActiveRepositoryForgeById(
+    repositoryId: string,
+  ): Promise<{ provider: string; instanceUrl: string | null } | null> {
+    const [row] = await this.sql<{ provider: string; instance_url: string | null }[]>`
+      select provider, instance_url
+      from registered_repositories
+      where id = ${repositoryId} and active = true
+      limit 1
+    `;
+    return row === undefined ? null : { provider: row.provider, instanceUrl: row.instance_url };
+  }
+
   public async getEnforcementState(userId: string): Promise<EnforcementState | null> {
     const [row] = await this.sql<EnforcementStateRow[]>`
       select enforcement_state
@@ -482,12 +528,14 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async saveAbandonedWebhookCleanup(record: AbandonedWebhookCleanup): Promise<void> {
     await this.sql`
       insert into abandoned_webhook_cleanups
-        (github_repository_id, owner_name, webhook_id, created_at)
+        (github_repository_id, owner_name, webhook_id, created_at, provider, instance_url)
       values
-        (${record.githubRepositoryId}, ${record.ownerName}, ${record.webhookId}, ${record.createdAt}::timestamptz)
-      on conflict (github_repository_id, webhook_id) do update set
+        (${record.githubRepositoryId}, ${record.ownerName}, ${record.webhookId}, ${record.createdAt}::timestamptz,
+         ${record.provider}, ${record.instanceUrl})
+      on conflict (github_repository_id, provider, webhook_id) do update set
         owner_name = excluded.owner_name,
-        created_at = excluded.created_at
+        created_at = excluded.created_at,
+        instance_url = excluded.instance_url
     `;
   }
 
@@ -497,17 +545,19 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         github_repository_id,
         owner_name,
         webhook_id,
-        created_at
+        created_at,
+        provider,
+        instance_url
       from abandoned_webhook_cleanups
-      order by created_at asc, github_repository_id asc, webhook_id asc
+      order by created_at asc, github_repository_id asc, provider asc, webhook_id asc
     `;
     return rows.map(toAbandonedWebhookCleanup);
   }
 
-  public async clearAbandonedWebhookCleanup(githubRepositoryId: number, webhookId: number): Promise<void> {
+  public async clearAbandonedWebhookCleanup(githubRepositoryId: number, provider: "github" | "gitlab", webhookId: number): Promise<void> {
     await this.sql`
       delete from abandoned_webhook_cleanups
-      where github_repository_id = ${githubRepositoryId} and webhook_id = ${webhookId}
+      where github_repository_id = ${githubRepositoryId} and provider = ${provider} and webhook_id = ${webhookId}
     `;
   }
 }
@@ -536,6 +586,8 @@ function toAbandonedWebhookCleanup(row: AbandonedWebhookCleanupRow): AbandonedWe
     ownerName: row.owner_name,
     webhookId: toSafeInteger(row.webhook_id),
     createdAt: timestampToIso(row.created_at),
+    provider: row.provider === "gitlab" ? "gitlab" : "github",
+    instanceUrl: row.instance_url,
   };
 }
 

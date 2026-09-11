@@ -562,18 +562,33 @@ function gitlabSubmission(input: RepositoryRegistrationInput): RepositoryRegistr
   return { ...input, provider: "gitlab", instanceUrl: "https://gitlab.com", project: gitlabProjectPath };
 }
 
-// A transport answering the project by path and by id, and the catalog labels the submission names
-// unless told to answer none; anything else is 404, as the real instance would answer. A case
-// varying exactly the project fields its refusal is about merges them over the served payload.
+// A transport answering the project by path and by id, the hook endpoints the
+// registration now drives, and the catalog labels the submission names unless
+// told to answer none; anything else is 404, as the real instance would
+// answer. A case varying exactly the project fields its refusal is about
+// merges them over the served payload.
 function gitlabTransport(options: {
   labels?: "all" | "none";
   project?: "found" | "missing";
   projectOverrides?: Record<string, unknown>;
+  /** The status the instance answers the hook POST with; absent means a created hook (id 4001). */
+  hookCreationStatus?: number;
+  /** The status the instance answers the hook DELETE with; absent means proven gone. */
+  hookDeletionStatus?: number;
 } = {}): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     const json = (body: unknown) =>
       new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    if (request.url.includes("/hooks")) {
+      if (request.method === "POST") {
+        if (options.hookCreationStatus !== undefined) {
+          return new Response("hook refused", { status: options.hookCreationStatus });
+        }
+        return json({ id: 4001 });
+      }
+      return new Response(null, { status: options.hookDeletionStatus ?? 204 });
+    }
     if (request.url.includes("/labels")) {
       const labels = options.labels === "none"
         ? []
@@ -719,10 +734,89 @@ const gitlabFailures: RegistrationFailure[] = [
     },
   },
   {
+    what: "a GitLab path another registration claims",
+    status: conflictStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new RepositoryOwnerNameConflictError(claimedOwnerName);
+      };
+    },
+    submit: gitlabSubmission,
+    // The path is substituted into this message at runtime, so only the text
+    // on either side of it can be compared with the catalog; the published
+    // cell carries <owner/name> in its place.
+    publishes: (surfaced) => {
+      const parts = surfaced.split(claimedOwnerName);
+      expect(parts, `The surfaced message names ${claimedOwnerName} other than once: ${surfaced}`).toHaveLength(2);
+      const [before, after] = parts as [string, string];
+      return (cell) => cell.startsWith(before) && cell.endsWith(after);
+    },
+  },
+  {
+    what: "a GitLab project whose hook id another registration records",
+    status: conflictStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new RepositoryWebhookIdConflictError(4001);
+      };
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
     what: "a GitLab registration the store cannot save",
     status: upstreamFailureStatus,
     raise(dependencies) {
       linkGitLab(dependencies);
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new Error("save failed");
+      };
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab credential rejection while creating the project hook",
+    status: githubCredentialsStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ hookCreationStatus: 401 })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab refusal while creating the project hook",
+    status: githubAccessStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ hookCreationStatus: 403 })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab 404 hiding while creating the project hook",
+    status: githubAccessStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ hookCreationStatus: 404 })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab rate limit while creating the project hook",
+    status: githubRateLimitedStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ hookCreationStatus: 429 })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab outage while creating the project hook",
+    status: upstreamFailureStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ hookCreationStatus: 500 })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab registration whose save fails and whose compensating hook deletion the instance refuses",
+    status: rollbackIncompleteStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies, gitlabTransport({ hookDeletionStatus: 500 }));
       dependencies.store.createRepository = async (): Promise<never> => {
         throw new Error("save failed");
       };
