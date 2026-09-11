@@ -72,15 +72,23 @@ function relativeLuminance(hex: string): number {
 }
 
 /**
- * Routes the form's two calls by URL: the labels read goes to the labels
- * route, everything else is a registration or catalog-change submission whose
- * calls are recorded for the assertions.
+ * Routes the form's three calls by URL: the labels read goes to the labels
+ * route, the identities read goes to the forge-identities route, and
+ * everything else is a registration or catalog-change submission whose calls
+ * are recorded for the assertions.
  */
-function stubFormApi(submit: () => Response, labels: () => Response = defaultLabelsResponse) {
+function stubFormApi(
+  submit: () => Response,
+  labels: () => Response = defaultLabelsResponse,
+  identities: () => Response = defaultIdentitiesResponse,
+) {
   const submitCalls: Array<{ url: string; init: RequestInit }> = [];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     if (String(input).includes("/api/repositories/labels")) {
       return labels();
+    }
+    if (String(input).includes("/api/forge-identities")) {
+      return identities();
     }
     submitCalls.push({ url: String(input), init: init ?? {} });
     return submit();
@@ -91,6 +99,41 @@ function stubFormApi(submit: () => Response, labels: () => Response = defaultLab
 
 function defaultLabelsResponse(): Response {
   return Response.json({ labels: repositoryLabels });
+}
+
+/** The forge-identities view the API answers with; a token never appears. */
+const gitlabIdentity = {
+  id: "gl-1",
+  provider: "gitlab",
+  instanceUrl: "https://gitlab.example",
+  forgeLogin: "gl-user",
+  verifiedAt: "2026-09-01T00:00:00.000Z",
+};
+
+const githubIdentity = {
+  id: "gh-1",
+  provider: "github",
+  instanceUrl: "https://github.com",
+  forgeLogin: "octo",
+  verifiedAt: "2026-09-01T00:00:00.000Z",
+};
+
+function defaultIdentitiesResponse(): Response {
+  return Response.json({ identities: [] });
+}
+
+/** The labels-route calls the stubbed fetch has seen, URLs only. */
+function labelsCalls(fetchMock: { mock: { calls: Array<[unknown, unknown]> } }): string[] {
+  return fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("/api/repositories/labels"));
+}
+
+/** Lets pending promise chains (the identities read) settle under fake timers. */
+async function flushMicrotasks() {
+  await act(async () => {
+    for (let turn = 0; turn < 6; turn += 1) {
+      await Promise.resolve();
+    }
+  });
 }
 
 describe("feedback stylesheet", () => {
@@ -640,6 +683,216 @@ describe("repository form catalog label selectboxes", () => {
     expect(screen.getByRole("alert").textContent).toBe("Give every catalog entry a label and a points mapping.");
     expect(submitCalls).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("repository form forge selection", () => {
+  /** Submits a full GitLab registration; returns the recorded submit calls. */
+  async function submitGitLabRegistration(
+    submitResponse: () => Response,
+  ): Promise<Array<{ url: string; init: RequestInit }>> {
+    const { fetchMock, submitCalls } = stubFormApi(
+      submitResponse,
+      defaultLabelsResponse,
+      () => Response.json({ identities: [githubIdentity, gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    const instance = await waitFor(() => {
+      const select = screen.getByLabelText("Instance") as HTMLSelectElement;
+      expect(within(select).getByRole("option", { name: "https://gitlab.example (gl-user)" })).toBeInTheDocument();
+      return select;
+    });
+    fireEvent.change(instance, { target: { value: "https://gitlab.example" } });
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: " group/proj " } });
+    await selectLoadedOption("Opening label 1", "rill");
+    await selectLoadedOption("Opening label 2", "stream");
+    for (const points of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      await selectLoadedOption(
+        `Actual label for ${points} point${points === 1 ? "" : "s"}`,
+        repositoryLabels[points - 1]!,
+      );
+    }
+    expect(fetchMock).toHaveBeenCalled();
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+    await waitFor(() => expect(submitCalls).toHaveLength(1));
+    return submitCalls;
+  }
+
+  it("offers the forge with GitHub preselected and the GitHub fields on the GitHub path", () => {
+    const { fetchMock } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm />);
+
+    const forge = screen.getByLabelText("Forge");
+    expect(forge).toHaveValue("github");
+    expect(within(forge).getByRole("option", { name: "GitHub" })).toBeInTheDocument();
+    expect(within(forge).getByRole("option", { name: "GitLab" })).toBeInTheDocument();
+    expect(screen.getByLabelText("GitHub repository")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Instance")).toBeNull();
+    expect(screen.queryByLabelText("Project")).toBeNull();
+    // The identities read is not spent when the forge never leaves GitHub.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the catalog-change variant GitHub-only without a Forge selector", () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm variant="catalog-change" />);
+
+    expect(screen.queryByLabelText("Forge")).toBeNull();
+    expect(screen.getByLabelText("GitHub repository")).toBeInTheDocument();
+  });
+
+  it("swaps the GitHub repository field for the Instance and Project fields when GitLab is chosen", () => {
+    stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    expect(screen.queryByLabelText("GitHub repository")).toBeNull();
+    expect(screen.getByLabelText("Instance")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project")).toBeInTheDocument();
+  });
+
+  it("feeds the Instance select from the linked GitLab identities only", async () => {
+    const { fetchMock } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => Response.json({ identities: [githubIdentity, gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    const instance = screen.getByLabelText("Instance");
+    await waitFor(() =>
+      expect(within(instance).getByRole("option", { name: "https://gitlab.example (gl-user)" })).toBeInTheDocument(),
+    );
+    expect(within(instance).queryByRole("option", { name: /octo/ })).toBeNull();
+    expect(fetchMock.mock.calls.every(([input]) => String(input).includes("/api/forge-identities"))).toBe(true);
+  });
+
+  it("refuses a GitLab submit when no GitLab identity is linked, naming the dashboard's Forge identities page", async () => {
+    const { fetchMock, submitCalls } = stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "group/proj" } });
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    expect(screen.getByRole("alert").textContent).toContain("Forge identities page");
+    expect(submitCalls).toHaveLength(0);
+  });
+
+  it("refuses a GitLab submit with no instance chosen before contacting the API", async () => {
+    const { submitCalls } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => Response.json({ identities: [gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    await flushMicrotasks();
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    expect(screen.getByRole("alert").textContent).toBe("Choose the GitLab instance to register through.");
+    expect(submitCalls).toHaveLength(0);
+  });
+
+  it("reads the GitLab labels once instance and project are present and well-shaped", async () => {
+    const { fetchMock } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => Response.json({ identities: [gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    const instance = await waitFor(() => {
+      const select = screen.getByLabelText("Instance") as HTMLSelectElement;
+      expect(within(select).getByRole("option", { name: "https://gitlab.example (gl-user)" })).toBeInTheDocument();
+      return select;
+    });
+    fireEvent.change(instance, { target: { value: "https://gitlab.example" } });
+    // The project is still missing: no labels read yet.
+    await flushMicrotasks();
+    expect(labelsCalls(fetchMock)).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "group/proj" } });
+    await waitFor(() => expect(labelsCalls(fetchMock)).toHaveLength(1));
+    const url = new URL(labelsCalls(fetchMock)[0]!, "http://localhost");
+    expect(url.pathname).toBe("/api/repositories/labels");
+    expect([...url.searchParams.keys()].sort()).toEqual(["instance", "project", "provider"]);
+    expect(url.searchParams.get("provider")).toBe("gitlab");
+    expect(url.searchParams.get("instance")).toBe("https://gitlab.example");
+    expect(url.searchParams.get("project")).toBe("group/proj");
+    expect(fetchMock.mock.calls.find(([input]) => String(input).includes("/api/repositories/labels"))?.[1]).toMatchObject({
+      credentials: "same-origin",
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toBeEnabled());
+    expect(within(screen.getByLabelText("Opening label 1")).getByRole("option", { name: "rill" })).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Actual label for 10 points")).getByRole("option", { name: "ocean" })).toBeInTheDocument();
+  });
+
+  it("shows the project shape guidance and fetches nothing for a project that is neither numeric nor a path", async () => {
+    vi.useFakeTimers();
+    const { fetchMock } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => Response.json({ identities: [gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    await flushMicrotasks();
+    fireEvent.change(screen.getByLabelText("Instance"), { target: { value: "https://gitlab.example" } });
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "justaproject" } });
+
+    expect(screen.getByText("Submit the GitLab project as a positive numeric id or a path with namespace.")).toBeVisible();
+    vi.advanceTimersByTime(400);
+    await flushMicrotasks();
+    expect(labelsCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it("submits the GitLab registration body with the instance and the trimmed project", async () => {
+    const submitCalls = await submitGitLabRegistration(() =>
+      Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+    );
+
+    const { url, init } = submitCalls[0]!;
+    expect(url).toBe("/api/repositories");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(JSON.parse(String(init.body))).toEqual({
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example",
+      project: "group/proj",
+      openingName: "Promise band",
+      actualName: "Landing measure",
+      openingLabels: [
+        { label: "rill", comparisonPoints: 3, reservePoints: 4 },
+        { label: "stream", comparisonPoints: 6, reservePoints: 8 },
+      ],
+      actualLabels: repositoryLabels.slice(0, 10).map((label, index) => ({ label, points: index + 1 })),
+    });
+  });
+
+  it("renders the same registration success message for a GitLab registration", async () => {
+    await submitGitLabRegistration(() =>
+      Response.json({
+        repository: { ownerName: "group/proj" },
+        initialImportScheduled: false,
+        claimPath: "NOT_CHECKED",
+      }, { status: 201 }),
+    );
+
+    const feedback = await screen.findByRole("status");
+    expect(feedback).toHaveClass("feedback", "warning");
+    expect(feedback.textContent).toBe(
+      "group/proj is registered, but its initial import could not be scheduled. It will be picked up by the next repair sweep."
+        + " Overflow could not read this repository's workflows, so it does not know whether comment-based claiming is set up."
+        + " Check the workflows yourself for one triggered by issue_comment that assigns the comment author.",
+    );
   });
 });
 
