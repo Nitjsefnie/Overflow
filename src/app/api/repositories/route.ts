@@ -94,18 +94,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
       // is the submitter's input, not an upstream failure: it maps to the
       // same client-error surface the registration errors use.
       if (error instanceof ForgeIdentityError) {
-        switch (error.code) {
-          case "INVALID_INPUT":
-            return errorResponse(400, error.code, error.message);
-          case "UNVERIFIED":
-            return errorResponse(401, error.code, error.message);
-          case "FORBIDDEN":
-            return errorResponse(403, error.code, error.message);
-          case "NOT_FOUND":
-            return errorResponse(404, error.code, error.message);
-          case "UPSTREAM_FAILURE":
-            return errorResponse(502, error.code, error.message);
-        }
+        return forgeIdentityErrorResponse(error);
       }
 
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
@@ -142,6 +131,9 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
+      }
+      if (error instanceof ForgeIdentityError) {
+        return forgeIdentityErrorResponse(error);
       }
 
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
@@ -180,6 +172,13 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
+      }
+      // A GitLab submission refuses inside the wiring — buildRegistrationDependencies
+      // resolves the submitter's linked identity before the flow runs — so the
+      // forge-identity mapping must sit here too, or a permanent input error
+      // reads as transient.
+      if (error instanceof ForgeIdentityError) {
+        return forgeIdentityErrorResponse(error);
       }
 
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to unregister the repository.");
@@ -388,6 +387,29 @@ function requiredWebhookConfiguration(): { callbackUrl: string; secret: string }
   }
 
   return { callbackUrl, secret };
+}
+
+/**
+ * One mapping for all three handlers, so a forge-identity refusal raised while
+ * the wiring resolves — buildRegistrationDependencies runs ahead of every flow
+ * and reads the submitter's instance URL itself (malformed instance URL,
+ * unverified or unknown token) — is the submitter's input everywhere: it maps
+ * to the client-error surface its code names, never to the catch-all upstream
+ * failure behind it.
+ */
+function forgeIdentityErrorResponse(error: ForgeIdentityError): Response {
+  switch (error.code) {
+    case "INVALID_INPUT":
+      return errorResponse(400, error.code, error.message);
+    case "UNVERIFIED":
+      return errorResponse(401, error.code, error.message);
+    case "FORBIDDEN":
+      return errorResponse(403, error.code, error.message);
+    case "NOT_FOUND":
+      return errorResponse(404, error.code, error.message);
+    case "UPSTREAM_FAILURE":
+      return errorResponse(502, error.code, error.message);
+  }
 }
 
 function registrationErrorResponse(error: RepositoryRegistrationError): Response {
