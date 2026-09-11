@@ -262,7 +262,7 @@ describe("local development database exposure", () => {
     expect(resolved.services?.[DATABASE_SERVICE]?.environment).toMatchObject(NONPRODUCTION_CREDENTIALS);
   });
 
-  // Both CONTRIBUTING.md and README.md tell a developer to copy
+  // Both CONTRIBUTING.md and OPERATING.md tell a developer to copy
   // `.env.example` to `.env`, so this file is the shipped environment
   // contract. It is read for its own sake — without a line identifying it, an
   // emptied, renamed or moved file would satisfy the absence checked below by

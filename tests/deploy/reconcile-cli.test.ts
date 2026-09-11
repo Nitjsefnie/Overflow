@@ -9,8 +9,8 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
-const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
-const documentedCommands = extractReconciliationCommands(readme);
+const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
+const documentedCommands = extractReconciliationCommands(operating);
 const databaseError = "DATABASE_URL must be configured before using the database.";
 
 function extractReconciliationCommands(markdown: string): string[] {
@@ -207,7 +207,7 @@ describe("documented reconciliation CLI commands", () => {
   });
 
   it("extracts exactly one all-repositories and one selected-repository invocation", () => {
-    expect(documentedCommands, "No reconciliation commands found in the README bash block").not.toHaveLength(0);
+    expect(documentedCommands, "No reconciliation commands found in the OPERATING.md bash block").not.toHaveLength(0);
     const argumentShapes = documentedCommands.map((command) => tokenizeCommand(command).slice(2));
     expect(argumentShapes).toHaveLength(2);
     expect(argumentShapes).toEqual(expect.arrayContaining([

@@ -2,6 +2,8 @@
 !.gitignore
 !.env.example
 !README.md
+!API.md
+!OPERATING.md
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !LICENSE

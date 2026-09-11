@@ -131,16 +131,16 @@ describe("GitHub webhook route", () => {
   it("keeps setup configuration aligned with the production App Router pathname", async () => {
     const routeFile = resolve("src/app/api/github/webhooks/route.ts");
     const routePathname = `/${relative(resolve("src/app"), routeFile).replace(/\/route\.ts$/, "")}`;
-    const [environmentExample, readme] = await Promise.all([
+    const [environmentExample, operating] = await Promise.all([
       readFile(resolve(".env.example"), "utf8"),
-      readFile(resolve("README.md"), "utf8"),
+      readFile(resolve("OPERATING.md"), "utf8"),
     ]);
 
     expect(routePathname).toBe("/api/github/webhooks");
     expect(environmentExample).toContain(`GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
-    expect(readme).toContain(`GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
+    expect(operating).toContain(`GITHUB_WEBHOOK_URL=https://<public-host>${routePathname}`);
     expect(environmentExample).not.toContain("/api/webhooks/github");
-    expect(readme).not.toContain("/api/webhooks/github");
+    expect(operating).not.toContain("/api/webhooks/github");
   });
 
   it("verifies raw bytes before parsing JSON and dispatches a supported delivery", async () => {
