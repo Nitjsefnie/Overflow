@@ -2,6 +2,8 @@ import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import type {
   GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueHistoryEvent,
   GitHubIssueReference,
   GitHubPullRequest,
   GitHubPullRequestReview,
@@ -92,6 +94,28 @@ type GitLabIssueObject = {
   assignee?: { id: number; username: string } | null;
 };
 
+// Live-verified shape (docs.gitlab.com resource_label_events): the label
+// travels as an embedded object and the action as "add" | "remove".
+type GitLabLabelEventObject = {
+  id: number;
+  user?: { id: number; username: string } | null;
+  created_at: string;
+  label?: { name?: string } | null;
+  action?: string;
+};
+
+// Live-verified shape (docs.gitlab.com notes): activity records share the
+// notes endpoint with a `system: true` flag, and `updated_at` is the only
+// edit witness a note carries — GitLab exposes no edited-at attribute.
+type GitLabNoteObject = {
+  id: number;
+  body: string;
+  author?: { id: number; username: string } | null;
+  created_at: string;
+  updated_at: string;
+  system?: boolean;
+};
+
 type GitLabRestResponse = {
   status: number;
   headers: Headers;
@@ -174,14 +198,24 @@ export class GitLabGateway {
     options?: GitHubIssueListOptions,
   ): Promise<GitHubIssue[]> {
     // `since` — the reconciliation's incremental cursor — maps to GitLab's
-    // `updated_after`; the timeline controls have no GitLab equivalent and
-    // stay unimplemented rather than silently ignored (their parity is the
-    // reconciliation's concern, not the transport's).
+    // `updated_after`. The targeting controls (`timelineCriticalLabels` /
+    // `timelineWatchedLabels`) select embedded-timeline refreshes on GitHub;
+    // GitLab embeds no timeline in its issue listing, so there is nothing
+    // embedded to refresh and the controls stay unimplemented rather than
+    // silently ignored. Instead every listed issue's evidence is read fresh
+    // from the per-issue surfaces below — the N+1 decision (issue 539): two
+    // requests per issue plus one per merged closing merge request, the
+    // simple correct cost on a reconciliation that runs on a budget hold,
+    // not a hard rate ceiling.
     const since = options?.since === undefined ? "" : `&updated_after=${encodeURIComponent(options.since)}`;
     const objects = await this.listAllPages<GitLabIssueObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues${since}`,
     );
-    return objects.map(toGitHubIssue);
+    const issues: GitHubIssue[] = [];
+    for (const object of objects) {
+      issues.push(await this.issueWithEvidence(repository, object));
+    }
+    return issues;
   }
 
   public async getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null> {
@@ -200,7 +234,127 @@ export class GitLabGateway {
     if (object.id !== subject.id) {
       throw new Error("GitLab issue identity did not match the dirty subject.");
     }
-    return toGitHubIssue(object);
+    return this.issueWithEvidence(repository, object);
+  }
+
+  /**
+   * The issue's label history, mapped onto the fold's LABELED/UNLABELED
+   * vocabulary. GitLab carries no REST surface for assignment changes (the
+   * resource event APIs cover labels, state, milestone, weight and iteration
+   * — no assignee), so no history event is ever emitted for ASSIGNED or
+   * UNASSIGNED: the fold reads a GitLab row as never assigned, which leaves
+   * the opening window unbounded — the same shape a GitHub issue with no
+   * recorded assignment folds from. Recorded here where the absence is made,
+   * the way `stateReason: null` is (contract item 16).
+   *
+   * An event whose label GitLab can no longer name (the label was deleted)
+   * carries no evidence any consumer can read, so it is skipped rather than
+   * mapped onto a label name that was never supplied.
+   */
+  public async listIssueLabelEvents(
+    repository: GitHubRepositoryReference,
+    issueIid: number,
+  ): Promise<GitHubIssueHistoryEvent[]> {
+    const events = await this.listIssueCollection<GitLabLabelEventObject>(repository, issueIid, "resource_label_events");
+    const history: GitHubIssueHistoryEvent[] = [];
+    for (const event of events) {
+      if (event.action !== "add" && event.action !== "remove") continue;
+      if (typeof event.label?.name !== "string" || event.label.name.length === 0) continue;
+      history.push({
+        kind: event.action === "add" ? "LABELED" : "UNLABELED",
+        id: String(event.id),
+        actorLogin: event.user?.username ?? null,
+        actorGitHubUserId: event.user?.id ?? null,
+        label: event.label.name,
+        createdAt: normalizeTimestamp(event.created_at),
+      });
+    }
+    return history;
+  }
+
+  /**
+   * The issue's human comments. GitLab records activity ("closed", "changed
+   * the label") as system notes on the same notes endpoint — and some of
+   * those as separate resource events instead — so a `system` note is not a
+   * comment and is dropped at this boundary.
+   *
+   * GitLab exposes no edited-at attribute for notes; `updated_at` differing
+   * from `created_at` is the only edit witness the REST surface carries. The
+   * fold reads `lastEditedAt` to refuse a rationale comment whose body
+   * changed after the settlement evidence window closed, so the mapping
+   * preserves that refusal (a non-null lastEditedAt when the timestamps
+   * differ) rather than the never-edited null — the wrong direction to lose.
+   */
+  public async listIssueComments(
+    repository: GitHubRepositoryReference,
+    issueIid: number,
+  ): Promise<GitHubIssueComment[]> {
+    const notes = await this.listIssueCollection<GitLabNoteObject>(repository, issueIid, "notes");
+    return notes.flatMap((note) => {
+      if (note.system === true) return [];
+      const createdAt = normalizeTimestamp(note.created_at);
+      const updatedAt = normalizeTimestamp(note.updated_at);
+      return [{
+        id: String(note.id),
+        databaseId: note.id,
+        authorLogin: note.author?.username ?? null,
+        authorGitHubUserId: note.author?.id ?? null,
+        body: note.body,
+        createdAt,
+        // String forms can differ for the same instant; compare normalized.
+        lastEditedAt: updatedAt !== createdAt ? updatedAt : null,
+      }];
+    });
+  }
+
+  /**
+   * One issue's full snapshot slice: the timeline surfaces read fresh, and
+   * the closing merge requests through the public `getIssueClosingPullRequests`
+   * surface — the same callable the issue-547 webhook + initial-import path
+   * uses, so the issue-embedded shape and the standalone shape can never
+   * drift apart.
+   */
+  private async issueWithEvidence(
+    repository: GitHubRepositoryReference,
+    object: GitLabIssueObject,
+  ): Promise<GitHubIssue> {
+    const [history, comments, closingPullRequests] = await Promise.all([
+      this.listIssueLabelEvents(repository, object.iid),
+      this.listIssueComments(repository, object.iid),
+      this.getIssueClosingPullRequests(repository, object.iid),
+    ]);
+    return toGitHubIssue(object, history, comments, closingPullRequests);
+  }
+
+  /**
+   * The per-issue event and note collections are walked with offset
+   * pagination: keyset pagination is endpoint-specific on GitLab (live-verified
+   * for the issues and closed_by walks), and a keyset walk on an endpoint that
+   * ignores it stops after one page — silently truncating the evidence. The
+   * `x-next-page` header works on every list endpoint; rows shifting between
+   * pages costs at worst a boundary re-read, never a silent skip.
+   */
+  private async listIssueCollection<T>(
+    repository: GitHubRepositoryReference,
+    issueIid: number,
+    collection: "resource_label_events" | "notes",
+  ): Promise<T[]> {
+    const items: T[] = [];
+    let page = 1;
+    for (;;) {
+      const response = await this.request(
+        `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${issueIid}/${collection}?per_page=100&page=${page}`,
+      );
+      items.push(...await responseJson<T[]>(response));
+      const next = response.headers.get("x-next-page");
+      if (next === null || next === "") break;
+      const nextPage = Number(next);
+      if (!Number.isSafeInteger(nextPage) || nextPage <= page) {
+        throw new Error(`GitLab returned an invalid x-next-page header: ${JSON.stringify(next)}.`);
+      }
+      page = nextPage;
+    }
+    return items;
   }
 
   public async getPullRequest(repository: GitHubRepositoryReference, mergeRequestIid: number): Promise<GitLabMergeRequest> {
@@ -465,7 +619,12 @@ function toGitHubRepository(project: GitLabProject): GitHubRepository {
   };
 }
 
-function toGitHubIssue(object: GitLabIssueObject): GitHubIssue {
+function toGitHubIssue(
+  object: GitLabIssueObject,
+  history: GitHubIssueHistoryEvent[],
+  comments: GitHubIssueComment[],
+  closingPullRequests: GitLabMergeRequest[],
+): GitHubIssue {
   const assignee = object.assignees?.[0] ?? object.assignee ?? null;
   return {
     id: object.id,
@@ -486,12 +645,14 @@ function toGitHubIssue(object: GitLabIssueObject): GitHubIssue {
     labels: object.labels ?? [],
     claimAssigneeGitHubLogin: assignee?.username ?? null,
     claimAssigneeGitHubUserId: assignee?.id ?? null,
-    // Timeline parity (label events, comments, closing references embedded in
-    // the issue) is the reconciliation surface — issue 296 step 2 C2 — not the
-    // registration surface this gateway is first consumed by.
-    history: [],
-    comments: [],
-    closingPullRequests: [],
+    // The reconciliation evidence: label events, human comments and closing
+    // merge requests read fresh by the caller (`issueWithEvidence`) through
+    // the same public surfaces the issue-547 webhook + initial-import path
+    // calls, so the issue-embedded shape and the standalone shape cannot
+    // drift apart.
+    history,
+    comments,
+    closingPullRequests,
   };
 }
 
