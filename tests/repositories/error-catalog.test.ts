@@ -454,13 +454,13 @@ const catalogValidationRefusals: RegistrationFailure[] = [
   },
 ];
 
-// README.md documents the status, code and exact message of every registration failure, and a
+// API.md documents the status, code and exact message of every registration failure, and a
 // reader matches on all three. Nothing else notices when a message is reworded and the catalog is
 // not, so these cases raise each failure for real and look the surfaced string up in the row the
 // registration catalog publishes for it. Membership in the corpus is not enough: a string the
 // catalog publishes under a different status, a different code, or for a different failure is a
 // row about something else, and answering with it misdescribes what happened.
-describe("the registration error catalog README.md publishes", () => {
+describe("the registration error catalog API.md publishes", () => {
   for (const failure of registrationFailures) {
     it(`publishes the status, code and message ${failure.what} surfaces`, async () => {
       await publishedRow(failure);
@@ -577,10 +577,10 @@ async function publishedRow(failure: RegistrationFailure): Promise<CatalogRow> {
 // The rows of the table under the registration catalog's heading whose message column is headed
 // `Exact message`, read back as the API emits them: each cell without its surrounding code span.
 function registrationCatalogRows(): CatalogRow[] {
-  const lines = readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8").split("\n");
+  const lines = readFileSync(fileURLToPath(new URL("../../API.md", import.meta.url)), "utf8").split("\n");
   const heading = lines.indexOf(registrationCatalogHeading);
   if (heading === -1) {
-    throw new Error(`README.md has no ${registrationCatalogHeading} section, so nothing was compared.`);
+    throw new Error(`API.md has no ${registrationCatalogHeading} section, so nothing was compared.`);
   }
 
   const rows: CatalogRow[] = [];
@@ -719,10 +719,10 @@ function actualLabelsFrom(from: number, to: number = 10): RepositoryRegistration
 // The bullet list below the registration catalog enumerating the exact INVALID_INPUT messages
 // catalog validation returns, read back as the API emits them.
 function publishedValidationMessages(): string[] {
-  const lines = readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8").split("\n");
+  const lines = readFileSync(fileURLToPath(new URL("../../API.md", import.meta.url)), "utf8").split("\n");
   const intro = lines.findIndex((line) => line.startsWith("Catalog validation returns one of these exact"));
   if (intro === -1) {
-    throw new Error("README.md no longer enumerates the catalog-validation INVALID_INPUT messages.");
+    throw new Error("API.md no longer enumerates the catalog-validation INVALID_INPUT messages.");
   }
 
   const messages: string[] = [];
@@ -738,7 +738,7 @@ function publishedValidationMessages(): string[] {
   }
 
   if (messages.length === 0) {
-    throw new Error("README.md enumerates no catalog-validation INVALID_INPUT messages.");
+    throw new Error("API.md enumerates no catalog-validation INVALID_INPUT messages.");
   }
   return messages;
 }
