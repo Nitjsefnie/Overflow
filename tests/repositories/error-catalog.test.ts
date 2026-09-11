@@ -563,8 +563,13 @@ function gitlabSubmission(input: RepositoryRegistrationInput): RepositoryRegistr
 }
 
 // A transport answering the project by path and by id, and the catalog labels the submission names
-// unless told to answer none; anything else is 404, as the real instance would answer.
-function gitlabTransport(options: { labels?: "all" | "none"; project?: "found" | "missing" } = {}): typeof fetch {
+// unless told to answer none; anything else is 404, as the real instance would answer. A case
+// varying exactly the project fields its refusal is about merges them over the served payload.
+function gitlabTransport(options: {
+  labels?: "all" | "none";
+  project?: "found" | "missing";
+  projectOverrides?: Record<string, unknown>;
+} = {}): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     const json = (body: unknown) =>
@@ -576,10 +581,10 @@ function gitlabTransport(options: { labels?: "all" | "none"; project?: "found" |
       return json(labels);
     }
     if (options.project !== "missing" && request.url.includes(`/projects/${encodeURIComponent(gitlabProjectPath)}`)) {
-      return json(gitlabProject);
+      return json({ ...gitlabProject, ...options.projectOverrides });
     }
     if (options.project !== "missing" && request.url.includes(`/projects/${gitlabProjectId}`)) {
-      return json(gitlabProject);
+      return json({ ...gitlabProject, ...options.projectOverrides });
     }
     return new Response("no route", { status: 404 });
   };
@@ -633,6 +638,23 @@ const gitlabFailures: RegistrationFailure[] = [
       linkGitLab(dependencies);
       dependencies.forgeIdentity = null;
     },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab project that is not public",
+    status: forbiddenStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ projectOverrides: { visibility: "private" } })),
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab project the linked identity cannot maintain",
+    status: forbiddenStatus,
+    raise: (dependencies) =>
+      linkGitLab(dependencies, gitlabTransport({
+        projectOverrides: { permissions: { project_access: { access_level: 30 } } },
+      })),
     submit: gitlabSubmission,
     publishes: (surfaced) => (cell) => cell === surfaced,
   },
