@@ -12,7 +12,7 @@ Overflow is a cooperative ledger for open-source work. A repository sponsor offe
 
 **Offer work, then settle it.** Apply an opening label when you file an issue. After the closing pull request's final commit and before you merge it, apply an actual-catalog label and post a comment naming that label — as the sponsor; nobody else's labels or comments price your repository's work, and a comment edited after the merge window closes no longer counts. [How credit settles](#how-credit-settles) states the evidence each label has to satisfy and what it is worth.
 
-**Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Register a repository*, *Calibration* and *Rules*.
+**Read the ledger.** A signed-in member gets *Ledger*, *Issues*, *Settlements*, *Members*, *Register a repository*, *Calibration* and *Rules*.
 
 Closing work needs no repository of your own. Take an issue in a repository that is already registered; the terms below say when the credit settles, including what happens when you have not signed in yet.
 
@@ -20,7 +20,7 @@ Closing work needs no repository of your own. Take an issue in a repository that
 
 ### GitHub
 
-GitHub is the forge Overflow is built around: it is the sign-in, the registration form on the dashboard and the API both take GitHub repositories, registration installs a webhook so the ledger follows the repository as it changes, and every settlement rule below applies in full.
+GitHub is the forge Overflow is built around: it is the sign-in, the *Register a repository* form and the API both take GitHub repositories, registration installs a webhook so the ledger follows the repository as it changes, and every settlement rule below applies in full.
 
 ### GitLab
 
@@ -36,7 +36,7 @@ What works:
 What is not available on GitLab:
 
 - **Sign-in.** GitHub is the only sign-in and the only account key; a GitLab identity is linked to a GitHub-signed-in account. This is by design.
-- **The dashboard registration form.** GitLab registration is API-only. Not built yet.
+- **The *Register a repository* form.** GitLab registration is API-only. Not built yet.
 - **Webhooks.** Registration installs nothing on the project and schedules no initial import. A GitLab project is picked up only by the periodic reconciliation sweep, which runs at startup and every six hours. Webhook ingestion is deferred, not ruled out.
 - **Changing the catalog.** `PATCH /api/repositories` has no GitLab path. Unregistration has none either: the GitHub-shaped `DELETE /api/repositories` accepts a `group/project` path as `repositoryUrl`, and a project under a nested group cannot be unregistered. Not built yet.
 - **Review rounds.** GitLab approvals are not changes-requested reviews, so review rounds on a GitLab merge request always count zero. This is a recorded asymmetry, by design until GitLab has a native equivalent.

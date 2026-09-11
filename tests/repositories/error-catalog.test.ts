@@ -26,6 +26,13 @@ beforeEach(() => {
 // this a control: a string the token-minting catalog publishes documents a different endpoint.
 const registrationCatalogHeading = "### Registration responses";
 
+// The subsection publishing the answers the GitLab registration path adds. Its table is a separate
+// catalog under a separate heading, so it needs its own reader and its own corpus.
+const gitlabCatalogHeading = "#### Submitting a GitLab project";
+
+// src/app/api/repositories/route.ts answers an error coded NOT_FOUND with this status.
+const notFoundStatus = "404";
+
 // src/app/api/repositories/route.ts answers a registration error coded CONFLICT with this status.
 const conflictStatus = "409";
 
@@ -535,6 +542,218 @@ describe("the registration error catalog API.md publishes", () => {
   });
 });
 
+// The GitLab registration path, raised through the same registerRepository: the submission
+// carries provider "gitlab", a linked identity on gitlab.com, and a transport that answers for one
+// project. Each case varies exactly the input or dependency its refusal is about.
+const gitlabProjectId = 278964;
+const gitlabProjectPath = "gitlab-org/gitlab";
+const gitlabProject = {
+  id: gitlabProjectId,
+  name: "gitlab",
+  path: "gitlab",
+  path_with_namespace: gitlabProjectPath,
+  visibility: "public",
+  web_url: `https://gitlab.com/${gitlabProjectPath}`,
+  namespace: { id: 1, name: "GitLab.org", path: "gitlab-org", kind: "group" },
+  permissions: { project_access: { access_level: 40 } },
+};
+
+function gitlabSubmission(input: RepositoryRegistrationInput): RepositoryRegistrationInput {
+  return { ...input, provider: "gitlab", instanceUrl: "https://gitlab.com", project: gitlabProjectPath };
+}
+
+// A transport answering the project by path and by id, and the catalog labels the submission names
+// unless told to answer none; anything else is 404, as the real instance would answer.
+function gitlabTransport(options: { labels?: "all" | "none"; project?: "found" | "missing" } = {}): typeof fetch {
+  return async (input, init) => {
+    const request = new Request(input, init);
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    if (request.url.includes("/labels")) {
+      const labels = options.labels === "none"
+        ? []
+        : [...registrationInput().openingLabels, ...registrationInput().actualLabels].map(({ label }) => ({ name: label }));
+      return json(labels);
+    }
+    if (options.project !== "missing" && request.url.includes(`/projects/${encodeURIComponent(gitlabProjectPath)}`)) {
+      return json(gitlabProject);
+    }
+    if (options.project !== "missing" && request.url.includes(`/projects/${gitlabProjectId}`)) {
+      return json(gitlabProject);
+    }
+    return new Response("no route", { status: 404 });
+  };
+}
+
+function linkGitLab(dependencies: RepositoryRegistrationDependencies, transport: typeof fetch = gitlabTransport()): void {
+  dependencies.forgeIdentity = { instanceUrl: "https://gitlab.com", token: "glpat-test" };
+  dependencies.forgeFetch = transport;
+}
+
+const gitlabFailures: RegistrationFailure[] = [
+  {
+    what: "a GitLab submission whose instance URL does not parse",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), instanceUrl: "not-a-url" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission whose instance URL is not http or https",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), instanceUrl: "ftp://gitlab.example" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission without a project",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), project: "" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission whose numeric project id is zero",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), project: "0" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission whose project is neither an id nor a path",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), project: "gitlab" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission with no identity linked on the instance",
+    status: forbiddenStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.forgeIdentity = null;
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission whose linked identity is on another instance",
+    status: forbiddenStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.forgeIdentity = { instanceUrl: "https://gitlab.example", token: "glpat-elsewhere" };
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab project id the instance does not answer",
+    status: notFoundStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ project: "missing" })),
+    submit: (input) => ({ ...gitlabSubmission(input), project: String(gitlabProjectId) }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab project another registration already holds",
+    status: conflictStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.store.createRepository = async () => null;
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab project whose numeric id a GitHub registration holds",
+    status: conflictStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.store.findRepositoryProviderById = async () => "github";
+    },
+    submit: gitlabSubmission,
+    // The id and the holding provider are substituted at runtime; the published cell carries <id>
+    // and <provider> in their places, so only the fixed skeleton around them is comparable.
+    publishes: (surfaced) => {
+      const skeleton = [
+        "GitLab project ",
+        " collides with forge id ",
+        " already registered as provider '",
+        "'. An id's forge history never migrates between forges; registration refused.",
+      ];
+      expect(matchesSegmentsInOrder(skeleton)(surfaced), `The surfaced message lost its skeleton: ${surfaced}`).toBe(true);
+      return matchesSegmentsInOrder(skeleton);
+    },
+  },
+  {
+    what: "a GitLab project missing the catalog labels",
+    status: invalidInputStatus,
+    raise: (dependencies) => linkGitLab(dependencies, gitlabTransport({ labels: "none" })),
+    submit: gitlabSubmission,
+    // The missing labels are substituted at runtime; the published cell carries <labels>.
+    publishes: (surfaced) => {
+      const skeleton = ["The GitLab project does not carry these labels: ", ". Create them, then register again."];
+      expect(matchesSegmentsInOrder(skeleton)(surfaced), `The surfaced message lost its skeleton: ${surfaced}`).toBe(true);
+      return matchesSegmentsInOrder(skeleton);
+    },
+  },
+  {
+    what: "a GitLab registration the store cannot save",
+    status: upstreamFailureStatus,
+    raise(dependencies) {
+      linkGitLab(dependencies);
+      dependencies.store.createRepository = async (): Promise<never> => {
+        throw new Error("save failed");
+      };
+    },
+    submit: gitlabSubmission,
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+];
+
+// GitLab rows the corpus deliberately does not raise, answered at the route rather than by
+// registerRepository — the same allowlist discipline as routeLevelAnswers.
+const gitlabRouteLevelAnswers: Record<string, string> = {
+  "Unable to initialize repository registration.": "the route's catch-all answers a GitLab read the gateway could not complete, and an unavailable GitHub credential",
+};
+
+describe("the GitLab registration answers API.md publishes", () => {
+  const catalog = { heading: gitlabCatalogHeading, rows: gitlabCatalogRows };
+
+  for (const failure of gitlabFailures) {
+    it(`publishes the status, code and message ${failure.what} surfaces`, async () => {
+      await publishedRow(failure, catalog);
+    });
+  }
+
+  it("publishes no GitLab exact-message row that no raised failure answers and no allowlist entry explains", async () => {
+    const raised = await Promise.all(gitlabFailures.map(async (failure) => ({
+      failure,
+      surfaced: await surfacedFailure(failure),
+    })));
+
+    const unclaimed = gitlabCatalogRows().filter((row) => {
+      const claimants = raised.filter(({ failure, surfaced }) =>
+        row.status === failure.status
+        && row.code === surfaced.code
+        && failure.publishes(surfaced.message)(row.message));
+
+      if (gitlabRouteLevelAnswers[row.message] !== undefined) {
+        expect(
+          claimants,
+          `The GitLab row "${row.message}" is allowlisted as route-level (${gitlabRouteLevelAnswers[row.message]}), but a raised failure answers it`,
+        ).toHaveLength(0);
+        return false;
+      }
+      return claimants.length === 0;
+    });
+
+    expect(
+      unclaimed.map((row) => `${row.status} ${row.code} ${row.message}`),
+      "The GitLab subsection publishes exact-message rows that no raised failure answers and no allowlist entry explains",
+    ).toEqual([]);
+  });
+});
+
 type RegistrationFailure = {
   readonly what: string;
   // The status src/app/api/repositories/route.ts answers this failure's error code with.
@@ -555,14 +774,17 @@ type CatalogRow = {
 // Raises the failure through the real registerRepository and returns the single catalog row that
 // publishes what it surfaced, having checked that row carries the status and code the reader is
 // told to match first.
-async function publishedRow(failure: RegistrationFailure): Promise<CatalogRow> {
+async function publishedRow(
+  failure: RegistrationFailure,
+  catalog: { heading: string; rows: () => CatalogRow[] } = { heading: registrationCatalogHeading, rows: registrationCatalogRows },
+): Promise<CatalogRow> {
   const surfaced = await surfacedFailure(failure);
   const publishes = failure.publishes(surfaced.message);
-  const matched = registrationCatalogRows().filter((row) => publishes(row.message));
+  const matched = catalog.rows().filter((row) => publishes(row.message));
 
   expect(
     matched,
-    `The ${registrationCatalogHeading} catalog publishes no single row for ${failure.what}: ${surfaced.message}`,
+    `The ${catalog.heading} catalog publishes no single row for ${failure.what}: ${surfaced.message}`,
   ).toHaveLength(1);
   const [row] = matched as [CatalogRow];
 
@@ -577,10 +799,20 @@ async function publishedRow(failure: RegistrationFailure): Promise<CatalogRow> {
 // The rows of the table under the registration catalog's heading whose message column is headed
 // `Exact message`, read back as the API emits them: each cell without its surrounding code span.
 function registrationCatalogRows(): CatalogRow[] {
+  return catalogRowsUnder(registrationCatalogHeading);
+}
+
+// The rows of the GitLab subsection's table, scoped the same way: the subsection ends at the
+// next heading, which is the registration catalog's own.
+function gitlabCatalogRows(): CatalogRow[] {
+  return catalogRowsUnder(gitlabCatalogHeading);
+}
+
+function catalogRowsUnder(catalogHeading: string): CatalogRow[] {
   const lines = readFileSync(fileURLToPath(new URL("../../API.md", import.meta.url)), "utf8").split("\n");
-  const heading = lines.indexOf(registrationCatalogHeading);
+  const heading = lines.indexOf(catalogHeading);
   if (heading === -1) {
-    throw new Error(`API.md has no ${registrationCatalogHeading} section, so nothing was compared.`);
+    throw new Error(`API.md has no ${catalogHeading} section, so nothing was compared.`);
   }
 
   const rows: CatalogRow[] = [];
@@ -611,7 +843,7 @@ function registrationCatalogRows(): CatalogRow[] {
 
   if (rows.length === 0) {
     throw new Error(
-      `The ${registrationCatalogHeading} section published no exact message rows, so nothing was compared.`,
+      `The ${catalogHeading} section published no exact message rows, so nothing was compared.`,
     );
   }
   return rows;
