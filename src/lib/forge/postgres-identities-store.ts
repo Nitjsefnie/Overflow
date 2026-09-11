@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { decryptToken } from "@/lib/security/token-cipher";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
 
 type IdentityRow = {
@@ -19,9 +20,34 @@ type IdentityRow = {
  */
 export class PostgresForgeIdentityStore implements ForgeIdentityStore {
   private readonly sql: Sql;
+  private readonly tokenEncryptionKey: string | undefined;
 
-  public constructor(sql: Sql) {
+  public constructor(sql: Sql, tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY) {
     this.sql = sql;
+    this.tokenEncryptionKey = tokenEncryptionKey;
+  }
+
+  /**
+   * The linked instance's PAT, decrypted for gateway use — the credential the
+   * GitLab registration and reconciliation paths read with. Null when the
+   * user has no verified identity on that instance. The identity's own
+   * normalization guarantees the lookup matches the stored row.
+   */
+  public async getForgeToken(userId: string, instanceUrl: string): Promise<string | null> {
+    const normalized = normalizeInstanceUrl(instanceUrl);
+    if (this.tokenEncryptionKey === undefined || this.tokenEncryptionKey.length === 0) {
+      throw new Error("Token encryption key must be configured.");
+    }
+    const [row] = await this.sql<{ encrypted_token: Buffer }[]>`
+      select encrypted_token
+      from user_forge_identities
+      where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
+      limit 1
+    `;
+    if (row === undefined) {
+      return null;
+    }
+    return decryptToken(Buffer.from(row.encrypted_token).toString("utf8"), this.tokenEncryptionKey);
   }
 
   public async listForUser(userId: string): Promise<ForgeIdentityView[]> {
@@ -82,6 +108,3 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
     return rows.length > 0;
   }
 }
-
-// Re-exported so a caller constructing only the store need not import the cipher.
-export { encryptToken };
