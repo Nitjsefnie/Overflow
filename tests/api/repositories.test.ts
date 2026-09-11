@@ -15,7 +15,8 @@ import { POST as mintToken } from "@/app/api/tokens/route";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
-import type { RepositoryRouteSession } from "@/app/api/repositories/route";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import type { RepositoryRouteDependencies, RepositoryRouteSession } from "@/app/api/repositories/route";
 
 import {
   RepositoryRegistrationEnforcementError,
@@ -1052,6 +1053,24 @@ describe("PATCH /api/repositories", () => {
     });
   });
 
+  // The same wiring preemption the DELETE handler repairs: a GitLab-shaped
+  // catalog change refuses inside buildRegistrationDependencies, and that
+  // refusal is the submitter's input — a permanent 400, never the catch-all
+  // upstream 502.
+  it("maps the forge-identity input refusal raised while wiring a GitLab catalog change to 400", async () => {
+    const handler = createRepositoryPatchHandler(forgeWiringDependencies());
+
+    const response = await handler(jsonRequest({ ...validInput(), provider: "gitlab" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INVALID_INPUT",
+        message: "The instance URL must be an absolute URL.",
+      },
+    });
+  });
+
   it("answers 200 with the appended version when the catalog changed", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
@@ -1426,6 +1445,23 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
+  // The wiring runs before the flow: a GitLab submission without an instance URL
+  // refuses inside buildRegistrationDependencies, and that refusal is the
+  // submitter's input — a permanent 400, never the catch-all upstream 502.
+  it("maps the forge-identity input refusal raised while wiring a GitLab unregistration to 400", async () => {
+    const handler = createRepositoryDeleteHandler(forgeWiringDependencies());
+
+    const response = await handler(jsonRequest({ provider: "gitlab" }, "DELETE"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INVALID_INPUT",
+        message: "The instance URL must be an absolute URL.",
+      },
+    });
+  });
+
   it("passes a store-raised conflict through the shared error mapping unchanged", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
@@ -1730,6 +1766,26 @@ function successfulDependencies(
     },
     async scheduleInitialImport() {
       return undefined;
+    },
+  };
+}
+
+/**
+ * Route wiring whose forge limb reproduces buildRegistrationDependencies' one
+ * unguarded step: a GitLab submission resolves the submitter's linked identity
+ * through normalizeInstanceUrl, whose ForgeIdentityError is the submitter's
+ * input. The stub throws where the real wiring throws, so these tests pin the
+ * route's mapping of that error rather than a stand-in refusal.
+ */
+function forgeWiringDependencies(options: SuccessfulDependenciesOptions = {}): RepositoryRouteDependencies {
+  return {
+    findAccountByTokenHash: async () => null,
+    getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" as const } }),
+    async createRegistrationDependencies(_session, input) {
+      if (input.provider === "gitlab") {
+        normalizeInstanceUrl(input.instanceUrl ?? "");
+      }
+      return successfulDependencies(undefined, options);
     },
   };
 }
