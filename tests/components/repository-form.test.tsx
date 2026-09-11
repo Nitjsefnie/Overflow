@@ -123,8 +123,8 @@ function defaultIdentitiesResponse(): Response {
 }
 
 /** The labels-route calls the stubbed fetch has seen, URLs only. */
-function labelsCalls(fetchMock: { mock: { calls: Array<[unknown, unknown]> } }): string[] {
-  return fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("/api/repositories/labels"));
+function labelsCalls(fetchMock: { mock: { calls: ReadonlyArray<unknown[]> } }): string[] {
+  return fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/api/repositories/labels"));
 }
 
 /** Lets pending promise chains (the identities read) settle under fake timers. */
@@ -707,6 +707,7 @@ describe("repository form forge selection", () => {
     fireEvent.change(screen.getByLabelText("Project"), { target: { value: " group/proj " } });
     await selectLoadedOption("Opening label 1", "rill");
     await selectLoadedOption("Opening label 2", "stream");
+    await selectLoadedOption("Opening label 3", "brook");
     for (const points of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
       await selectLoadedOption(
         `Actual label for ${points} point${points === 1 ? "" : "s"}`,
@@ -867,11 +868,12 @@ describe("repository form forge selection", () => {
       provider: "gitlab",
       instanceUrl: "https://gitlab.example",
       project: "group/proj",
-      openingName: "Promise band",
-      actualName: "Landing measure",
+      openingName: "Opening catalog",
+      actualName: "Result catalog",
       openingLabels: [
-        { label: "rill", comparisonPoints: 3, reservePoints: 4 },
-        { label: "stream", comparisonPoints: 6, reservePoints: 8 },
+        { label: "rill", comparisonPoints: 3, reservePoints: 3 },
+        { label: "stream", comparisonPoints: 6, reservePoints: 6 },
+        { label: "brook", comparisonPoints: 9, reservePoints: 9 },
       ],
       actualLabels: repositoryLabels.slice(0, 10).map((label, index) => ({ label, points: index + 1 })),
     });
