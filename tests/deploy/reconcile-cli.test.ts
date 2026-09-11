@@ -131,6 +131,15 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
       environment.LOCALAPPDATA = configDirectory;
     }
     if (databaseUrl !== undefined) environment.DATABASE_URL = databaseUrl;
+    // The migrate default-branch guard's disposable-database switch is part of
+    // the documented script's own interface, not host config supplying behavior:
+    // this suite's container database is disposable by construction, and a
+    // branch carrying an unmerged migration can only migrate it by the escape
+    // the guard itself names (issue 511). Unset here in CI and on main, so the
+    // child's behavior is unchanged where the guard has nothing to refuse.
+    if (process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD !== undefined) {
+      environment.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD;
+    }
     const result = spawnSync(executable!, argumentsList, {
       cwd,
       // Next requires NODE_ENV on ProcessEnv, but Node accepts an environment
