@@ -154,6 +154,60 @@ describe("GitLabGateway", () => {
     expect(repository.ownerType).toBe("ORGANIZATION");
   });
 
+  it("computes canAdminister from the higher of direct project and inherited group access", async () => {
+    const serving = (projectPayload: unknown) =>
+      gateway(async () =>
+        new Response(JSON.stringify(projectPayload), { status: 200, headers: { "content-type": "application/json" } }));
+
+    // GitLab reports the effective access level as the higher of the direct
+    // project access and the access inherited through the namespace group:
+    // a group Maintainer carries project_access === null and group_access at
+    // Maintainer, so project_access alone would falsely refuse them.
+    const groupMaintainer = await serving({
+      ...project,
+      permissions: { project_access: null, group_access: { access_level: 40 } },
+    }).getRepositoryById(278964);
+    expect(groupMaintainer.canAdminister).toBe(true);
+
+    const groupOwnerOverDirectDeveloper = await serving({
+      ...project,
+      permissions: { project_access: { access_level: 30 }, group_access: { access_level: 50 } },
+    }).getRepositoryById(278964);
+    expect(groupOwnerOverDirectDeveloper.canAdminister).toBe(true);
+
+    const directMaintainerOverGroupDeveloper = await serving({
+      ...project,
+      permissions: { project_access: { access_level: 40 }, group_access: { access_level: 30 } },
+    }).getRepositoryById(278964);
+    expect(directMaintainerOverGroupDeveloper.canAdminister).toBe(true);
+
+    const belowMaintainerOnBoth = await serving({
+      ...project,
+      permissions: { project_access: { access_level: 30 }, group_access: { access_level: 30 } },
+    }).getRepositoryById(278964);
+    expect(belowMaintainerOnBoth.canAdminister).toBe(false);
+
+    const noAccessAtAll = await serving({
+      ...project,
+      permissions: { project_access: null, group_access: null },
+    }).getRepositoryById(278964);
+    expect(noAccessAtAll.canAdminister).toBe(false);
+
+    // An absent permissions field reports no access either — nothing inferred.
+    const absentPermissions = await serving({ ...project, permissions: undefined }).getRepositoryById(278964);
+    expect(absentPermissions.canAdminister).toBe(false);
+  });
+
+  it("maps GitLab-internal visibility to PRIVATE so a non-public project cannot register", async () => {
+    const client = gateway(async () =>
+      new Response(JSON.stringify({ ...project, visibility: "internal" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    const repository = await client.getRepositoryById(278964);
+    expect(repository.visibility).toBe("PRIVATE");
+  });
+
   it("captures the merge evidence and all three SHAs from the MR object", async () => {
     const client = gateway(jsonRouter([
       ["/merge_requests/17", mergeRequest],
