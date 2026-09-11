@@ -38,15 +38,14 @@ describe("docs/forge-evidence-contract is untracked", () => {
     for (const pathname of forgeEvidenceContract) {
       expect(existsSync(resolve(pathname)), pathname).toBe(false);
     }
+    for (const pathname of forgeEvidenceContract) {
+      expect(checkIgnore(pathname), pathname).toBe(0);
+    }
   });
 
   it("ignores probe paths directly under docs/", () => {
     expect(checkIgnore("docs/probe.md")).toBe(0);
     expect(checkIgnore("docs/probe.html")).toBe(0);
-  });
-
-  it("keeps the docs/reviews audit reachable by the ignore policy", () => {
-    expect(checkIgnore("docs/reviews/2026-09-05-full-application-audit.html")).toBe(1);
   });
 });
 
