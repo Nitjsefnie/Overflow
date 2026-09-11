@@ -647,20 +647,74 @@ describe("scripts/deploy-revision.sh", () => {
     expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
   });
 
-  it("refuses fail-closed when a required check has no check run on the SHA", async () => {
+  it("waits for an absent required check run and proceeds once it appears and succeeds", async () => {
     const fixture = await makeFixture();
     const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
       ["verify", "completed", "success"],
       ["claim", "completed", "success"],
     ]);
-    const result = await runDeploy(fixture, { GH_SHIM_CHECKRUNS_SEQUENCE: absent });
+    const result = await runDeploy(fixture, {
+      GH_SHIM_CHECKRUNS_SEQUENCE: `${absent}:${fixture.checkRunsSuccess}`,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    const isCheckRuns = (entry: ShimLogEntry) =>
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+    const checkRunsCalls = entries.filter(isCheckRuns);
+    expect(checkRunsCalls).toHaveLength(2);
+    const checkRunsAt = entries.findIndex(isCheckRuns);
+    const sleepBetween = entries
+      .map(describeEntry)
+      .filter((line, at) => line === "sleep 15" && at > checkRunsAt);
+    expect(sleepBetween.length).toBeGreaterThanOrEqual(1);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "release:switch")).toBe(true);
+  });
+
+  it("refuses on the timeout while a required check run stays absent, before mutating anything", async () => {
+    const fixture = await makeFixture();
+    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+      ["verify", "completed", "success"],
+      ["claim", "completed", "success"],
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_CHECKRUNS_SEQUENCE: absent,
+      OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
+    });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("deploy-gate (absent)");
+    expect(result.stderr).toContain("nothing has been mutated");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate")).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
+  });
+
+  it("refuses immediately when an absent run appears and concludes non-success", async () => {
+    const fixture = await makeFixture();
+    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+      ["verify", "completed", "success"],
+      ["claim", "completed", "success"],
+    ]);
+    const appeared = await writeCheckRuns(fixture, "check-runs-appeared-failed.txt", [
+      ["verify", "completed", "success"],
+      ["deploy-gate", "completed", "failure"],
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_CHECKRUNS_SEQUENCE: `${absent}:${appeared}`,
+    });
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate");
-    expect(result.stderr).toContain("absent");
+    expect(result.stderr).toContain("concluded failure");
     const entries = await readLog(fixture.shimLog);
+    const isCheckRuns = (entry: ShimLogEntry) =>
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+    expect(entries.filter(isCheckRuns)).toHaveLength(2);
+    expect(entries.filter((entry) => entry.cmd === "sleep")).toHaveLength(1);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
-    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
   });
 
   it("waits for a pending required check and proceeds once it succeeds", async () => {

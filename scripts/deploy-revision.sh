@@ -23,8 +23,11 @@ log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 # or restart, so every refusal below leaves the tree untouched. Per required
 # context, only the latest check run decides: completed + success passes;
 # completed + any other conclusion refuses immediately; a status that is not
-# completed is pending and waits; absent refuses, because absent is not
-# passed.
+# completed is pending and waits; an absent run (GitHub has not created it
+# yet — the normal state in the first minute after a merge) waits too, listed
+# as `<check> (absent)`. The OVERFLOW_DEPLOY_CI_TIMEOUT deadline bounds the
+# wait, so a run that never registers — a renamed job, a path-filtered
+# workflow — still refuses at the deadline, named with the same marker.
 required_checks_gate() {
   local remote_url repo required check_runs check name status conclusion pending timeout deadline
   remote_url=$(git config --get remote.origin.url)
@@ -62,8 +65,8 @@ required_checks_gate() {
 $check_runs
 EOF
       if [ "$name" != "$check" ]; then
-        printf 'Required check %s has no check run on %s; absent is not passed; refusing to deploy.\n' "$check" "$full_sha" >&2
-        exit 1
+        pending+="${pending:+, }$check (absent)"
+        continue
       fi
       if [ "$status" != completed ]; then
         pending+="${pending:+, }$check ($status)"

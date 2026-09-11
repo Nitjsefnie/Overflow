@@ -625,10 +625,11 @@ after the pull it resolves the exact SHA being deployed and reads main's
 required checks from the branch protection; every required check's latest run
 on that SHA must conclude `success` before install, migrations, build, switch
 or restart. A failed, cancelled or otherwise non-successful conclusion refuses
-immediately, an absent check run refuses (absent is not passed), and a queued
-or in-progress check makes the script wait, polling every 15 seconds until
+immediately, and a check whose latest run is queued, in progress or has not
+been created yet makes the script wait, polling every 15 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
-the still-pending checks named; a refused gate mutates nothing.
+the still-pending checks named, an absent run reported as `<check> (absent)`;
+a refused gate mutates nothing.
 `OVERFLOW_DEPLOY_CI_GATE=skip` bypasses the entire gate with a loud warning
 naming the skip and the SHA, and is reserved for rollback or recovery deploys
 when main's CI is red; unset or empty enforces the gate, and any other value
