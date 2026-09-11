@@ -96,6 +96,27 @@ describe("linkForgeIdentity", () => {
     expect(upserts).toEqual([]);
   });
 
+  it("claims past GitLab work with the verified triple after storing the identity", async () => {
+    const claims: Array<Record<string, unknown>> = [];
+    const { store, upserts } = fakeStore();
+    const dependencies = {
+      store,
+      tokenEncryptionKey: TEST_KEY,
+      fetch: fetchJson({ id: 4242, username: "tester" }),
+      claimPastWork: async (input: { userId: string; instanceUrl: string; forgeUserId: number }) => {
+        claims.push({ ...input });
+      },
+    };
+    await linkForgeIdentity(
+      dependencies,
+      { userId: "user-1", instanceUrl: "https://GitLab.Example.com/", token: "glpat-live" },
+    );
+    expect(claims).toEqual([
+      { userId: "user-1", instanceUrl: "https://gitlab.example.com", forgeUserId: 4242 },
+    ]);
+    expect(upserts).toHaveLength(1);
+  });
+
   it("refuses when another account already holds the triple", async () => {
     const store = {
       async upsertIdentity() {
