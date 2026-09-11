@@ -18,6 +18,21 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const migrationsDirectory = path.join(repositoryRoot, "db/migrations");
 
 /**
+ * The candidate refs the default branch is resolved from, mirroring scripts/migrate.ts's
+ * deliberately unexported `defaultBranchRefCandidates` — same names, same order. The resolver
+ * tries them in sequence and the first one that resolves wins. Two consumers here: the
+ * preference-order leg seeds exactly this list into a scratch repository, and the checkout leg
+ * re-derives the first resolving candidate to hold this checkout to that same rule.
+ */
+const RESOLVER_CANDIDATES = [
+  "refs/remotes/origin/HEAD",
+  "refs/remotes/origin/main",
+  "refs/remotes/origin/master",
+  "refs/heads/main",
+  "refs/heads/master",
+] as const;
+
+/**
  * The default branch as this checkout resolves it, computed once at load: the CLI legs below
  * assert against the ref the guard itself would use, so a leg never disagrees with the runner
  * about which ref won.
@@ -92,13 +107,7 @@ describe("resolving the default branch from local refs alone", () => {
     const root = seedRepository();
     const head = gitOutput(root, "rev-parse", "HEAD");
 
-    for (const ref of [
-      "refs/remotes/origin/HEAD",
-      "refs/remotes/origin/main",
-      "refs/remotes/origin/master",
-      "refs/heads/main",
-      "refs/heads/master",
-    ]) {
+    for (const ref of RESOLVER_CANDIDATES) {
       git(root, "update-ref", ref, head);
     }
     expect(resolveDefaultBranchRef(root)).toBe("refs/remotes/origin/HEAD");
@@ -126,13 +135,17 @@ describe("resolving the default branch from local refs alone", () => {
   });
 
   it("resolves this checkout's default branch", () => {
-    if (resolvedDefaultBranchRef !== undefined) {
-      // This worktree has no refs/remotes/origin/HEAD (it shares the main checkout's refs), so
-      // origin/main is the first candidate that resolves. A checkout carrying a different ref
-      // set — a detached merge-ref checkout, for one — resolves differently or not at all; the
-      // fail-open contract covers that shape and the CLI legs pin its stderr line.
-      expect(resolvedDefaultBranchRef).toBe("refs/remotes/origin/main");
+    if (resolvedDefaultBranchRef === undefined) {
+      return; // The fail-open shape is the neighbors' job; the CLI legs pin its skip line.
     }
+
+    // The contract, not one checkout's inventory: a stock full clone carries origin/HEAD, a
+    // linked worktree does not, and both satisfy the same first-resolving-candidate rule over
+    // RESOLVER_CANDIDATES. Naming WHICH candidate wins in a given checkout is the
+    // preference-order leg's job; this one only holds this checkout to that rule.
+    expect(resolvedDefaultBranchRef).toBe(
+      RESOLVER_CANDIDATES.find((ref) => refExists(repositoryRoot, ref)),
+    );
   });
 
   it("passes the shipped tree against the real default-branch listing", (ctx) => {
@@ -389,6 +402,18 @@ function git(root: string, ...args: string[]): void {
 /** Runs git without failing the caller when it does — cleanup paths run whether or not git can. */
 function gitQuietly(root: string, ...args: string[]): void {
   spawnSync("git", args, { cwd: root, encoding: "utf8" });
+}
+
+/**
+ * Whether the ref resolves in the tree: the resolver's own probe (`rev-parse --verify --quiet`,
+ * exit status as the verdict), so the checkout leg re-derives its expectation the same way
+ * scripts/migrate.ts settles it.
+ */
+function refExists(root: string, ref: string): boolean {
+  return (
+    spawnSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: root, encoding: "utf8" })
+      .status === 0
+  );
 }
 
 function gitOutput(root: string, ...args: string[]): string {
