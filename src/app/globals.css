@@ -477,6 +477,21 @@ dd {
   margin-bottom: 0.6rem;
 }
 
+/*
+ * The GitLab link form sits inside an already-padded `.surface`, so it takes
+ * a child gap and nothing else: `.repository-form` would add a second card
+ * padding and a max-width, and `.form-grid` lays fields out in two columns.
+ */
+.forge-link-form {
+  display: grid;
+  gap: 1rem;
+}
+
+/* A grid item stretches by default; the submit keeps its natural width. */
+.forge-link-form > .quiet-button {
+  justify-self: start;
+}
+
 .form-grid,
 .catalog-row,
 .calibration-grid {

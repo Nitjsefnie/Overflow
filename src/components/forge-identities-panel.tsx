@@ -152,13 +152,14 @@ export function ForgeIdentitiesPanel() {
         </ul>
       )}
       <form
+        className="forge-link-form"
         onSubmit={(event) => {
           void link(event);
         }}
       >
         <h3>Link a GitLab instance</h3>
-        <label>
-          Instance URL
+        <label className="field">
+          <span>Instance URL</span>
           <input
             type="url"
             value={instanceUrl}
@@ -167,8 +168,8 @@ export function ForgeIdentitiesPanel() {
             required
           />
         </label>
-        <label>
-          Personal access token
+        <label className="field">
+          <span>Personal access token</span>
           <input
             type="password"
             value={token}
@@ -178,7 +179,7 @@ export function ForgeIdentitiesPanel() {
             required
           />
         </label>
-        <p id="forge-token-scope">
+        <p className="field-help" id="forge-token-scope">
           Create the token with the <code>read_api</code> scope. <code>read_user</code> alone is not enough;
           the broader <code>api</code> scope also works.
         </p>
