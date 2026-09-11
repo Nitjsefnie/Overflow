@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -80,6 +80,43 @@ describe("Forge identities panel", () => {
     const list = await screen.findByRole("list");
     expect(list).toHaveClass("facts-list");
     expect(list.querySelectorAll("li > dl.issue-facts")).toHaveLength(1);
+    await act(async () => {});
+  });
+
+  it("shows the needs-re-verification state beside a failed identity and not beside a healthy one", async () => {
+    fetchMock.mockReset().mockResolvedValue(Response.json({
+      identities: [
+        {
+          id: "identity-failed",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.com",
+          forgeLogin: "ada",
+          verifiedAt: "2026-09-10T00:00:00.000Z",
+          tokenFailedAt: "2026-09-11T09:30:00.000Z",
+        },
+        {
+          id: "identity-healthy",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.example.com",
+          forgeLogin: "bob",
+          verifiedAt: "2026-09-10T00:00:00.000Z",
+          tokenFailedAt: null,
+        },
+      ],
+    }));
+    render(<ForgeIdentitiesPanel />);
+
+    const list = await screen.findByRole("list");
+    const failed = list.querySelector("li[data-forge-identity-state='needs-re-verification']");
+    const healthy = list.querySelector("li[data-forge-identity-state='verified']");
+    expect(failed).not.toBeNull();
+    expect(healthy).not.toBeNull();
+    // The marker rides on the failed row and is absent from the healthy one.
+    expect(within(failed as HTMLElement).getByTestId("forge-identity-needs-re-verification")).toBeInTheDocument();
+    expect(within(healthy as HTMLElement).queryByTestId("forge-identity-needs-re-verification")).not.toBeInTheDocument();
+    // A failed identity keeps its last successful verification date: the
+    // marker is beside it, not a replacement for it.
+    expect(within(failed as HTMLElement).getByText("2026-09-10")).toBeInTheDocument();
     await act(async () => {});
   });
 

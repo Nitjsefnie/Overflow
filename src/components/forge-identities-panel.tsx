@@ -9,6 +9,8 @@ type ForgeIdentityRow = {
   instanceUrl: string;
   forgeLogin: string;
   verifiedAt: string;
+  /** Set when a fold read through this identity was rejected; re-linking clears it. */
+  tokenFailedAt: string | null;
 };
 
 /**
@@ -112,7 +114,10 @@ export function ForgeIdentitiesPanel() {
       ) : (
         <ul className="facts-list">
           {identities.map((identity) => (
-            <li key={identity.id}>
+            <li
+              key={identity.id}
+              data-forge-identity-state={identity.tokenFailedAt == null ? "verified" : "needs-re-verification"}
+            >
               <dl className="issue-facts">
                 <div>
                   <dt>Provider</dt>
@@ -128,7 +133,16 @@ export function ForgeIdentitiesPanel() {
                 </div>
                 <div>
                   <dt>Verified</dt>
-                  <dd>{identity.verifiedAt.slice(0, 10)}</dd>
+                  <dd>
+                    {identity.verifiedAt.slice(0, 10)}
+                    {identity.tokenFailedAt != null ? (
+                      <span data-testid="forge-identity-needs-re-verification">
+                        {" "}
+                        Needs re-verification — a recent read through this identity was rejected, so
+                        re-link it to restore folding.
+                      </span>
+                    ) : null}
+                  </dd>
                 </div>
                 <div>
                   <dt>Unlink</dt>
