@@ -281,6 +281,7 @@ export async function registerRepository(
       repository.id,
       repository.fullName,
       webhook.id,
+      describeErrorCause(error),
     );
     if (!abandonment.proven) {
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
@@ -335,12 +336,16 @@ export async function registerRepository(
   if (created === null) {
     // The registration did not complete, so the webhook just created has no repository to
     // deliver to; the same durable-before-delete compensation applies as in the catch above.
+    // No exception exists here — the store answered null — so the arbiter-decline phrase
+    // stands in for a rendered error: the operator must not read this diagnostic as
+    // "save error unknown".
     const abandonment = await abandonCreatedWebhook(
       dependencies,
       submittedRepository,
       repository.id,
       repository.fullName,
       webhook.id,
+      arbiterDeclinedSaveCause,
     );
     if (!abandonment.proven) {
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", rollbackIncompleteMessage);
@@ -877,6 +882,47 @@ const rollbackIncompleteMessage =
   + "successful registration or unregistration removes the abandoned webhook.";
 
 /**
+ * The bounded cause rendered into the abandonment diagnostic when the store's
+ * on-conflict arbiter answers null without raising (issue 515). No exception
+ * exists to describe there, and a diagnostic left without a cause would read
+ * as "save error unknown" — the save was declined because another registration
+ * holds the GitHub path.
+ */
+const arbiterDeclinedSaveCause =
+  "the store's on-conflict arbiter declined the save (another registration holds the GitHub path)";
+
+/** Hard cap for a rendered save-failure cause, so a diagnostic stays one bounded log line. */
+const describeErrorCauseLimit = 200;
+
+/**
+ * Renders a thrown save failure for an operator diagnostic (issue 515):
+ * deterministic, single-line, and secret-safe — the rendering may name
+ * credentials the error message carried, so they are redacted before the
+ * string is capped. This is a log-side rendering only: the thrown
+ * ROLLBACK_INCOMPLETE error's public message never carries it.
+ */
+export function describeErrorCause(error: unknown): string {
+  const rendered = error instanceof Error && error.message.length > 0
+    ? `${error.name}: ${error.message}`
+    : String(error);
+  return capRenderedCause(redactCredentials(rendered.replace(/[\r\n]+/g, " ")));
+}
+
+/**
+ * Replaces `scheme://user:password@host…` with `scheme://***@host…` and any
+ * `password=<value>` / `password: <value>` fragment with `password=***`.
+ */
+function redactCredentials(value: string): string {
+  return value
+    .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s@/]+:[^\s@/]+@/g, "$1***@")
+    .replace(/password(\s*[=:]\s*)[^\s]+/gi, "password=***");
+}
+
+function capRenderedCause(value: string): string {
+  return value.length > describeErrorCauseLimit ? value.slice(0, describeErrorCauseLimit) : value;
+}
+
+/**
  * The abandonment sequence for a webhook a failed registration created (issue 451).
  *
  * The cleanup record is written FIRST — durably, before anything can forget the id. Only
@@ -886,7 +932,10 @@ const rollbackIncompleteMessage =
  * or the record itself could not be saved, a bounded diagnostic names the owner, the hook
  * id, and whether the cleanup record is retained — and the caller answers
  * ROLLBACK_INCOMPLETE instead of the original save failure, because the orphaned webhook
- * is the actionable state.
+ * is the actionable state. `saveCause` (issue 515) rides into that diagnostic as a
+ * bounded, secret-safe rendering of the original save failure, so an operator can
+ * separate a database outage from a constraint conflict; the thrown error's public
+ * message never carries it.
  */
 async function abandonCreatedWebhook(
   dependencies: RepositoryRegistrationDependencies,
@@ -894,6 +943,7 @@ async function abandonCreatedWebhook(
   githubRepositoryId: number,
   ownerName: string,
   webhookId: number,
+  saveCause?: string,
 ): Promise<{ proven: boolean; recordSaved: boolean }> {
   const record: AbandonedWebhookCleanup = {
     githubRepositoryId,
@@ -919,20 +969,25 @@ async function abandonCreatedWebhook(
   }
 
   if (!proven || !recordSaved) {
+    // `; cause: <saveCause>` integrates before the final period; with no cause the
+    // rendered text is byte-identical to the pre-515 diagnostic.
+    const causeSuffix = saveCause !== undefined && saveCause.length > 0
+      ? `; cause: ${saveCause}.`
+      : ".";
     if (recordSaved) {
       console.error(
         `The webhook ${webhookId} created for ${ownerName} could not be proven deleted; `
-          + "the cleanup record is retained for a later drain.",
+          + "the cleanup record is retained for a later drain" + causeSuffix,
       );
     } else if (proven) {
       console.error(
         `The cleanup record for the webhook ${webhookId} created for ${ownerName} could not be saved; `
-          + "the webhook was deleted, but nothing records it for a later drain.",
+          + "the webhook was deleted, but nothing records it for a later drain" + causeSuffix,
       );
     } else {
       console.error(
         `The cleanup record for the webhook ${webhookId} created for ${ownerName} could not be saved, `
-          + "and the webhook could not be proven deleted; nothing records it for a later drain.",
+          + "and the webhook could not be proven deleted; nothing records it for a later drain" + causeSuffix,
       );
     }
   }
