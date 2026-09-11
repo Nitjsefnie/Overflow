@@ -1184,6 +1184,105 @@ describe("unregistering a GitLab registration by forge identity", () => {
     });
     expect(harness.callOrder).toEqual([]);
   });
+
+  // The hook installed at registration is deleted forge-first (issue 547):
+  // before the store write, so a refusal leaves the row exactly as it stood,
+  // and an idempotent repeat converges.
+  it("deletes the installed hook forge-first and answers webhookDeleted true", async () => {
+    const gitlabRequests: Request[] = [];
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
+      gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
+      getForgeToken: async () => "glpat-live",
+      forgeFetch: async (input, init) => {
+        const request = new Request(input, init);
+        gitlabRequests.push(request);
+        if (request.method === "DELETE") {
+          harness.callOrder.push("deleteGitLabHook:9001");
+          return new Response(null, { status: 204 });
+        }
+        return new Response("no route", { status: 404 });
+      },
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).resolves.toMatchObject({
+      repository: { id: "registered-gitlab-repository-id" },
+      webhookDeleted: true,
+      alreadyUnregistered: false,
+    });
+    expect(gitlabRequests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "DELETE /api/v4/projects/group%2Fsubgroup%2Fproject/hooks/9001",
+    ]);
+    expect(gitlabRequests[0]!.headers.get("authorization")).toBe("Bearer glpat-live");
+    expect(harness.callOrder).toEqual(["deleteGitLabHook:9001", "unregisterRepository:group/subgroup/project"]);
+  });
+
+  it("continues with webhookDeleted false when GitLab answers 404 for the hook deletion", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
+      gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
+      getForgeToken: async () => "glpat-live",
+      forgeFetch: async () => new Response(null, { status: 404 }),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).resolves.toMatchObject({
+      webhookDeleted: false,
+      alreadyUnregistered: false,
+    });
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id" }]);
+  });
+
+  it("leaves the row untouched when the sponsor has no identity on the instance, so a relink converges", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
+      getForgeToken: async () => null,
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "GITHUB_CREDENTIALS",
+      message: "A verified GitLab identity linked to this instance is required to unregister a GitLab repository. "
+        + "Relink your GitLab identity on the Ledger page, then retry unregistration.",
+    });
+    // The store write never ran: the registration stands, and the dashboard
+    // control stays available for the retried unregistration.
+    expect(harness.unregisterInputs).toEqual([]);
+  });
+
+  it("leaves the row untouched when GitLab refuses the hook deletion without a 404", async () => {
+    const harness = createHarness({
+      existing: registeredGitLabRepository(),
+      gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
+      getForgeToken: async () => "glpat-live",
+      forgeFetch: async () => new Response("refused", { status: 403 }),
+    });
+
+    await expect(unregisterRepository(harness.dependencies, {
+      provider: "gitlab",
+      instanceUrl,
+      project: "group/subgroup/project",
+    })).rejects.toMatchObject({
+      code: "GITHUB_ACCESS",
+      message: "GitLab refused to delete the project webhook (HTTP 403). The linked identity does not hold maintainer "
+        + "permission on this project, or the instance refuses webhook management for it. Check the token's access, "
+        + "then retry unregistration.",
+    });
+    expect(harness.unregisterInputs).toEqual([]);
+  });
 });
 
 describe("abandoning the webhook a failed registration created", () => {
@@ -1672,6 +1771,12 @@ type HarnessOptions = {
   }>;
   /** The registering actor's linked GitLab identity, handed to the drain's GitLab arm. */
   forgeIdentity?: { instanceUrl: string; token: string } | null;
+  /** What the store answers the unregistration module's GitLab hook-target lookup with. */
+  gitlabWebhookTarget?: { sponsorId: string; githubWebhookId: number | null; instanceUrl: string | null } | null;
+  /** The stored instance URL of the GitLab fixture row (default: the fixture instance). */
+  gitlabInstanceUrl?: string | null;
+  /** The sponsor's forge-identity token lookup, handed to the unregistration wiring. */
+  getForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
   /** Injectable transport for the drain's GitLab gateway. */
   forgeFetch?: typeof fetch;
   /** The rejection the fake cleanup-record write raises (after recording the call). */
@@ -1706,6 +1811,7 @@ function createHarness(options: HarnessOptions = {}) {
   const stateLookupIds: number[] = [];
   const stateLookupsByOwnerName: string[] = [];
   const forgeIdentityLookups: Array<{ provider: string; instanceUrl: string; forgeProjectId?: number; ownerName?: string }> = [];
+  const gitlabWebhookTargetLookups: string[] = [];
   const unregisterInputs: Array<{ ownerName: string; sponsorId: string }> = [];
   const callOrder: string[] = [];
   const scheduledRepositoryIds: string[] = [];
@@ -1817,6 +1923,23 @@ function createHarness(options: HarnessOptions = {}) {
         }
         return existingState();
       },
+      async findGitLabWebhookTargetByOwnerName(ownerName: string) {
+        gitlabWebhookTargetLookups.push(ownerName);
+        if (options.gitlabWebhookTarget !== undefined) {
+          return options.gitlabWebhookTarget;
+        }
+        // Faithful default: the target row is the one the flow already
+        // resolved, so the module's own lookup finds it with the row's hook
+        // fields.
+        if (options.existing !== null && options.existing !== undefined && options.existing.ownerName === ownerName) {
+          return {
+            sponsorId: options.existing.sponsorId,
+            githubWebhookId: options.existing.githubWebhookId,
+            instanceUrl: options.gitlabInstanceUrl ?? null,
+          };
+        }
+        return null;
+      },
       async unregisterRepository(input) {
         callOrder.push(`unregisterRepository:${input.ownerName}`);
         unregisterInputs.push(input);
@@ -1882,6 +2005,7 @@ function createHarness(options: HarnessOptions = {}) {
       secret: "webhook-secret-for-test",
     },
     ...(options.forgeIdentity !== undefined ? { forgeIdentity: options.forgeIdentity } : {}),
+    ...(options.getForgeToken !== undefined ? { getForgeToken: options.getForgeToken } : {}),
     ...(options.forgeFetch !== undefined ? { forgeFetch: options.forgeFetch } : {}),
     ...(options.withoutScheduleInitialImport === true
       ? {}
@@ -1905,6 +2029,7 @@ function createHarness(options: HarnessOptions = {}) {
     stateLookupIds,
     stateLookupsByOwnerName,
     forgeIdentityLookups,
+    gitlabWebhookTargetLookups,
     unregisterInputs,
     callOrder,
     createdRepositories,

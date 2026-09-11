@@ -353,15 +353,19 @@ async function buildRegistrationDependencies(
   }
 
   let forgeIdentity: { instanceUrl: string; token: string } | null = null;
+  let getForgeToken: ((userId: string, instanceUrl: string) => Promise<string | null>) | undefined;
   if (input.provider === "gitlab") {
     const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
     if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
       throw new Error("Token encryption key must be configured.");
     }
+    const forgeIdentities = new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey);
     const normalized = normalizeInstanceUrl(input.instanceUrl ?? "");
-    const pat = await new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey)
-      .getForgeToken(session.user.id, normalized);
+    const pat = await forgeIdentities.getForgeToken(session.user.id, normalized);
     forgeIdentity = pat === null ? null : { instanceUrl: normalized, token: pat };
+    // The unregistration's forge-first hook deletion reads the sponsor's
+    // credential per stored instance through the same identity store.
+    getForgeToken = (userId, instanceUrl) => forgeIdentities.getForgeToken(userId, instanceUrl);
   }
 
   return {
@@ -371,6 +375,7 @@ async function buildRegistrationDependencies(
     webhook: requiredWebhookConfiguration(input.provider),
     scheduleInitialImport: extras.scheduleInitialImport,
     forgeIdentity,
+    getForgeToken,
   };
 }
 

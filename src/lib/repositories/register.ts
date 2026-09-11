@@ -11,6 +11,7 @@ import {
 import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { gitlabWebhookError } from "@/lib/repositories/gitlab-forge-errors";
+import { deleteGitLabWebhookForUnregistration } from "@/lib/repositories/gitlab-unregister";
 import type {
   GitHubRepository,
   GitHubRepositoryReference,
@@ -174,6 +175,17 @@ export type RepositoryRegistrationStore = {
    */
   unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome>;
   /**
+   * The GitLab registration holding this owner/name path, with the hook
+   * target fields the unregistration's forge-first deletion needs (issue
+   * 547). Null when no row holds the path AND when a GitHub registration
+   * holds it — the GitHub flow owns those rows' hook deletion.
+   */
+  findGitLabWebhookTargetByOwnerName(ownerName: string): Promise<{
+    sponsorId: string;
+    githubWebhookId: number | null;
+    instanceUrl: string | null;
+  } | null>;
+  /**
    * Durably records a webhook Overflow created and may have orphaned, before the
    * compensating deletion is attempted. Re-saving the same repository, provider
    * and webhook triple rewrites the earlier record.
@@ -210,6 +222,13 @@ export type RepositoryRegistrationDependencies = {
    * GitLab registration, absent (and unused) for GitHub.
    */
   forgeIdentity?: { instanceUrl: string; token: string } | null;
+  /**
+   * A user's decrypted GitLab PAT for a normalized instance, or null when no
+   * verified identity is linked there (production:
+   * PostgresForgeIdentityStore.getForgeToken). The GitLab unregistration's
+   * forge-first hook deletion reads the sponsor's credential through it.
+   */
+  getForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
   /** Injectable transport for the GitLab gateway; production uses global fetch. */
   forgeFetch?: typeof fetch;
 };
@@ -996,9 +1015,9 @@ function gitlabProjectReference(ownerName: string): GitHubRepositoryReference | 
  * A GitLab submission (`provider: "gitlab"` plus `instanceUrl` and `project`)
  * resolves the row by forge identity instead of a GitHub-shaped path, because a
  * nested group's path_with_namespace is not expressible as a two-segment
- * owner/name reference (issue 549). GitLab rows carry no webhook, so the flow
- * makes no forge call of any kind; the details are on
- * `unregisterGitLabRepository`.
+ * owner/name reference (issue 549), and deletes the registration's project
+ * hook forge-first like the GitHub flow deletes its webhook; the details are
+ * on `unregisterGitLabRepository`.
  *
  * Unregistration runs no participation gate and no public/admin pre-checks:
  * it removes ledger activity rather than creating it (gating would trap a
@@ -1115,14 +1134,14 @@ export async function unregisterRepository(
  * The submission names the normalized instance URL plus the numeric project id
  * or the project's path_with_namespace, and the store resolves the row
  * directly — never through `parseGitHubRepository`, which a nested group's
- * path cannot survive, and with no forge API call at all: the identity is
- * already stored on the row. A sponsor with no linked identity on the instance
- * can still unregister a row they sponsor.
+ * path cannot survive. The hook Overflow installed at registration (issue
+ * 547) is deleted forge-first through the linked identity — the same
+ * module the GitHub flow's deleteWebhook block parallels — before the local
+ * row is touched: a GitLab 404 or a pre-webhook row (null hook id) continues
+ * with `webhookDeleted: false`, and any other refusal leaves the row
+ * untouched, converging when the sponsor relinks.
  *
- * GitLab rows carry `githubWebhookId: null`, so the GitHub webhook block is
- * skipped entirely — there is no hook to delete and no parsed GitHub reference
- * to pass one — and the result honestly reports `webhookDeleted: false`. The
- * sponsor check, the idempotent outcome handling, and the abandoned-webhook
+ * The sponsor check, the idempotent outcome handling, and the abandoned-webhook
  * drain run exactly as the GitHub flow runs them.
  */
 async function unregisterGitLabRepository(
@@ -1191,6 +1210,29 @@ async function unregisterGitLabRepository(
     );
   }
 
+  // Forge-first, the GitHub flow's shape (issue 547): the hook Overflow
+  // installed at registration is deleted on the instance BEFORE the local row
+  // is touched, so a refusal leaves the registration exactly as it stood and
+  // a retry converges once the sponsor relinks. A GitLab 404 reads as the
+  // hook — or its project — already gone, the desired end state, and a row
+  // registered before the webhook path (null hook id) has nothing to delete;
+  // both continue with `webhookDeleted: false`.
+  const deletion = await deleteGitLabWebhookForUnregistration(
+    {
+      store: {
+        findGitLabWebhookTargetByOwnerName: (ownerName) =>
+          dependencies.store.findGitLabWebhookTargetByOwnerName(ownerName),
+        getForgeToken: (userId, instanceUrl) =>
+          dependencies.getForgeToken !== undefined
+            ? dependencies.getForgeToken(userId, instanceUrl)
+            : Promise.resolve(null),
+      },
+      createGateway: (instanceUrl, token) =>
+        new GitLabGateway({ instanceUrl, token, fetch: dependencies.forgeFetch }),
+    },
+    { ownerName: state.repository.ownerName, sponsorId: dependencies.actor.id },
+  );
+
   const outcome = await unregisterThroughStore(dependencies.store, {
     ownerName: state.repository.ownerName,
     sponsorId: dependencies.actor.id,
@@ -1214,7 +1256,7 @@ async function unregisterGitLabRepository(
 
   return {
     repository: outcome.repository,
-    webhookDeleted: false,
+    webhookDeleted: deletion.kind === "DELETED",
     alreadyUnregistered: outcome.kind === "ALREADY_UNREGISTERED",
   };
 }

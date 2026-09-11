@@ -106,6 +106,9 @@ function fixture(options: {
     async clearAbandonedWebhookCleanup(githubRepositoryId: number, provider: "github" | "gitlab", webhookId: number) {
       abandonedClears.push({ githubRepositoryId, provider, webhookId });
     },
+    async findGitLabWebhookTargetByOwnerName() {
+      return null;
+    },
   } as unknown as RepositoryRegistrationStore;
 
   const gitlabFetch = async (input: RequestInfo | URL, init?: RequestInit) => {

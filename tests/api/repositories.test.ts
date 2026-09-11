@@ -1789,6 +1789,18 @@ function successfulDependencies(
         return [];
       },
       async clearAbandonedWebhookCleanup() {},
+      async findGitLabWebhookTargetByOwnerName(ownerName: string) {
+        // Faithful default: the target row is the one the flow already
+        // resolved by forge identity, with the row's own hook fields.
+        if (options.unregisterForgeTarget !== undefined && options.unregisterForgeTarget.ownerName === ownerName) {
+          return {
+            sponsorId: options.unregisterForgeTarget.sponsorId,
+            githubWebhookId: options.unregisterForgeTarget.githubWebhookId,
+            instanceUrl: "https://gitlab.example.com",
+          };
+        }
+        return null;
+      },
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
