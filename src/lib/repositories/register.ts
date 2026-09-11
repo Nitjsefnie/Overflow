@@ -1003,6 +1003,10 @@ export async function changeRepositoryCatalog(
     throw new RepositoryRegistrationError("INVALID_INPUT", validation.reason);
   }
 
+  if (input.provider === "gitlab") {
+    return changeGitLabRepositoryCatalog(dependencies, input, difficultyScheme);
+  }
+
   let submittedRepository: GitHubRepositoryReference;
   try {
     submittedRepository = parseGitHubRepository(input.repositoryUrl);
@@ -1087,6 +1091,196 @@ export type RepositoryCatalogChangeResult = RepositoryCatalogChange & {
   /** The registered repository whose catalog changed. */
   repository: RegisteredRepository;
 };
+
+/**
+ * The GitLab catalog-change path (issue 548). The submission is the same body
+ * a GitLab registration takes (`provider`, `instanceUrl`, `project`, catalogs)
+ * and the authorization is the same: the submitter must hold a verified linked
+ * identity on the submitted instance, whose PAT reads the project and its
+ * labels. The change itself is the GitHub path's append — the submitted catalog
+ * becomes the repository's next catalog version in one store transaction — so
+ * a GitLab project's sponsor can retune the catalog after registration exactly
+ * as a GitHub repository's sponsor always could. No webhook or claim-path work
+ * happens here: a GitLab row carries neither (registration contract items
+ * 27/28/30), and a catalog change alters neither.
+ */
+async function changeGitLabRepositoryCatalog(
+  dependencies: RepositoryRegistrationDependencies,
+  input: RepositoryRegistrationInput,
+  difficultyScheme: DifficultyScheme,
+): Promise<RepositoryCatalogChangeResult> {
+  if (input.instanceUrl === undefined || input.project === undefined || input.instanceUrl === "" || input.project === "") {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "A GitLab catalog change requires the instance URL and the project id or path.",
+    );
+  }
+
+  // The same normalization the link flow stores under: one input cannot be
+  // valid here and invalid there (or vice versa).
+  let instanceUrl: string;
+  try {
+    instanceUrl = normalizeInstanceUrl(input.instanceUrl);
+  } catch (error) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      error instanceof Error ? error.message : "The instance URL is malformed.",
+    );
+  }
+  if (/^\d+$/.test(input.project)) {
+    const numericProject = Number(input.project);
+    if (!Number.isSafeInteger(numericProject) || numericProject <= 0) {
+      throw new RepositoryRegistrationError(
+        "INVALID_INPUT",
+        "The GitLab project id must be a positive integer.",
+      );
+    }
+  } else if (!input.project.includes("/")) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit the GitLab project as a positive numeric id or a path with namespace.",
+    );
+  }
+
+  // The verified-identity requirement is the authorization for the whole
+  // path: without a linked, live-verified PAT on THIS instance there is no
+  // credential to read with and nothing vouches for the submitter.
+  const identity = dependencies.forgeIdentity ?? null;
+  if (identity === null || instanceUrl !== normalizeInstanceUrl(identity.instanceUrl)) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "A verified GitLab identity linked to this instance is required to change a GitLab repository's catalog.",
+    );
+  }
+
+  const gateway = new GitLabGateway({
+    instanceUrl,
+    token: identity.token,
+    fetch: dependencies.forgeFetch,
+  });
+  let repository: GitHubRepository;
+  if (/^\d+$/.test(input.project)) {
+    const byId = await gateway.getRepositoryById(Number(input.project));
+    if (byId === null) {
+      throw new RepositoryRegistrationError(
+        "NOT_FOUND",
+        "No GitLab project with that id is visible through the linked identity.",
+      );
+    }
+    repository = byId;
+  } else {
+    const segments = input.project.split("/");
+    if (segments.length < 2) {
+      throw new RepositoryRegistrationError(
+        "INVALID_INPUT",
+        "Submit the GitLab project as a numeric id or a path with namespace, like group/project.",
+      );
+    }
+    repository = await gateway.getRepository({
+      owner: segments.slice(0, -1).join("/"),
+      name: segments[segments.length - 1]!,
+    });
+  }
+
+  // The same two refusals the GitHub change path makes before anything is
+  // written: a project that is not public can no longer keep a registered
+  // catalog, and the linked identity must still hold maintainer permission.
+  // The gateway maps GitLab's internal visibility to PRIVATE, so an internal
+  // project refuses here too.
+  if (repository.visibility !== "PUBLIC") {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only public GitLab projects can keep a registered difficulty catalog.",
+    );
+  }
+
+  if (!repository.canAdminister) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "GitLab maintainer permission is required for the submitted project.",
+    );
+  }
+
+  const registered = await findRegisteredRepository(dependencies.store, repository.id);
+  if (registered === null) {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      "This GitLab project is not registered, so there is no catalog to change.",
+    );
+  }
+
+  // The reverse cross-forge guard on the change path: a GitLab-shaped body may
+  // never move a row whose forge id a GitHub registration holds — the id's
+  // forge history (GitHub-era settlements folded against it) never migrates.
+  const storedProvider = await dependencies.store.findRepositoryProviderById(repository.id);
+  if (storedProvider !== null && storedProvider !== "gitlab") {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      `GitLab project ${repository.id} collides with forge id ${repository.id} already registered as provider '${storedProvider}'. `
+        + "An id's forge history never migrates between forges; catalog change refused.",
+    );
+  }
+
+  // The sponsor check precedes any label request: an outsider asking for a
+  // catalog change must not move anything on the project, and the stored
+  // sponsor is already in hand from the lookup above. The store re-checks
+  // inside its transaction; this check keeps the common refusal free of side
+  // effects.
+  if (registered.sponsorId !== dependencies.actor.id) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "Only the repository's sponsor can change its difficulty catalog.",
+    );
+  }
+
+  // Label existence through the gateway: the labels endpoint may refuse
+  // (contract gap 8), in which case the gateway itself falls back to the
+  // labels embedded in the issues list.
+  const labels = await gateway.listRepositoryLabels({
+    owner: repository.owner,
+    name: repository.name,
+  });
+  const catalog = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels];
+  const missing = catalog.filter((entry) => !labels.has(entry.label));
+  if (missing.length > 0) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      `The GitLab project does not carry these labels: ${missing.map((entry) => entry.label).join(", ")}. Create them, then retry the catalog change.`,
+    );
+  }
+
+  try {
+    const change = await dependencies.store.appendDifficultySchemeVersion({
+      githubRepositoryId: repository.id,
+      sponsorId: dependencies.actor.id,
+      scheme: difficultyScheme,
+      effectiveFrom: new Date(),
+    });
+    // Unreachable through the flow above — the registration was just found —
+    // but a null here must not spread into a result that claims a change.
+    if (change === null) {
+      throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is not registered, so there is no catalog to change.");
+    }
+    return { ...change, repository: registered };
+  } catch (error) {
+    if (error instanceof RepositorySchemeChangeForbiddenError) {
+      throw new RepositoryRegistrationError("FORBIDDEN", error.message);
+    }
+    if (error instanceof RepositorySchemeChangeOrderError) {
+      // Reachable through the API only when the account's clock moves
+      // backwards between changes: the route supplies now(), and a version
+      // recording at the same instant is allowed. A retry is the remedy.
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        "The catalog change could not be recorded: its effective instant precedes the version before it. Retry the change.",
+      );
+    }
+    if (error instanceof RepositoryRegistrationError) {
+      throw error;
+    }
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the difficulty catalog change.");
+  }
+}
 
 async function findRegisteredRepository(
   store: RepositoryRegistrationStore,

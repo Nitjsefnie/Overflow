@@ -41,8 +41,8 @@ const labelsFixture = [
 function input(overrides: Partial<RepositoryRegistrationInput> = {}): RepositoryRegistrationInput {
   return {
     repositoryUrl: "https://gitlab.com/gitlab-org/gitlab",
-    openingName: "size",
-    actualName: "delivered",
+    openingName: scheme.openingName,
+    actualName: scheme.actualName,
     openingLabels: scheme.openingLabels,
     actualLabels: scheme.actualLabels,
     provider: "gitlab",
@@ -194,7 +194,10 @@ describe("changing a registered GitLab project's catalog (PATCH)", () => {
     });
     expect(appendCall(f.calls).githubRepositoryId).toBe(278964);
     expect(f.requests.some((url) => url.includes("/projects/278964"))).toBe(true);
-    expect(f.requests.some((url) => url.includes("/projects/gitlab-org%2Fgitlab"))).toBe(false);
+    // The labels read addresses the project by its path (that URL necessarily
+    // carries the path-encoded segment), but the project lookup itself went by
+    // id — no path-addressed project read happened.
+    expect(f.requests.filter((url) => url.includes("/projects/gitlab-org%2Fgitlab")).every((url) => url.includes("/labels"))).toBe(true);
   });
 
   it("answers an idempotent repeat (changed: false) carrying the registered repository", async () => {
@@ -232,7 +235,9 @@ describe("changing a registered GitLab project's catalog (PATCH)", () => {
     });
     await expect(changeRepositoryCatalog(f.dependencies, input({ project: "-4" }))).rejects.toMatchObject({
       code: "INVALID_INPUT",
-      message: "The GitLab project id must be a positive integer.",
+      // "-4" is not all-digits, so it takes the path branch: the path-shaped
+      // refusal, exactly as registration answers the same submission.
+      message: "Submit the GitLab project as a positive numeric id or a path with namespace.",
     });
     await expect(changeRepositoryCatalog(f.dependencies, input({ project: "12abc" }))).rejects.toMatchObject({
       code: "INVALID_INPUT",
