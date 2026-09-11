@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
@@ -9,9 +9,12 @@ const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
+const fetchMock = vi.fn();
+
 beforeEach(() => {
   spyOnConsoleOutput();
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ identities: [] })));
+  fetchMock.mockReset().mockResolvedValue(Response.json({ identities: [] }));
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => {
@@ -32,7 +35,11 @@ describe("Forge identities panel", () => {
     // so the field's own accessible name-or-description must carry it; the
     // sentence around it is not asserted.
     const tokenField = screen.getByLabelText(/personal access token/i);
-    expect(await screen.findByText(/no forge identity is linked/i)).toBeVisible();
     expect(tokenField).toHaveAccessibleDescription(/read_api/);
+
+    // Settle the mount-time list request structurally (not on page copy) so
+    // the state update it produces lands inside the test, not after cleanup.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/forge-identities", { credentials: "same-origin" }));
+    await act(async () => {});
   });
 });
