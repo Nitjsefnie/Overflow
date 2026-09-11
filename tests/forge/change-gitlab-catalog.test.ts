@@ -280,6 +280,20 @@ describe("changing a registered GitLab project's catalog (PATCH)", () => {
     expect(f.calls.some((call) => call.op === "appendDifficultySchemeVersion")).toBe(false);
   });
 
+  it("refuses with NOT_FOUND when the project path names no visible project", async () => {
+    const f = fixture();
+    // The fixture's transport answers 404 for any path other than
+    // gitlab-org/gitlab, so a path nothing vouches for must refuse exactly as
+    // the id branch refuses — before any store write, not with the raw
+    // GitLabApiError the route's catch-all would read as an upstream failure.
+    await expect(changeRepositoryCatalog(f.dependencies, input({ project: "ghost-org/ghost" }))).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "NOT_FOUND",
+      message: "No GitLab project with that path is visible through the linked identity.",
+    });
+    expect(f.calls.some((call) => call.op === "appendDifficultySchemeVersion")).toBe(false);
+  });
+
   it("refuses a private project as FORBIDDEN before anything is appended", async () => {
     const f = fixture({ projectOverrides: { visibility: "private" } });
     await expect(changeRepositoryCatalog(f.dependencies, input())).rejects.toMatchObject({

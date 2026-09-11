@@ -1012,6 +1012,36 @@ describe("Overflow token registration", () => {
     expect(fixture.getSession).not.toHaveBeenCalled();
     expect(fixture.createRegistrationDependencies).not.toHaveBeenCalled();
   });
+
+  // A GitLab path submission whose forge lookup fails with something other
+  // than 404 is an upstream problem, not a missing project: the raw
+  // GitLabApiError must reach the route's catch-all and answer 502 — never a
+  // 404 that reads as "no such project" (issue 566).
+  it("answers 502 UPSTREAM_FAILURE when a GitLab path lookup fails upstream", async () => {
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      async createRegistrationDependencies() {
+        return {
+          ...successfulDependencies(),
+          forgeIdentity: { instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
+          forgeFetch: async () => new Response("upstream detonation", { status: 500 }),
+        };
+      },
+    });
+
+    const response = await handler(jsonRequest({
+      ...validInput(),
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example.com",
+      project: "ghost-org/ghost",
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration." },
+    });
+  });
 });
 
 const {

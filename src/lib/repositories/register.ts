@@ -8,7 +8,7 @@ import {
   type DifficultyScheme,
   type OpeningDifficultyLabel,
 } from "@/lib/domain/difficulty-scheme";
-import { GitLabGateway } from "@/lib/gitlab/client";
+import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type {
   GitHubRepository,
@@ -545,10 +545,25 @@ async function registerGitLabRepository(
         "Submit the GitLab project as a numeric id or a path with namespace, like group/project.",
       );
     }
-    repository = await gateway.getRepository({
-      owner: segments.slice(0, -1).join("/"),
-      name: segments[segments.length - 1]!,
-    });
+    try {
+      repository = await gateway.getRepository({
+        owner: segments.slice(0, -1).join("/"),
+        name: segments[segments.length - 1]!,
+      });
+    } catch (error) {
+      // Mirrors the id branch's discipline in getRepositoryById: only 404
+      // answers "this path names no visible project". Every other failure is
+      // an upstream problem, and reading one as an invisible path would
+      // refuse a real project as not-found — so it is rethrown unchanged and
+      // the route surfaces it as the upstream failure it is.
+      if (error instanceof GitLabApiError && error.status === 404) {
+        throw new RepositoryRegistrationError(
+          "NOT_FOUND",
+          "No GitLab project with that path is visible through the linked identity.",
+        );
+      }
+      throw error;
+    }
   }
 
   // The same two refusals the GitHub path makes before anything is stored
@@ -1176,10 +1191,25 @@ async function changeGitLabRepositoryCatalog(
         "Submit the GitLab project as a numeric id or a path with namespace, like group/project.",
       );
     }
-    repository = await gateway.getRepository({
-      owner: segments.slice(0, -1).join("/"),
-      name: segments[segments.length - 1]!,
-    });
+    try {
+      repository = await gateway.getRepository({
+        owner: segments.slice(0, -1).join("/"),
+        name: segments[segments.length - 1]!,
+      });
+    } catch (error) {
+      // Mirrors the id branch's discipline in getRepositoryById: only 404
+      // answers "this path names no visible project". Every other failure is
+      // an upstream problem, and reading one as an invisible path would
+      // refuse a real project as not-found — so it is rethrown unchanged and
+      // the route surfaces it as the upstream failure it is.
+      if (error instanceof GitLabApiError && error.status === 404) {
+        throw new RepositoryRegistrationError(
+          "NOT_FOUND",
+          "No GitLab project with that path is visible through the linked identity.",
+        );
+      }
+      throw error;
+    }
   }
 
   // The same two refusals the GitHub change path makes before anything is
