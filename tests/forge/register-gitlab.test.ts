@@ -12,9 +12,12 @@ import {
 
 /**
  * The GitLab registration path: verified identity required, project lookup
- * through the linked PAT, no webhook creation, claimPath permanently
- * NOT_CHECKED (contract item 30), and the forge columns stored for the first
- * time. The GitHub path is untouched — its suite stays authoritative for it.
+ * through the linked PAT, a project hook installed with the shared webhook
+ * secret (issue 547), the hook id stored in the dual-use webhook-id column,
+ * the initial import queued through the same reconciliation job the GitHub
+ * path uses, the issue-451 compensating cleanup on a failed save, and a
+ * permanently NOT_CHECKED claim path (contract item 30). The GitHub path is
+ * untouched — its suite stays authoritative for it.
  */
 
 const project = {
@@ -53,8 +56,19 @@ function fixture(options: {
   existingProvider?: string | null;
   /** Merged over the served project payload, so a case varies exactly the fields its refusal is about. */
   projectOverrides?: Record<string, unknown>;
+  /** The status the instance answers the hook POST with; absent means a created hook (id 4242). */
+  hookCreationStatus?: number;
+  /** The status the instance answers the hook DELETE with; absent means proven gone. */
+  hookDeletionStatus?: number;
+  /** "throw" raises a store outage, "null" answers the on-conflict arbiter's decline. */
+  storeFailure?: "throw" | "null";
 } = {}) {
   const calls: { op: string; args: unknown }[] = [];
+  const hookRequests: Request[] = [];
+  const scheduledRepositoryIds: string[] = [];
+  const abandonedSaves: unknown[] = [];
+  const abandonedClears: unknown[] = [];
+  const order: string[] = [];
   const store: RepositoryRegistrationStore = {
     async findRepositoryByGitHubId() {
       return null;
@@ -67,6 +81,12 @@ function fixture(options: {
     },
     async createRepository(repository: NewRegisteredRepository) {
       calls.push({ op: "createRepository", args: repository });
+      if (options.storeFailure === "throw") {
+        throw new Error("save failed: connection refused");
+      }
+      if (options.storeFailure === "null") {
+        return null;
+      }
       return {
         id: "repo-row-1",
         githubRepositoryId: repository.githubRepositoryId,
@@ -76,6 +96,16 @@ function fixture(options: {
         githubWebhookId: repository.githubWebhookId,
       };
     },
+    async saveAbandonedWebhookCleanup(record: Parameters<RepositoryRegistrationStore["saveAbandonedWebhookCleanup"]>[0]) {
+      order.push("save");
+      abandonedSaves.push(record);
+    },
+    async listAbandonedWebhookCleanups() {
+      return [];
+    },
+    async clearAbandonedWebhookCleanup(githubRepositoryId: number, provider: "github" | "gitlab", webhookId: number) {
+      abandonedClears.push({ githubRepositoryId, provider, webhookId });
+    },
   } as unknown as RepositoryRegistrationStore;
 
   const gitlabFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -84,6 +114,23 @@ function fixture(options: {
     // must not be able to satisfy the lookup through this transport.
     if (new URL(request.url).origin !== "https://gitlab.com") {
       return new Response("wrong instance", { status: 404 });
+    }
+    if (request.url.includes("/hooks")) {
+      hookRequests.push(request);
+      if (request.method === "DELETE") order.push("delete");
+      if (request.method === "POST") {
+        if (options.hookCreationStatus !== undefined) {
+          return new Response("hook refused", { status: options.hookCreationStatus });
+        }
+        return new Response(JSON.stringify({ id: 4242 }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (options.hookDeletionStatus !== undefined) {
+        return new Response("delete refused", { status: options.hookDeletionStatus });
+      }
+      return new Response(null, { status: 204 });
     }
     if (request.url.includes("/labels")) {
       return new Response(JSON.stringify(labelsFixture.map((name) => ({ name }))), {
@@ -106,35 +153,64 @@ function fixture(options: {
       throw new Error("the GitHub gateway must not be called on the GitLab path");
     } }),
     store,
-    webhook: { callbackUrl: "https://overflow.example/api/github/webhooks", secret: "s3cret" },
+    webhook: { callbackUrl: "https://overflow.example/api/gitlab/webhooks", secret: "s3cret" },
     forgeFetch: gitlabFetch,
     forgeIdentity: options.linkedIdentity === undefined
       ? { instanceUrl: "https://gitlab.com", token: "glpat-live" }
       : options.linkedIdentity,
+    async scheduleInitialImport(repositoryId: string) {
+      scheduledRepositoryIds.push(repositoryId);
+    },
   };
-  return { dependencies, calls, gitlabFetch };
+  return { dependencies, calls, hookRequests, scheduledRepositoryIds, abandonedSaves, abandonedClears, order, gitlabFetch };
 }
 
 describe("GitLab repository registration", () => {
-  it("registers without a webhook, storing the forge columns and NOT_CHECKED claim path", async () => {
+  it("installs a project hook, stores its id, and queues the initial import", async () => {
     const f = fixture();
     const result = await registerRepository(f.dependencies, input());
 
     expect(result.claimPath).toBe("NOT_CHECKED");
-    expect(result.githubWebhookId).toBeNull();
+    expect(result.githubWebhookId).toBe(4242);
     expect(result.ownerName).toBe("gitlab-org/gitlab");
+    expect(result.initialImportScheduled).toBe(true);
+    expect(f.scheduledRepositoryIds).toEqual(["repo-row-1"]);
+
+    // The hook POST: the GitLab receiver's URL, the shared secret as the hook
+    // token, and exactly the event flags the gateway installs.
+    expect(f.hookRequests).toHaveLength(1);
+    const hookPost = f.hookRequests[0]!;
+    expect(`${hookPost.method} ${new URL(hookPost.url).pathname}`).toBe("POST /api/v4/projects/gitlab-org%2Fgitlab/hooks");
+    expect(hookPost.headers.get("authorization")).toBe("Bearer glpat-live");
+    const hookBody = JSON.parse(await hookPost.text()) as Record<string, unknown>;
+    expect(hookBody).toMatchObject({
+      url: "https://overflow.example/api/gitlab/webhooks",
+      token: "s3cret",
+      issue_events: true,
+      merge_requests_events: true,
+      push_events: false,
+    });
+
     const creation = f.calls.find((call) => call.op === "createRepository");
     expect(creation).toBeDefined();
     const args = creation!.args as { githubWebhookId: number | null; provider?: string; instanceUrl?: string; forgeProjectId?: number };
-    expect(args.githubWebhookId).toBeNull();
+    // The dual use of the webhook-id column (issue 547): the GitLab hook id
+    // lives in the same column, with the forge columns carrying the rest.
+    expect(args.githubWebhookId).toBe(4242);
     expect(args.provider).toBe("gitlab");
     expect(args.instanceUrl).toBe("https://gitlab.com");
     expect(args.forgeProjectId).toBe(278964);
-    // A GitLabGateway was built with the linked PAT: prove it by the requests
-    // it made being the project lookup and the labels read, nothing GitHub.
     expect(f.dependencies.github).toBeInstanceOf(GitHubGateway);
-    expect(f.dependencies.github).toBeDefined();
-    expect(f.calls.every((call) => call.op !== "createWebhook")).toBe(true);
+  });
+
+  it("reports an honestly failed initial-import schedule without undoing the registration", async () => {
+    const f = fixture();
+    f.dependencies.scheduleInitialImport = async () => {
+      throw new Error("the queue is unreachable");
+    };
+    const result = await registerRepository(f.dependencies, input());
+    expect(result.githubWebhookId).toBe(4242);
+    expect(result.initialImportScheduled).toBe(false);
   });
 
   it("refuses when the submitter has no verified identity on the instance", async () => {
@@ -143,6 +219,8 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "FORBIDDEN",
     });
+    expect(f.hookRequests).toEqual([]);
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
   });
 
   it("refuses when the linked identity is for a different instance", async () => {
@@ -151,6 +229,7 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "FORBIDDEN",
     });
+    expect(f.hookRequests).toEqual([]);
   });
 
   it("refuses a GitLab submission without the forge fields", async () => {
@@ -161,6 +240,7 @@ describe("GitLab repository registration", () => {
     await expect(registerRepository(f.dependencies, input({ project: undefined }))).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
+    expect(f.hookRequests).toEqual([]);
   });
 
   it("refuses with NOT_FOUND when the project id is unreachable through the linked PAT", async () => {
@@ -171,6 +251,7 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "NOT_FOUND",
     });
+    expect(f.hookRequests).toEqual([]);
   });
 
   it("refuses with NOT_FOUND when the project path names no visible project", async () => {
@@ -216,6 +297,7 @@ describe("GitLab repository registration", () => {
       message: "Only public GitLab projects can be registered.",
     });
     expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+    expect(f.hookRequests).toEqual([]);
   });
 
   it("refuses an internal project with the same refusal — the gateway maps internal to PRIVATE", async () => {
@@ -334,6 +416,7 @@ describe("GitLab repository registration", () => {
     await expect(registerRepository(f.dependencies, input({ project: "12abc" }))).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
+    expect(f.hookRequests).toEqual([]);
   });
 
   it("refuses a GitHub registration whose forge id is already held by a GitLab row", async () => {
@@ -412,8 +495,82 @@ describe("GitLab repository registration", () => {
       actualLabels: scheme.actualLabels,
     });
     expect(result.githubWebhookId).toBe(9001);
+    expect(result.initialImportScheduled).toBe(true);
     expect(f.calls.find((call) => call.op === "createRepository")).toBeDefined();
     const creation = f.calls.find((call) => call.op === "createRepository")!;
     expect((creation.args as { githubWebhookId: number | null }).githubWebhookId).toBe(9001);
+  });
+
+  describe("hook creation refusals", () => {
+    it.each([
+      { status: 401, code: "GITHUB_CREDENTIALS" },
+      { status: 403, code: "GITHUB_ACCESS" },
+      { status: 404, code: "GITHUB_ACCESS" },
+      { status: 429, code: "GITHUB_RATE_LIMITED" },
+      { status: 500, code: "UPSTREAM_FAILURE" },
+    ])("maps a GitLab $status on hook creation through the catalog as $code", async ({ status, code }) => {
+      const f = fixture({ hookCreationStatus: status });
+      await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+        name: "RepositoryRegistrationError",
+        code,
+      });
+      expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+    });
+  });
+
+  describe("the compensating cleanup on a failed save (issue 451 pattern)", () => {
+    it("records the hook with provider gitlab and the instance URL before deleting, and clears it when proven", async () => {
+      const f = fixture({ storeFailure: "throw" });
+      // The GitLab transport answers the compensating DELETE with 404 — the
+      // hook is proven gone — so the save failure itself surfaces.
+      f.dependencies.forgeFetch = async (req, init) => {
+        const request = new Request(req, init);
+        if (request.method === "DELETE" && request.url.includes("/hooks")) {
+          f.order.push("delete");
+          return new Response(null, { status: 404 });
+        }
+        return f.gitlabFetch(req, init);
+      };
+
+      await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+        code: "UPSTREAM_FAILURE",
+        message: "Unable to save the repository registration.",
+      });
+      expect(f.abandonedSaves).toEqual([{
+        githubRepositoryId: 278964,
+        ownerName: "gitlab-org/gitlab",
+        webhookId: 4242,
+        createdAt: expect.any(String),
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.com",
+      }]);
+      // The issue-451 ordering: the record is durable BEFORE the compensating
+      // deletion is attempted, so the hook id survives every failure shape.
+      expect(f.order.slice(0, 2)).toEqual(["save", "delete"]);
+      expect(f.abandonedClears).toEqual([{ githubRepositoryId: 278964, provider: "gitlab", webhookId: 4242 }]);
+    });
+
+    it("answers ROLLBACK_INCOMPLETE when the compensating deletion is refused without a 404", async () => {
+      const f = fixture({ storeFailure: "throw", hookDeletionStatus: 500 });
+      await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+        code: "ROLLBACK_INCOMPLETE",
+        message: "The repository registration could not be saved, and the project webhook Overflow created for it "
+          + "could not be deleted on GitLab. Nothing was registered; retry the registration, and a later "
+          + "successful registration or unregistration removes the abandoned webhook.",
+      });
+      // The record stays: the drain owns the orphaned hook from here.
+      expect(f.abandonedSaves).toHaveLength(1);
+      expect(f.abandonedClears).toEqual([]);
+    });
+
+    it("abandons the created hook when the store's arbiter declines the save", async () => {
+      const f = fixture({ storeFailure: "null", hookDeletionStatus: 404 });
+      await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: "This GitLab project is already registered.",
+      });
+      expect(f.abandonedSaves).toHaveLength(1);
+      expect(f.abandonedClears).toEqual([{ githubRepositoryId: 278964, provider: "gitlab", webhookId: 4242 }]);
+    });
   });
 });

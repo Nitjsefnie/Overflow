@@ -1410,12 +1410,20 @@ describe("describing a save failure's cause for operator diagnostics", () => {
 });
 
 describe("draining the abandoned webhook cleanup records", () => {
-  function cleanupRecord(webhookId: number, createdAt: string) {
+  function cleanupRecord(webhookId: number, createdAt: string, overrides: {
+    provider?: "github" | "gitlab";
+    instanceUrl?: string | null;
+    ownerName?: string;
+    githubRepositoryId?: number;
+  } = {}) {
     return {
       githubRepositoryId: 42,
       ownerName: "octo/overflow",
       webhookId,
       createdAt,
+      provider: "github" as const,
+      instanceUrl: null as string | null,
+      ...overrides,
     };
   }
 
@@ -1426,7 +1434,7 @@ describe("draining the abandoned webhook cleanup records", () => {
     });
 
     await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 501 }]);
     expect(harness.deletedWebhookIds).toEqual([]);
     expect(harness.deleteWebhookReferences).toEqual([]);
   });
@@ -1447,7 +1455,7 @@ describe("draining the abandoned webhook cleanup records", () => {
     expect(harness.repositoryByIdLookups).toEqual([42]);
     expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "new-name" }]);
     expect(harness.deletedWebhookIds).toEqual([501]);
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 501 }]);
   });
 
   it("keeps the record when the deletion at the resolved path fails without a proven 404", async () => {
@@ -1477,7 +1485,7 @@ describe("draining the abandoned webhook cleanup records", () => {
     await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
     expect(harness.repositoryByIdLookups).toEqual([42]);
     expect(harness.deleteWebhookReferences).toEqual([{ owner: "octo", name: "new-name" }]);
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 501 }]);
   });
 
   it("clears the record without touching webhooks when the id no longer resolves to a repository", async () => {
@@ -1492,7 +1500,7 @@ describe("draining the abandoned webhook cleanup records", () => {
     expect(harness.repositoryByIdLookups).toEqual([42]);
     expect(harness.deletedWebhookIds).toEqual([]);
     expect(harness.deleteWebhookReferences).toEqual([]);
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 501 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 501 }]);
   });
 
   it("keeps the record and attempts no deletion when resolving the repository by id fails", async () => {
@@ -1521,7 +1529,7 @@ describe("draining the abandoned webhook cleanup records", () => {
       githubWebhookId: 501,
     });
     expect(harness.deletedWebhookIds).toEqual([777]);
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 777 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 777 }]);
   });
 
   it("drains a seeded cleanup record through a successful unregistration", async () => {
@@ -1536,7 +1544,99 @@ describe("draining the abandoned webhook cleanup records", () => {
     });
     // The flow deleted the registration's own webhook 501; only the drain touches 777.
     expect(harness.deletedWebhookIds).toEqual([501, 777]);
-    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, webhookId: 777 }]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "github", webhookId: 777 }]);
+  });
+
+  it("deletes a GitLab record through the GitLab gateway when the drain runs beside the record instance's identity", async () => {
+    const gitlabRequests: Request[] = [];
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z", {
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        ownerName: "gl-group/project",
+      })],
+      forgeIdentity: { instanceUrl: "https://gitlab.example.com", token: "glpat-drain" },
+      forgeFetch: async (input, init) => {
+        const request = new Request(input, init);
+        gitlabRequests.push(request);
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(gitlabRequests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "DELETE /api/v4/projects/gl-group%2Fproject/hooks/501",
+    ]);
+    expect(gitlabRequests[0]!.headers.get("authorization")).toBe("Bearer glpat-drain");
+    // The GitHub gateway is never consulted for a GitLab record.
+    expect(harness.deleteWebhookReferences).toEqual([]);
+    expect(harness.deletedWebhookIds).toEqual([]);
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "gitlab", webhookId: 501 }]);
+  });
+
+  it("keeps a GitLab record when the identity at hand names another instance, and when there is none", async () => {
+    const record = cleanupRecord(501, "2020-01-01T00:00:00.000Z", {
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example.com",
+      ownerName: "gl-group/project",
+    });
+    // The transport would delete if asked — so the instance match is the only
+    // thing standing between the record and its deletion, and the test fails
+    // if the guard is dropped.
+    const willingTransport = async () => new Response(null, { status: 204 });
+    for (const forgeIdentity of [{ instanceUrl: "https://other.example.com", token: "glpat-x" }, null]) {
+      const harness = createHarness({ abandonedRecords: [record], forgeIdentity, forgeFetch: willingTransport });
+      await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+      expect(harness.abandonedClears).toEqual([]);
+    }
+  });
+
+  it("reads a GitLab 404 as the hook already gone and clears the record", async () => {
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z", {
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        ownerName: "gl-group/project",
+      })],
+      forgeIdentity: { instanceUrl: "https://gitlab.example.com", token: "glpat-drain" },
+      forgeFetch: async () => new Response(null, { status: 404 }),
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "gitlab", webhookId: 501 }]);
+  });
+
+  it("keeps the GitLab record when the deletion is refused without a 404", async () => {
+    const harness = createHarness({
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z", {
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        ownerName: "gl-group/project",
+      })],
+      forgeIdentity: { instanceUrl: "https://gitlab.example.com", token: "glpat-drain" },
+      forgeFetch: async () => new Response("refused", { status: 403 }),
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.abandonedClears).toEqual([]);
+  });
+
+  it("spares a GitLab record whose active registration holds the same webhook id, clearing it without a deletion call", async () => {
+    const harness = createHarness({
+      existing: registeredRepository(),
+      abandonedRecords: [cleanupRecord(501, "2020-01-01T00:00:00.000Z", {
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        ownerName: "gl-group/project",
+      })],
+      forgeIdentity: { instanceUrl: "https://gitlab.example.com", token: "glpat-drain" },
+      forgeFetch: async () => {
+        throw new Error("a wanted hook must not be deleted");
+      },
+    });
+
+    await expect(drainAbandonedWebhooks(harness.dependencies)).resolves.toBeUndefined();
+    expect(harness.abandonedClears).toEqual([{ githubRepositoryId: 42, provider: "gitlab", webhookId: 501 }]);
   });
 });
 
@@ -1567,7 +1667,13 @@ type HarnessOptions = {
     ownerName: string;
     webhookId: number;
     createdAt: string;
+    provider?: "github" | "gitlab";
+    instanceUrl?: string | null;
   }>;
+  /** The registering actor's linked GitLab identity, handed to the drain's GitLab arm. */
+  forgeIdentity?: { instanceUrl: string; token: string } | null;
+  /** Injectable transport for the drain's GitLab gateway. */
+  forgeFetch?: typeof fetch;
   /** The rejection the fake cleanup-record write raises (after recording the call). */
   saveAbandonedFailure?: unknown;
   /** The rejection the fake cleanup-record clear raises (after recording the call). */
@@ -1609,8 +1715,10 @@ function createHarness(options: HarnessOptions = {}) {
     ownerName: string;
     webhookId: number;
     createdAt: string;
+    provider: "github" | "gitlab";
+    instanceUrl: string | null;
   }> = [];
-  const abandonedClears: Array<{ githubRepositoryId: number; webhookId: number }> = [];
+  const abandonedClears: Array<{ githubRepositoryId: number; provider: "github" | "gitlab"; webhookId: number }> = [];
   const createdRepositories: Array<Parameters<RepositoryRegistrationDependencies["store"]["createRepository"]>[0]> = [];
 
   const existingState = (): RepositoryRegistrationState | null =>
@@ -1728,14 +1836,18 @@ function createHarness(options: HarnessOptions = {}) {
         abandonedSaves.push(record);
       },
       async listAbandonedWebhookCleanups() {
-        return options.abandonedRecords ?? [];
+        return (options.abandonedRecords ?? []).map((record) => ({
+          provider: "github" as const,
+          instanceUrl: null as string | null,
+          ...record,
+        }));
       },
-      async clearAbandonedWebhookCleanup(githubRepositoryId, webhookId) {
+      async clearAbandonedWebhookCleanup(githubRepositoryId, provider, webhookId) {
         callOrder.push(`clearAbandonedWebhookCleanup:${webhookId}`);
         if (options.clearAbandonedFailure !== undefined) {
           throw options.clearAbandonedFailure;
         }
-        abandonedClears.push({ githubRepositoryId, webhookId });
+        abandonedClears.push({ githubRepositoryId, provider, webhookId });
       },
       async createRepository(repository) {
         createdRepositories.push(repository);
@@ -1769,6 +1881,8 @@ function createHarness(options: HarnessOptions = {}) {
       callbackUrl: "https://overflow.example/api/github/webhooks",
       secret: "webhook-secret-for-test",
     },
+    ...(options.forgeIdentity !== undefined ? { forgeIdentity: options.forgeIdentity } : {}),
+    ...(options.forgeFetch !== undefined ? { forgeFetch: options.forgeFetch } : {}),
     ...(options.withoutScheduleInitialImport === true
       ? {}
       : {

@@ -50,10 +50,11 @@ Create a GitHub OAuth application and a public HTTPS webhook endpoint. Configure
 ```dotenv
 APP_URL=https://<public-host>
 GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
-GITHUB_WEBHOOK_SECRET=<the-webhook-secret-configured-in-github>
+GITLAB_WEBHOOK_URL=https://<public-host>/api/gitlab/webhooks
+GITHUB_WEBHOOK_SECRET=<the-one-shared-webhook-secret-configured-in-both-forges>
 ```
 
-GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`. The webhook endpoint rejects deliveries larger than 25 MiB with HTTP 413.
+GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`. A GitLab registration installs its project hook against `GITLAB_WEBHOOK_URL`, carrying the same shared secret; the GitLab instance must also reach that URL over public HTTPS. The webhook endpoint rejects deliveries larger than 25 MiB with HTTP 413.
 
 ## Operating an instance: the production service
 
@@ -147,7 +148,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
-| `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub webhook URL and shared secret |
+| `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub and GitLab webhook URLs and the one shared secret both forges carry |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 | `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
 

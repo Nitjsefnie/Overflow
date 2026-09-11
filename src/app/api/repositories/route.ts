@@ -368,14 +368,22 @@ async function buildRegistrationDependencies(
     actor: { ...session.user, enforcementState },
     github: new GitHubGateway({ accessToken, owner: session.user.id }),
     store,
-    webhook: requiredWebhookConfiguration(),
+    webhook: requiredWebhookConfiguration(input.provider),
     scheduleInitialImport: extras.scheduleInitialImport,
     forgeIdentity,
   };
 }
 
-function requiredWebhookConfiguration(): { callbackUrl: string; secret: string } {
-  const callbackUrl = process.env.GITHUB_WEBHOOK_URL;
+/**
+ * The webhook configuration the registration's hook creation carries. The
+ * secret is the one shared secret both receivers verify (issue 547); the
+ * callback URL is the receiver the forge delivers to — `GITHUB_WEBHOOK_URL`
+ * for a GitHub registration, `GITLAB_WEBHOOK_URL` for a GitLab one.
+ */
+function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: string; secret: string } {
+  const callbackUrl = provider === "gitlab"
+    ? process.env.GITLAB_WEBHOOK_URL
+    : process.env.GITHUB_WEBHOOK_URL;
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
   if (
     callbackUrl === undefined ||
@@ -383,7 +391,11 @@ function requiredWebhookConfiguration(): { callbackUrl: string; secret: string }
     secret === undefined ||
     secret.length === 0
   ) {
-    throw new Error("GitHub webhook configuration must be set.");
+    throw new Error(
+      provider === "gitlab"
+        ? "GitLab webhook configuration must be set."
+        : "GitHub webhook configuration must be set.",
+    );
   }
 
   return { callbackUrl, secret };

@@ -115,10 +115,12 @@ access token of the GitLab identity you linked on the *Ledger* page (or over
 that exact instance the request is refused. The project must be public, and the
 linked identity must hold maintainer permission on it — directly or inherited
 through its group; a project failing either is refused before anything is
-stored. No webhook is installed and no
-initial import is scheduled — the periodic reconciliation sweep picks the
-project up. The catalog labels must already exist on the project; the *Register a
-repository* form has no GitLab path, and neither has `PATCH`.
+stored. A project hook is installed on the instance with the same shared webhook
+secret the GitHub hooks carry — deliveries arrive at the GitLab receiver
+configured under `GITLAB_WEBHOOK_URL` — and the initial import is queued
+exactly as for a GitHub registration. The catalog labels must already exist on
+the project; the *Register a repository* form has no GitLab path, and neither
+has `PATCH`.
 
 The body takes the catalog fields above plus these. Extra fields are still
 rejected.
@@ -165,8 +167,9 @@ JSON
 
 Success is HTTP `201` with the same body shape as a GitHub registration:
 `githubRepositoryId` is the GitLab project id, `ownerName` is the project's
-path with namespace, `githubWebhookId` is `null`, `initialImportScheduled` is
-`false`, and `claimPath` is `"NOT_CHECKED"`.
+path with namespace, `githubWebhookId` is the installed project hook's id,
+`initialImportScheduled` reports whether the import of the project's existing
+work was queued, and `claimPath` is `"NOT_CHECKED"`.
 
 The authentication, content-type and catalog-validation answers are the ones the
 registration responses below list. The GitLab path answers these in addition;
@@ -185,8 +188,16 @@ angle-bracketed text is substituted at runtime:
 | 403 | `FORBIDDEN` | `GitLab maintainer permission is required for the submitted project.` | Use an account with Maintainer permission for that project — held directly on the project or inherited through its group. |
 | 404 | `NOT_FOUND` | `No GitLab project with that id is visible through the linked identity.` | A numeric `project` the instance answered 404 for. Check the id and the token's access. |
 | 409 | `CONFLICT` | `This GitLab project is already registered.` | Use the existing registration. |
+| 409 | `CONFLICT` | `The GitLab path <owner/name> is claimed by a different registration. The submitted project is not registered, and it cannot be registered while another registration holds that path.` | The submitted project has never been registered as GitLab, but another registration holds its path. Retrying repeats the same collision; the registration holding the path has to be resolved first. |
+| 409 | `CONFLICT` | `The project webhook created for the submitted repository collided with one a different registration already records. The submitted project is not registered. Registering again requests a new webhook, so retry once before treating this as stored state that has to be resolved.` | The collision is on the hook id the instance returned for this attempt — the same shared id space the GitHub hooks use — and registering again requests another one, so retry once first. |
 | 409 | `CONFLICT` | `GitLab project <id> collides with forge id <id> already registered as provider '<provider>'. An id's forge history never migrates between forges; registration refused.` | A registration under another forge already holds that numeric id, so this id cannot become a GitLab registration. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Saving the registration failed; check service health before retrying. |
+| 401 | `GITHUB_CREDENTIALS` | `GitLab rejected the linked identity's token (HTTP 401) while trying to create the project webhook. Relink your GitLab identity on the Ledger page, then retry registration.` | The instance rejected the linked token itself when the hook was installed. Refresh the identity by relinking it, then retry. |
+| 403 | `GITHUB_ACCESS` | `GitLab refused to create the project webhook (HTTP 403). The linked identity does not hold maintainer permission on this project, or the instance refuses webhook management for it. Check the token's access, then retry registration.` | The instance answered but refused the hook. Check the token's roles on the project. |
+| 403 | `GITHUB_ACCESS` | `GitLab answered 404 for the request to create the project webhook. The project may have been renamed, moved or deleted. Check the project, then retry registration.` | The instance hid the hook endpoint or the project is gone. Check the project path and the token's access. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitLab rate-limited the request to create the project webhook (HTTP 429). Please retry registration later.` | The instance limited the hook creation. Wait, then retry. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to create the project webhook on GitLab.` | Every other hook-creation failure — a transport failure or an unexpected instance answer. Check the instance's health, then retry. |
+| 503 | `ROLLBACK_INCOMPLETE` | `The repository registration could not be saved, and the project webhook Overflow created for it could not be deleted on GitLab. Nothing was registered; retry the registration, and a later successful registration or unregistration removes the abandoned webhook.` | The save failed and the compensating hook deletion failed too, so a hook Overflow created still exists on the instance. Nothing was registered and nothing is lost by retrying; the recorded hook is cleaned up by a later successful registration or unregistration. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Every other failure of a read against the instance — a path the instance does not answer, a token it no longer accepts, a transport failure — as well as an unavailable GitHub credential for the account. Check the project path, the linked token and the instance, then retry. |
 
 ### Registration responses

@@ -10,6 +10,7 @@ import {
 } from "@/lib/domain/difficulty-scheme";
 import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { gitlabWebhookError } from "@/lib/repositories/gitlab-forge-errors";
 import type {
   GitHubRepository,
   GitHubRepositoryReference,
@@ -106,6 +107,19 @@ export type AbandonedWebhookCleanup = {
   ownerName: string;
   webhookId: number;
   createdAt: string;
+  /**
+   * The forge the hook lives on. Every pre-547 record is GitHub (migration
+   * 041's column default); a GitLab registration's compensation (issue 547)
+   * records 'gitlab', reusing the numeric repository id and hook id columns
+   * for the GitLab side of their dual use.
+   */
+  provider: "github" | "gitlab";
+  /**
+   * The hook instance's normalized base URL — required to address a GitLab
+   * hook (instance + project), null for GitHub records, which address hooks
+   * by numeric id alone.
+   */
+  instanceUrl: string | null;
 };
 
 export type RepositoryRegistrationStore = {
@@ -161,14 +175,19 @@ export type RepositoryRegistrationStore = {
   unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome>;
   /**
    * Durably records a webhook Overflow created and may have orphaned, before the
-   * compensating deletion is attempted. Re-saving the same GitHub repository and
-   * webhook pair rewrites the earlier record.
+   * compensating deletion is attempted. Re-saving the same repository, provider
+   * and webhook triple rewrites the earlier record.
    */
   saveAbandonedWebhookCleanup(record: AbandonedWebhookCleanup): Promise<void>;
   /** Every recorded abandoned webhook, oldest first, so a drain works through them in order. */
   listAbandonedWebhookCleanups(): Promise<AbandonedWebhookCleanup[]>;
-  /** Removes the record once the webhook is proven gone; clearing an absent record resolves. */
-  clearAbandonedWebhookCleanup(githubRepositoryId: number, webhookId: number): Promise<void>;
+  /**
+   * Removes the record once the webhook is proven gone; clearing an absent
+   * record resolves. Provider-scoped: a GitLab record and a GitHub record can
+   * share the repository and webhook ids (migration 041's primary key), and
+   * retiring one must never retire the other.
+   */
+  clearAbandonedWebhookCleanup(githubRepositoryId: number, provider: "github" | "gitlab", webhookId: number): Promise<void>;
 };
 
 export type RepositoryCatalogChange = {
@@ -465,13 +484,17 @@ export async function registerRepository(
 }
 
 /**
- * The GitLab registration path (issue 296 step 2). The submitter must hold a
- * verified linked identity on the submitted instance — its PAT is the gateway
- * credential. The project must be reachable through that PAT; no webhook is
- * created (contract items 27/28 PARTIAL, webhook ingestion deferred), so the
- * row stores a null webhook id, and the claim path is permanently NOT_CHECKED
- * (item 30, NOT SUPPLIED: GitLab has no in-repo claim-path evidence surface).
- * The forge columns carry their real values for the first time here.
+ * The GitLab registration path (issue 296 step 2, webhooks + initial import
+ * since issue 547). The submitter must hold a verified linked identity on the
+ * submitted instance — its PAT is the gateway credential. The project must be
+ * reachable through that PAT, public, and maintainer-held by the identity.
+ * A project hook is installed on the instance (the same shared webhook secret
+ * the GitHub hooks carry; deliveries arrive at the GitLab receiver), the row
+ * stores the hook id in `githubWebhookId` (the column's dual use — the numeric
+ * id is forge-neutral), the initial import is queued through the same
+ * reconciliation job the GitHub path uses, and the claim path is permanently
+ * NOT_CHECKED (item 30, NOT SUPPLIED: GitLab has no in-repo claim-path
+ * evidence surface).
  */
 async function registerGitLabRepository(
   dependencies: RepositoryRegistrationDependencies,
@@ -622,9 +645,17 @@ async function registerGitLabRepository(
     );
   }
 
-  // No webhook is created: contract items 27/28 are PARTIAL and webhook
-  // ingestion is deferred, so the row stores a null webhook id and the drain
-  // skips it.
+  // The project hook is installed before anything is stored, exactly like the
+  // GitHub path: the hook carries the same shared webhook secret (the GitLab
+  // `token` parameter, echoed back on every delivery as X-Gitlab-Token), and
+  // the callback URL the deployment configures for GitLab deliveries.
+  let webhook: GitHubWebhook;
+  try {
+    webhook = await gateway.createWebhook({ owner: repository.owner, name: repository.name }, dependencies.webhook);
+  } catch (error) {
+    throw gitlabWebhookError(error, "create the project webhook", "registration");
+  }
+
   let created: RegisteredRepository | null;
   try {
     created = await dependencies.store.createRepository({
@@ -632,24 +663,171 @@ async function registerGitLabRepository(
       ownerName: repository.fullName,
       sponsorId: dependencies.actor.id,
       visibility: repository.visibility,
-      githubWebhookId: null,
+      githubWebhookId: webhook.id,
       difficultyScheme,
       provider: "gitlab",
       instanceUrl,
       forgeProjectId: repository.id,
     });
-  } catch {
+  } catch (error) {
+    // Every route out of this catch abandons the registration, so the hook
+    // this call created has no repository to deliver to. The compensation is
+    // the issue-451 pattern over the GitLab gateway: the cleanup record —
+    // carrying provider 'gitlab' and the instance URL — is written BEFORE the
+    // compensating deletion is attempted, so the hook id survives every
+    // failure combination and stays reachable by the drain.
+    const abandonment = await abandonCreatedGitLabWebhook(
+      dependencies,
+      gateway,
+      instanceUrl,
+      repository,
+      webhook.id,
+      describeErrorCause(error),
+    );
+    if (!abandonment.proven) {
+      throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", gitlabRollbackIncompleteMessage);
+    }
+
+    // The same three named store failures the GitHub catch answers (issues 180/451/515):
+    // the owner-name path claimed by another registration, the webhook id
+    // colliding with one another registration records, and a sponsor whose
+    // eligibility changed under the save. Each maps through the catalog as
+    // its GitHub twin does.
+    if (error instanceof RepositoryOwnerNameConflictError) {
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        `The GitLab path ${error.ownerName} is claimed by a different registration. `
+          + "The submitted project is not registered, and it cannot be registered while another "
+          + "registration holds that path.",
+      );
+    }
+    if (error instanceof RepositoryWebhookIdConflictError) {
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        "The project webhook created for the submitted repository collided with one a different "
+          + "registration already records. The submitted project is not registered. Registering "
+          + "again requests a new webhook, so retry once before treating this as stored "
+          + "state that has to be resolved.",
+      );
+    }
+    if (error instanceof RepositoryRegistrationEnforcementError) {
+      throw new RepositoryRegistrationError(
+        "FORBIDDEN",
+        "The account is not eligible to register repositories.",
+      );
+    }
+
     throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
   }
+
+  // The registration did not complete — another registration holds the row the
+  // on-conflict arbiter watched — so the just-created hook is abandoned with
+  // the same durable-before-delete compensation as the catch above.
   if (created === null) {
+    const abandonment = await abandonCreatedGitLabWebhook(
+      dependencies,
+      gateway,
+      instanceUrl,
+      repository,
+      webhook.id,
+      arbiterDeclinedSaveCause,
+    );
+    if (!abandonment.proven) {
+      throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", gitlabRollbackIncompleteMessage);
+    }
     throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
   }
 
-  // No initial import is scheduled: reconciliation does not read GitLab yet
-  // (that is the next step of the split), so a queued job could never run.
+  // The registration stands. The initial import queues through the same
+  // reconciliation job the GitHub path uses — reconciliation reads GitLab
+  // evidence fully (PR 557), so the queued job runs — and a scheduling failure
+  // reports honestly rather than undoing a registration that stands.
+  const initialImportScheduled = await scheduleInitialImport(dependencies, created.id);
+
   // The claim-path verdict is permanent for GitLab: item 30 graded NOT
   // SUPPLIED, so there is no in-repo evidence surface to consult.
-  return { ...created, initialImportScheduled: false, claimPath: "NOT_CHECKED" };
+  const claimPath: RepositoryRegistrationResult["claimPath"] = "NOT_CHECKED";
+
+  // The registration stands, so this is the moment a webhook recorded for
+  // cleanup by an earlier failed registration can be retired — the same
+  // best-effort drain the GitHub path runs before answering.
+  await drainAbandonedWebhooks(dependencies);
+
+  return { ...created, initialImportScheduled, claimPath };
+}
+
+/**
+ * The GitLab abandonment sequence for a hook a failed registration created —
+ * the issue-451 pattern run against the GitLab gateway. The cleanup record
+ * (provider 'gitlab' + the instance URL) is written FIRST; only then is the
+ * deletion attempted, with a GitLab 404 counting as proven. Diagnostics are
+ * the GitHub abandonment's, forge-neutral, and `saveCause` rides into them as
+ * the bounded, secret-safe rendering issue 515 prescribes.
+ */
+async function abandonCreatedGitLabWebhook(
+  dependencies: RepositoryRegistrationDependencies,
+  gateway: GitLabGateway,
+  instanceUrl: string,
+  repository: GitHubRepository,
+  webhookId: number,
+  saveCause?: string,
+): Promise<{ proven: boolean; recordSaved: boolean }> {
+  const record: AbandonedWebhookCleanup = {
+    githubRepositoryId: repository.id,
+    ownerName: repository.fullName,
+    webhookId,
+    createdAt: new Date().toISOString(),
+    provider: "gitlab",
+    instanceUrl,
+  };
+  let recordSaved = true;
+  try {
+    await dependencies.store.saveAbandonedWebhookCleanup(record);
+  } catch {
+    recordSaved = false;
+  }
+
+  let proven = false;
+  try {
+    await gateway.deleteWebhook({ owner: repository.owner, name: repository.name }, webhookId);
+    proven = true;
+  } catch (error) {
+    if (error instanceof GitLabApiError && error.status === 404) {
+      proven = true;
+    }
+  }
+
+  if (!proven || !recordSaved) {
+    const causeSuffix = saveCause !== undefined && saveCause.length > 0
+      ? `; cause: ${saveCause}.`
+      : ".";
+    if (recordSaved) {
+      console.error(
+        `The webhook ${webhookId} created for ${repository.fullName} could not be proven deleted; `
+          + "the cleanup record is retained for a later drain" + causeSuffix,
+      );
+    } else if (proven) {
+      console.error(
+        `The cleanup record for the webhook ${webhookId} created for ${repository.fullName} could not be saved; `
+          + "the webhook was deleted, but nothing records it for a later drain" + causeSuffix,
+      );
+    } else {
+      console.error(
+        `The cleanup record for the webhook ${webhookId} created for ${repository.fullName} could not be saved, `
+          + "and the webhook could not be proven deleted; nothing records it for a later drain" + causeSuffix,
+      );
+    }
+  }
+
+  if (proven) {
+    try {
+      await dependencies.store.clearAbandonedWebhookCleanup(repository.id, "gitlab", webhookId);
+    } catch {
+      // The record staying is safe: the drain re-checks the registration state before deleting.
+    }
+  }
+
+  return { proven, recordSaved };
 }
 
 /**
@@ -668,7 +846,7 @@ async function registerGitLabRepository(
  * or unregistration that just succeeded.
  */
 export async function drainAbandonedWebhooks(
-  dependencies: Pick<RepositoryRegistrationDependencies, "github" | "store">,
+  dependencies: Pick<RepositoryRegistrationDependencies, "github" | "store" | "forgeIdentity" | "forgeFetch">,
 ): Promise<void> {
   let records: AbandonedWebhookCleanup[];
   try {
@@ -688,7 +866,12 @@ export async function drainAbandonedWebhooks(
         // unregistered_at is null both while the sponsor holds the registration and
         // after a moderation deactivation (which owns `active` alone), so any row
         // still holding this exact webhook id spares the deletion: the hook is wanted.
-        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.webhookId);
+        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.provider, record.webhookId);
+        continue;
+      }
+
+      if (record.provider === "gitlab") {
+        await drainGitLabAbandonedWebhook(dependencies, record);
         continue;
       }
 
@@ -722,7 +905,7 @@ export async function drainAbandonedWebhooks(
       }
 
       try {
-        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.webhookId);
+        await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, record.provider, record.webhookId);
       } catch {
         // The record staying is safe: the next drain re-checks the registration state first.
       }
@@ -730,6 +913,72 @@ export async function drainAbandonedWebhooks(
       // One record's failure must not stop the drain from working through the rest.
     }
   }
+}
+
+/**
+ * The drain's GitLab arm (issue 547): a GitLab orphan is addressed instance +
+ * project path, so deleting needs the linked PAT for that exact instance. The
+ * registering actor's `forgeIdentity` is the only credential at hand — when
+ * there is none, or it names another instance, the record stays for a drain
+ * that runs beside such an identity. A GitLab 404 reads as the hook already
+ * gone; anything else keeps the record for a later drain. Never throws: the
+ * drain must never disturb the registration or unregistration that just
+ * succeeded.
+ */
+async function drainGitLabAbandonedWebhook(
+  dependencies: Pick<RepositoryRegistrationDependencies, "store" | "forgeIdentity" | "forgeFetch">,
+  record: AbandonedWebhookCleanup,
+): Promise<void> {
+  const identity = dependencies.forgeIdentity;
+  if (identity === null || identity === undefined) return;
+  if (record.instanceUrl === null) return;
+  let instanceUrl: string;
+  try {
+    instanceUrl = normalizeInstanceUrl(identity.instanceUrl);
+  } catch {
+    return;
+  }
+  if (instanceUrl !== record.instanceUrl) return;
+
+  const reference = gitlabProjectReference(record.ownerName);
+  if (reference === null) return;
+
+  const gateway = new GitLabGateway({
+    instanceUrl: record.instanceUrl,
+    token: identity.token,
+    fetch: dependencies.forgeFetch,
+  });
+  let proven = false;
+  try {
+    await gateway.deleteWebhook(reference, record.webhookId);
+    proven = true;
+  } catch (error) {
+    if (error instanceof GitLabApiError && error.status === 404) {
+      proven = true;
+    }
+  }
+
+  if (proven) {
+    try {
+      await dependencies.store.clearAbandonedWebhookCleanup(record.githubRepositoryId, "gitlab", record.webhookId);
+    } catch {
+      // The record staying is safe: the next drain re-checks the registration state first.
+    }
+  }
+}
+
+/**
+ * Splits a GitLab project's path with namespace back into the owner/name
+ * reference the gateway addresses the project with. Null when the stored path
+ * cannot be a path with namespace — the record then names no addressable
+ * project and stays for humans instead.
+ */
+function gitlabProjectReference(ownerName: string): GitHubRepositoryReference | null {
+  const segments = ownerName.split("/");
+  if (segments.length < 2 || segments.some((segment) => segment.length === 0)) {
+    return null;
+  }
+  return { owner: segments.slice(0, -1).join("/"), name: segments[segments.length - 1]! };
 }
 
 /**
@@ -1538,6 +1787,11 @@ const rollbackIncompleteMessage =
   + "could not be deleted on GitHub. Nothing was registered; retry the registration, and a later "
   + "successful registration or unregistration removes the abandoned webhook.";
 
+const gitlabRollbackIncompleteMessage =
+  "The repository registration could not be saved, and the project webhook Overflow created for it "
+  + "could not be deleted on GitLab. Nothing was registered; retry the registration, and a later "
+  + "successful registration or unregistration removes the abandoned webhook.";
+
 /**
  * The bounded cause rendered into the abandonment diagnostic when the store's
  * on-conflict arbiter answers null without raising (issue 515). No exception
@@ -1607,6 +1861,8 @@ async function abandonCreatedWebhook(
     ownerName,
     webhookId,
     createdAt: new Date().toISOString(),
+    provider: "github",
+    instanceUrl: null,
   };
   let recordSaved = true;
   try {
@@ -1651,7 +1907,7 @@ async function abandonCreatedWebhook(
 
   if (proven) {
     try {
-      await dependencies.store.clearAbandonedWebhookCleanup(githubRepositoryId, webhookId);
+      await dependencies.store.clearAbandonedWebhookCleanup(githubRepositoryId, "github", webhookId);
     } catch {
       // The record staying is safe: the drain re-checks the registration state before deleting.
     }
