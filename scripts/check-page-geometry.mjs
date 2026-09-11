@@ -374,14 +374,19 @@ export function mintSessionCookieValue({ secret, userId, role, now = Date.now() 
  * The AUTH_SECRET the session cookie is minted with — the target server
  * derives its decryption key from the same value, so only an exact match is
  * accepted. Required on the first authed contract only; a run with no authed
- * contracts never asks for it.
+ * contracts never asks for it. The refusal names CONTRIBUTING (issue 555):
+ * its check list is where the requirement is written down, and a repro that
+ * followed that list alone had nothing else to learn the variable from.
+ * Exported so a test can pin the message's content — the variable name, the
+ * pointer and the emptiness contract — the way missingEnvMessage is pinned.
  */
-function fixtureAuthSecret() {
+export function fixtureAuthSecret() {
   const secret = process.env.AUTH_SECRET;
   if (secret === undefined || secret === "") {
     throw new Error(
       "AUTH_SECRET is not set — a signed-in contract cannot get a session cookie the server accepts. " +
-        "Set it to the same secret the target server was started with.",
+        "Set it to the same secret the target server was started with. " +
+        "CONTRIBUTING.md's check list names this requirement.",
     );
   }
   return secret;

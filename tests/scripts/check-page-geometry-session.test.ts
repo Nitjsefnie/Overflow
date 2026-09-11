@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { decode } from "next-auth/jwt";
 // @ts-expect-error -- untyped .mjs script module
-import { SESSION_COOKIE_NAME, authedLandingState, loadRepoEnvFile, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
+import { SESSION_COOKIE_NAME, authedLandingState, fixtureAuthSecret, loadRepoEnvFile, mintSessionCookieValue, seedFixtureUsers, setSessionCookie, spawnedServerEnv } from "../../scripts/check-page-geometry.mjs";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -248,6 +248,49 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
 
     expect(env.DATABASE_URL).toBe("postgresql://me:p#ss@host/db");
     expect(env.AUTH_SECRET).toBe("s#cret");
+  });
+});
+
+/**
+ * The signed-in contract's secret read (issue 555). The refusal must name
+ * both the variable and the document that lists the requirement: a message
+ * that omits either leaves a repro on CONTRIBUTING's verification chain
+ * guessing at the name or the remedy. Exported for these tests under the
+ * pattern missingEnvMessage and missingRequiredEnv already follow (the
+ * message is pinned, so a mutant that drops the CONTRIBUTING pointer,
+ * renames the variable or drops the empty-string arm cannot slip past); the
+ * emptiness contract is the script's own — an empty secret is as unusable as
+ * an absent one.
+ */
+describe("fixtureAuthSecret — the signed-in contract's secret read (issue 555)", () => {
+  const originalAuthSecret = process.env.AUTH_SECRET;
+
+  afterAll(() => {
+    if (originalAuthSecret === undefined) {
+      delete process.env.AUTH_SECRET;
+    } else {
+      process.env.AUTH_SECRET = originalAuthSecret;
+    }
+  });
+
+  it("throws, naming the variable and CONTRIBUTING, when AUTH_SECRET is unset", () => {
+    delete process.env.AUTH_SECRET;
+
+    expect(() => fixtureAuthSecret()).toThrow(/^AUTH_SECRET is not set/);
+    expect(() => fixtureAuthSecret()).toThrow(/CONTRIBUTING/);
+  });
+
+  it("throws the same refusal when AUTH_SECRET is set to the empty string", () => {
+    process.env.AUTH_SECRET = "";
+
+    expect(() => fixtureAuthSecret()).toThrow(/^AUTH_SECRET is not set/);
+    expect(() => fixtureAuthSecret()).toThrow(/CONTRIBUTING/);
+  });
+
+  it("returns the exact value when AUTH_SECRET is set", () => {
+    process.env.AUTH_SECRET = "geometry-fixture-issue-555-secret";
+
+    expect(fixtureAuthSecret()).toBe("geometry-fixture-issue-555-secret");
   });
 });
 
