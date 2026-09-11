@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "@/lib/repositories/upgrade-webhooks";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -10,6 +11,8 @@ import { materializeRepositoryFixture } from "../support/materialized-repository
 import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
+// 32 raw bytes, base64url: a real key for the real cipher round-trips these tests exercise.
+const TEST_ENCRYPTION_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");
 let container: StartedTestContainer;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
@@ -195,5 +198,110 @@ describe("migration 038: forge identities and provider columns", () => {
       { repositoryId: created!.id, subscription: "NOT_APPLICABLE", queue: "NOT_ATTEMPTED", failure: null },
     ]);
     expect(credentialReads).toEqual([]);
+  });
+
+  it("refreshes the owner's re-link on the same row and refuses the same triple for another account", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [owner] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930001, 'forge-owner') returning id
+    `;
+    const [outsider] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930002, 'forge-outsider') returning id
+    `;
+    const link = {
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example.com",
+      forgeUserId: 7007,
+      encryptedToken: "v1.test.envelope",
+    };
+    const first = await store.upsertIdentity({
+      userId: owner!.id, forgeLogin: "tester-v1", ...link,
+    });
+    expect(first).not.toBeNull();
+
+    // The owner's re-link refreshes login and verification on the SAME row.
+    const refreshed = await store.upsertIdentity({
+      userId: owner!.id, forgeLogin: "tester-v2", ...link,
+    });
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!.id).toBe(first!.id);
+    expect(refreshed!.forgeLogin).toBe("tester-v2");
+
+    // Another account presenting the same triple must not take the row over:
+    // the conditional upsert inserts nothing and answers null.
+    const stolen = await store.upsertIdentity({
+      userId: outsider!.id, forgeLogin: "outsider", ...link,
+    });
+    expect(stolen).toBeNull();
+    const after = await sql<{ forge_login: string; user_id: string }[]>`
+      select forge_login, user_id::text as user_id from user_forge_identities
+      where provider = 'gitlab' and instance_url = 'https://gitlab.example.com' and forge_user_id = 7007
+    `;
+    expect(after).toEqual([{ forge_login: "tester-v2", user_id: owner!.id }]);
+  });
+
+  it("deletes only the owner's identity: a foreign user's delete is a no-op", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [owner] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930003, 'delete-owner') returning id
+    `;
+    const [foreign] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930004, 'delete-foreign') returning id
+    `;
+    const identity = await store.upsertIdentity({
+      userId: owner!.id,
+      provider: "gitlab",
+      instanceUrl: "https://delete-test.example.com",
+      forgeUserId: 7008,
+      forgeLogin: "deletable",
+      encryptedToken: "v1.test.envelope",
+    });
+    expect(identity).not.toBeNull();
+
+    // A foreign id deletes nothing and reports it.
+    expect(await store.deleteForUser({ identityId: identity!.id, userId: foreign!.id })).toBe(false);
+    // The owner's delete removes the row.
+    expect(await store.deleteForUser({ identityId: identity!.id, userId: owner!.id })).toBe(true);
+  });
+
+  it("lists exactly the identity view fields and never the encrypted token", async () => {
+    const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (930005, 'list-owner') returning id
+    `;
+    await store.upsertIdentity({
+      userId: user!.id,
+      provider: "gitlab",
+      instanceUrl: "https://list-test.example.com",
+      forgeUserId: 7009,
+      forgeLogin: "lister",
+      encryptedToken: "v1.secret.never-leak",
+    });
+    const listed = await store.listForUser(user!.id);
+    const mine = listed.filter((identity) => identity.instanceUrl === "https://list-test.example.com");
+    expect(mine).toHaveLength(1);
+    // The view's exact field set: no encrypted_token, no user_id, no envelope.
+    expect(Object.keys(mine[0]!).sort()).toEqual([
+      "forgeLogin", "id", "instanceUrl", "provider", "verifiedAt",
+    ]);
+    expect(JSON.stringify(mine[0])).not.toContain("never-leak");
+  });
+
+  it("keeps the token column out of the list query itself, not just out of the view mapping", async () => {
+    // The view mapping already projects the token away; this pin holds the
+    // QUERY to the same containment, so a secret is never fetched to be
+    // dropped. Reviewed mutant: re-adding encrypted_token to the select.
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const storeSource = await readFile(
+      fileURLToPath(new URL("../../src/lib/forge/postgres-identities-store.ts", import.meta.url)),
+      "utf8",
+    );
+    const listSelect = storeSource.slice(
+      storeSource.indexOf("async listForUser"),
+      storeSource.indexOf("upsertIdentity(input"),
+    );
+    expect(listSelect).toContain("select id, provider, instance_url, forge_login, verified_at");
+    expect(listSelect).not.toContain("encrypted_token");
   });
 });

@@ -647,6 +647,9 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
       async findRepositoryByGitHubId() {
         return null;
       },
+      async findRepositoryProviderById() {
+        return null;
+      },
       async findRepositoryRegistrationStateByOwnerName() {
         return null;
       },

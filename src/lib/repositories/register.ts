@@ -9,6 +9,7 @@ import {
   type OpeningDifficultyLabel,
 } from "@/lib/domain/difficulty-scheme";
 import { GitLabGateway } from "@/lib/gitlab/client";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type {
   GitHubRepository,
   GitHubRepositoryReference,
@@ -109,6 +110,14 @@ export type AbandonedWebhookCleanup = {
 
 export type RepositoryRegistrationStore = {
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null>;
+  /**
+   * The stored forge provider for the row holding this forge repository id —
+   * 'github', 'gitlab', or null when nothing is registered under it. The
+   * cross-forge collision guard reads this before any on-conflict insert,
+   * because re-pointing an id between forges would re-fold the other forge's
+   * settlements against this registration.
+   */
+  findRepositoryProviderById(githubRepositoryId: number): Promise<string | null>;
   createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null>;
   /**
    * Appends the submitted catalog as the repository's next version and moves
@@ -288,6 +297,18 @@ export async function registerRepository(
     throw new RepositoryRegistrationError("CONFLICT", "This GitHub repository is already registered.");
   }
 
+  // The reverse cross-forge guard: a GitHub registration may not take over an
+  // id a GitLab registration has held (registered or unregistered) — the
+  // forge history never migrates between forges.
+  const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
+  if (existingProvider !== null && existingProvider !== "github") {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      `GitHub repository ${repository.id} collides with forge id ${repository.id} already registered as provider '${existingProvider}'. `
+        + "An id's forge history never migrates between forges; registration refused.",
+    );
+  }
+
   await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
 
   let webhook: GitHubWebhook;
@@ -440,11 +461,37 @@ async function registerGitLabRepository(
     );
   }
 
+  // The same normalization the link flow stores under: one input cannot be
+  // valid here and invalid there (or vice versa).
+  let instanceUrl: string;
+  try {
+    instanceUrl = normalizeInstanceUrl(input.instanceUrl);
+  } catch (error) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      error instanceof Error ? error.message : "The instance URL is malformed.",
+    );
+  }
+  if (/^\d+$/.test(input.project)) {
+    const numericProject = Number(input.project);
+    if (!Number.isSafeInteger(numericProject) || numericProject <= 0) {
+      throw new RepositoryRegistrationError(
+        "INVALID_INPUT",
+        "The GitLab project id must be a positive integer.",
+      );
+    }
+  } else if (!input.project.includes("/")) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "Submit the GitLab project as a positive numeric id or a path with namespace.",
+    );
+  }
+
   // The verified-identity requirement is the authorization for the whole
   // path: without a linked, live-verified PAT on THIS instance there is no
   // credential to read with and nothing vouches for the submitter.
   const identity = dependencies.forgeIdentity ?? null;
-  if (identity === null || normalizeForComparison(identity.instanceUrl) !== normalizeForComparison(input.instanceUrl)) {
+  if (identity === null || instanceUrl !== normalizeInstanceUrl(identity.instanceUrl)) {
     throw new RepositoryRegistrationError(
       "FORBIDDEN",
       "A verified GitLab identity linked to this instance is required to register a GitLab repository.",
@@ -452,7 +499,7 @@ async function registerGitLabRepository(
   }
 
   const gateway = new GitLabGateway({
-    instanceUrl: identity.instanceUrl,
+    instanceUrl,
     token: identity.token,
     fetch: dependencies.forgeFetch,
   });
@@ -487,6 +534,19 @@ async function registerGitLabRepository(
     throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
   }
 
+  // Cross-forge collision: an id registered under GitHub — even an
+  // unregistered row, which a resubmission would silently re-point — must
+  // never become a GitLab registration, and vice versa. The forge's history
+  // (GitHub-era settlements folded against this id) travels with the row.
+  const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
+  if (existingProvider !== null && existingProvider !== "gitlab") {
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      `GitLab project ${repository.id} collides with forge id ${repository.id} already registered as provider '${existingProvider}'. `
+        + "An id's forge history never migrates between forges; registration refused.",
+    );
+  }
+
   // Label existence through the gateway: the labels endpoint may refuse
   // (contract gap 8), in which case the gateway itself falls back to the
   // labels embedded in the issues list.
@@ -516,7 +576,7 @@ async function registerGitLabRepository(
       githubWebhookId: null,
       difficultyScheme,
       provider: "gitlab",
-      instanceUrl: identity.instanceUrl,
+      instanceUrl,
       forgeProjectId: repository.id,
     });
   } catch {
@@ -531,10 +591,6 @@ async function registerGitLabRepository(
   // The claim-path verdict is permanent for GitLab: item 30 graded NOT
   // SUPPLIED, so there is no in-repo evidence surface to consult.
   return { ...created, initialImportScheduled: false, claimPath: "NOT_CHECKED" };
-}
-
-function normalizeForComparison(value: string): string {
-  return value.trim().replace(/\/+$/, "").toLowerCase();
 }
 
 /**

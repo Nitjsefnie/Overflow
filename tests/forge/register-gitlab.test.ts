@@ -47,11 +47,17 @@ function input(overrides: Partial<RepositoryRegistrationInput> = {}): Repository
   };
 }
 
-function fixture(options: { linkedIdentity?: { instanceUrl: string; token: string } | null } = {}) {
+function fixture(options: {
+  linkedIdentity?: { instanceUrl: string; token: string } | null;
+  existingProvider?: string | null;
+} = {}) {
   const calls: { op: string; args: unknown }[] = [];
   const store: RepositoryRegistrationStore = {
     async findRepositoryByGitHubId() {
       return null;
+    },
+    async findRepositoryProviderById() {
+      return options.existingProvider ?? null;
     },
     async findRepositoryRegistrationState() {
       return null;
@@ -159,6 +165,71 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "NOT_FOUND",
     });
+  });
+
+  it("refuses a GitLab registration whose forge id is already held by a GitHub row", async () => {
+    // An unregistered GitHub row under the same numeric id would be silently
+    // re-pointed by the on-conflict insert, re-folding GitHub-era settlements
+    // against a GitLab project. The refusal names the collision.
+    const f = fixture({ existingProvider: "github" });
+    await expect(registerRepository(f.dependencies, input())).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "CONFLICT",
+      message: /collides with forge id .* provider 'github'/,
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("rejects a malformed numeric project id before any gateway call", async () => {
+    const f = fixture();
+    await expect(registerRepository(f.dependencies, input({ project: "0" }))).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    await expect(registerRepository(f.dependencies, input({ project: "-4" }))).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    await expect(registerRepository(f.dependencies, input({ project: "12abc" }))).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+  });
+
+  it("refuses a GitHub registration whose forge id is already held by a GitLab row", async () => {
+    // The reverse direction: a GitHub submission may not take over an id a
+    // GitLab registration has held, even unregistered — the row's forge
+    // history never migrates.
+    const f = fixture({ existingProvider: "gitlab" });
+    const githubFetch = async (req: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(req, init);
+      if (request.url.endsWith("/repos/octo/repo")) {
+        return new Response(JSON.stringify({
+          id: 278964, name: "repo", full_name: "octo/repo", private: false,
+          html_url: "https://github.com/octo/repo", owner: { login: "octo", type: "Organization" },
+          permissions: { admin: true },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (request.url.includes("/labels")) {
+        return new Response(JSON.stringify(labelsFixture.map((name) => ({ name }))), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("no route", { status: 404 });
+    };
+    const dependencies: RepositoryRegistrationDependencies = {
+      ...f.dependencies,
+      github: new GitHubGateway({ accessToken: "gho-token", fetch: githubFetch }),
+    };
+    await expect(registerRepository(dependencies, {
+      repositoryUrl: "octo/repo",
+      openingName: scheme.openingName,
+      actualName: scheme.actualName,
+      openingLabels: scheme.openingLabels,
+      actualLabels: scheme.actualLabels,
+    })).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "CONFLICT",
+      message: /collides with forge id .* provider 'gitlab'/,
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
   });
 
   it("still registers GitHub submissions exactly as before", async () => {
