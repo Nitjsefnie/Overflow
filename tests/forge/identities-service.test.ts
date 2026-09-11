@@ -77,7 +77,13 @@ describe("linkForgeIdentity", () => {
     await expect(linkForgeIdentity(
       { store, tokenEncryptionKey: TEST_KEY, fetch: fetchJson({ message: "401 Unauthorized" }, 401) },
       { userId: "user-1", instanceUrl: "https://gitlab.example.com", token: "glpat-live" },
-    )).rejects.toMatchObject({ name: "ForgeIdentityError", code: "UNVERIFIED" });
+    )).rejects.toMatchObject({
+      name: "ForgeIdentityError",
+      code: "UNVERIFIED",
+      // The refusal names the scope the member has to mint the token with —
+      // the literal token they tick in GitLab's scope checklist.
+      message: expect.stringContaining("read_api"),
+    });
     expect(upserts).toEqual([]);
   });
 

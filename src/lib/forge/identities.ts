@@ -115,7 +115,7 @@ export async function linkForgeIdentity(
   if (status !== 200) {
     throw new ForgeIdentityError(
       "UNVERIFIED",
-      "The instance did not accept the token, so no identity was linked.",
+      "The instance did not accept the token, so no identity was linked. Check that the token is valid for that instance and carries the read_api scope.",
     );
   }
   const forgeUser = JSON.parse(bodyText) as { id?: unknown; username?: unknown };

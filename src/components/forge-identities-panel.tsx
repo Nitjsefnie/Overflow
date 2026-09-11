@@ -174,9 +174,14 @@ export function ForgeIdentitiesPanel() {
             value={token}
             onChange={(event) => setToken(event.target.value)}
             autoComplete="off"
+            aria-describedby="forge-token-scope"
             required
           />
         </label>
+        <p id="forge-token-scope">
+          Create the token with the <code>read_api</code> scope. <code>read_user</code> alone is not enough;
+          the broader <code>api</code> scope also works.
+        </p>
         <button className="quiet-button" type="submit" disabled={busy || instanceUrl === "" || token === ""}>
           Link identity
         </button>
