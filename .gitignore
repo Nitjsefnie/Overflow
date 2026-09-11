@@ -69,6 +69,11 @@ src/app/api/github/*
 !src/app/api/github/webhooks/
 src/app/api/github/webhooks/*
 !src/app/api/github/webhooks/*.ts
+!src/app/api/gitlab/
+src/app/api/gitlab/*
+!src/app/api/gitlab/webhooks/
+src/app/api/gitlab/webhooks/*
+!src/app/api/gitlab/webhooks/*.ts
 !src/app/api/issues/
 src/app/api/issues/*
 !src/app/api/issues/*.ts

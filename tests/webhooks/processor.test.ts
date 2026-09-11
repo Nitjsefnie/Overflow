@@ -87,6 +87,60 @@ describe("processWebhook", () => {
 
     await expect(processWebhook(dependencies, delivery())).resolves.toEqual({ status: "DUPLICATE" });
   });
+
+  // A GitLab delivery (issue 547) resolves through the forge identity it
+  // carries — the numeric id alone could name a GitHub registration instead.
+  it("resolves a forge delivery by its forge identity and never by the numeric id", async () => {
+    const dependencies = processorDependencies({
+      findRepositoryByGitHubId: vi.fn().mockResolvedValue(null),
+    });
+    const forgeDelivery = {
+      ...delivery(),
+      repositoryGitHubId: 278964,
+      forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
+    };
+    dependencies.store.findRepositoryByForgeIdentity = vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true });
+
+    const result = await processWebhook(dependencies, forgeDelivery);
+
+    expect(result).toEqual({ status: "PROCESSED" });
+    expect(dependencies.store.findRepositoryByForgeIdentity).toHaveBeenCalledWith("gitlab", "https://gitlab.example.com", 278964);
+    expect(dependencies.store.findRepositoryByGitHubId).not.toHaveBeenCalled();
+    expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("gitlab-repository", forgeDelivery);
+    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("delivery-1", "lease-1");
+  });
+
+  it("does not schedule a fold for a forge delivery whose identity resolves to nothing", async () => {
+    const dependencies = processorDependencies({
+      findRepositoryByForgeIdentity: vi.fn().mockResolvedValue(null),
+    });
+
+    await expect(processWebhook(dependencies, {
+      ...delivery(),
+      forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
+    })).resolves.toEqual({ status: "PROCESSED" });
+
+    expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
+    expect(dependencies.store.markProcessed).toHaveBeenCalled();
+  });
+
+  it("applies the issue view of a forge delivery through the same seam", async () => {
+    const dependencies = processorDependencies({
+      findRepositoryByForgeIdentity: vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true }),
+    });
+    const forgeDelivery = {
+      ...delivery(),
+      event: "issues" as const,
+      subject: { kind: "ISSUE" as const, id: 301, number: 23 },
+      issue: { state: "CLOSED" as const, updatedAt: "2026-09-08T10:00:00Z", title: "t", body: "", url: "https://gitlab.example.com/g/p/-/issues/23" },
+      forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
+    };
+
+    await processWebhook(dependencies, forgeDelivery);
+
+    expect(dependencies.store.applyIssueView).toHaveBeenCalledWith("gitlab-repository", 301, forgeDelivery.issue);
+    expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("gitlab-repository", forgeDelivery);
+  });
 });
 
 function delivery() {
@@ -104,6 +158,7 @@ function processorDependencies(
   overrides: Partial<{
     claimDelivery: DeliveryClaim;
     findRepositoryByGitHubId: ReturnType<typeof vi.fn>;
+    findRepositoryByForgeIdentity: ReturnType<typeof vi.fn>;
     enqueueReconciliation: ReturnType<typeof vi.fn>;
     markProcessed: ReturnType<typeof vi.fn>;
     markFailed: ReturnType<typeof vi.fn>;
@@ -121,6 +176,8 @@ function processorDependencies(
     claimDelivery: vi.fn().mockResolvedValue(overrides.claimDelivery ?? claimedLease("lease-1")),
     findRepositoryByGitHubId:
       overrides.findRepositoryByGitHubId ?? vi.fn().mockResolvedValue({ id: "repository", active: true }),
+    findRepositoryByForgeIdentity:
+      overrides.findRepositoryByForgeIdentity ?? vi.fn().mockResolvedValue({ id: "repository", active: true }),
     markProcessed: overrides.markProcessed ?? vi.fn().mockResolvedValue(true),
     markFailed: overrides.markFailed ?? vi.fn().mockResolvedValue(true),
   };

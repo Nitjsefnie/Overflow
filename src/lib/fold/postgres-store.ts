@@ -1220,6 +1220,24 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return row ?? null;
   }
 
+  public async findRepositoryByForgeIdentity(
+    provider: string,
+    instanceUrl: string,
+    forgeProjectId: number,
+  ): Promise<{ id: string; active: boolean } | null> {
+    // The forge triple is the resolution primitive for GitLab deliveries: a
+    // numeric id alone could match a GitHub registration holding the same
+    // number, so the provider and the normalized instance URL decide (issue
+    // 547). The partial unique index from migration 038 keeps the triple
+    // unique across non-GitHub registrations.
+    const [row] = await this.sql<{ id: string; active: boolean }[]>`
+      select id, active from registered_repositories
+      where provider = ${provider} and instance_url = ${instanceUrl} and forge_project_id = ${forgeProjectId}
+      limit 1
+    `;
+    return row ?? null;
+  }
+
   public async applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void> {
     // Unknown issues need the fold's opening evidence before they can be inserted.
     await this.sql`

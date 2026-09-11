@@ -3,6 +3,17 @@ import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/web
 export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
+  /**
+   * Resolves the registration holding this forge identity — provider,
+   * normalized instance URL, forge project id. A GitLab delivery resolves
+   * through it and never through the numeric id alone, which a GitHub
+   * registration could equally hold (issue 547).
+   */
+  findRepositoryByForgeIdentity(
+    provider: string,
+    instanceUrl: string,
+    forgeProjectId: number,
+  ): Promise<{ id: string; active: boolean } | null>;
   applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void>;
   markProcessed(deliveryId: string, leaseToken: string): Promise<boolean>;
   markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
@@ -36,7 +47,15 @@ export async function processWebhook(
   }
 
   try {
-    const repository = await dependencies.store.findRepositoryByGitHubId(delivery.repositoryGitHubId);
+    // One processing path for both forges: the delivery names how its
+    // repository is resolved, and everything after this line is shared.
+    const repository = delivery.forge === undefined
+      ? await dependencies.store.findRepositoryByGitHubId(delivery.repositoryGitHubId)
+      : await dependencies.store.findRepositoryByForgeIdentity(
+          delivery.forge.provider,
+          delivery.forge.instanceUrl,
+          delivery.repositoryGitHubId,
+        );
     if (repository !== null && repository.active) {
       if (delivery.subject.kind === "ISSUE" && delivery.issue !== undefined) {
         await dependencies.store.applyIssueView(repository.id, delivery.subject.id, delivery.issue);
