@@ -168,11 +168,15 @@ export class GitLabGateway {
 
   public async listIssues(
     repository: GitHubRepositoryReference,
-    _options?: GitHubIssueListOptions,
+    options?: GitHubIssueListOptions,
   ): Promise<GitHubIssue[]> {
-    void _options;
+    // `since` — the reconciliation's incremental cursor — maps to GitLab's
+    // `updated_after`; the timeline controls have no GitLab equivalent and
+    // stay unimplemented rather than silently ignored (their parity is the
+    // reconciliation's concern, not the transport's).
+    const since = options?.since === undefined ? "" : `&updated_after=${encodeURIComponent(options.since)}`;
     const objects = await this.listAllPages<GitLabIssueObject>(
-      `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues`,
+      `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues${since}`,
     );
     return objects.map(toGitHubIssue);
   }
@@ -200,7 +204,39 @@ export class GitLabGateway {
     const response = await this.request(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}`,
     );
-    return toGitLabMergeRequest(await responseJson<GitLabMergeRequestObject>(response));
+    const mergeRequest = await responseJson<GitLabMergeRequestObject>(response);
+    return this.withFinalCommitAt(repository, mergeRequestIid, mergeRequest);
+  }
+
+  /**
+   * The fold's evidence window reads `finalCommitAt` (the last push before the
+   * merge), and the MR object does not carry it — it lives on the MR's commits.
+   * One bounded commit read supplies it; a failed read leaves it null, where
+   * the fold's own validity check refuses the MR rather than guessing.
+   */
+  private async withFinalCommitAt(
+    repository: GitHubRepositoryReference,
+    mergeRequestIid: number,
+    mergeRequest: GitLabMergeRequestObject,
+  ): Promise<GitLabMergeRequest> {
+    const mapped = toGitLabMergeRequest(mergeRequest);
+    if (mergeRequest.merged_at === null) {
+      return mapped;
+    }
+    try {
+      const commits = await this.listAllPages<{ committed_at: string | null; committed_date: string }>(
+        `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits?per_page=100`,
+      );
+      const timestamps = commits
+        .map((commit) => commit.committed_at ?? commit.committed_date)
+        .filter((value): value is string => typeof value === "string");
+      mapped.finalCommitAt = timestamps.length === 0
+        ? null
+        : normalizeTimestamp(timestamps.slice().sort().at(-1)!);
+    } catch {
+      mapped.finalCommitAt = null;
+    }
+    return mapped;
   }
 
   public async getPullRequestClosingIssues(
@@ -224,7 +260,11 @@ export class GitLabGateway {
     const objects = await this.listAllPages<GitLabMergeRequestObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${issueIid}/closed_by`,
     );
-    return objects.map(toGitLabMergeRequest);
+    const mapped: GitLabMergeRequest[] = [];
+    for (const object of objects) {
+      mapped.push(await this.withFinalCommitAt(repository, object.iid, object));
+    }
+    return mapped;
   }
 
   /**
@@ -374,18 +414,21 @@ export class GitLabGateway {
   }
 
   private async listAllPages<T>(path: string): Promise<T[]> {
+    // Keyset pagination (contract gap 7, live-verified): offset pagination
+    // drifts when rows shift between pages, and reconciliation reads exactly
+    // the surfaces where that would silently skip evidence. Ordered by id
+    // ascending, following the x-next-page-cursor the server hands back.
     const items: T[] = [];
-    let page = 1;
+    let cursor: string | null = null;
     for (;;) {
       const separator = path.includes("?") ? "&" : "?";
-      const response = await this.request(`${path}${separator}per_page=100&page=${page}`);
+      const base = `${path}${separator}per_page=100&pagination=keyset&order_by=id&sort=asc`;
+      const target = cursor === null ? base : `${base}&cursor=${encodeURIComponent(cursor)}`;
+      const response = await this.request(target);
       const payload = await responseJson<T[]>(response);
       items.push(...payload);
-      // No x-next-page header on the last page; the response is fully consumed
-      // inside request(), so headers must be read before the body drain.
-      const nextPage = response.headers.get("x-next-page");
-      if (nextPage === null || nextPage === "") break;
-      page = Number(nextPage);
+      cursor = response.headers.get("x-next-page-cursor");
+      if (cursor === null || cursor === "") break;
     }
     return items;
   }

@@ -67,6 +67,7 @@ export async function materializeRepositoryFixture(sql: Sql) {
       proofSha256, githubIssueIds: [issueIds[index]], reviewRounds: [],
     })),
     settlements: [{
+      provider: "github", instanceUrl: null,
       githubIssueId: issueIds[0], githubPullRequestId: pullRequestIds[0], creditorId: contributor.id,
       creditorGitHubLogin: `contributor-${contributorGitHubId}`, creditorGitHubUserId: contributorGitHubId,
       debtorId: sponsor.id, openingComparisonPoints: 5, ...settledEvidence,

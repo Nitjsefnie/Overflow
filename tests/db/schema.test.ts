@@ -3638,6 +3638,11 @@ describe("initial PostgreSQL materialization", () => {
       // own `add column if not exists` makes its later application a no-op for
       // the column; the check constraint is left to it.
       await upgradeSql.unsafe("alter table issues add column if not exists claim_assignee_github_user_id bigint");
+      // NOTE (issue 296 C2): the HEAD materializer also writes the settlements
+      // forge columns 038 provides, which this 028-frozen fixture lacks. The
+      // 032 pattern (add column if not exists) covers this; making 038's
+      // columns legal to pre-create needs a follow-up `add column if not
+      // exists` migration (041) — raised with the lead.
       const sponsorLogin = `recorded-seq-upgrade-sponsor-${nextExternalId()}`;
       const contributorLogin = `recorded-seq-upgrade-contributor-${nextExternalId()}`;
       const sponsorId = await insertUserWithLogin(upgradeSql, sponsorLogin);

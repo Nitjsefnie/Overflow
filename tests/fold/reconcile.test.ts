@@ -1350,6 +1350,7 @@ function reconciliationDependencies(
     failRun,
     recordVerifiedRepositoryIdentity: vi.fn().mockResolvedValue(undefined),
     markRepositoryUnavailable: vi.fn().mockResolvedValue(undefined),
+    findForgeIdentitiesByForgeUserIds: vi.fn().mockResolvedValue([]),
   };
 
   return { store, github } as ReconciliationDependencies & {
