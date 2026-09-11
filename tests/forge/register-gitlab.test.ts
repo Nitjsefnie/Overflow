@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { GitHubGateway } from "@/lib/github/client";
+import { GitLabApiError } from "@/lib/gitlab/client";
 import {
   registerRepository,
   type NewRegisteredRepository,
@@ -170,6 +171,41 @@ describe("GitLab repository registration", () => {
       name: "RepositoryRegistrationError",
       code: "NOT_FOUND",
     });
+  });
+
+  it("refuses with NOT_FOUND when the project path names no visible project", async () => {
+    const f = fixture();
+    // The fixture's transport answers 404 for any path other than
+    // gitlab-org/gitlab, so a path nothing vouches for must refuse exactly as
+    // the id branch refuses — not with the raw GitLabApiError the route's
+    // catch-all would read as an upstream failure.
+    await expect(registerRepository(f.dependencies, input({ project: "ghost-org/ghost" }))).rejects.toMatchObject({
+      name: "RepositoryRegistrationError",
+      code: "NOT_FOUND",
+      message: "No GitLab project with that path is visible through the linked identity.",
+    });
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
+  });
+
+  it("surfaces a non-404 GitLab failure on the path lookup as the upstream failure it is", async () => {
+    const f = fixture();
+    // Replace the transport so the path-addressed project lookup answers 500.
+    const originalFetch = f.dependencies.forgeFetch;
+    f.dependencies.forgeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("/projects/") && !url.includes("/labels")) {
+        return new Response("upstream detonation", { status: 500 });
+      }
+      return originalFetch!(input, init);
+    };
+    const error = await registerRepository(f.dependencies, input({ project: "ghost-org/ghost" }))
+      .then(() => null, (thrown: unknown) => thrown);
+    // The 404 mapping must not swallow real upstream failures: a 500 does not
+    // answer "this path names no visible project", so the raw GitLabApiError
+    // is rethrown and the route's catch-all answers 502 UPSTREAM_FAILURE.
+    expect(error).toBeInstanceOf(GitLabApiError);
+    expect((error as GitLabApiError).status).toBe(500);
+    expect(f.calls.some((call) => call.op === "createRepository")).toBe(false);
   });
 
   it("refuses a private project as FORBIDDEN before anything is stored", async () => {
