@@ -89,8 +89,9 @@ const repoRoot = resolve(import.meta.dirname, "..");
  * simultaneous sightings in one night). Mirrors the LAYOUT_CHECK_CHROME
  * discovery override. Unset or empty keeps the default; anything that is
  * not a plain decimal integer from 1 to 65535 is refused, naming the
- * variable and the offending value. --base-url mode spawns nothing and
- * never consults this.
+ * variable and the offending value. The value is validated at startup
+ * regardless of mode — only the SPAWNED server consults it, but an invalid
+ * one refuses the run before anything starts, whichever mode.
  */
 export function parseLayoutCheckPort(value) {
   if (value === undefined || value === "") return 3219;
