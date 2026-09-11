@@ -128,6 +128,21 @@ describe("explicit repository registration", () => {
     expect(append).not.toHaveBeenCalled();
   });
 
+  it("refuses the cross-forge collision before the sponsor check on the catalog-change path", async () => {
+    // The guard precedes the sponsor check: a non-sponsor asking to change a
+    // row another forge holds learns the collision, not the sponsor refusal.
+    const harness = createHarness({ existing: { ...registeredRepository(), sponsorId: "someone-else" } });
+    harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
+
+    const error = await changeRepositoryCatalog(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    const message = (error as Error).message;
+    expect(message).toMatch(/collides with forge id/);
+    expect(message).toMatch(/catalog change refused\.$/);
+    expect(message).not.toContain("Only the repository's sponsor can change its difficulty catalog.");
+    expect(harness.createdRepositories).toEqual([]);
+  });
+
   it("carries a catalog change past the forge guard when the stored provider is github", async () => {
     const harness = createHarness({ existing: registeredRepository() });
     harness.dependencies.store.findRepositoryProviderById = async () => "github";
@@ -847,6 +862,24 @@ describe("unregistering a registered repository", () => {
     expect(harness.unregisterInputs).toEqual([]);
     expect(harness.deletedWebhookIds).toEqual([]);
     expect(harness.deleteWebhookReferences).toEqual([]);
+  });
+
+  it("refuses the cross-forge collision before the sponsor check on the unregistration path", async () => {
+    // The guard precedes the sponsor check: a non-sponsor asking to
+    // unregister a row another forge holds learns the collision, not the
+    // sponsor refusal — and still moves nothing.
+    const harness = createHarness({ existing: { ...registeredRepository(), sponsorId: "someone-else" } });
+    harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
+
+    const error = await unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    const message = (error as Error).message;
+    expect(message).toMatch(/collides with forge id/);
+    expect(message).toMatch(/unregistration refused\.$/);
+    expect(message).not.toContain("Only the repository's sponsor can unregister it.");
+    expect(harness.callOrder).toEqual([]);
+    expect(harness.unregisterInputs).toEqual([]);
+    expect(harness.deletedWebhookIds).toEqual([]);
   });
 
   it("carries an unregistration past the forge guard when the stored provider is github", async () => {
