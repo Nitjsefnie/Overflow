@@ -80,7 +80,7 @@ function relativeLuminance(hex: string): number {
 function stubFormApi(
   submit: () => Response,
   labels: () => Response = defaultLabelsResponse,
-  identities: () => Response = defaultIdentitiesResponse,
+  identities: () => Response | Promise<Response> = defaultIdentitiesResponse,
 ) {
   const submitCalls: Array<{ url: string; init: RequestInit }> = [];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -776,6 +776,7 @@ describe("repository form forge selection", () => {
 
     fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await flushMicrotasks();
     fireEvent.change(screen.getByLabelText("Project"), { target: { value: "group/proj" } });
     fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
 
@@ -797,6 +798,83 @@ describe("repository form forge selection", () => {
 
     expect(screen.getByRole("alert").textContent).toBe("Choose the GitLab instance to register through.");
     expect(submitCalls).toHaveLength(0);
+  });
+
+  it("does not claim identities are missing while the identities read is in flight", async () => {
+    let resolveIdentities: (response: Response) => void = () => {};
+    const { submitCalls } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => new Promise<Response>((resolve) => {
+        resolveIdentities = resolve;
+      }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    const alertText = screen.getByRole("alert").textContent;
+    expect(alertText).not.toContain("Forge identities page");
+    expect(submitCalls).toHaveLength(0);
+
+    // Once the answer lands, a genuinely empty list earns the real refusal.
+    await act(async () => {
+      resolveIdentities(Response.json({ identities: [] }));
+    });
+    await flushMicrotasks();
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+    expect(screen.getByRole("alert").textContent).toContain("Forge identities page");
+    expect(submitCalls).toHaveLength(0);
+  });
+
+  it("names reload as the remedy when the identities read failed", async () => {
+    const { submitCalls } = stubFormApi(
+      () => Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+      defaultLabelsResponse,
+      () => new Response("exploded", { status: 500 }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    await flushMicrotasks();
+    fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+    const alertText = screen.getByRole("alert").textContent;
+    expect(alertText).toContain("Reload");
+    expect(alertText).not.toContain("Forge identities page");
+    expect(alertText).not.toContain("retry");
+    expect(submitCalls).toHaveLength(0);
+  });
+
+  it("clears the selections and refetches when the GitLab project changes", async () => {
+    const labels = [Response.json({ labels: ["pier", "mast"] }), Response.json({ labels: ["keel", "sail"] })];
+    stubFormApi(
+      () => Response.json({ repository: { ownerName: "group/proj" } }, { status: 201 }),
+      () => labels.shift() ?? Response.json({ labels: [] }),
+      () => Response.json({ identities: [gitlabIdentity] }),
+    );
+    render(<RepositoryForm />);
+
+    fireEvent.change(screen.getByLabelText("Forge"), { target: { value: "gitlab" } });
+    const instance = await waitFor(() => {
+      const select = screen.getByLabelText("Instance") as HTMLSelectElement;
+      expect(within(select).getByRole("option", { name: "https://gitlab.example (gl-user)" })).toBeInTheDocument();
+      return select;
+    });
+    fireEvent.change(instance, { target: { value: "https://gitlab.example" } });
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "group/proj" } });
+    await selectLoadedOption("Opening label 1", "pier");
+    await selectLoadedOption("Actual label for 2 points", "pier");
+
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "other/proj" } });
+
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toHaveValue(""));
+    await waitFor(() => expect(screen.getByLabelText("Actual label for 2 points")).toHaveValue(""));
+    await waitFor(() => expect(screen.getByLabelText("Opening label 1")).toBeEnabled());
+    const opening = screen.getByLabelText("Opening label 1");
+    expect(within(opening).getByRole("option", { name: "keel" })).toBeInTheDocument();
+    expect(within(opening).queryByRole("option", { name: "pier" })).toBeNull();
   });
 
   it("reads the GitLab labels once instance and project are present and well-shaped", async () => {

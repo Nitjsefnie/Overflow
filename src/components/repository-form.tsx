@@ -23,6 +23,8 @@ type RepositoryFormState = Omit<RepositoryFormValues, "openingLabels"> & {
 
 type LabelsStatus = "idle" | "loading" | "ready" | "error";
 
+type IdentitiesStatus = "idle" | "loading" | "ready" | "error";
+
 type ForgeProvider = "github" | "gitlab";
 
 /** The fields of a linked identity the form needs; never a token. */
@@ -109,6 +111,7 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
   const [instanceUrl, setInstanceUrl] = useState("");
   const [project, setProject] = useState("");
   const [gitlabIdentities, setGitlabIdentities] = useState<ForgeIdentityOption[]>([]);
+  const [identitiesStatus, setIdentitiesStatus] = useState<IdentitiesStatus>("idle");
   const identitiesSequence = useRef(0);
   const identitiesRequested = useRef(false);
   const reference = parseSingleRepository(values.repositoryUrl);
@@ -148,14 +151,16 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
 
   // The linked identities feed the Instance select. The read is spent once,
   // on the first GitLab selection and never on the GitHub path the catalog
-  // change stays on; a failed or misunderstood answer leaves the select empty,
-  // and the submit refusal names the remedy.
+  // change stays on; the status is what the submit refusals read, so a read
+  // still in flight is never mistaken for an account without identities and
+  // a failed read names the remedy that actually re-runs it: a page reload.
   useEffect(() => {
     if (provider !== "gitlab" || identitiesRequested.current) {
       return;
     }
     identitiesRequested.current = true;
     const sequence = ++identitiesSequence.current;
+    setIdentitiesStatus("loading");
     (async () => {
       try {
         const response = await fetch("/api/forge-identities", { credentials: "same-origin" });
@@ -177,9 +182,11 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
           ).filter((entry) => entry.provider === "gitlab")
             .map(({ id, instanceUrl: url, forgeLogin }) => ({ id, instanceUrl: url, forgeLogin })),
         );
+        setIdentitiesStatus("ready");
       } catch {
         if (identitiesSequence.current === sequence) {
           setGitlabIdentities([]);
+          setIdentitiesStatus("error");
         }
       }
     })();
@@ -246,11 +253,29 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
     setFeedback(null);
     if (provider === "gitlab") {
       // Client-side refusals mirror the registration rule (register.ts); the
-      // server stays the backstop.
+      // server stays the backstop. The identities read has to have answered
+      // before its emptiness means anything: while it is in flight the submit
+      // is refused without claiming identities are missing, and a failed read
+      // names the only action that re-runs it — a reload. "Link one … then
+      // reload" stays accurate because linking happens on another page.
+      if (identitiesStatus === "loading" || identitiesStatus === "idle") {
+        setFeedback({
+          kind: "error",
+          message: "Still reading your linked GitLab identities. Submit again in a moment.",
+        });
+        return;
+      }
+      if (identitiesStatus === "error") {
+        setFeedback({
+          kind: "error",
+          message: "Overflow could not read your linked GitLab identities. Reload the page and try again.",
+        });
+        return;
+      }
       if (gitlabIdentities.length === 0) {
         setFeedback({
           kind: "error",
-          message: "No linked GitLab identity is available. Link one on the dashboard's Forge identities page, then retry.",
+          message: "No linked GitLab identity is available. Link one on the dashboard's Forge identities page, then reload this page and register again.",
         });
         return;
       }
