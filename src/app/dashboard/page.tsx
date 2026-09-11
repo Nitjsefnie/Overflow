@@ -77,7 +77,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
       <section className="surface" aria-labelledby="open-claims-heading">
         <h2 id="open-claims-heading">Open claims</h2>
         {dashboard.openClaims.length === 0 ? <p>No open claims are reserving your ledger.</p> : (
-          <ul>
+          <ul className="facts-list">
             {dashboard.openClaims.map((claim) => (
               <li key={claim.id}>
                 <dl className="issue-facts">
@@ -112,7 +112,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
       <section className="surface" aria-labelledby="registered-repositories-heading">
         <h2 id="registered-repositories-heading">Registered repositories</h2>
         {dashboard.registeredRepositories.length === 0 ? <p>No repositories are registered to this account.</p> : (
-          <ul>
+          <ul className="facts-list">
             {dashboard.registeredRepositories.map((repository) => {
               // Held in a name so the two clauses stay independent: a repository can be both
               // unavailable and behind on reconciliation, and the sponsor is owed both readings.
@@ -171,7 +171,7 @@ export function DashboardContent({ memberName, isModerator, dashboard }: Dashboa
       <section className="surface" aria-labelledby="enforcement-notices-heading">
         <h2 id="enforcement-notices-heading">Enforcement notices</h2>
         {dashboard.enforcementNotices.length === 0 ? <p>No enforcement notices are recorded.</p> : (
-          <ol>
+          <ol className="facts-list">
             {dashboard.enforcementNotices.map((notice) => (
               <li key={notice.id}>
                 <dl className="issue-facts">

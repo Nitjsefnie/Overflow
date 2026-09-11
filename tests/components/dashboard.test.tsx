@@ -1,5 +1,7 @@
 /** @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
@@ -729,6 +731,9 @@ describe("member dashboard", () => {
       "enforcement-notices-heading",
     ]) {
       const section = sectionFor(labelledBy);
+      // The list itself carries the class that drops the browser's default
+      // marker; without it a disc or ordinal sits beside each bordered grid.
+      expect(within(section).getByRole("list")).toHaveClass("facts-list");
       const items = within(section).getAllByRole("listitem");
       expect(items).toHaveLength(1);
       for (const item of items) {
@@ -751,6 +756,17 @@ describe("member dashboard", () => {
     expect(cellValue("enforcement-notices-heading", "2026-09-02", "Transition")).toBe(
       "Active → Banned",
     );
+  });
+
+  it("ships a facts-list rule that drops the marker and spaces the grids", () => {
+    // jsdom performs no layout, so the markup test above cannot see a marker;
+    // what is pinned is the stylesheet text the class resolves to.
+    const rule = pinnedRule(".facts-list");
+    expect(rule.declarations["list-style"]).toBe("none");
+    expect(rule.declarations.padding).toBe("0");
+    expect(rule.declarations.margin).toBe("0");
+    expect(rule.declarations.display).toBe("grid");
+    expect(rule.declarations.gap).toMatch(/^[\d.]+rem$/);
   });
 
   it("offers an unregister control on every registered repository's row, inactive ones included", () => {
@@ -1028,6 +1044,20 @@ function registered(id: string, ownerName: string): RegisteredRepositoryProjecti
     unavailableReason: null,
     reconciliationState: "IDLE",
     reconciliationLastFailureAt: null,
+  };
+}
+
+const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
+
+/** The rule `selector` opens, matched only where the selector is the whole prelude. */
+function pinnedRule(selector: string): { declarations: Record<string, string> } {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+  const match = stylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
+  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
+  return {
+    declarations: Object.fromEntries([...match![1]!.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
+      ([, property, value]) => [property!, value!.trim()],
+    )),
   };
 }
 
