@@ -106,6 +106,85 @@ curl --include --request POST "${OVERFLOW_ORIGIN}/api/repositories" \
 JSON
 ```
 
+#### Submitting a GitLab project
+
+The same endpoint registers a GitLab project when the body carries
+`provider: "gitlab"`. Registration then reads the project with the personal
+access token of the GitLab identity you linked on the *Ledger* page (or over
+`POST /api/forge-identities`) for that instance; without a verified identity on
+that exact instance the request is refused. No webhook is installed and no
+initial import is scheduled — the periodic reconciliation sweep picks the
+project up. The catalog labels must already exist on the project; there is no
+dashboard form for this path, and `PATCH` has no GitLab path.
+
+The body takes the catalog fields above plus these. Extra fields are still
+rejected.
+
+| Field | Type and requirements |
+| --- | --- |
+| `provider` | The string `gitlab`. |
+| `instanceUrl` | String: an absolute `http` or `https` URL naming the instance's host, such as `https://gitlab.com`. Only the scheme and host are used, lowercased; a path is ignored. It must match the instance of a linked identity. |
+| `project` | String: the project's numeric id (a positive integer), or its path with namespace, such as `group/project` or `group/subgroup/project`. |
+| `repositoryUrl` | String: still required by the request schema, and not read for a GitLab submission. |
+
+```bash
+curl --include --request POST "${OVERFLOW_ORIGIN}/api/repositories" \
+  --header "Authorization: Bearer ${OVERFLOW_API_TOKEN}" \
+  --header 'Content-Type: application/json' \
+  --data-binary @- <<'JSON'
+{
+  "provider": "gitlab",
+  "instanceUrl": "https://gitlab.com",
+  "project": "your-group/your-project",
+  "repositoryUrl": "your-group/your-project",
+  "openingName": "Estimated scope",
+  "actualName": "Delivered difficulty",
+  "openingLabels": [
+    { "label": "offered: small", "comparisonPoints": 2, "reservePoints": 2 },
+    { "label": "offered: medium", "comparisonPoints": 5, "reservePoints": 5 },
+    { "label": "offered: large", "comparisonPoints": 8, "reservePoints": 8 }
+  ],
+  "actualLabels": [
+    { "label": "settled: 1", "points": 1 },
+    { "label": "settled: 2", "points": 2 },
+    { "label": "settled: 3", "points": 3 },
+    { "label": "settled: 4", "points": 4 },
+    { "label": "settled: 5", "points": 5 },
+    { "label": "settled: 6", "points": 6 },
+    { "label": "settled: 7", "points": 7 },
+    { "label": "settled: 8", "points": 8 },
+    { "label": "settled: 9", "points": 9 },
+    { "label": "settled: 10", "points": 10 }
+  ]
+}
+JSON
+```
+
+Success is HTTP `201` with the same body shape as a GitHub registration:
+`githubRepositoryId` is the GitLab project id, `ownerName` is the project's
+path with namespace, `githubWebhookId` is `null`, `initialImportScheduled` is
+`false`, and `claimPath` is `"NOT_CHECKED"`.
+
+The authentication, content-type and catalog-validation answers are the ones the
+registration responses below list. The GitLab path answers these in addition;
+angle-bracketed text is substituted at runtime:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 400 | `INVALID_INPUT` | `The instance URL must be an absolute URL.` | `instanceUrl` is missing or does not parse as a URL. |
+| 400 | `INVALID_INPUT` | `The instance URL must use http or https.` | Correct the scheme. |
+| 400 | `INVALID_INPUT` | `The instance URL must name a host.` | Correct the URL. |
+| 400 | `INVALID_INPUT` | `A GitLab registration requires the instance URL and the project id or path.` | `project` is missing or empty. |
+| 400 | `INVALID_INPUT` | `The GitLab project id must be a positive integer.` | `project` is all digits but not a positive safe integer. |
+| 400 | `INVALID_INPUT` | `Submit the GitLab project as a positive numeric id or a path with namespace.` | `project` is neither digits nor a path containing `/`. |
+| 400 | `INVALID_INPUT` | `The GitLab project does not carry these labels: <labels>. Create them, then register again.` | `<labels>` is the comma-separated list of catalog labels the project lacks. Create them on the project, then register again. |
+| 403 | `FORBIDDEN` | `A verified GitLab identity linked to this instance is required to register a GitLab repository.` | Link a GitLab identity for exactly this instance, then retry. |
+| 404 | `NOT_FOUND` | `No GitLab project with that id is visible through the linked identity.` | A numeric `project` the instance answered 404 for. Check the id and the token's access. |
+| 409 | `CONFLICT` | `This GitLab project is already registered.` | Use the existing registration. |
+| 409 | `CONFLICT` | `GitLab project <id> collides with forge id <id> already registered as provider '<provider>'. An id's forge history never migrates between forges; registration refused.` | A registration under another forge already holds that numeric id, so this id cannot become a GitLab registration. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to save the repository registration.` | Saving the registration failed; check service health before retrying. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Every other failure of a read against the instance — a path the instance does not answer, a token it no longer accepts, a transport failure — as well as an unavailable GitHub credential for the account. Check the project path, the linked token and the instance, then retry. |
+
 ### Registration responses
 
 Success is HTTP `201`. Example body (identifiers vary):
