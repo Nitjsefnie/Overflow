@@ -708,6 +708,46 @@ describe("reconcileRepository", () => {
       const foldedIds = materializeInput.fold.issues.map((issue) => issue.githubIssueId);
       expect(foldedIds).toContain(555);
       expect(foldedIds).not.toContain(999);
+      expect(materializeInput.synchronization?.dirtySubjects).toEqual([poison, good]);
+      expect(vi.mocked(dependencies.github.getIssue).mock.calls.map(([, subject]) => subject.number)).toEqual([42, 43]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("fails the run without discarding when a dirty GitLab issue read fails with a server error", async () => {
+    // The GitLab arm is 404 and nothing else: a server error is transient or
+    // run-invalidating, so it keeps whole-run retry semantics and must never
+    // discard the subject. This is the negative control against a widened
+    // classifier accepting any GitLabApiError status.
+    const serverError = new GitLabApiError(500);
+    const dependencies = reconciliationDependencies({
+      github: {
+        getIssue: vi.fn(async () => {
+          throw serverError;
+        }),
+      },
+    });
+    dependencies.store.getReconciliationEvidence = async () => ({
+      version: 1,
+      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(),
+      lastFullPassAt: new Date(),
+      issues: [],
+      pullRequests: [],
+    });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
+      { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 },
+    ];
+    dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        message: "Unable to reconcile repository.",
+      });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
       errorLog.mockRestore();
     }
