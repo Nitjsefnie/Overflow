@@ -386,6 +386,19 @@ dd {
   gap: 1.4rem;
 }
 
+/*
+ * A list whose every item is an `.issue-facts` grid. The browser's default
+ * marker would sit beside each bordered box, so the list opts out the way the
+ * other card lists do and spaces its items by the card-list gap.
+ */
+.facts-list {
+  display: grid;
+  gap: 1.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .issue-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(17rem, 0.8fr);
