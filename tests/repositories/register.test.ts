@@ -16,6 +16,7 @@ import {
   RepositoryRegistrationError,
   RepositoryWebhookIdConflictError,
   changeRepositoryCatalog,
+  describeErrorCause,
   drainAbandonedWebhooks,
   parseGitHubRepository,
   registerRepository,
@@ -942,6 +943,126 @@ describe("abandoning the webhook a failed registration created", () => {
     expect(diagnostic).toContain("501");
     expect(diagnostic).toContain("retained");
   });
+
+  // Issue 515: the ROLLBACK_INCOMPLETE diagnostics named only the webhook/record
+  // state, so an operator could not tell a database outage from a constraint
+  // conflict. The original save failure now rides into the diagnostic, bounded
+  // and secret-safe; the public ROLLBACK_INCOMPLETE message is unchanged.
+  it("carries the original save failure into the rollback-incomplete diagnostic", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      createRepositoryFailure: new Error("controlled save outage"),
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    expect(harness.callOrder).toEqual([
+      "saveAbandonedWebhookCleanup:501",
+      "deleteWebhook:501",
+    ]);
+    const diagnostic = consoleError.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(diagnostic).toContain("controlled save outage");
+  });
+
+  it("redacts credentials embedded in the save failure before it reaches the diagnostic", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      createRepositoryFailure: new Error(
+        "could not connect: postgres://sponsor:hunter2@db.internal:5432/overflow",
+      ),
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    const diagnostic = consoleError.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(diagnostic).not.toContain("hunter2");
+    expect(diagnostic).toContain("postgres://***@db.internal:5432/overflow");
+  });
+
+  it("caps an overlong save failure's rendering in the diagnostic", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      createRepositoryFailure: new Error("x".repeat(400) + " OVERFLOW-MARKER"),
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    const diagnostic = consoleError.mock.calls.map((call) => String(call[0])).join("\n");
+    // The cause renders as "Error: <message>" and is cut at the 200-char cap:
+    // 7 characters of prefix + 193 of the repeated x survive, nothing beyond.
+    expect(diagnostic).toContain(`Error: ${"x".repeat(193)}`);
+    expect(diagnostic).not.toContain("x".repeat(194));
+    expect(diagnostic).not.toContain("OVERFLOW-MARKER");
+  });
+
+  it("names the arbiter decline rather than an unknown save error when the store returns no row and the deletion is unproven", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({
+      storeRejectsAsDuplicateId: true,
+      deleteWebhookFailure: new GitHubApiError(500),
+    });
+
+    await expect(registerRepository(harness.dependencies, createInput())).rejects.toMatchObject({
+      code: "ROLLBACK_INCOMPLETE",
+    });
+    const diagnostic = consoleError.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(diagnostic).toContain(
+      "the store's on-conflict arbiter declined the save (another registration holds the GitHub path)",
+    );
+  });
+});
+
+describe("describing a save failure's cause for operator diagnostics", () => {
+  it("renders an Error as its name and message", () => {
+    expect(describeErrorCause(new Error("controlled save outage"))).toBe("Error: controlled save outage");
+  });
+
+  it("renders a non-Error rejection through String", () => {
+    expect(describeErrorCause("plain string rejection")).toBe("plain string rejection");
+    expect(describeErrorCause(42)).toBe("42");
+    expect(describeErrorCause(undefined)).toBe("undefined");
+  });
+
+  it("renders an Error with an empty message through String", () => {
+    expect(describeErrorCause(new Error(""))).toBe("Error");
+  });
+
+  it("collapses newlines so the diagnostic stays one line", () => {
+    const rendered = describeErrorCause(new Error("line one\nline two\r\nline three"));
+    expect(rendered).toBe("Error: line one line two line three");
+    expect(rendered).not.toMatch(/[\r\n]/);
+  });
+
+  it("redacts credentials in a connection URL", () => {
+    const rendered = describeErrorCause(
+      new Error("could not connect: postgres://sponsor:hunter2@db.internal:5432/overflow"),
+    );
+    expect(rendered).not.toContain("hunter2");
+    expect(rendered).toContain("postgres://***@db.internal:5432/overflow");
+  });
+
+  it("redacts password= and password: fragments to password=***", () => {
+    expect(describeErrorCause(new Error("auth failed: password=hunter2"))).toBe("Error: auth failed: password=***");
+    expect(describeErrorCause(new Error("auth failed: password: hunter2"))).toBe("Error: auth failed: password=***");
+  });
+
+  it("caps the rendering at 200 characters and drops the tail", () => {
+    const rendered = describeErrorCause(new Error("x".repeat(400) + " OVERFLOW-MARKER"));
+    expect(rendered).toHaveLength(200);
+    expect(rendered).not.toContain("OVERFLOW-MARKER");
+  });
+
+  it("renders the same error identically on every call", () => {
+    const error = new Error("deterministic failure: password=sekret");
+    expect(describeErrorCause(error)).toBe(describeErrorCause(error));
+    expect(describeErrorCause(error)).not.toContain("sekret");
+  });
 });
 
 describe("draining the abandoned webhook cleanup records", () => {
@@ -1107,6 +1228,8 @@ type HarnessOptions = {
   clearAbandonedFailure?: unknown;
   /** The label names the fake GitHub answers `listRepositoryLabels` with. */
   repositoryLabels?: readonly string[];
+  /** The rejection the fake createRepository raises (after recording the call). */
+  createRepositoryFailure?: unknown;
   webhookFailure?: boolean;
   /** What the fake GitHub answers `getRepositoryById` with: a repository, null for a deleted repository, or a rejection to throw. Default: the repository under its stored name. */
   resolvedByIdRepository?: GitHubRepository | null | Error;
@@ -1259,6 +1382,9 @@ function createHarness(options: HarnessOptions = {}) {
       },
       async createRepository(repository) {
         createdRepositories.push(repository);
+        if (options.createRepositoryFailure !== undefined) {
+          throw options.createRepositoryFailure;
+        }
         if (options.databaseFailure) {
           throw new Error("database connectivity failure");
         }
