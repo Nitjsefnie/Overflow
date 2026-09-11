@@ -14,7 +14,7 @@ import {
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
-import { foldRepository, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import { foldRepository, type FoldForgeIdentity, type FoldResult, type FoldUser, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import type {
   GitHubIssue,
   GitHubIssueReference,
@@ -63,6 +63,21 @@ export type ReconciliationDeltas = {
 export type ReconciliationStore = {
   withRepositoryReconciliation<T>(repositoryId: string, work: () => Promise<T>): Promise<T>;
   getRepository(repositoryId: string): Promise<ReconciliationRepository | null>;
+  /**
+   * The linked identities matching THIS repository's provider and instance,
+   * for the given forge user ids — the fold's GitLab author candidates. The
+   * store scopes the match to the exact triple's repository-side columns, so
+   * the fold's match is the triple by construction.
+   */
+  /**
+   * Optional: only the GitLab path consults it, and production's fold store
+   * always implements it. Absent, GitLab authors resolve as unlinked — the
+   * UNCLAIMED posture — which GitHub-only test fakes never need to stub.
+   */
+  findForgeIdentitiesByForgeUserIds?(
+    repositoryId: string,
+    forgeUserIds: number[],
+  ): Promise<FoldForgeIdentity[]>;
   assessReconciliationFairness(input: {
     repositoryId: string;
     sponsorId: string;
@@ -341,7 +356,17 @@ async function reconcileRepositoryWhileCoordinated(
           .map((pullRequest) => pullRequest.authorGitHubUserId)
           .filter((githubUserId): githubUserId is number => githubUserId !== null),
       )];
-      const users = await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
+      // GitLab authors resolve through linked identities on this repository's
+      // provider and instance, not through the users table's GitHub ids.
+      const forgeIdentities = repository.provider === "gitlab"
+        ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
+            repositoryId,
+            authorGitHubUserIds,
+          )
+        : undefined;
+      const users = repository.provider === "gitlab"
+        ? []
+        : await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
       const snapshot: RepositoryFoldSnapshot = {
         // The stored path can still carry the pre-rename name on the run that
         // first observes the rename — recordVerifiedRepositoryIdentity above
@@ -353,6 +378,7 @@ async function reconcileRepositoryWhileCoordinated(
           observedOwnerName: verified.fullName,
         },
         users,
+        forgeIdentities,
         issues: githubIssues.map((issue) => ({
           ...issue,
           claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,

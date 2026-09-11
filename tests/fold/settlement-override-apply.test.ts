@@ -7,6 +7,8 @@ import {
 
 function unsettled(overrides: Partial<FoldSettlement> = {}): FoldSettlement {
   return {
+    provider: "github",
+    instanceUrl: null,
     githubIssueId: 44,
     githubPullRequestId: 4_400,
     creditorId: "creditor-id",

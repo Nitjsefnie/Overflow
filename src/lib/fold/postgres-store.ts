@@ -12,6 +12,8 @@ import {
 import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { calculateSettlement } from "@/lib/domain/settlement";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import type { FoldForgeIdentity } from "@/lib/fold/repository-fold";
 import {
   assessReconciliationFairness,
   type ReconciliationCostCharge,
@@ -72,6 +74,8 @@ type RepositoryRow = {
   active: boolean;
   created_at: string | Date;
   difficulty_scheme: DifficultyScheme;
+  provider: string | null;
+  instance_url: string | null;
   sponsor_id: string;
   sponsor_github_user_id: number | string;
   sponsor_github_login: string;
@@ -576,6 +580,43 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     }
   }
 
+  public async findForgeIdentitiesByForgeUserIds(
+    repositoryId: string,
+    forgeUserIds: number[],
+  ): Promise<FoldForgeIdentity[]> {
+    if (forgeUserIds.length === 0) return [];
+    // Scope: the exact triple's repository-side columns. The fold's match is
+    // the triple by construction, so the same forge id on another instance or
+    // another forge never resolves here.
+    const rows = await this.sql<{
+      id: string;
+      github_user_id: number | string;
+      github_login: string;
+      enforcement_state: EnforcementState;
+      forge_user_id: number | string;
+    }[]>`
+      select users.id, users.github_user_id, users.github_login, users.enforcement_state,
+             identities.forge_user_id
+      from user_forge_identities as identities
+      join users on users.id = identities.user_id
+      join registered_repositories as repositories
+        on repositories.provider = identities.provider
+        and repositories.instance_url = identities.instance_url
+      where repositories.id = ${repositoryId}
+        and identities.provider = 'gitlab'
+        and identities.forge_user_id = any(${this.sql.array(forgeUserIds)}::bigint[])
+    `;
+    return rows.map((row) => ({
+      forgeUserId: toSafeInteger(row.forge_user_id),
+      user: {
+        id: row.id,
+        githubUserId: toSafeInteger(row.github_user_id),
+        githubLogin: row.github_login,
+        enforcementState: row.enforcement_state,
+      },
+    }));
+  }
+
   public async getRepository(repositoryId: string): Promise<ReconciliationRepository | null> {
     const [row] = await this.sql<RepositoryRow[]>`
       select
@@ -585,6 +626,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         repositories.active,
         repositories.created_at,
         repositories.difficulty_scheme,
+        repositories.provider,
+        repositories.instance_url,
         sponsors.id as sponsor_id,
         sponsors.github_user_id as sponsor_github_user_id,
         sponsors.github_login as sponsor_github_login,
@@ -1541,6 +1584,84 @@ export async function claimGitHubIdentity(
 }
 
 /**
+ * The GitLab analogue of claimGitHubIdentity (contract decision 3): linking a
+ * forge identity claims the PAST UNCLAIMED GitLab settlements its exact
+ * triple — (provider, instance_url, forge_user_id); never the login — already
+ * produced, retroactively, under the same participation guards the GitHub
+ * claim applies. The settlement's own provider and instance_url columns
+ * (written by the fold since 038) scope the match, so a forge id on another
+ * instance or another forge never resolves here.
+ */
+export async function claimForgeIdentity(
+  sql: SqlClient,
+  input: { userId: string; instanceUrl: string; forgeUserId: number },
+): Promise<void> {
+  if (!Number.isSafeInteger(input.forgeUserId) || input.forgeUserId <= 0) {
+    throw new Error("Forge user id must be a positive integer.");
+  }
+  const instanceUrl = normalizeInstanceUrl(input.instanceUrl);
+  await sql.begin(async (transaction) => {
+    // The same publication fence claimGitHubIdentity takes (issue 472).
+    await transaction`select id from registered_repositories order by id for update`;
+    const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
+      select
+        settlements.id,
+        settlements.fold_revision,
+        settlements.issue_id,
+        settlements.pull_request_id,
+        settlements.creditor_id,
+        settlements.creditor_github_login,
+        settlements.debtor_id,
+        settlements.opening_comparison_points,
+        settlements.settled_points
+      from settlements
+      join pull_requests on pull_requests.id = settlements.pull_request_id
+      where settlements.status = ${"UNCLAIMED"}
+        and settlements.provider = ${"gitlab"}
+        and settlements.instance_url = ${instanceUrl}
+        and settlements.creditor_github_user_id = ${input.forgeUserId}
+        and settlements.debtor_id = ${input.userId}
+        and pull_requests.merged_at is not null
+        and participation_eligible_at(${input.userId}, pull_requests.merged_at)
+    `;
+    for (const settlement of selfWorkSettlements) {
+      await transaction`
+        insert into self_work_calibrations (
+          pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
+        )
+        values (
+          ${settlement.pull_request_id}, ${settlement.issue_id}, ${input.userId},
+          ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
+        )
+        on conflict (pull_request_id, issue_id) do update
+        set user_id = excluded.user_id,
+            opening_comparison_points = excluded.opening_comparison_points,
+            actual_points = excluded.actual_points,
+            fold_revision = least(self_work_calibrations.fold_revision, excluded.fold_revision)
+      `;
+      await transaction`delete from settlements where id = ${settlement.id}`;
+    }
+
+    await transaction`
+      update settlements
+      set creditor_id = ${input.userId}, status = ${"SETTLED"}
+      from users as creditor, users as debtor, pull_requests
+      where settlements.status = ${"UNCLAIMED"}
+        and settlements.provider = ${"gitlab"}
+        and settlements.instance_url = ${instanceUrl}
+        and settlements.creditor_github_user_id = ${input.forgeUserId}
+        and settlements.debtor_id <> ${input.userId}
+        and creditor.id = ${input.userId}
+        and debtor.id = settlements.debtor_id
+        and pull_requests.id = settlements.pull_request_id
+        and pull_requests.merged_at is not null
+        and participation_eligible_at(creditor.id, pull_requests.merged_at)
+        and participation_eligible_at(debtor.id, pull_requests.merged_at)
+    `;
+  });
+}
+
+/**
  * Re-resolve the identities a stale fold snapshot left unclaimed, so publishing
  * it does not undo a claim made since the snapshot was taken (issue 446).
  *
@@ -1939,12 +2060,14 @@ async function insertSettlement(
   await sql`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
-      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, fold_revision
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, fold_revision,
+      provider, instance_url
     )
     values (
       ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.creditorGitHubUserId}, ${settlement.debtorId},
       ${settlement.openingComparisonPoints}, ${settlement.settledPoints}, ${settlement.reviewRounds},
-      ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}, ${FOLD_REVISION}
+      ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}, ${FOLD_REVISION},
+      ${settlement.provider ?? "github"}, ${settlement.instanceUrl ?? null}
     )
   `;
 }
@@ -1962,7 +2085,8 @@ async function updateSettlement(
         creditor_github_user_id = ${settlement.creditorGitHubUserId}, debtor_id = ${settlement.debtorId},
         opening_comparison_points = ${settlement.openingComparisonPoints}, settled_points = ${settlement.settledPoints},
         review_rounds = ${settlement.reviewRounds}, credits = ${settlement.credits}, proof_sha256 = ${settlement.proofSha256},
-        status = ${settlement.status}, fold_revision = ${FOLD_REVISION}
+        status = ${settlement.status}, fold_revision = ${FOLD_REVISION},
+        provider = ${settlement.provider ?? "github"}, instance_url = ${settlement.instanceUrl ?? null}
     where issue_id = ${issueId}
   `;
 }
@@ -2527,6 +2651,8 @@ function toReconciliationRepository(
     registeredAt: timestampToIso(row.created_at),
     difficultyScheme: row.difficulty_scheme,
     difficultySchemeVersions,
+    provider: row.provider ?? "github",
+    instanceUrl: row.instance_url,
     sponsor: {
       id: row.sponsor_id,
       githubUserId: toSafeInteger(row.sponsor_github_user_id),
