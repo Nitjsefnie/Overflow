@@ -1,10 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
+import { pinnedRule, rem } from "../support/stylesheet-rules";
 import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
@@ -766,7 +765,7 @@ describe("member dashboard", () => {
     expect(rule.declarations.padding).toBe("0");
     expect(rule.declarations.margin).toBe("0");
     expect(rule.declarations.display).toBe("grid");
-    expect(rule.declarations.gap).toMatch(/^[\d.]+rem$/);
+    expect(rem(rule.declarations.gap, "the gap between facts grids")).toBeGreaterThan(0);
   });
 
   it("offers an unregister control on every registered repository's row, inactive ones included", () => {
@@ -1044,20 +1043,6 @@ function registered(id: string, ownerName: string): RegisteredRepositoryProjecti
     unavailableReason: null,
     reconciliationState: "IDLE",
     reconciliationLastFailureAt: null,
-  };
-}
-
-const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
-
-/** The rule `selector` opens, matched only where the selector is the whole prelude. */
-function pinnedRule(selector: string): { declarations: Record<string, string> } {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
-  const match = stylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
-  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
-  return {
-    declarations: Object.fromEntries([...match![1]!.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
-      ([, property, value]) => [property!, value!.trim()],
-    )),
   };
 }
 

@@ -1,10 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
+import { pinnedRule, rem } from "../support/stylesheet-rules";
 import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
@@ -64,25 +63,35 @@ describe("Forge identities panel", () => {
     await act(async () => {});
   });
 
+  it("lists linked identities as a facts list, with no browser marker beside each grid", async () => {
+    fetchMock.mockReset().mockResolvedValue(Response.json({
+      identities: [{
+        id: "identity-1",
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.com",
+        forgeLogin: "ada",
+        verifiedAt: "2026-09-10T00:00:00.000Z",
+      }],
+    }));
+    render(<ForgeIdentitiesPanel />);
+
+    // Each row is an `.issue-facts` grid; the list itself carries the class
+    // that drops the default disc, as the dashboard's own facts lists do.
+    const list = await screen.findByRole("list");
+    expect(list).toHaveClass("facts-list");
+    expect(list.querySelectorAll("li > dl.issue-facts")).toHaveLength(1);
+    await act(async () => {});
+  });
+
   it("ships a forge-link-form rule that separates the form's children", () => {
     const rule = pinnedRule(".forge-link-form");
     expect(rule.declarations.display).toBe("grid");
-    expect(rule.declarations.gap).toMatch(/^[\d.]+rem$/);
+    // The boundary between two fields has to read as at least as wide as the
+    // one a field puts between its own label and input.
+    expect(rem(rule.declarations.gap, "the gap between the form's children")).toBeGreaterThanOrEqual(
+      rem(pinnedRule(".field").declarations.gap, "the label-to-input gap"),
+    );
     // The grid would stretch the submit to the form's full width otherwise.
     expect(pinnedRule(".forge-link-form > .quiet-button").declarations["justify-self"]).toBe("start");
   });
 });
-
-const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
-
-/** The rule `selector` opens, matched only where the selector is the whole prelude. */
-function pinnedRule(selector: string): { declarations: Record<string, string> } {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
-  const match = stylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
-  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
-  return {
-    declarations: Object.fromEntries([...match![1]!.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
-      ([, property, value]) => [property!, value!.trim()],
-    )),
-  };
-}
