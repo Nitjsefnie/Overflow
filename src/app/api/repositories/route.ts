@@ -5,7 +5,6 @@ import { GitHubGateway } from "@/lib/github/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { getSql } from "@/lib/db/client";
-import { decryptToken } from "@/lib/security/token-cipher";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
 import {

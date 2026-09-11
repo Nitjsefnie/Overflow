@@ -166,7 +166,7 @@ describe("GitLabGateway", () => {
 
   it("returns no reviews, ever, per contract decision 2", async () => {
     let requested = 0;
-    const client = gateway(async (input) => {
+    const client = gateway(async () => {
       requested++;
       return new Response("[]", { status: 200 });
     });
