@@ -3,8 +3,9 @@ import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
 
 /**
  * Fixtures model the contract's live-verified shapes: real field names from
- * the probe (docs/forge-evidence-contract.md), including the three-SHA merge
- * evidence of gap 5 and the absent state_reason of item 16.
+ * the forge-evidence probe (an untracked working document, recoverable from
+ * git history: commit cf1a5db added it for issue 296), including the
+ * three-SHA merge evidence of gap 5 and the absent state_reason of item 16.
  */
 
 const project = {
