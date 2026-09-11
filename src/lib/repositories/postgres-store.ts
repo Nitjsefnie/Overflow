@@ -192,7 +192,10 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             sponsor_id,
             visibility,
             github_webhook_id,
-            difficulty_scheme
+            difficulty_scheme,
+            provider,
+            instance_url,
+            forge_project_id
           )
           select
             ${repository.githubRepositoryId},
@@ -200,7 +203,10 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             eligible_sponsor.id,
             ${repository.visibility},
             ${repository.githubWebhookId},
-            ${this.sql.json(repository.difficultyScheme)}
+            ${this.sql.json(repository.difficultyScheme)},
+            ${repository.provider ?? "github"},
+            ${repository.instanceUrl ?? null},
+            ${repository.forgeProjectId ?? null}
           from eligible_sponsor
           on conflict (github_repository_id) do update set
             owner_name = excluded.owner_name,
@@ -208,6 +214,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             visibility = excluded.visibility,
             github_webhook_id = excluded.github_webhook_id,
             difficulty_scheme = excluded.difficulty_scheme,
+            provider = excluded.provider,
+            instance_url = excluded.instance_url,
+            forge_project_id = excluded.forge_project_id,
             active = true,
             unregistered_at = null,
             updated_at = now()

@@ -8,6 +8,7 @@ import {
   type DifficultyScheme,
   type OpeningDifficultyLabel,
 } from "@/lib/domain/difficulty-scheme";
+import { GitLabGateway } from "@/lib/gitlab/client";
 import type {
   GitHubRepository,
   GitHubRepositoryReference,
@@ -21,6 +22,12 @@ export type RepositoryRegistrationInput = {
   actualName: string;
   openingLabels: OpeningDifficultyLabel[];
   actualLabels: ActualDifficultyLabel[];
+  /** Absent means GitHub — the shape every pre-forge submission carried. */
+  provider?: "gitlab";
+  /** Required for GitLab: the origin base URL, stored normalized. */
+  instanceUrl?: string;
+  /** Required for GitLab: numeric project id or path_with_namespace. */
+  project?: string;
 };
 
 export type RegisteredRepository = {
@@ -40,6 +47,10 @@ export type RegisteredRepository = {
 
 export type NewRegisteredRepository = Omit<RegisteredRepository, "id"> & {
   difficultyScheme: DifficultyScheme;
+  /** Forge columns; absent on the GitHub path, where the store defaults them. */
+  provider?: "github" | "gitlab";
+  instanceUrl?: string | null;
+  forgeProjectId?: number | null;
 };
 
 /**
@@ -152,6 +163,14 @@ export type RepositoryRegistrationDependencies = {
   store: RepositoryRegistrationStore;
   webhook: GitHubWebhookConfiguration;
   scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
+  /**
+   * The submitter's verified linked identity for the submitted instance —
+   * the PAT the GitLab path uses as its gateway credential. Required for a
+   * GitLab registration, absent (and unused) for GitHub.
+   */
+  forgeIdentity?: { instanceUrl: string; token: string } | null;
+  /** Injectable transport for the GitLab gateway; production uses global fetch. */
+  forgeFetch?: typeof fetch;
 };
 
 export type RepositoryRegistrationResult = RegisteredRepository & {
@@ -230,6 +249,10 @@ export async function registerRepository(
   const validation = validateDifficultyScheme(difficultyScheme);
   if (!validation.ok) {
     throw new RepositoryRegistrationError("INVALID_INPUT", validation.reason);
+  }
+
+  if (input.provider === "gitlab") {
+    return registerGitLabRepository(dependencies, input, difficultyScheme);
   }
 
   let submittedRepository: GitHubRepositoryReference;
@@ -394,6 +417,124 @@ export async function registerRepository(
   await drainAbandonedWebhooks(dependencies);
 
   return { ...created, initialImportScheduled, claimPath };
+}
+
+/**
+ * The GitLab registration path (issue 296 step 2). The submitter must hold a
+ * verified linked identity on the submitted instance — its PAT is the gateway
+ * credential. The project must be reachable through that PAT; no webhook is
+ * created (contract items 27/28 PARTIAL, webhook ingestion deferred), so the
+ * row stores a null webhook id, and the claim path is permanently NOT_CHECKED
+ * (item 30, NOT SUPPLIED: GitLab has no in-repo claim-path evidence surface).
+ * The forge columns carry their real values for the first time here.
+ */
+async function registerGitLabRepository(
+  dependencies: RepositoryRegistrationDependencies,
+  input: RepositoryRegistrationInput,
+  difficultyScheme: DifficultyScheme,
+): Promise<RepositoryRegistrationResult> {
+  if (input.instanceUrl === undefined || input.project === undefined || input.instanceUrl === "" || input.project === "") {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      "A GitLab registration requires the instance URL and the project id or path.",
+    );
+  }
+
+  // The verified-identity requirement is the authorization for the whole
+  // path: without a linked, live-verified PAT on THIS instance there is no
+  // credential to read with and nothing vouches for the submitter.
+  const identity = dependencies.forgeIdentity ?? null;
+  if (identity === null || normalizeForComparison(identity.instanceUrl) !== normalizeForComparison(input.instanceUrl)) {
+    throw new RepositoryRegistrationError(
+      "FORBIDDEN",
+      "A verified GitLab identity linked to this instance is required to register a GitLab repository.",
+    );
+  }
+
+  const gateway = new GitLabGateway({
+    instanceUrl: identity.instanceUrl,
+    token: identity.token,
+    fetch: dependencies.forgeFetch,
+  });
+  let repository: GitHubRepository;
+  if (/^\d+$/.test(input.project)) {
+    const byId = await gateway.getRepositoryById(Number(input.project));
+    if (byId === null) {
+      throw new RepositoryRegistrationError(
+        "NOT_FOUND",
+        "No GitLab project with that id is visible through the linked identity.",
+      );
+    }
+    repository = byId;
+  } else {
+    const segments = input.project.split("/");
+    if (segments.length < 2) {
+      throw new RepositoryRegistrationError(
+        "INVALID_INPUT",
+        "Submit the GitLab project as a numeric id or a path with namespace, like group/project.",
+      );
+    }
+    repository = await gateway.getRepository({
+      owner: segments.slice(0, -1).join("/"),
+      name: segments[segments.length - 1]!,
+    });
+  }
+
+  // An unregistered row reactivates (the store's conditional on-conflict
+  // update), so only a row still holding the registration conflicts.
+  const existing = await findExistingRepository(dependencies.store, repository.id);
+  if (existing !== null && existing.unregisteredAt === null) {
+    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
+  }
+
+  // Label existence through the gateway: the labels endpoint may refuse
+  // (contract gap 8), in which case the gateway itself falls back to the
+  // labels embedded in the issues list.
+  const labels = await gateway.listRepositoryLabels({
+    owner: repository.owner,
+    name: repository.name,
+  });
+  const catalog = [...difficultyScheme.openingLabels, ...difficultyScheme.actualLabels];
+  const missing = catalog.filter((entry) => !labels.has(entry.label));
+  if (missing.length > 0) {
+    throw new RepositoryRegistrationError(
+      "INVALID_INPUT",
+      `The GitLab project does not carry these labels: ${missing.map((entry) => entry.label).join(", ")}. Create them, then register again.`,
+    );
+  }
+
+  // No webhook is created: contract items 27/28 are PARTIAL and webhook
+  // ingestion is deferred, so the row stores a null webhook id and the drain
+  // skips it.
+  let created: RegisteredRepository | null;
+  try {
+    created = await dependencies.store.createRepository({
+      githubRepositoryId: repository.id,
+      ownerName: repository.fullName,
+      sponsorId: dependencies.actor.id,
+      visibility: repository.visibility,
+      githubWebhookId: null,
+      difficultyScheme,
+      provider: "gitlab",
+      instanceUrl: identity.instanceUrl,
+      forgeProjectId: repository.id,
+    });
+  } catch {
+    throw new RepositoryRegistrationError("UPSTREAM_FAILURE", "Unable to save the repository registration.");
+  }
+  if (created === null) {
+    throw new RepositoryRegistrationError("CONFLICT", "This GitLab project is already registered.");
+  }
+
+  // No initial import is scheduled: reconciliation does not read GitLab yet
+  // (that is the next step of the split), so a queued job could never run.
+  // The claim-path verdict is permanent for GitLab: item 30 graded NOT
+  // SUPPLIED, so there is no in-repo evidence surface to consult.
+  return { ...created, initialImportScheduled: false, claimPath: "NOT_CHECKED" };
+}
+
+function normalizeForComparison(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
 }
 
 /**
