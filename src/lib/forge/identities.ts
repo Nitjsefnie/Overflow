@@ -78,12 +78,130 @@ export type LinkForgeIdentityDependencies = {
 
 const defaultTimeoutMs = 10_000;
 
+/** The scopes that satisfy every read the reconciliation makes; `api` implies `read_api`. */
+const acceptedScopes = new Set(["api", "read_api"]);
+
+const transportRefusal = () =>
+  new ForgeIdentityError(
+    "UNVERIFIED",
+    "The instance could not be reached to verify the token. Check the URL and try again.",
+  );
+
+const upstreamShapeFailure = (missing: "identity fields" | "scope answer") =>
+  new ForgeIdentityError(
+    "UPSTREAM_FAILURE",
+    `The instance answered without the ${missing} a link needs.`,
+  );
+
 /**
- * Links a forge identity to a user by verifying the token live: a GET to the
- * instance's `/api/v4/user` with the token must answer 200 before anything is
- * stored. The stored token is the cipher envelope, never the PAT; the row is
- * keyed on the exact triple so the same forge identity on a different
- * instance is a different identity.
+ * The refusal for a token the instance accepts but which cannot make the
+ * reconciliation reads. It names the scope the member has to tick when
+ * minting the token and, when the instance reported them, the scopes the
+ * submitted token actually carries.
+ */
+function scopeRefusal(carried?: string[]): ForgeIdentityError {
+  const carriedClause = carried === undefined
+    ? ""
+    : carried.length === 0
+      ? " It carries no scopes."
+      : ` It carries only: ${carried.join(", ")}.`;
+  return new ForgeIdentityError(
+    "UNVERIFIED",
+    `The token does not carry the read_api scope, so no identity was linked.${carriedClause} Create the token with the read_api scope (or api) and try again.`,
+  );
+}
+
+type UpstreamAnswer = { status: number; bodyText: string };
+
+async function readUpstream(
+  fetchImplementation: typeof fetch,
+  url: string,
+  token: string,
+  signal: AbortSignal,
+): Promise<UpstreamAnswer> {
+  try {
+    const response = await fetchImplementation(url, {
+      headers: { authorization: `Bearer ${token}` },
+      signal,
+    });
+    return { status: response.status, bodyText: await response.text() };
+  } catch {
+    // A transport failure — timeout or unreachable host — is a verification
+    // failure: nothing is stored, and no upstream detail escapes.
+    throw transportRefusal();
+  }
+}
+
+function parseJsonObject(bodyText: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Verifies that the token can make the reads the reconciliation needs, which
+ * `/api/v4/user` answering 200 does not establish: GitLab serves that endpoint
+ * to a `read_user`-only token, and such a token then fails every note,
+ * label-event, discussion and search read (401 without `read_api`).
+ *
+ * The token's own record, `GET /api/v4/personal_access_tokens/self`, lists its
+ * scopes and is served to a token of any scope (GitLab 16.0+). When the
+ * instance cannot describe the token that way — 404 on an older instance, 400
+ * for a token type the endpoint does not cover — one scope-gated read decides
+ * instead: `GET /api/v4/projects?membership=true&per_page=1` answers 200 with
+ * the scope and 401/403 without it.
+ */
+async function verifyReadApiScope(
+  fetchImplementation: typeof fetch,
+  instanceUrl: string,
+  token: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const self = await readUpstream(
+    fetchImplementation,
+    `${instanceUrl}/api/v4/personal_access_tokens/self`,
+    token,
+    signal,
+  );
+  if (self.status === 200) {
+    const scopes = parseJsonObject(self.bodyText)?.scopes;
+    if (!Array.isArray(scopes)) {
+      throw upstreamShapeFailure("scope answer");
+    }
+    const carried = scopes.filter((scope): scope is string => typeof scope === "string");
+    if (carried.some((scope) => acceptedScopes.has(scope))) {
+      return;
+    }
+    throw scopeRefusal(carried);
+  }
+  const probe = await readUpstream(
+    fetchImplementation,
+    `${instanceUrl}/api/v4/projects?membership=true&per_page=1`,
+    token,
+    signal,
+  );
+  if (probe.status === 200) {
+    return;
+  }
+  if (probe.status === 401 || probe.status === 403) {
+    throw scopeRefusal();
+  }
+  throw upstreamShapeFailure("scope answer");
+}
+
+/**
+ * Links a forge identity to a user by verifying the token live, all within one
+ * timeout: a GET to the instance's `/api/v4/user` with the token must answer
+ * 200, and the token must then prove it carries `read_api` (or `api`) —
+ * see `verifyReadApiScope` — before anything is stored. The stored token is
+ * the cipher envelope, never the PAT; the row is keyed on the exact triple so
+ * the same forge identity on a different instance is a different identity.
  */
 export async function linkForgeIdentity(
   dependencies: LinkForgeIdentityDependencies,
@@ -93,37 +211,25 @@ export async function linkForgeIdentity(
   const fetchImplementation = dependencies.fetch ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? defaultTimeoutMs);
-  let status: number;
-  let bodyText: string;
+  let forgeUser: { id: number; username: string };
   try {
-    const response = await fetchImplementation(`${instanceUrl}/api/v4/user`, {
-      headers: { authorization: `Bearer ${input.token}` },
-      signal: controller.signal,
-    });
-    status = response.status;
-    bodyText = await response.text();
-  } catch {
-    // A transport failure — timeout or unreachable host — is a verification
-    // failure: nothing is stored, and no upstream detail escapes.
-    throw new ForgeIdentityError(
-      "UNVERIFIED",
-      "The instance could not be reached to verify the token. Check the URL and try again.",
-    );
+    const user = await readUpstream(fetchImplementation, `${instanceUrl}/api/v4/user`, input.token, controller.signal);
+    if (user.status !== 200) {
+      throw new ForgeIdentityError(
+        "UNVERIFIED",
+        "The instance did not accept the token, so no identity was linked. Check that the token is valid for that instance and carries the read_api scope.",
+      );
+    }
+    const body = parseJsonObject(user.bodyText);
+    const id = body?.id;
+    const username = body?.username;
+    if (typeof id !== "number" || typeof username !== "string") {
+      throw upstreamShapeFailure("identity fields");
+    }
+    forgeUser = { id, username };
+    await verifyReadApiScope(fetchImplementation, instanceUrl, input.token, controller.signal);
   } finally {
     clearTimeout(timeout);
-  }
-  if (status !== 200) {
-    throw new ForgeIdentityError(
-      "UNVERIFIED",
-      "The instance did not accept the token, so no identity was linked. Check that the token is valid for that instance and carries the read_api scope.",
-    );
-  }
-  const forgeUser = JSON.parse(bodyText) as { id?: unknown; username?: unknown };
-  if (typeof forgeUser.id !== "number" || typeof forgeUser.username !== "string") {
-    throw new ForgeIdentityError(
-      "UPSTREAM_FAILURE",
-      "The instance answered without the identity fields a link needs.",
-    );
   }
 
   const encryptedToken = encryptToken(input.token, dependencies.tokenEncryptionKey);

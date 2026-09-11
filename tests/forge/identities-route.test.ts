@@ -47,9 +47,12 @@ function fixture(options: {
     createIdentityStore: () => store,
     tokenEncryptionKey: TEST_KEY,
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-      void input;
-      void init;
-      return new Response(JSON.stringify({ id: 4242, username: "tester" }), { status: 200 });
+      // A linkable token: /user answers, and the token's own record carries read_api.
+      const url = new Request(input, init).url;
+      const payload = url.endsWith("/api/v4/personal_access_tokens/self")
+        ? { id: 7, name: "overflow", scopes: ["read_api"] }
+        : { id: 4242, username: "tester" };
+      return new Response(JSON.stringify(payload), { status: 200 });
     }) as typeof fetch,
   };
   return { dependencies, calls };
