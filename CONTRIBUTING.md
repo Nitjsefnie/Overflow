@@ -161,7 +161,12 @@ output. It needs a Chrome/Chromium binary — `LAYOUT_CHECK_CHROME` overrides
 discovery; otherwise `google-chrome-stable`, `google-chrome`, `chromium` or
 `chromium-browser` on `PATH` and `/usr/bin` — and, when it spawns its own
 server, `DATABASE_URL` from the environment or a repo-root `.env` file.
-`--base-url URL` measures an already-running server instead. Refusals exit 2;
+`--base-url URL` measures an already-running server instead. The signed-in
+contracts also read `AUTH_SECRET` — the same secret the target server was
+started with, whether this check spawned it or `--base-url` named it — from
+the environment or the repo-root `.env` file (the only env file the check
+loads, not the wider Next.js family). A run with no signed-in contract never
+requires it; the default contracts include signed-in pages. Refusals exit 2;
 measured failures exit 1.
 
 On pull requests the job ends with a Base freshness step that fails when the
