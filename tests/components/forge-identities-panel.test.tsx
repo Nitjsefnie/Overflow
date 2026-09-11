@@ -1,5 +1,7 @@
 /** @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
@@ -42,4 +44,45 @@ describe("Forge identities panel", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/forge-identities", { credentials: "same-origin" }));
     await act(async () => {});
   });
+
+  it("lays the link form out with the app's field, help and form-gap classes", async () => {
+    render(<ForgeIdentitiesPanel />);
+
+    // jsdom performs no layout, so what is pinned is the markup: each label is
+    // a `.field` (label-to-input gap and input styling), the scope note is a
+    // `.field-help`, and the form carries the class that separates its
+    // children. Without them the controls stack with no spacing at all.
+    const urlField = screen.getByLabelText(/instance url/i);
+    const tokenField = screen.getByLabelText(/personal access token/i);
+    expect(urlField.closest("label")).toHaveClass("field");
+    expect(tokenField.closest("label")).toHaveClass("field");
+    expect(document.getElementById("forge-token-scope")).toHaveClass("field-help");
+    expect(urlField.closest("form")).toHaveClass("forge-link-form");
+    expect(tokenField).toHaveAttribute("aria-describedby", "forge-token-scope");
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/forge-identities", { credentials: "same-origin" }));
+    await act(async () => {});
+  });
+
+  it("ships a forge-link-form rule that separates the form's children", () => {
+    const rule = pinnedRule(".forge-link-form");
+    expect(rule.declarations.display).toBe("grid");
+    expect(rule.declarations.gap).toMatch(/^[\d.]+rem$/);
+    // The grid would stretch the submit to the form's full width otherwise.
+    expect(pinnedRule(".forge-link-form > .quiet-button").declarations["justify-self"]).toBe("start");
+  });
 });
+
+const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
+
+/** The rule `selector` opens, matched only where the selector is the whole prelude. */
+function pinnedRule(selector: string): { declarations: Record<string, string> } {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+  const match = stylesheet.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`));
+  expect(match, `Missing \`${selector}\` rule`).not.toBeNull();
+  return {
+    declarations: Object.fromEntries([...match![1]!.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(
+      ([, property, value]) => [property!, value!.trim()],
+    )),
+  };
+}
