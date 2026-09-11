@@ -155,9 +155,13 @@ describe("GitLabGateway", () => {
   });
 
   it("computes canAdminister from the higher of direct project and inherited group access", async () => {
-    const serving = (projectPayload: unknown) =>
-      gateway(async () =>
+    const serving = async (projectPayload: unknown) => {
+      const client = gateway(async () =>
         new Response(JSON.stringify(projectPayload), { status: 200, headers: { "content-type": "application/json" } }));
+      const repository = await client.getRepositoryById(278964);
+      expect(repository).not.toBeNull();
+      return repository!;
+    };
 
     // GitLab reports the effective access level as the higher of the direct
     // project access and the access inherited through the namespace group:
@@ -166,35 +170,35 @@ describe("GitLabGateway", () => {
     const groupMaintainer = await serving({
       ...project,
       permissions: { project_access: null, group_access: { access_level: 40 } },
-    }).getRepositoryById(278964);
+    });
     expect(groupMaintainer.canAdminister).toBe(true);
 
     const groupOwnerOverDirectDeveloper = await serving({
       ...project,
       permissions: { project_access: { access_level: 30 }, group_access: { access_level: 50 } },
-    }).getRepositoryById(278964);
+    });
     expect(groupOwnerOverDirectDeveloper.canAdminister).toBe(true);
 
     const directMaintainerOverGroupDeveloper = await serving({
       ...project,
       permissions: { project_access: { access_level: 40 }, group_access: { access_level: 30 } },
-    }).getRepositoryById(278964);
+    });
     expect(directMaintainerOverGroupDeveloper.canAdminister).toBe(true);
 
     const belowMaintainerOnBoth = await serving({
       ...project,
       permissions: { project_access: { access_level: 30 }, group_access: { access_level: 30 } },
-    }).getRepositoryById(278964);
+    });
     expect(belowMaintainerOnBoth.canAdminister).toBe(false);
 
     const noAccessAtAll = await serving({
       ...project,
       permissions: { project_access: null, group_access: null },
-    }).getRepositoryById(278964);
+    });
     expect(noAccessAtAll.canAdminister).toBe(false);
 
     // An absent permissions field reports no access either — nothing inferred.
-    const absentPermissions = await serving({ ...project, permissions: undefined }).getRepositoryById(278964);
+    const absentPermissions = await serving({ ...project, permissions: undefined });
     expect(absentPermissions.canAdminister).toBe(false);
   });
 
@@ -205,7 +209,8 @@ describe("GitLabGateway", () => {
         headers: { "content-type": "application/json" },
       }));
     const repository = await client.getRepositoryById(278964);
-    expect(repository.visibility).toBe("PRIVATE");
+    expect(repository).not.toBeNull();
+    expect(repository!.visibility).toBe("PRIVATE");
   });
 
   it("captures the merge evidence and all three SHAs from the MR object", async () => {
