@@ -305,9 +305,6 @@ tests/deploy/*
 !tests/deploy/*.ts
 !tests/deploy/webhook-upgrade-cli.test.ts
 !tests/deploy/webhook-upgrade-order.test.ts
-!tests/docs/
-tests/docs/*
-!tests/docs/*.ts
 !tests/domain/
 tests/domain/*
 !tests/domain/*.ts
@@ -347,10 +344,3 @@ tests/support/*
 !tests/webhooks/
 tests/webhooks/*
 !tests/webhooks/*.ts
-
-!docs/
-docs/*
-
-!docs/reviews/
-docs/reviews/*
-!docs/reviews/2026-09-05-full-application-audit.html
