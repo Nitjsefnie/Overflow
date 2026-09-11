@@ -88,6 +88,7 @@ it("drains active PR collectors before releasing coordination and retains their 
     hasDerivedRowsBelowFoldRevision: async () => false, beginRun: async () => "run",
     completeRun: async () => {}, failRun: async () => {}, materialize,
     recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+    findForgeIdentitiesByForgeUserIds: async () => [],
   };
   const run = reconcileRepository({ store, github, now: () => now,
     budget: createReconciliationBudgetGate({ store: budget, reserve: 500 }), onBudgetChange: () => {},
@@ -209,6 +210,7 @@ it("settles every started HTTP request before a failed fold rejects and releases
     completeRun: async () => {}, failRun: async () => {},
     materialize: async () => { throw new Error("A failed fold must not materialize"); },
     recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+    findForgeIdentitiesByForgeUserIds: async () => [],
   };
   const outcome = reconcileRepository({ store, github }, "repository").then(
     () => { events.push({ event: "resolved", outstanding: outstanding() }); },
@@ -334,6 +336,7 @@ it("bounds actual HTTP requests across worker cohorts and both review paginators
     beginRun: async () => "run", completeRun: async () => {}, failRun: async () => {}, materialize,
     recordVerifiedRepositoryIdentity: async () => {},
     markRepositoryUnavailable: async () => {},
+    findForgeIdentitiesByForgeUserIds: async () => [],
   };
   const run = reconcileRepository({ store, github }, "repository");
   try {

@@ -27,6 +27,18 @@ export type FoldUser = {
   moderationEvents?: FoldModerationEvent[];
 };
 
+/**
+ * A linked forge identity, resolved for the fold: the linked Overflow account
+ * (with its enforcement state, so participation gates read it exactly as they
+ * read GitHub authors) and the forge's numeric user id. The snapshot carries
+ * only identities matching the folded repository's provider and instance, so
+ * the fold's match is the exact triple by construction.
+ */
+export type FoldForgeIdentity = {
+  user: FoldUser;
+  forgeUserId: number;
+};
+
 export type RepositoryFoldSnapshot = {
   repository: {
     id: string;
@@ -51,8 +63,18 @@ export type RepositoryFoldSnapshot = {
      * repository had before catalogs became versioned (issue 180).
      */
     difficultySchemeVersions: DifficultySchemeVersion[];
+    /** The forge this repository lives on; absent means GitHub (pre-038 rows). */
+    provider?: string;
+    /** The forge instance base URL; null/absent for GitHub (the canonical github.com namespace). */
+    instanceUrl?: string | null;
   };
   users: FoldUser[];
+  /**
+   * Linked forge identities for THIS repository's provider and instance,
+   * resolved by the snapshot builder. GitLab author resolution matches on the
+   * exact triple (provider, instance_url, forge_user_id) — never the login.
+   */
+  forgeIdentities?: FoldForgeIdentity[];
   issues: RepositoryFoldIssue[];
 };
 
@@ -151,6 +173,10 @@ export type FoldPullRequest = {
 export type FoldSettlement = {
   githubIssueId: number;
   githubPullRequestId: number;
+  /** The forge the settlement's repository lives on; 'github' by default. */
+  provider: string;
+  /** The forge instance base URL; null for GitHub rows. */
+  instanceUrl: string | null;
   creditorId: string | null;
   creditorGitHubLogin: string | null;
   creditorGitHubUserId: number | null;
@@ -349,6 +375,12 @@ const noClosingPullRequest: ClosingPullRequestSelection = { kind: "NONE" };
 
 export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
   const usersByGitHubUserId = new Map(snapshot.users.map((user) => [user.githubUserId, user]));
+  // GitLab author resolution: the exact triple, scoped by the snapshot builder
+  // to this repository's provider and instance. The login is never a key.
+  const isGitLabRepository = snapshot.repository.provider === "gitlab";
+  const forgeIdentitiesByForgeUserId = new Map(
+    (snapshot.forgeIdentities ?? []).map((identity) => [identity.forgeUserId, identity.user]),
+  );
   // The sponsor pays for the work, so only the sponsor's labels and rationale
   // price it. Work closed by the sponsor remains self-work calibration.
   const sponsor = snapshot.repository.sponsor;
@@ -466,7 +498,13 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
           githubPullRequestId: null,
           reason: crossRepositoryReason(selection.pullRequest, snapshot.repository),
         });
-      } else if (issue.stateReason !== "NOT_PLANNED" && evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)) {
+      } else if (
+        // Contract gap 1, forge-neutral: the gate reads the presence of a
+        // NOT_PLANNED reason, and GitLab issues carry no state_reason at all
+        // (contract item 16) — an absent reason is not-not-planned, so GitLab
+        // rows are never skipped here.
+        issue.stateReason !== "NOT_PLANNED" && evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)
+      ) {
         unwritableClosures.push({
           githubIssueId: issue.id,
           kind: "NO_CLOSING_PULL_REQUEST",
@@ -477,9 +515,14 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       continue;
     }
 
+    // GitHub authors resolve through the users table's GitHub id; GitLab
+    // authors resolve through the linked identities' exact triple. The
+    // provider branch is what keeps a forge id from resolving across forges.
     const author = pullRequest.authorGitHubUserId === null
       ? undefined
-      : usersByGitHubUserId.get(pullRequest.authorGitHubUserId);
+      : isGitLabRepository
+        ? forgeIdentitiesByForgeUserId.get(pullRequest.authorGitHubUserId)
+        : usersByGitHubUserId.get(pullRequest.authorGitHubUserId);
     const reviewRounds = countReviewRounds(pullRequest.reviews, pullRequest.mergedAt);
     const proofSha256 = hashRawDiff(pullRequest.rawDiff);
     const foldedPullRequest = rememberPullRequest(
@@ -538,6 +581,8 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         author,
         authorLogin: pullRequest.authorLogin,
         authorGitHubUserId: pullRequest.authorGitHubUserId,
+        provider: isGitLabRepository ? "gitlab" : "github",
+        instanceUrl: isGitLabRepository ? (snapshot.repository.instanceUrl ?? null) : null,
         debtorId: snapshot.repository.sponsor.id,
         openingComparisonPoints: opening.openingComparisonPoints,
         settledDifficulty,
@@ -1108,6 +1153,8 @@ function toSettlement(input: {
   author: FoldUser | undefined;
   authorLogin: string | null;
   authorGitHubUserId: number | null;
+  provider: string;
+  instanceUrl: string | null;
   debtorId: string;
   openingComparisonPoints: number;
   settledDifficulty: SettledDifficultyEvidence | null;
@@ -1117,6 +1164,8 @@ function toSettlement(input: {
   const base = {
     githubIssueId: input.issueId,
     githubPullRequestId: input.pullRequest.githubPullRequestId,
+    provider: input.provider,
+    instanceUrl: input.instanceUrl,
     creditorId: input.author?.id ?? null,
     creditorGitHubLogin: input.authorLogin,
     creditorGitHubUserId: input.authorGitHubUserId,

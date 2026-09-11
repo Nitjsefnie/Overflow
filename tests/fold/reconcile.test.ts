@@ -162,9 +162,9 @@ describe("reconcileRepository", () => {
       key === "authorGitHubUserId" || key === "creditorGitHubUserId"
         || key === "claimAssigneeGitHubUserId" || key === "updatedAt" ? undefined : value
     ));
-    expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("0ac5072d7c8aeb9d42841698ee8b121f5425ad718a26bd8a9cb587f430ba2796");
+    expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("ad44c506ea706236d3a9ad69d466b696ab88200c54c5861228d1c0fa2f10346f");
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("a7adcd262f7b887f551aa91aa37429e7af438b78ab9ff15e3c3e0d548fcf3dc6");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("9d08f7b5e71f0a2857d888e9fb1a1f1a97b27bd39ba3e279ce3d28d9d20a8569");
   });
 
   it("settles from the only merged closing reference on the second continuation", async () => {
@@ -184,7 +184,7 @@ describe("reconcileRepository", () => {
     ]);
     // The 120 unmerged references per issue must not alter any part of the baseline fold.
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("a7adcd262f7b887f551aa91aa37429e7af438b78ab9ff15e3c3e0d548fcf3dc6");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("9d08f7b5e71f0a2857d888e9fb1a1f1a97b27bd39ba3e279ce3d28d9d20a8569");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-last" } },
@@ -1350,6 +1350,7 @@ function reconciliationDependencies(
     failRun,
     recordVerifiedRepositoryIdentity: vi.fn().mockResolvedValue(undefined),
     markRepositoryUnavailable: vi.fn().mockResolvedValue(undefined),
+    findForgeIdentitiesByForgeUserIds: vi.fn().mockResolvedValue([]),
   };
 
   return { store, github } as ReconciliationDependencies & {

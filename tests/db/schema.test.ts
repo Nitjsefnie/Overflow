@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -18,7 +18,12 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { verifiedRepositoryAt } from "../support/verified-repository";
-import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import {
+  foldRepository,
+  type FoldPullRequest,
+  type FoldSettlement,
+  type RepositoryFoldSnapshot,
+} from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
@@ -272,7 +277,16 @@ describe("initial PostgreSQL materialization", () => {
       const before = await readIssue();
 
       if (sponsorAuthored) {
-        await expect(runMigrations()).resolves.toBeUndefined();
+        // A real 028-to-HEAD upgrade re-adds these columns by migration: the
+      // out-of-band copies above exist only so the pre-upgrade rows can be
+      // written at 028's shape, and they are dropped here so the upgrade
+      // applies 038's own adds over the existing rows, exactly as production
+      // experienced.
+      // The pre-upgrade rows above were written against the 028 shape plus
+      // 041's conditionally-restated columns; runMigrations then applies 029
+      // through 041, where the 032/041 conditional pattern makes the upgrade
+      // idempotent for every column this fixture pre-created.
+      await expect(runMigrations()).resolves.toBeUndefined();
       } else {
         await expect(runMigrations()).rejects.toThrow(
           `Opening authority precondition failed: 1 issue(s) have non-sponsor opening evidence. Issue ids: ${issue.id}`,
@@ -3658,32 +3672,80 @@ describe("initial PostgreSQL materialization", () => {
         contributorLogin,
       });
 
-      // Two runs, two transactions: the first records both settlements under
-      // one created_at, the second changes the first settlement afterwards, so
-      // the upgrade has existing rows whose insertion order is known.
-      const store = new PostgresFoldStore(upgradeSql, undefined, upgradeSql);
-      const addRun = await store.beginRun(repositoryId);
-      await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
-        repositoryId,
-        runId: addRun,
-        fold: foldRepository(snapshot),
-      }))).resolves.toEqual({ adds: 2, changes: 0, removals: 0 });
-
-      const changedSnapshot = structuredClone(snapshot);
-      const changedIssue = changedSnapshot.issues[0]!;
-      changedIssue.labels = changedIssue.labels.map((label) => label === "delivered/6" ? "delivered/7" : label);
-      const actualEvent = changedIssue.history.find((event) => event.kind === "LABELED" && event.label === "delivered/6");
-      if (actualEvent === undefined || actualEvent.kind !== "LABELED") {
-        throw new Error("Expected actual label history fixture.");
+      // Raw seeds at the 028 shape — only columns that exist at the freeze —
+      // because the HEAD materializer writes the forge columns 038 provides
+      // (issue 296). 029's backfill then assigns recorded_seq to these
+      // genuinely pre-existing rows in physical insertion order, which is the
+      // order this fixture inserts them in. The fold computes the values; the
+      // seeds name the 028-era subset of them.
+      const fold = foldRepository(snapshot);
+      const addRun = randomUUID();
+      const changeRun = randomUUID();
+      await upgradeSql`
+        insert into reconciliation_runs (id, requested_by_user_id, status)
+        values (${addRun}, ${sponsorId}, 'COMPLETED'), (${changeRun}, ${sponsorId}, 'COMPLETED')
+      `;
+      for (const issue of fold.issues) {
+        await upgradeSql`
+          insert into issues (
+            github_issue_id, repository_id, issue_number, title, body, url, state,
+            owner_github_login, opening_label, opening_comparison_points, opening_reserve_points,
+            opening_source_event_id, opening_source_actor_login, opening_source_at
+          )
+          values (
+            ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state},
+            ${issue.ownerGitHubLogin}, ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints},
+            ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt}
+          )
+        `;
       }
-      actualEvent.label = "delivered/7";
-      changedIssue.comments[0]!.body = "Settled as delivered/7.";
-      const changeRun = await store.beginRun(repositoryId);
-      await expect(store.withRepositoryReconciliation(repositoryId, async () => store.materialize({
-        repositoryId,
-        runId: changeRun,
-        fold: foldRepository(changedSnapshot),
-      }))).resolves.toEqual({ adds: 0, changes: 1, removals: 0 });
+      for (const pullRequest of fold.pullRequests) {
+        await upgradeSql`
+          insert into pull_requests (
+            github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
+            author_id, author_github_login, author_github_user_id, state, merged_at, merge_commit_oid, final_commit_at, proof_sha256
+          )
+          select
+            ${pullRequest.githubPullRequestId}, ${repositoryId}, issues.id, ${pullRequest.number},
+            ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.body}, ${pullRequest.authorId},
+            ${pullRequest.authorGitHubLogin}, ${pullRequest.authorGitHubUserId}, ${pullRequest.state}, ${pullRequest.mergedAt},
+            ${pullRequest.mergeCommitOid}, ${pullRequest.finalCommitAt}, ${pullRequest.proofSha256}
+          from issues
+          where issues.github_issue_id = ${pullRequest.githubIssueIds[0]}
+        `;
+      }
+      const seedChange = async (
+        runId: string,
+        pullRequest: FoldPullRequest,
+        changeKind: string,
+        settlement: FoldSettlement,
+      ) => {
+        const afterState = upgradeSql`jsonb_build_object('githubIssueId', ${settlement.githubIssueId}::bigint, 'settledPoints', ${settlement.settledPoints}::int)`;
+        const beforeState = changeKind === "CHANGE"
+          ? upgradeSql`jsonb_build_object('githubIssueId', ${settlement.githubIssueId}::bigint, 'settledPoints', 6::int)`
+          : null;
+        await upgradeSql`
+          insert into reconciliation_changes
+            (reconciliation_run_id, pull_request_id, entity_kind, change_kind, before_state, after_state)
+          values (
+            ${runId},
+            (select id from pull_requests where github_pull_request_id = ${pullRequest.githubPullRequestId}),
+            'SETTLEMENT', ${changeKind},
+            ${beforeState},
+            ${afterState}
+          )
+        `;
+      };
+      let index = 0;
+      for (const settlement of fold.settlements) {
+        const pullRequest = fold.pullRequests.find((entry) => entry.githubIssueIds.includes(settlement.githubIssueId))!;
+        await seedChange(addRun, pullRequest, "ADD", settlement);
+        index += 1;
+      }
+      const firstSettlement = fold.settlements[0]!;
+      const firstPullRequest = fold.pullRequests.find((entry) => entry.githubIssueIds.includes(firstSettlement.githubIssueId))!;
+      const changedSettlement = { ...firstSettlement, settledPoints: 7 };
+      await seedChange(changeRun, firstPullRequest, "CHANGE", changedSettlement);
 
       await expect(runMigrations()).resolves.toBeUndefined();
 

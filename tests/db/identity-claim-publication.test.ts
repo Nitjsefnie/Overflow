@@ -409,6 +409,7 @@ async function createUnclaimedScenario(
       proofSha256, githubIssueIds: [githubIssueId], reviewRounds: [],
     }],
     settlements: [{
+      provider: "github", instanceUrl: null,
       githubIssueId, githubPullRequestId, creditorId: null,
       creditorGitHubLogin: creditorLogin, creditorGitHubUserId: creditorGitHubId,
       debtorId: sponsor.id, openingComparisonPoints: 5, ...settledEvidence,

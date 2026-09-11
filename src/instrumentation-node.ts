@@ -24,7 +24,13 @@ export async function registerNodejs(): Promise<void> {
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
+  const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
+  const { getSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
+  // GitLab repositories fold with the sponsor's linked identity's PAT,
+  // resolved and decrypted at first read through the same memoization.
+  const resolveForgeToken = (userId: string, instanceUrl: string) =>
+    new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
 
   startReconciliationWorker({
     drain: async () => {
@@ -34,7 +40,11 @@ export async function registerNodejs(): Promise<void> {
         // webhook route reads it — the worker has no actor of its own. Which token
         // and whether one is needed at all belong to the fold, so this is wiring
         // and nothing else.
-        reconcile: (repositoryId, options) => reconcileRepositoryAsSponsor(store, repositoryId, undefined, options),
+        reconcile: (repositoryId, options) =>
+          reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
+            ...options,
+            resolveForgeToken,
+          }),
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of
           // a repository that keeps failing to fold.

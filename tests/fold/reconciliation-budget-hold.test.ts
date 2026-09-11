@@ -66,6 +66,7 @@ function fixture(remaining?: number) {
       findUsersByGitHubUserIds: async () => [],
       materialize: async () => ({ adds: 0, changes: 0, removals: 0 }),
       failRun: async () => {}, recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
+      findForgeIdentitiesByForgeUserIds: async () => [],
     },
     github: { getRepositoryById: reconcile, listIssues: async () => [],
       getIssue: async () => null, getPullRequestClosingIssues: async () => [],
