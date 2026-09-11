@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { GitHubGateway } from "@/lib/github/client";
-import { GitLabGateway } from "@/lib/gitlab/client";
 import {
   registerRepository,
   type NewRegisteredRepository,

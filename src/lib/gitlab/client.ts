@@ -1,6 +1,4 @@
-import { z } from "zod";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
-import { GitHubApiError } from "@/lib/github/errors";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import type {
   GitHubIssue,
@@ -334,11 +332,7 @@ export class GitLabGateway {
     }
     const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks/${webhookId}`;
     const hook = await responseJson<GitLabHookObject>(await this.request(path));
-    const missing =
-      (hook.issues_events !== true ? "issues_events" : null) ??
-      (hook.merge_requests_events !== true ? "merge_requests_events" : null);
-    const missingAny = hook.issues_events !== true || hook.merge_requests_events !== true;
-    if (!missingAny) return;
+    if (hook.issues_events === true && hook.merge_requests_events === true) return;
     await this.request(path, {
       method: "PUT",
       headers: { "content-type": "application/json" },
