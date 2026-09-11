@@ -588,15 +588,30 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     // Scope: the exact triple's repository-side columns. The fold's match is
     // the triple by construction, so the same forge id on another instance or
     // another forge never resolves here.
+    // The moderation-events projection mirrors the GitHub identity query: the
+    // fold's participation gate replays at-merge state from these events, and
+    // a forge identity whose account was banned at merge but unbanned later
+    // must replay the ban, not the current state.
     const rows = await this.sql<{
       id: string;
       github_user_id: number | string;
       github_login: string;
       enforcement_state: EnforcementState;
       forge_user_id: number | string;
+      moderation_events: unknown;
     }[]>`
       select users.id, users.github_user_id, users.github_login, users.enforcement_state,
-             identities.forge_user_id
+             identities.forge_user_id,
+             coalesce((
+               select jsonb_agg(jsonb_build_object(
+                 'id', events.id,
+                 'priorState', events.prior_state,
+                 'newState', events.new_state,
+                 'occurredAt', events.created_at
+               ) order by events.created_at, events.id)
+               from moderation_events as events
+               where events.target_user_id = users.id
+             ), '[]'::jsonb) as moderation_events
       from user_forge_identities as identities
       join users on users.id = identities.user_id
       join registered_repositories as repositories
@@ -613,6 +628,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         githubUserId: toSafeInteger(row.github_user_id),
         githubLogin: row.github_login,
         enforcementState: row.enforcement_state,
+        moderationEvents: moderationEventsFromJson(row.moderation_events),
       },
     }));
   }
@@ -1536,6 +1552,7 @@ export async function claimGitHubIdentity(
       from settlements
       join pull_requests on pull_requests.id = settlements.pull_request_id
       where settlements.status = ${"UNCLAIMED"}
+        and settlements.provider = ${"github"}
         and settlements.creditor_github_user_id = ${githubUserId}
         and settlements.debtor_id = ${userId}
         and pull_requests.merged_at is not null
@@ -1565,12 +1582,18 @@ export async function claimGitHubIdentity(
       update pull_requests
       set author_id = ${userId}
       where author_github_user_id = ${githubUserId}
+        and exists (
+          select 1 from registered_repositories
+          where registered_repositories.id = pull_requests.repository_id
+            and registered_repositories.provider = 'github'
+        )
     `;
     await transaction`
       update settlements
       set creditor_id = ${userId}, status = ${"SETTLED"}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
+        and settlements.provider = ${"github"}
         and settlements.creditor_github_user_id = ${githubUserId}
         and settlements.debtor_id <> ${userId}
         and creditor.id = ${userId}

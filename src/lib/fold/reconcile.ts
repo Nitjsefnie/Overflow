@@ -67,12 +67,10 @@ export type ReconciliationStore = {
    * The linked identities matching THIS repository's provider and instance,
    * for the given forge user ids — the fold's GitLab author candidates. The
    * store scopes the match to the exact triple's repository-side columns, so
-   * the fold's match is the triple by construction.
-   */
-  /**
-   * Optional: only the GitLab path consults it, and production's fold store
-   * always implements it. Absent, GitLab authors resolve as unlinked — the
-   * UNCLAIMED posture — which GitHub-only test fakes never need to stub.
+   * the fold's match is the triple by construction. Optional: only the GitLab
+   * path consults it, and production's fold store always implements it —
+   * absent, GitLab authors resolve as unlinked (the UNCLAIMED posture), so
+   * GitHub-only test fakes never need to stub it.
    */
   findForgeIdentitiesByForgeUserIds?(
     repositoryId: string,

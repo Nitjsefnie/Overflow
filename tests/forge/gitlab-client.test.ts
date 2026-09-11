@@ -221,6 +221,40 @@ describe("GitLabGateway", () => {
     expect(closingPullRequests[0]).toMatchObject({ number: 17, state: "MERGED", mergeCommitOid: "a".repeat(40) });
   });
 
+  it("passes the since cursor as updated_after on issue reads", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      requests.push(request.url);
+      return new Response(JSON.stringify([issue]), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await client.listIssues({ owner: "gitlab-org", name: "gitlab" }, { since: "2026-09-11T00:00:00.000Z" });
+    expect(requests.some((url) => url.includes("updated_after=2026-09-11T00%3A00%3A00.000Z"))).toBe(true);
+  });
+
+  it("paginates by keyset, following the cursor across pages", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      requests.push(request.url);
+      if (request.url.includes("cursor=")) {
+        return new Response(JSON.stringify([{ ...issue, iid: 13 }]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([issue]), {
+        status: 200,
+        headers: { "content-type": "application/json", "x-next-page-cursor": "cursor-after-page-1" },
+      });
+    });
+    const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
+    expect(issues).toHaveLength(2);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toContain("pagination=keyset");
+    expect(requests[0]).toContain("order_by=id");
+    expect(requests[1]).toContain("cursor=cursor-after-page-1");
+  });
+
   it("returns the raw diff body", async () => {
     const client = gateway(async (input) => {
       const request = new Request(input);

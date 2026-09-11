@@ -277,16 +277,7 @@ describe("initial PostgreSQL materialization", () => {
       const before = await readIssue();
 
       if (sponsorAuthored) {
-        // A real 028-to-HEAD upgrade re-adds these columns by migration: the
-      // out-of-band copies above exist only so the pre-upgrade rows can be
-      // written at 028's shape, and they are dropped here so the upgrade
-      // applies 038's own adds over the existing rows, exactly as production
-      // experienced.
-      // The pre-upgrade rows above were written against the 028 shape plus
-      // 041's conditionally-restated columns; runMigrations then applies 029
-      // through 041, where the 032/041 conditional pattern makes the upgrade
-      // idempotent for every column this fixture pre-created.
-      await expect(runMigrations()).resolves.toBeUndefined();
+        await expect(runMigrations()).resolves.toBeUndefined();
       } else {
         await expect(runMigrations()).rejects.toThrow(
           `Opening authority precondition failed: 1 issue(s) have non-sponsor opening evidence. Issue ids: ${issue.id}`,
@@ -3736,11 +3727,9 @@ describe("initial PostgreSQL materialization", () => {
           )
         `;
       };
-      let index = 0;
       for (const settlement of fold.settlements) {
         const pullRequest = fold.pullRequests.find((entry) => entry.githubIssueIds.includes(settlement.githubIssueId))!;
         await seedChange(addRun, pullRequest, "ADD", settlement);
-        index += 1;
       }
       const firstSettlement = fold.settlements[0]!;
       const firstPullRequest = fold.pullRequests.find((entry) => entry.githubIssueIds.includes(firstSettlement.githubIssueId))!;

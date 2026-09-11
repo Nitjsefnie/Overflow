@@ -66,6 +66,14 @@ export type LinkForgeIdentityDependencies = {
   tokenEncryptionKey: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Claims the past GitLab work the newly verified identity owns (contract
+   * decision 3's retroactivity): invoked after the identity is stored, with
+   * the verified triple. Wired to the fold store's claim in production;
+   * a failure propagates — the identity stays linked and a re-link retries
+   * the claim.
+   */
+  claimPastWork?: (input: { userId: string; instanceUrl: string; forgeUserId: number }) => Promise<void>;
 };
 
 const defaultTimeoutMs = 10_000;
@@ -132,6 +140,16 @@ export async function linkForgeIdentity(
       "FORBIDDEN",
       "That forge identity is already linked to another account.",
     );
+  }
+  // Retroactivity (contract decision 3): the verified claim reaches back to
+  // the UNCLAIMED GitLab settlements this triple already owns. The identity
+  // stands either way; a claim failure surfaces and the next re-link retries.
+  if (dependencies.claimPastWork !== undefined) {
+    await dependencies.claimPastWork({
+      userId: input.userId,
+      instanceUrl,
+      forgeUserId: forgeUser.id,
+    });
   }
   return identity;
 }

@@ -20,6 +20,8 @@ export type ForgeIdentitiesRouteDependencies = {
   tokenEncryptionKey?: string;
   /** Injectable transport for the verification probe; production uses global fetch. */
   fetch?: typeof fetch;
+  /** Claims past GitLab work for the freshly verified triple (fold store). */
+  claimPastWork?: (input: { userId: string; instanceUrl: string; forgeUserId: number }) => Promise<void>;
 };
 
 const linkSchema = z
@@ -43,6 +45,14 @@ export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDe
       return { user: { id: user.id, role: user.role } };
     },
     createIdentityStore: () => new PostgresForgeIdentityStore(getSql()),
+    claimPastWork: async (input) => {
+      const { claimForgeIdentity } = await import("@/lib/fold/postgres-store");
+      await claimForgeIdentity(getSql(), {
+        userId: input.userId,
+        instanceUrl: input.instanceUrl,
+        forgeUserId: input.forgeUserId,
+      });
+    },
     tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
   };
 }
@@ -81,7 +91,7 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
     const store = dependencies.createIdentityStore();
     try {
       const identity = await linkForgeIdentity(
-        { store, tokenEncryptionKey, fetch: dependencies.fetch },
+        { store, tokenEncryptionKey, fetch: dependencies.fetch, claimPastWork: dependencies.claimPastWork },
         { userId: session.user.id, instanceUrl: input.instanceUrl, token: input.token },
       );
       return Response.json({ identity }, { status: 201 });
