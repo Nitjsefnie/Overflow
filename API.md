@@ -114,8 +114,8 @@ access token of the GitLab identity you linked on the *Ledger* page (or over
 `POST /api/forge-identities`) for that instance; without a verified identity on
 that exact instance the request is refused. No webhook is installed and no
 initial import is scheduled — the periodic reconciliation sweep picks the
-project up. The catalog labels must already exist on the project; there is no
-dashboard form for this path, and `PATCH` has no GitLab path.
+project up. The catalog labels must already exist on the project; the *Register a
+repository* form has no GitLab path, and neither has `PATCH`.
 
 The body takes the catalog fields above plus these. Extra fields are still
 rejected.
@@ -173,7 +173,6 @@ angle-bracketed text is substituted at runtime:
 | --- | --- | --- | --- |
 | 400 | `INVALID_INPUT` | `The instance URL must be an absolute URL.` | `instanceUrl` is missing or does not parse as a URL. |
 | 400 | `INVALID_INPUT` | `The instance URL must use http or https.` | Correct the scheme. |
-| 400 | `INVALID_INPUT` | `The instance URL must name a host.` | Correct the URL. |
 | 400 | `INVALID_INPUT` | `A GitLab registration requires the instance URL and the project id or path.` | `project` is missing or empty. |
 | 400 | `INVALID_INPUT` | `The GitLab project id must be a positive integer.` | `project` is all digits but not a positive safe integer. |
 | 400 | `INVALID_INPUT` | `Submit the GitLab project as a positive numeric id or a path with namespace.` | `project` is neither digits nor a path containing `/`. |
