@@ -178,6 +178,7 @@ describe("GitHub webhook route", () => {
         applyIssueView: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
         markFailed: async () => true,
       },
@@ -215,6 +216,7 @@ describe("GitHub webhook route", () => {
         applyIssueView: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
         markFailed: async (deliveryId, leaseToken) => {
           markedFailed.push({ deliveryId, leaseToken });
@@ -348,6 +350,7 @@ describe("GitHub webhook route", () => {
         applyIssueView: async () => {},
         claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
+        findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
         markFailed: async () => true,
       },

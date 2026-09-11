@@ -210,6 +210,9 @@ function createQueueingStore() {
     async findRepositoryByGitHubId() {
       return { id: "repository-from-webhook", active: true };
     },
+    async findRepositoryByForgeIdentity() {
+      return null;
+    },
     async markProcessed() {
       return true;
     },

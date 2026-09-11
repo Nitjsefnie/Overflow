@@ -20,6 +20,15 @@ export type GitHubWebhookDelivery = {
   subject: { kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number };
   /** Present only for genuine, PR-free issue envelopes; a PR-carrying envelope yields no subject at all. */
   issue?: GitHubWebhookIssue;
+  /**
+   * Present on a GitLab-origin delivery (issue 547): the forge and the
+   * normalized instance URL the repository is resolved through. A GitHub
+   * delivery never carries it and keeps resolving by its numeric id; a
+   * GitLab delivery resolves by forge identity — provider + instance + the
+   * forge project id in `repositoryGitHubId` — never by the numeric id
+   * alone.
+   */
+  forge?: { provider: "gitlab"; instanceUrl: string };
 };
 
 export type GitHubWebhookParseResult =
