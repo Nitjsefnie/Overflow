@@ -140,6 +140,25 @@ describe("resolving the default branch from local refs alone", () => {
       return; // No local ref resolved, so there is no listing to compare against here.
     }
 
+    // The leg's premise is a default-branch-shaped shipped tree, which only the default
+    // branch's own checkout guarantees. On any other host — a migration-carrying branch above
+    // all (issue 522) — the assertion would fail by construction, and the CLI legs carry the
+    // guard's real coverage there instead, so the leg yields with a visible line.
+    const hostBranchName = gitOutput(repositoryRoot, "rev-parse", "--abbrev-ref", "HEAD");
+    const defaultBranchName = resolvedDefaultBranchRef.replace(
+      /^refs\/(?:remotes|heads)\/(?:origin\/)?/,
+      "",
+    );
+    if (hostBranchName !== defaultBranchName) {
+      console.warn(
+        `skipping this leg: the checked-out branch (${hostBranchName}) is not ` +
+          `${defaultBranchName}, so the shipped tree is not default-branch-shaped and the ` +
+          "leg's premise does not hold (issue 522); the CLI legs carry the guard's coverage " +
+          "on a branch.",
+      );
+      return;
+    }
+
     const treeMigrationNames = listMigrationNames(readdirSync(migrationsDirectory));
     const defaultBranchMigrationNames = listDefaultBranchMigrationNames(
       resolvedDefaultBranchRef,
@@ -207,6 +226,19 @@ describe("the CLI against a real database", () => {
     // default-branch resolution and listing behave identically to the real tree's.
     privateWorktreeRoot = mkdtempSync(path.join(os.tmpdir(), "migrate-guard-worktree-"));
     git(repositoryRoot, "worktree", "add", privateWorktreeRoot, "HEAD");
+    // A migration-carrying host branch must not red this suite (issue 522): created from HEAD,
+    // the linked worktree would inherit the host branch's db/migrations, and a branch-only
+    // migration there would survive the fake's removal and refuse the clean run below. So the
+    // private tree's migration set is pinned to the default branch's: the tracked set is
+    // removed first because `git checkout <ref> -- db/migrations` only overwrites the files
+    // the ref carries — a branch-only file is left behind (tested, issue 522) — and the
+    // default branch's set is checked out over the emptied directory. The CLI under test
+    // remains the branch's own scripts/migrate.ts; only the database-facing tree moves. The
+    // swap stages a diff in the private worktree — harmless, afterAll force-removes the tree.
+    if (resolvedDefaultBranchRef !== undefined) {
+      git(privateWorktreeRoot, "rm", "-q", "-r", "db/migrations");
+      git(privateWorktreeRoot, "checkout", resolvedDefaultBranchRef, "--", "db/migrations");
+    }
     // The linked worktree carries no node_modules of its own; the symlink keeps the spawned
     // runner's imports resolvable without copying the store. Only node runs from here, so the
     // symlink is enough — nothing builds in this tree.
@@ -293,8 +325,11 @@ describe("the CLI against a real database", () => {
       const [{ applied }] = await sql<{ applied: number }[]>`
         select count(*)::integer as applied from schema_migrations
       `;
+      // The comparison reads the PRIVATE worktree's listing (issue 522): that is the tree the
+      // run actually enumerated, while the shared db/migrations/ listing is host-branch-shaped
+      // and would compare a default-branch run against a branch-only count.
       expect(applied).toBeGreaterThanOrEqual(
-        listMigrationNames(readdirSync(migrationsDirectory)).length,
+        listMigrationNames(readdirSync(path.join(worktreeRoot(), "db/migrations"))).length,
       );
     } finally {
       await sql.end();
