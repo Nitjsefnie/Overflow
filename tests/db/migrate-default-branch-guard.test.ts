@@ -4,12 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertMigrationsOnDefaultBranch,
   listDefaultBranchMigrationNames,
   listMigrationNames,
   resolveDefaultBranchRef,
+  runMigrations,
 } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -22,6 +23,22 @@ const migrationsDirectory = path.join(repositoryRoot, "db/migrations");
  * about which ref won.
  */
 const resolvedDefaultBranchRef = resolveDefaultBranchRef(repositoryRoot);
+
+const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
+const databaseClient = vi.hoisted(() => ({
+  withTransaction: vi.fn(() => Promise.reject(new Error("the database client is stubbed here"))),
+  closeSql: vi.fn(() => Promise.resolve()),
+}));
+
+// The runMigrations pin below drives the real exported entry point against a mocked listing and
+// a stubbed database — the same hermetic shape tests/db/migration-numbering.test.ts uses. Only
+// readdir is replaced: the CLI legs' child processes are outside this module graph, and the one
+// read this file makes of the real tree uses the synchronous API for exactly that reason.
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  readdir: () => Promise.resolve(migrationsOnDisk.entries),
+}));
+vi.mock("../../src/lib/db/client.ts", () => databaseClient);
 
 /** The message, not the throw, is what tells whoever hit this which files are wrong. */
 function rejectionMessage(check: () => void): string {
@@ -134,6 +151,24 @@ describe("resolving the default branch from local refs alone", () => {
     expect(() => {
       assertMigrationsOnDefaultBranch(treeMigrationNames, defaultBranchMigrationNames, resolvedDefaultBranchRef);
     }).not.toThrow();
+  });
+});
+
+describe("the exported runMigrations, which the guard must stay out of", () => {
+  beforeEach(() => {
+    migrationsOnDisk.entries = [];
+    databaseClient.withTransaction.mockClear();
+  });
+
+  it("applies a foreign migration without the default-branch refusal, which is the CLI guard's alone", async () => {
+    migrationsOnDisk.entries = ["001_a.sql", "999_foreign_to_the_default_branch.sql"];
+
+    // The refusal belongs to the command-line path only: runMigrations() is what testcontainer
+    // suites and CI call directly, and routing it through the guard would need every suite to
+    // seed refs none carries. The stub rejection below is the pin — the run must proceed past
+    // the tree checks and into the runner proper, never the issue-511 refusal.
+    await expect(runMigrations()).rejects.toThrow("the database client is stubbed here");
+    expect(databaseClient.withTransaction).toHaveBeenCalled();
   });
 });
 
