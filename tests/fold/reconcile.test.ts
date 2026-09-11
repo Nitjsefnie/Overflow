@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RECONCILIATION_COOLDOWN_SECONDS,
+  FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE,
   reconcileRepository,
   type ReconciliationDeltas,
   type ReconciliationDependencies,
 } from "@/lib/fold/reconcile";
+import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { GitHubGateway } from "@/lib/github/client";
@@ -606,6 +608,54 @@ describe("reconcileRepository", () => {
       expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed."]]);
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", upstream);
       expect(upstream.body).toBe(body);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("records the credential as the cause when the fold died on a rejected GitLab credential", async () => {
+    const rejection = new ForgeCredentialRejectedError();
+    const dependencies = reconciliationDependencies({
+      github: { listIssues: vi.fn().mockRejectedValue(rejection) },
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
+        cause: rejection,
+      });
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
+      // The cause still reaches the service log, exactly as on the generic path.
+      expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", rejection);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("finds the credential rejection nested in the fold error's cause chain", async () => {
+    const rejection = new ForgeCredentialRejectedError();
+    const dependencies = reconciliationDependencies({
+      github: { listIssues: vi.fn().mockRejectedValue(new Error("aggregate wrapper", { cause: rejection })) },
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await reconcileRepository(dependencies, "repository").catch(() => undefined);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("keeps the generic stored failure when a nested cause chain carries no credential rejection", async () => {
+    const dependencies = reconciliationDependencies({
+      github: { listIssues: vi.fn().mockRejectedValue(new Error("outer wrapper", { cause: new Error("inner") })) },
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await reconcileRepository(dependencies, "repository").catch(() => undefined);
+      expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
     } finally {
       errorLog.mockRestore();
     }

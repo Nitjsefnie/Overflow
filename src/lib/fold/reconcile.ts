@@ -7,6 +7,7 @@ import { GraphqlBudgetHeld, withGraphqlRequestBudget } from "@/lib/github/graphq
 import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
+import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { ReconciliationCostCharge, ReconciliationFairnessAssessment } from "@/lib/fold/reconciliation-fairness";
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
@@ -34,6 +35,12 @@ const reconciliationFullRepairMs = 6 * 60 * 60_000;
 // A large repository can exhaust an hourly GitHub budget; without retry guidance,
 // allow a full hour for it to recover before spending points on another full fold.
 export const DEFAULT_RECONCILIATION_COOLDOWN_SECONDS = 60 * 60;
+
+// The stored failure for a fold that died on a rejected linked credential — a
+// code constant for the same reason the generic message below is one (the runs
+// table is read by the product), and the sentence names the repair: re-link.
+export const FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE =
+  "Reconciliation failed: the linked GitLab credential was rejected. Re-link the identity to restore folding.";
 
 // Reconciliation resolves the registered repository by the identity GitHub cannot
 // reassign, and so does the fold: the snapshot repository carries it, so there is
@@ -417,13 +424,29 @@ async function reconcileRepositoryWhileCoordinated(
     // The cause reaches the service log here and rides on the thrown error, so
     // a caller that reports the failure reports what actually went wrong.
     console.error(`Reconciliation of repository ${repositoryId} failed.`, error);
-    await dependencies.store.failRun(runId, "Reconciliation failed.");
+    await dependencies.store.failRun(
+      runId,
+      carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
+    );
     if (isGitHubRateLimitError(error)) {
       const seconds = error.retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS;
       await dependencies.store.setReconciliationCooldown(repositoryId, new Date(now().getTime() + seconds * 1000));
     }
     throw new Error("Unable to reconcile repository.", { cause: error });
   }
+}
+
+// A credential rejection reaches this module nested — the sponsor gateway's
+// guard raises it from inside a read, and intermediate layers may wrap it — so
+// the walk follows the cause chain, with a visited set because a constructed
+// chain could be cyclic. Anything else is the generic failure.
+function carriesCredentialRejection(error: unknown): boolean {
+  const visited = new Set<unknown>();
+  for (let cause = error; cause !== null && cause !== undefined && !visited.has(cause); cause = (cause as { cause?: unknown }).cause) {
+    visited.add(cause);
+    if (cause instanceof ForgeCredentialRejectedError) return true;
+  }
+  return false;
 }
 
 // The reviews read is GraphQL, so a pull request deleted upstream answers
