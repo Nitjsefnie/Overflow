@@ -52,7 +52,10 @@ type GitLabProject = {
   visibility: string;
   web_url: string;
   namespace: { name: string; path: string; kind: string };
-  permissions?: { project_access?: { access_level?: number } };
+  permissions?: {
+    project_access?: { access_level?: number } | null;
+    group_access?: { access_level?: number } | null;
+  };
 };
 
 type GitLabMergeRequestObject = {
@@ -437,6 +440,15 @@ export class GitLabGateway {
 function toGitHubRepository(project: GitLabProject): GitHubRepository {
   const pathParts = project.path_with_namespace.split("/");
   const owner = pathParts.slice(0, -1).join("/");
+  // GitLab reports the effective access level as the higher of the direct
+  // project access and the access inherited through the namespace group:
+  // a group Maintainer carries project_access === null and group_access at
+  // Maintainer, so reading project_access alone would refuse someone who
+  // genuinely holds the permission. Maintainer (40) or Owner (50) either way.
+  const effectiveAccessLevel = Math.max(
+    project.permissions?.project_access?.access_level ?? 0,
+    project.permissions?.group_access?.access_level ?? 0,
+  );
   return {
     id: project.id,
     owner,
@@ -449,8 +461,7 @@ function toGitHubRepository(project: GitLabProject): GitHubRepository {
     fullName: project.path_with_namespace,
     visibility: project.visibility === "public" ? "PUBLIC" : "PRIVATE",
     url: project.web_url,
-    // Maintainer (40) or Owner (50) on the project itself.
-    canAdminister: (project.permissions?.project_access?.access_level ?? 0) >= 40,
+    canAdminister: effectiveAccessLevel >= 40,
   };
 }
 
