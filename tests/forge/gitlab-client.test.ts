@@ -54,6 +54,68 @@ const issue = {
   assignees: [{ id: 902, username: "claimer" }],
 };
 
+// Live-verified resource_label_events shape: the label travels as an embedded
+// object and the action as "add" | "remove".
+const addedLabelEvent = {
+  id: 142,
+  user: { id: 1, username: "sponsor" },
+  created_at: "2026-09-10T08:00:00.000Z",
+  resource_type: "Issue",
+  resource_id: 253,
+  label: { id: 73, name: "delivered::6", color: "#34495E", description: "" },
+  action: "add",
+};
+
+const removedLabelEvent = {
+  ...addedLabelEvent,
+  id: 143,
+  created_at: "2026-09-11T08:30:00Z",
+  label: { id: 74, name: "offered::3", color: "#0033CC", description: "" },
+  action: "remove",
+};
+
+// A label GitLab can no longer name (deleted since the event): no readable
+// evidence, so the mapping must drop it rather than invent a label name.
+const deletedLabelEvent = {
+  ...addedLabelEvent,
+  id: 144,
+  label: null,
+};
+
+// Live-verified notes shape: activity records carry `system: true` on the
+// same endpoint, and `updated_at` is the only edit witness a note carries.
+const systemNote = {
+  id: 302,
+  body: "closed",
+  author: { id: 1, username: "sponsor" },
+  created_at: "2026-09-10T09:22:45Z",
+  updated_at: "2026-09-10T09:22:45Z",
+  system: true,
+  noteable_id: 377,
+  noteable_type: "Issue",
+  project_id: 5,
+  resolvable: false,
+  confidential: false,
+  internal: false,
+};
+
+const note = {
+  ...systemNote,
+  id: 305,
+  body: "Fixed by the merge request.",
+  created_at: "2026-09-10T09:56:03Z",
+  updated_at: "2026-09-10T09:56:03Z",
+  system: false,
+};
+
+const editedNote = {
+  ...note,
+  id: 306,
+  body: "corrected after the merge",
+  created_at: "2026-09-10T10:00:00Z",
+  updated_at: "2026-09-11T09:00:00Z",
+};
+
 function gateway(fetchImplementation: typeof fetch): GitLabGateway {
   return new GitLabGateway({
     instanceUrl: "https://gitlab.com",
@@ -242,6 +304,9 @@ describe("GitLabGateway", () => {
 
   it("maps issues with null state_reason, embedded labels and normalized timestamps", async () => {
     const client = gateway(jsonRouter([
+      ["/resource_label_events", []],
+      ["/notes", []],
+      ["/closed_by", []],
       ["/issues", [issue]],
     ]));
     const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
@@ -262,12 +327,155 @@ describe("GitLabGateway", () => {
 
   it("maps a single issue by iid and nulls the absent state_reason", async () => {
     const client = gateway(jsonRouter([
+      ["/resource_label_events", [addedLabelEvent, removedLabelEvent, deletedLabelEvent]],
+      ["/notes", [systemNote, note, editedNote]],
+      ["/closed_by", [mergeRequest]],
+      ["/merge_requests/17/commits", [{ committed_date: "2026-09-11T11:30:00.000Z" }]],
       ["/issues/12", issue],
     ]));
     const single = await client.getIssue({ owner: "gitlab-org", name: "gitlab" }, { id: 6_600_001, number: 12 });
     expect(single).not.toBeNull();
     expect(single!.stateReason).toBeNull();
     expect(single!.state).toBe("OPEN");
+    expect(single!.history).toEqual([
+      {
+        kind: "LABELED",
+        id: "142",
+        actorLogin: "sponsor",
+        actorGitHubUserId: 1,
+        label: "delivered::6",
+        createdAt: "2026-09-10T08:00:00.000Z",
+      },
+      {
+        kind: "UNLABELED",
+        id: "143",
+        actorLogin: "sponsor",
+        actorGitHubUserId: 1,
+        label: "offered::3",
+        createdAt: "2026-09-11T08:30:00.000Z",
+      },
+    ]);
+    expect(single!.comments).toEqual([
+      {
+        id: "305",
+        databaseId: 305,
+        authorLogin: "sponsor",
+        authorGitHubUserId: 1,
+        body: "Fixed by the merge request.",
+        createdAt: "2026-09-10T09:56:03.000Z",
+        lastEditedAt: null,
+      },
+      {
+        id: "306",
+        databaseId: 306,
+        authorLogin: "sponsor",
+        authorGitHubUserId: 1,
+        body: "corrected after the merge",
+        createdAt: "2026-09-10T10:00:00.000Z",
+        lastEditedAt: "2026-09-11T09:00:00.000Z",
+      },
+    ]);
+    expect(single!.closingPullRequests).toHaveLength(1);
+    expect(single!.closingPullRequests[0]).toMatchObject({
+      number: 17,
+      state: "MERGED",
+      finalCommitAt: "2026-09-11T11:30:00.000Z",
+    });
+  });
+
+  it("supplies every listed issue's label events, comments and closing merge requests", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      const request = new Request(input);
+      requests.push(new URL(request.url).pathname);
+      if (request.url.includes("/resource_label_events")) {
+        return new Response(JSON.stringify([addedLabelEvent, removedLabelEvent, deletedLabelEvent]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      if (request.url.includes("/notes")) {
+        return new Response(JSON.stringify([systemNote, note, editedNote]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      if (request.url.includes("/closed_by")) {
+        return new Response(JSON.stringify([mergeRequest]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      if (request.url.includes("/merge_requests/17/commits")) {
+        return new Response(JSON.stringify([{ committed_date: "2026-09-11T11:30:00.000Z" }]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      if (request.url.includes("/issues")) {
+        return new Response(JSON.stringify([issue]), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("no route", { status: 404 });
+    });
+    const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
+    expect(issues).toHaveLength(1);
+    // Two requests per listed issue (label events + notes) plus one per merged
+    // closing merge request: the always-fresh N+1 cost, counted here.
+    expect(requests.filter((path) => path.endsWith("/resource_label_events")))
+      .toEqual(["/api/v4/projects/gitlab-org%2Fgitlab/issues/12/resource_label_events"]);
+    expect(requests.filter((path) => path.endsWith("/notes")))
+      .toEqual(["/api/v4/projects/gitlab-org%2Fgitlab/issues/12/notes"]);
+    expect(requests.filter((path) => path.endsWith("/closed_by")))
+      .toEqual(["/api/v4/projects/gitlab-org%2Fgitlab/issues/12/closed_by"]);
+    expect(requests.filter((path) => path.endsWith("/merge_requests/17/commits")))
+      .toEqual(["/api/v4/projects/gitlab-org%2Fgitlab/merge_requests/17/commits"]);
+    expect(issues[0]!.history).toHaveLength(2);
+    expect(issues[0]!.comments).toHaveLength(2);
+    expect(issues[0]!.closingPullRequests).toHaveLength(1);
+  });
+
+  it("reads timelines for every listed issue; the targeting controls do not gate the reads", async () => {
+    const bareRequests: string[] = [];
+    const optionedRequests: string[] = [];
+    const routerFor = (record: string[]) => async (input: RequestInfo | URL) => {
+      const request = new Request(input);
+      record.push(new URL(request.url).pathname);
+      const body = request.url.includes("/issues")
+        && !request.url.includes("/resource_label_events")
+        && !request.url.includes("/notes")
+        && !request.url.includes("/closed_by")
+        ? [issue] : [];
+      return new Response(JSON.stringify(body), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    const bare = await gateway(routerFor(bareRequests))
+      .listIssues({ owner: "gitlab-org", name: "gitlab" });
+    const optioned = await gateway(routerFor(optionedRequests)).listIssues(
+      { owner: "gitlab-org", name: "gitlab" },
+      {
+        since: "2026-09-11T00:00:00.000Z",
+        timelineCriticalLabels: new Set(["delivered::6"]),
+        timelineWatchedLabels: new Set(["offered::3"]),
+      },
+    );
+    // The targeting controls select embedded-timeline refreshes on GitHub;
+    // GitLab embeds no timeline, so the per-issue reads happen either way.
+    expect(optionedRequests.filter((path) => path.endsWith("/resource_label_events")))
+      .toEqual(bareRequests.filter((path) => path.endsWith("/resource_label_events")));
+    expect(optionedRequests.filter((path) => path.endsWith("/notes")))
+      .toEqual(bareRequests.filter((path) => path.endsWith("/notes")));
+    expect(bare).toHaveLength(1);
+    expect(optioned).toHaveLength(1);
+  });
+
+  it("fails the issue read loudly when a timeline surface refuses", async () => {
+    const client = gateway(jsonRouter([
+      ["/resource_label_events", { message: "403 Forbidden" }, 403],
+      ["/notes", []],
+      ["/closed_by", []],
+      ["/issues", [issue]],
+    ]));
+    await expect(client.listIssues({ owner: "gitlab-org", name: "gitlab" }))
+      .rejects.toMatchObject({ name: "GitLabApiError", status: 403 });
   });
 
   it("returns no reviews, ever, per contract decision 2", async () => {
@@ -295,6 +503,9 @@ describe("GitLabGateway", () => {
   it("falls back to the labels embedded in the issues list when the labels endpoint refuses", async () => {
     const client = gateway(jsonRouter([
       ["/labels", { message: "403 Forbidden" }, 403],
+      ["/resource_label_events", []],
+      ["/notes", []],
+      ["/closed_by", []],
       ["/issues", [issue, { ...issue, iid: 13, labels: ["extra"] }]],
     ]));
     const labels = await client.listRepositoryLabels({ owner: "gitlab-org", name: "gitlab" });
@@ -332,6 +543,12 @@ describe("GitLabGateway", () => {
     const client = gateway(async (input) => {
       const request = new Request(input);
       requests.push(request.url);
+      // Only the issue listing answers with issues; every per-issue timeline
+      // surface answers empty so the fixture never feeds an issue object to
+      // the merge-request parser.
+      if (!new URL(request.url).pathname.endsWith("/issues")) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify([issue]), { status: 200, headers: { "content-type": "application/json" } });
     });
     await client.listIssues({ owner: "gitlab-org", name: "gitlab" }, { since: "2026-09-11T00:00:00.000Z" });
@@ -343,6 +560,10 @@ describe("GitLabGateway", () => {
     const client = gateway(async (input) => {
       const request = new Request(input);
       requests.push(request.url);
+      const listPage = request.url.includes("updated_after") || new URL(request.url).pathname.endsWith("/issues");
+      if (!listPage) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (request.url.includes("cursor=")) {
         return new Response(JSON.stringify([{ ...issue, iid: 13 }]), {
           status: 200, headers: { "content-type": "application/json" },
@@ -355,10 +576,11 @@ describe("GitLabGateway", () => {
     });
     const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
     expect(issues).toHaveLength(2);
-    expect(requests).toHaveLength(2);
-    expect(requests[0]).toContain("pagination=keyset");
-    expect(requests[0]).toContain("order_by=id");
-    expect(requests[1]).toContain("cursor=cursor-after-page-1");
+    const issuePages = requests.filter((url) => new URL(url).pathname.endsWith("/issues"));
+    expect(issuePages).toHaveLength(2);
+    expect(issuePages[0]).toContain("pagination=keyset");
+    expect(issuePages[0]).toContain("order_by=id");
+    expect(issuePages[1]).toContain("cursor=cursor-after-page-1");
   });
 
   it("returns the raw diff body", async () => {
