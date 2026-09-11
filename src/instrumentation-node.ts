@@ -29,13 +29,14 @@ export async function registerNodejs(): Promise<void> {
   const store = new PostgresFoldStore();
   // GitLab repositories fold with the sponsor's linked identity's PAT, resolved
   // and decrypted at first read through the same memoization, and a rejection
-  // of that credential stamps the identity's re-verification marker through the
-  // same store.
-  const identityStore = new PostgresForgeIdentityStore(getSql());
+  // of that credential stamps the identity's re-verification marker. Both
+  // construct the identity store per call — never at register time, so an
+  // environment without database wiring stays constructible (the unit suites
+  // exercise this exact wiring against fakes).
   const resolveForgeToken = (userId: string, instanceUrl: string) =>
-    identityStore.getForgeToken(userId, instanceUrl);
+    new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
   const markCredentialRejected = (userId: string, instanceUrl: string) =>
-    identityStore.markTokenRejected(userId, instanceUrl);
+    new PostgresForgeIdentityStore(getSql()).markTokenRejected(userId, instanceUrl);
 
   startReconciliationWorker({
     drain: async () => {
