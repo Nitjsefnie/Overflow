@@ -12,7 +12,6 @@ import { startPostgresContainer } from "../support/postgres-container";
 let container: StartedTestContainer | undefined;
 let sql: Sql;
 const originalDatabaseUrl = process.env.DATABASE_URL;
-const TEST_ENCRYPTION_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");
 const INSTANCE = "https://gitlab.example.com";
 const FORGE_USER_ID = 4242;
 
@@ -92,7 +91,6 @@ async function createGitLabScenario(
   const githubIssueId = externalId++;
   const githubPullRequestId = externalId++;
   const mergeCommitOid = "b".repeat(40);
-  const proofSha256 = repositoryGithubId.toString(16).padStart(64, "0");
 
   const snapshot: RepositoryFoldSnapshot = {
     repository: {
