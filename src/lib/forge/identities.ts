@@ -6,6 +6,13 @@ export type ForgeIdentityView = {
   instanceUrl: string;
   forgeLogin: string;
   verifiedAt: string;
+  /**
+   * The last time a read made through this identity was rejected by the
+   * instance (GitLab 401/403) — the re-link signal. Null while the credential
+   * reads cleanly; a successful re-link clears it. `verifiedAt` is never
+   * cleared and keeps meaning the last successful verification.
+   */
+  tokenFailedAt: string | null;
 };
 
 export class ForgeIdentityError extends Error {
@@ -50,6 +57,13 @@ export function normalizeInstanceUrl(value: string): string {
  */
 export interface ForgeIdentityStore {
   listForUser(userId: string): Promise<ForgeIdentityView[]>;
+  /**
+   * Records that a read made through the user's identity on this instance was
+   * rejected as an authentication or scope failure. Best-effort at the caller:
+   * the identity stays readable either way, and the fold's own failure path
+   * still runs. Repeated failures re-stamp the marker.
+   */
+  markTokenRejected(userId: string, instanceUrl: string): Promise<void>;
   upsertIdentity(input: {
     userId: string;
     provider: string;

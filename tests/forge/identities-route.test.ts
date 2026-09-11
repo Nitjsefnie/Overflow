@@ -17,6 +17,7 @@ function identityView(overrides: Partial<ForgeIdentityView> = {}): ForgeIdentity
     instanceUrl: "https://gitlab.example.com",
     forgeLogin: "tester",
     verifiedAt: "2026-09-11T12:00:00.000Z",
+    tokenFailedAt: null,
     ...overrides,
   };
 }
@@ -32,6 +33,9 @@ function fixture(options: {
     async listForUser(userId) {
       calls.push({ op: "listForUser", args: { userId } });
       return options.list ?? [];
+    },
+    async markTokenRejected(userId, instanceUrl) {
+      calls.push({ op: "markTokenRejected", args: { userId, instanceUrl } });
     },
     async upsertIdentity(input) {
       calls.push({ op: "upsertIdentity", args: input });
@@ -83,9 +87,18 @@ describe("forge identities API", () => {
     const body = (await response.json()) as { identities: Array<Record<string, unknown>> };
     expect(body.identities).toHaveLength(1);
     expect(Object.keys(body.identities[0]!).sort()).toEqual([
-      "forgeLogin", "id", "instanceUrl", "provider", "verifiedAt",
+      "forgeLogin", "id", "instanceUrl", "provider", "tokenFailedAt", "verifiedAt",
     ]);
     expect(f.calls[0]).toMatchObject({ op: "listForUser", args: { userId: "user-1" } });
+  });
+
+  it("exposes the re-verification marker on the listed identity", async () => {
+    const failedAt = "2026-09-11T13:00:00.000Z";
+    const f = fixture({ list: [identityView({ tokenFailedAt: failedAt })] });
+    const response = await createForgeIdentitiesGetHandler(f.dependencies)();
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { identities: Array<{ tokenFailedAt: string | null }> };
+    expect(body.identities[0]!.tokenFailedAt).toBe(failedAt);
   });
 
   it("links with the session's user id and answers 201", async () => {
