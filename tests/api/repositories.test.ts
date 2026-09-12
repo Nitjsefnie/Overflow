@@ -12,6 +12,8 @@ import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GitHubGateway } from "@/lib/github/client";
 import { POST as mintToken } from "@/app/api/tokens/route";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
@@ -29,6 +31,7 @@ import {
   type RepositoryUnregisterOutcome,
 } from "@/lib/repositories/register";
 import {
+  DELETE,
   POST,
   createRepositoryDeleteHandler,
   createRepositoryPostHandler,
@@ -640,6 +643,55 @@ function validGitlabUnregisterInput() {
   };
 }
 
+const gitlabWebhookUrl = "https://overflow.example/api/gitlab/webhooks";
+
+/** A GitLab registration body against the instance the production-wire tests link. */
+function validGitlabInput() {
+  return {
+    ...validInput(),
+    repositoryUrl: "https://gitlab.example.com/group/subgroup/project",
+    provider: "gitlab",
+    instanceUrl: "https://gitlab.example.com",
+    project: "group/subgroup/project",
+  };
+}
+
+/** The GitLab project the production-wire fetch serves: public, maintainer access. */
+function gitlabProjectPayload() {
+  return {
+    id: 7331,
+    name: "project",
+    path: "project",
+    path_with_namespace: "group/subgroup/project",
+    visibility: "public",
+    web_url: "https://gitlab.example.com/group/subgroup/project",
+    namespace: { id: 1, name: "subgroup", path: "group/subgroup", kind: "group" },
+    permissions: { project_access: { access_level: 40 } },
+  };
+}
+
+/**
+ * The Postgres-backed prototype spies and environment the production
+ * handlers' GitLab limb reads through: a bearer account, a stored GitHub
+ * credential (the wiring requires one regardless of provider), both webhook
+ * callbacks so the test can tell which one the hook was installed at, and the
+ * sponsor's PAT through the forge identity store.
+ */
+function productionGitLabWiring() {
+  vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+  vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-github-oauth-token");
+  vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+  vi.spyOn(PostgresRepositoryStore.prototype, "listAbandonedWebhookCleanups").mockResolvedValue([]);
+  vi.stubEnv("TOKEN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+  vi.stubEnv("GITLAB_WEBHOOK_URL", gitlabWebhookUrl);
+  vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
+  const getForgeToken = vi.spyOn(PostgresForgeIdentityStore.prototype, "getForgeToken")
+    .mockResolvedValue("glpat-production-wire");
+  const requests: Request[] = [];
+  return { getForgeToken, requests };
+}
+
 function registeredTarget(sponsorId = "moderator-id"): RegisteredRepository {
   return {
     id: "repository-id",
@@ -883,6 +935,61 @@ describe("Overflow token registration", () => {
       if (previous) Object.defineProperty(globalThis, key, previous);
       else Reflect.deleteProperty(globalThis, key);
     }
+  });
+
+  // The production GitLab wire (issue 547): every other route test stubs the
+  // registration dependencies, so nothing else executes the limb of
+  // buildRegistrationDependencies that picks GITLAB_WEBHOOK_URL over the
+  // GitHub callback and reads the sponsor's PAT through the identity store.
+  it("installs the GitLab hook at GITLAB_WEBHOOK_URL through the production POST wiring", async () => {
+    const forge = productionGitLabWiring();
+    const project = gitlabProjectPayload();
+    vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationState").mockResolvedValue(null);
+    vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryProviderById").mockResolvedValue(null);
+    const createRepository = vi.spyOn(PostgresRepositoryStore.prototype, "createRepository")
+      .mockImplementation(async (repository) => ({
+        id: "gitlab-repository-id",
+        githubRepositoryId: repository.githubRepositoryId,
+        ownerName: repository.ownerName,
+        sponsorId: repository.sponsorId,
+        visibility: repository.visibility,
+        githubWebhookId: repository.githubWebhookId,
+      }));
+    vi.spyOn(PostgresFoldStore.prototype, "enqueueReconciliationJob").mockResolvedValue(undefined as never);
+    const gitlabFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      forge.requests.push(request);
+      const pathname = new URL(request.url).pathname;
+      if (pathname.endsWith("/hooks")) {
+        return Response.json({ id: 9001 }, { status: 201 });
+      }
+      if (pathname.endsWith("/labels")) {
+        const labels = [...validInput().openingLabels, ...validInput().actualLabels];
+        return Response.json(labels.map(({ label }) => ({ name: label })));
+      }
+      return Response.json(project);
+    });
+    vi.stubGlobal("fetch", gitlabFetch);
+
+    const response = await POST(authorizedRequest(validGitlabInput()));
+
+    expect(response.status).toBe(201);
+    expect(forge.getForgeToken).toHaveBeenCalledWith(tokenAccount.id, "https://gitlab.example.com");
+    const hookPost = forge.requests.find((request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/hooks"));
+    expect(hookPost).toBeDefined();
+    expect(new URL(hookPost!.url).origin).toBe("https://gitlab.example.com");
+    expect(hookPost!.headers.get("authorization")).toBe("Bearer glpat-production-wire");
+    const hookBody = JSON.parse(await hookPost!.text()) as Record<string, unknown>;
+    // The receiver the hook delivers to is the GitLab one, not the GitHub
+    // callback the same wiring hands a GitHub registration.
+    expect(hookBody.url).toBe(gitlabWebhookUrl);
+    expect(hookBody.token).toBe("webhook-secret");
+    expect(createRepository).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.example.com",
+      githubWebhookId: 9001,
+      sponsorId: tokenAccount.id,
+    }));
   });
 
   it("carries each minted account identity through bearer lookup to its own GitHub OAuth credential", async () => {
@@ -1472,6 +1579,50 @@ describe("DELETE /api/repositories", () => {
         code: "NOT_FOUND",
         message: "No GitLab registration matches that instance and project, so there is nothing to unregister.",
       },
+    });
+  });
+
+  // The other half of the production GitLab wire (issue 547): the forge-first
+  // hook deletion reads the sponsor's PAT through the identity store the
+  // route constructs, and nothing else in this suite drives that wiring.
+  it("deletes the GitLab hook through the sponsor's forge token via the production DELETE wiring", async () => {
+    const forge = productionGitLabWiring();
+    const target = gitlabTarget(tokenAccount.id);
+    vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationStateByForgeIdentity")
+      .mockResolvedValue({ repository: target, unregisteredAt: null });
+    vi.spyOn(PostgresRepositoryStore.prototype, "findGitLabWebhookTargetByOwnerName").mockResolvedValue({
+      sponsorId: tokenAccount.id,
+      githubWebhookId: 9001,
+      instanceUrl: "https://gitlab.example.com",
+    });
+    const unregister = vi.spyOn(PostgresRepositoryStore.prototype, "unregisterRepository")
+      .mockResolvedValue({ kind: "UNREGISTERED", repository: target });
+    const gitlabFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      forge.requests.push(request);
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", gitlabFetch);
+
+    const response = await DELETE(deleteRequest(validGitlabUnregisterInput()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ webhookDeleted: true, alreadyUnregistered: false });
+    // Every token read — the wiring's own and the deletion's — is the
+    // sponsor's credential on the registration's instance.
+    expect(forge.getForgeToken).toHaveBeenCalled();
+    for (const call of forge.getForgeToken.mock.calls) {
+      expect(call).toEqual([tokenAccount.id, "https://gitlab.example.com"]);
+    }
+    expect(forge.requests).toHaveLength(1);
+    const hookDelete = forge.requests[0]!;
+    expect(`${hookDelete.method} ${hookDelete.url}`).toBe(
+      "DELETE https://gitlab.example.com/api/v4/projects/group%2Fsubgroup%2Fproject/hooks/9001",
+    );
+    expect(hookDelete.headers.get("authorization")).toBe("Bearer glpat-production-wire");
+    expect(unregister).toHaveBeenCalledExactlyOnceWith({
+      ownerName: "group/subgroup/project",
+      sponsorId: tokenAccount.id,
     });
   });
 
