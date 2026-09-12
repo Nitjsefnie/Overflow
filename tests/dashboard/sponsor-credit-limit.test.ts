@@ -192,6 +192,37 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     expect(await creditState(sponsor)).toEqual({ balance: 0, repaidDebt: 10, creditLimit: 11 });
   });
 
+  it("replays undated debt before dated work even after the historical row is recreated", async () => {
+    const sponsor = await account();
+    const worker = await account();
+    const undated = await settle(worker, sponsor, 10, 1);
+    await sql`update pull_requests set merged_at = null where id = ${undated.pullRequestId}`;
+    await settle(sponsor, worker, 10, 2);
+    await settle(worker, sponsor, 10, 3);
+    // NULLS LAST would replay the earning before either debit: no demonstrated
+    // repayment, a limit of ten, and no visible issue at the final -10 balance.
+    const facts = async () => ({ state: await creditState(sponsor), visible: await board(sponsor, worker) });
+    const expected = {
+      state: { balance: -10, repaidDebt: 10, creditLimit: 11 }, visible: [sponsor.issueId],
+    };
+    expect(await facts()).toEqual(expected);
+
+    const [recreated] = await sql<{ id: string }[]>`
+      with removed as (
+        delete from settlements where id = ${undated.id} returning *
+      )
+      insert into settlements (
+        pull_request_id, issue_id, creditor_id, debtor_id, opening_comparison_points,
+        settled_points, review_rounds, credits, proof_sha256, status, created_at
+      )
+      select pull_request_id, issue_id, creditor_id, debtor_id, opening_comparison_points,
+        settled_points, review_rounds, credits, proof_sha256, status, '2040-01-01'::timestamptz
+      from removed returning id
+    `;
+    expect(recreated.id).not.toBe(undated.id);
+    expect(await facts()).toEqual(expected);
+  });
+
   it("ignores unsettled, unclaimed and zero-credit work when deriving repayment", async () => {
     const sponsor = await account();
     const worker = await account();
