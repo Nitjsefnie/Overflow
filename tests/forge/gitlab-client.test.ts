@@ -157,6 +157,181 @@ function jsonRouter(routes: Array<[string, unknown] | [string, unknown, number]>
   };
 }
 
+describe("GitLab collection pagination", () => {
+  const repository = { owner: "gitlab-org", name: "gitlab" };
+  const projectPath = "/api/v4/projects/gitlab-org%2Fgitlab";
+  const issuesUrl = `https://gitlab.com${projectPath}/issues`;
+  const closesUrl = `https://gitlab.com${projectPath}/merge_requests/17/closes_issues`;
+  const json = (body: unknown, headers: HeadersInit = {}) => new Response(JSON.stringify(body), { headers });
+  // A hard transport cap turns missing loop guards into prompt, visible failures.
+  function collectionClient(
+    pathname: string,
+    respond: (request: Request, hit: number) => Response,
+    cap = 3,
+    instanceUrl = "https://gitlab.com",
+  ) {
+    const requests: Request[] = [];
+    const client = new GitLabGateway({
+      instanceUrl,
+      token: "glpat-test",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        if (new URL(request.url).pathname === pathname) {
+          requests.push(request);
+          if (requests.length > cap) return new Response("request cap exceeded", { status: 503 });
+          return respond(request, requests.length);
+        }
+        if (new URL(request.url).pathname.endsWith("/merge_requests/17")) return json(mergeRequest);
+        return json([]);
+      },
+    });
+    return { client, requests };
+  }
+
+  it("follows the next Link relation and preserves opaque parameters", async () => {
+    const next = `${issuesUrl}?pagination=keyset&order_by=created_at&sort=asc&per_page=100&created_at=opaque%2Bvalue&id_after=42&cursor=a%2Fb%3D`;
+    const { client, requests } = collectionClient(`${projectPath}/issues`, (_, hit) => hit === 1
+      ? json([issue], { link: `<${issuesUrl}>; rel="prev"; title="prior, page", <${next}>; title="next, page"; rel="next", <${issuesUrl}>; rel="last"`, "x-next-cursor": "wrong-fallback" })
+      : json([{ ...issue, iid: 13 }]));
+    const issues = await client.listIssues(repository);
+    expect(issues.map((item) => item.number)).toEqual([12, 13]);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.url).toBe(next);
+    expect(requests[1]!.headers.get("authorization")).toBe("Bearer glpat-test");
+  });
+
+  it("uses offset pagination for MR commits and reads the latest second-page timestamp", async () => {
+    const pathname = `${projectPath}/merge_requests/17/commits`;
+    const next = `https://gitlab.com${pathname}?per_page=100&page=2`;
+    const { client, requests } = collectionClient(pathname, (_, hit) => hit === 1
+      ? json([{ committed_date: "2026-09-11T08:00:00.000Z" }], { link: `<${next}>; rel="next"` })
+      : json([{ committed_date: "2026-09-11T11:30:00.000Z" }, { committed_date: "2026-09-11T09:00:00.000Z" }]));
+    expect((await client.getPullRequest(repository, 17)).finalCommitAt).toBe("2026-09-11T11:30:00.000Z");
+    expect(requests.map((request) => new URL(request.url).search)).toEqual(["?per_page=100&page=1", "?per_page=100&page=2"]);
+  });
+
+  it("uses offset pagination for closes_issues", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit === 1
+      ? json([{ id: 6_600_001, iid: 12, project_id: 278964 }], { "x-next-page": "2" })
+      : json([{ id: 6_600_002, iid: 13, project_id: 278964 }]));
+    expect(await client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })).toEqual([
+      { id: 6_600_001, number: 12, repositoryGitHubId: 278964 },
+      { id: 6_600_002, number: 13, repositoryGitHubId: 278964 },
+    ]);
+    expect(requests.map((request) => new URL(request.url).search)).toEqual(["?per_page=100&page=1", "?per_page=100&page=2"]);
+  });
+
+  it("uses offset pagination for closed_by", async () => {
+    const pathname = `${projectPath}/issues/12/closed_by`;
+    const { client, requests } = collectionClient(pathname, (_, hit) => {
+      const body = [{ ...mergeRequest, iid: hit + 16, merged_at: null }];
+      if (hit === 1) return json(body, { link: `<${pathname}?per_page=100&page=2&opaque=keep%2Bme>; rel="next"`, "x-next-page": "99" });
+      if (hit === 2) return json(body, { "x-next-page": "3" });
+      return json(body);
+    });
+    expect((await client.getIssueClosingPullRequests(repository, 12)).map((mr) => mr.number)).toEqual([17, 18, 19]);
+    expect(requests.map((request) => new URL(request.url).search)).toEqual([
+      "?per_page=100&page=1", "?per_page=100&page=2&opaque=keep%2Bme", "?per_page=100&page=3&opaque=keep%2Bme",
+    ]);
+  });
+
+  it.each([
+    ["keyset", {}], ["keyset", { "x-next-cursor": "" }], ["keyset", { "x-next-page": "2" }],
+    ["offset", {}], ["offset", { "x-next-page": "" }], ["offset", { "x-next-cursor": "cursor" }],
+  ] as const)("stops without a supported continuation (%s, %j)", async (mode, headers) => {
+    const pathname = mode === "keyset" ? `${projectPath}/issues` : `${projectPath}/merge_requests/17/closes_issues`;
+    const { client, requests } = collectionClient(pathname, () => json([], headers));
+    const result = mode === "keyset" ? await client.listIssues(repository)
+      : await client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 });
+    expect(result).toEqual([]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each(["abc", "0", "-1", "1", "1.5", "2e0", "0x2", "9007199254740992"])("rejects invalid offset page headers (%s)", async (page) => {
+    const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, () => json([], { "x-next-page": page }));
+    await expect(client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })).rejects.toThrow(/invalid x-next-page/);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("rejects repeated cursor values", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/issues`, () => json([], { "x-next-cursor": "same-cursor" }));
+    await expect(client.listIssues(repository)).rejects.toThrow(/repeated.*(cursor|target)/i);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("rejects repeated normalized Link targets", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/issues`, () => json([], {
+      link: `<${issuesUrl}?sort=asc&order_by=created_at&pagination=keyset&per_page=%31%30%30>; rel="next"`,
+    }));
+    await expect(client.listIssues(repository)).rejects.toThrow(/repeated.*target/i);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("rejects reused cursors on distinct Link targets", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/issues`, (_, hit) => json([], {
+      link: `<${issuesUrl}?cursor=same&opaque=${hit}>; rel="next"`,
+    }));
+    await expect(client.listIssues(repository)).rejects.toThrow(/repeated.*cursor/i);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("rejects a header that moves backwards from the linked offset page", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit === 1
+      ? json([], { link: `<${closesUrl}?per_page=100&page=5>; rel="next"` })
+      : json([], { "x-next-page": "3" }));
+    await expect(client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })).rejects.toThrow(/invalid x-next-page/);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("follows relative Links under a configured instance prefix", async () => {
+    const { client, requests } = collectionClient(`/gitlab${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit === 1
+      ? json([{ id: 6_600_001, iid: 12, project_id: 278964 }], { link: '<?page=2&per_page=100>; rel="next"' })
+      : json([{ id: 6_600_002, iid: 13, project_id: 278964 }]), 2, "https://gitlab.com/gitlab");
+    expect((await client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })).map((item) => item.number)).toEqual([12, 13]);
+    expect(requests[1]!.url).toBe("https://gitlab.com/gitlab/api/v4/projects/gitlab-org%2Fgitlab/merge_requests/17/closes_issues?page=2&per_page=100");
+  });
+
+  it.each([
+    `<https://user:pass@gitlab.com${projectPath}/issues?page=2>; rel="next"`,
+    `<${issuesUrl}?page=2#fragment>; rel="next"`,
+    `<${issuesUrl}?page=2#>; rel="next"`,
+    `<https://other.example${projectPath}/issues?page=2>; rel="next"`,
+    `<http://gitlab.com${projectPath}/issues?page=2>; rel="next"`,
+    `<https://gitlab.com/api/v40/projects/gitlab-org%2Fgitlab/issues?page=2>; rel="next"`,
+    `<${closesUrl}?page=2>; rel="next"`,
+    `<https://gitlab.com/api/v4/../projects/gitlab-org%2Fgitlab/issues?page=2>; rel="next"`,
+    `<https://[invalid>; rel="next"`,
+    `${issuesUrl}?page=2; rel="next"`,
+    `<${issuesUrl}?page=2>; rel="next`,
+    `<${issuesUrl}?page=2>; rel="next", <${issuesUrl}?page=3>; rel="next"`,
+  ])("rejects unsafe or malformed next Links (%s)", async (link) => {
+    const requests: Request[] = [];
+    const client = gateway(async (input, init) => {
+      requests.push(new Request(input, init));
+      if (requests.length > 2) return new Response("request cap exceeded", { status: 503 });
+      return json([], { link });
+    });
+    await expect(client.listIssues(repository)).rejects.toThrow(/(invalid|unsafe|malformed).*link/i);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.headers.get("authorization")).toBe("Bearer glpat-test");
+  });
+
+  it("preserves API failures on continuation pages", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit === 1
+      ? json([], { "x-next-page": "2" }) : new Response("forbidden", { status: 403 }));
+    await expect(client.getPullRequestClosingIssues(repository, { id: 5_500_001, number: 17 })).rejects.toMatchObject({ name: "GitLabApiError", status: 403 });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("leaves finalCommitAt null when commit pagination fails", async () => {
+    const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/commits`, (_, hit) => hit === 1
+      ? json([{ committed_date: "2026-09-11T08:00:00.000Z" }], { "x-next-page": "2" })
+      : new Response("unavailable", { status: 503 }));
+    expect((await client.getPullRequest(repository, 17)).finalCommitAt).toBeNull();
+    expect(requests).toHaveLength(2);
+  });
+});
+
 describe("GitLabGateway", () => {
   it("looks a project up by numeric id and by urlencoded path", async () => {
     const requests: string[] = [];
@@ -722,7 +897,7 @@ describe("GitLabGateway", () => {
     expect(requests.some((url) => url.includes("updated_after=2026-09-11T00%3A00%3A00.000Z"))).toBe(true);
   });
 
-  it("paginates by keyset, following the cursor across pages", async () => {
+  it("uses created_at keyset ordering and follows x-next-cursor for 101 issues", async () => {
     const requests: string[] = [];
     const client = gateway(async (input) => {
       const request = new Request(input);
@@ -731,22 +906,25 @@ describe("GitLabGateway", () => {
       if (!listPage) {
         return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (requests.filter((url) => new URL(url).pathname.endsWith("/issues")).length > 2) {
+        return new Response("pagination loop", { status: 503 });
+      }
       if (request.url.includes("cursor=")) {
-        return new Response(JSON.stringify([{ ...issue, iid: 13 }]), {
+        return new Response(JSON.stringify([{ ...issue, iid: 112 }]), {
           status: 200, headers: { "content-type": "application/json" },
         });
       }
-      return new Response(JSON.stringify([issue]), {
+      return new Response(JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ ...issue, iid: index + 12 }))), {
         status: 200,
-        headers: { "content-type": "application/json", "x-next-page-cursor": "cursor-after-page-1" },
+        headers: { "content-type": "application/json", "x-next-cursor": "cursor-after-page-1" },
       });
     });
     const issues = await client.listIssues({ owner: "gitlab-org", name: "gitlab" });
-    expect(issues).toHaveLength(2);
+    expect(issues).toHaveLength(101);
+    expect(issues.at(-1)?.number).toBe(112);
     const issuePages = requests.filter((url) => new URL(url).pathname.endsWith("/issues"));
     expect(issuePages).toHaveLength(2);
-    expect(issuePages[0]).toContain("pagination=keyset");
-    expect(issuePages[0]).toContain("order_by=id");
+    expect(new URL(issuePages[0]!).search).toBe("?per_page=100&pagination=keyset&order_by=created_at&sort=asc");
     expect(issuePages[1]).toContain("cursor=cursor-after-page-1");
   });
 
