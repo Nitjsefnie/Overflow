@@ -218,28 +218,6 @@ describe("Forge identities panel", () => {
     expect(screen.queryByRole("button", { name: "Retry loading identities" })).not.toBeInTheDocument();
   });
 
-  it("does not update state when an in-flight list request settles after unmount", async () => {
-    let resolveInitial!: (response: Response) => void;
-    const initialRequest = new Promise<Response>((resolve) => {
-      resolveInitial = resolve;
-    });
-    fetchMock.mockReset().mockReturnValue(initialRequest);
-    const { unmount } = render(<ForgeIdentitiesPanel />);
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "/api/forge-identities",
-      { credentials: "same-origin" },
-    ));
-    unmount();
-    await act(async () => {
-      resolveInitial(Response.json({ identities: [] }));
-    });
-
-    // The console guard would surface an update from the unmounted panel; the
-    // empty body confirms there is no remounted view for the stale response.
-    expect(document.body).toHaveTextContent("");
-  });
-
   it("ignores a stale rejection from the canceled StrictMode effect", async () => {
     let rejectStaleRequest!: (reason?: unknown) => void;
     const staleRequest = new Promise<Response>((_resolve, reject) => {
@@ -271,6 +249,142 @@ describe("Forge identities panel", () => {
 
     expect(screen.getByText("strict-mode-login")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the linked identity after a successful refresh following an initial list failure", async () => {
+    const linkedIdentity = {
+      id: "identity-linked-after-failure",
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.com",
+      forgeLogin: "linked-after-failure",
+      verifiedAt: "2026-09-10T00:00:00.000Z",
+      tokenFailedAt: null,
+    };
+    fetchMock.mockReset()
+      .mockRejectedValueOnce(new Error("initial list unavailable"))
+      .mockResolvedValueOnce(Response.json({ identity: linkedIdentity }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ identities: [linkedIdentity] }));
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: linkedIdentity.instanceUrl } });
+    fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: "token-for-link" } });
+    fireEvent.click(screen.getByRole("button", { name: "Link identity" }));
+
+    expect(await screen.findByText(linkedIdentity.forgeLogin)).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Forge identity linked.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let a stale successful load replace the newer StrictMode result", async () => {
+    let resolveStaleRequest!: (response: Response) => void;
+    const staleRequest = new Promise<Response>((resolve) => {
+      resolveStaleRequest = resolve;
+    });
+    fetchMock.mockReset()
+      .mockReturnValueOnce(staleRequest)
+      .mockResolvedValueOnce(Response.json({ identities: [{
+        id: "identity-newer",
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        forgeLogin: "newer-result",
+        verifiedAt: "2026-09-10T00:00:00.000Z",
+        tokenFailedAt: null,
+      }] }));
+    render(
+      <StrictMode>
+        <ForgeIdentitiesPanel />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("newer-result")).toBeVisible();
+    await act(async () => {
+      resolveStaleRequest(Response.json({ identities: [{
+        id: "identity-stale",
+        provider: "gitlab",
+        instanceUrl: "https://gitlab.example.com",
+        forgeLogin: "stale-result",
+        verifiedAt: "2026-09-09T00:00:00.000Z",
+        tokenFailedAt: null,
+      }] }));
+    });
+
+    expect(screen.getByText("newer-result")).toBeVisible();
+    expect(screen.queryByText("stale-result")).not.toBeInTheDocument();
+  });
+
+  it("keeps retry disabled when a canceled older request finally settles", async () => {
+    let rejectOlderRequest!: (reason?: unknown) => void;
+    const olderRequest = new Promise<Response>((_resolve, reject) => {
+      rejectOlderRequest = reject;
+    });
+    let resolveRetryRequest!: (response: Response) => void;
+    const retryRequest = new Promise<Response>((resolve) => {
+      resolveRetryRequest = resolve;
+    });
+    fetchMock.mockReset()
+      .mockReturnValueOnce(olderRequest)
+      .mockResolvedValueOnce(Response.json(
+        { error: { code: "UPSTREAM_FAILURE", message: "The identity list is unavailable." } },
+        { status: 503 },
+      ))
+      .mockReturnValueOnce(retryRequest);
+    render(
+      <StrictMode>
+        <ForgeIdentitiesPanel />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    const retry = screen.getByRole("button", { name: "Retry loading identities" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(retry).toBeDisabled();
+
+    await act(async () => {
+      rejectOlderRequest(new Error("older request failed"));
+    });
+
+    expect(retry).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading linked identities…");
+    await act(async () => {
+      resolveRetryRequest(Response.json({ identities: [] }));
+    });
+  });
+
+  it("clears stale link feedback when retrying the failed identity list", async () => {
+    const linkFailureMessage = "The identity could not be linked. Try again.";
+    let resolveRetryRequest!: (response: Response) => void;
+    const retryRequest = new Promise<Response>((resolve) => {
+      resolveRetryRequest = resolve;
+    });
+    fetchMock.mockReset()
+      .mockRejectedValueOnce(new Error("initial list unavailable"))
+      .mockResolvedValueOnce(Response.json(
+        { error: { code: "INVALID_TOKEN", message: linkFailureMessage } },
+        { status: 422 },
+      ))
+      .mockReturnValueOnce(retryRequest);
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: "https://gitlab.com" } });
+    fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: "invalid-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Link identity" }));
+    expect(await screen.findByText(linkFailureMessage)).toBeVisible();
+
+    const retry = screen.getByRole("button", { name: "Retry loading identities" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    expect(screen.queryByText(linkFailureMessage)).not.toBeInTheDocument();
+    expect(retry).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading linked identities…");
+    await act(async () => {
+      resolveRetryRequest(Response.json({ identities: [] }));
+    });
   });
 
   it("ships a forge-link-form rule that separates the form's children", () => {

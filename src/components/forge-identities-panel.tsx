@@ -55,6 +55,7 @@ export function ForgeIdentitiesPanel() {
   }, [loadAttempt]);
 
   function retryLoad() {
+    setFeedback(null);
     setLoading(true);
     setIdentities(null);
     setLoadAttempt((attempt) => attempt + 1);
@@ -84,6 +85,7 @@ export function ForgeIdentitiesPanel() {
       if (list.ok) {
         const listBody = (await list.json()) as { identities: ForgeIdentityRow[] };
         setIdentities(listBody.identities);
+        setLoadError(null);
       }
     } catch {
       setFeedback({ kind: "error", message: "The link request could not reach Overflow. Check your connection and try again." });
