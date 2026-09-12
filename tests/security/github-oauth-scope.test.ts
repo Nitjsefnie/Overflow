@@ -115,4 +115,72 @@ describe("GitHub OAuth scope", () => {
 
     expect("githubOAuthScope" in auth).toBe(false);
   });
+
+  // The hint the JWT carries is what GitHub reported granting on the initial
+  // callback (account.scope), reduced to one boolean. It gates only the
+  // registration page's form; the route re-reads the grant from GitHub.
+  describe("webhook-administration hint", () => {
+    async function callbacks() {
+      await import("@/auth");
+      return mocks.nextAuth.mock.calls[0]![0].callbacks!;
+    }
+
+    function githubAccount(scope: string | undefined) {
+      return {
+        provider: "github",
+        providerAccountId: "4242",
+        type: "oauth" as const,
+        access_token: "test-token",
+        ...(scope === undefined ? {} : { scope }),
+      };
+    }
+
+    it.each([
+      { label: "the empty contributor grant", scope: "", expected: false },
+      { label: "an absent scope claim", scope: undefined, expected: false },
+      { label: "the exact registration grant", scope: "admin:repo_hook", expected: true },
+      { label: "a comma-delimited grant carrying it", scope: "read:user,admin:repo_hook", expected: true },
+      { label: "a space-delimited grant carrying it", scope: "read:user admin:repo_hook", expected: true },
+      { label: "full repository access", scope: "repo", expected: true },
+      { label: "public repository access", scope: "public_repo", expected: true },
+      { label: "hook write only", scope: "write:repo_hook", expected: false },
+    ])("records $expected on the JWT for $label", async ({ scope, expected }) => {
+      const { jwt } = await callbacks();
+
+      const token = await jwt!({
+        token: {},
+        user: { id: "4242" },
+        account: githubAccount(scope),
+        trigger: "signIn",
+      });
+
+      expect(token?.canAdministerWebhooks).toBe(expected);
+    });
+
+    it("keeps the recorded hint on a later refresh that carries no account", async () => {
+      const { jwt } = await callbacks();
+
+      const token = await jwt!({ token: { canAdministerWebhooks: true }, user: { id: "4242" } });
+
+      expect(token?.canAdministerWebhooks).toBe(true);
+    });
+
+    it("exposes the hint on the session only when the JWT recorded it true", async () => {
+      const { session: sessionCallback } = await callbacks();
+      const base = { expires: "2099-01-01T00:00:00.000Z" };
+      const read = async (token: Record<string, unknown>) => {
+        const session = await sessionCallback!({
+          session: { ...base, user: { id: "", name: "Ada", email: null as unknown as string, emailVerified: null } },
+          token: { userId: "user-uuid", role: "MEMBER", ...token },
+        } as never);
+        return (session.user as { canAdministerWebhooks?: unknown }).canAdministerWebhooks;
+      };
+
+      await expect(read({ canAdministerWebhooks: true })).resolves.toBe(true);
+      await expect(read({ canAdministerWebhooks: false })).resolves.toBe(false);
+      // A JWT issued before the hint existed is not capable.
+      await expect(read({})).resolves.toBe(false);
+      await expect(read({ canAdministerWebhooks: "true" })).resolves.toBe(false);
+    });
+  });
 });

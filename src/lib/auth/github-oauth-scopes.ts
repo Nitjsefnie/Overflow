@@ -24,3 +24,26 @@ export const GITHUB_CONTRIBUTOR_SCOPE = "";
 
 /** The repository-registration sign-in: webhook administration. */
 export const GITHUB_REPOSITORY_REGISTRATION_SCOPE = "admin:repo_hook";
+
+/** Every granted scope that lets this token create and delete a public repository's webhooks. */
+const WEBHOOK_ADMINISTRATION_SCOPES: ReadonlySet<string> = new Set([
+  GITHUB_REPOSITORY_REGISTRATION_SCOPE,
+  "repo",
+  "public_repo",
+]);
+
+/**
+ * The individual scopes in a GitHub scope list, in either delimiter GitHub
+ * uses. Anything that is not a string reads as no scopes granted.
+ */
+export function parseGrantedScopes(raw: unknown): string[] {
+  if (typeof raw !== "string") {
+    return [];
+  }
+  return raw.split(/[\s,]+/).filter((scope) => scope.length > 0);
+}
+
+/** Whether a granted scope list lets the token administer public-repository webhooks. */
+export function grantsWebhookAdministration(scopes: readonly string[]): boolean {
+  return scopes.some((scope) => WEBHOOK_ADMINISTRATION_SCOPES.has(scope));
+}
