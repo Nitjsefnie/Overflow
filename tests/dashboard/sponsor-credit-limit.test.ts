@@ -144,6 +144,9 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     for (const repository of repositories) {
       await sql`update registered_repositories set sponsor_id = ${sponsor.id} where id = ${repository.repositoryId}`;
     }
+    // GitHub must win on provider even when its instance sorts after GitLab's.
+    await sql`update registered_repositories set instance_url = 'https://zz.example'
+      where id in (${sponsor.repositoryId}, ${githubLater.repositoryId})`;
     await sql`update registered_repositories set provider = 'gitlab', instance_url = 'https://z.example',
       forge_project_id = 1 where id = ${gitlabLaterInstance.repositoryId}`;
     await sql`update registered_repositories set provider = 'gitlab', instance_url = 'https://a.example',
