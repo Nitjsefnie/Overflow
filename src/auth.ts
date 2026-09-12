@@ -15,6 +15,8 @@ import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
 import {
   GITHUB_CONTRIBUTOR_SCOPE,
   GITHUB_REPOSITORY_REGISTRATION_SCOPE,
+  grantsWebhookAdministration,
+  parseGrantedScopes,
 } from "@/lib/auth/github-oauth-scopes";
 
 export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
@@ -48,7 +50,17 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
         persist: upsertGitHubIdentity,
       });
     },
-    async jwt({ token, profile }) {
+    async jwt({ token, profile, account }) {
+      // The scopes GitHub reports granting arrive once, on the initial OAuth
+      // callback (account.scope). Reduced to one boolean hint: it decides
+      // whether the registration page shows its form or the widening
+      // sign-in, never whether registration proceeds — the route re-reads
+      // the grant from GitHub. A JWT issued before the hint existed carries
+      // nothing here and reads as not capable.
+      if (account?.provider === "github") {
+        token.canAdministerWebhooks = grantsWebhookAdministration(parseGrantedScopes(account.scope));
+      }
+
       const identity = readGitHubIdentity(profile);
       if (identity === null) {
         return token;
@@ -74,6 +86,8 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       ) {
         session.user.id = token.userId;
         (session.user as typeof session.user & { role?: UserRole }).role = token.role;
+        (session.user as typeof session.user & { canAdministerWebhooks?: boolean }).canAdministerWebhooks =
+          token.canAdministerWebhooks === true;
       }
       return session;
     },
