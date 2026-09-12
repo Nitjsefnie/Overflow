@@ -55,7 +55,6 @@ export function ForgeIdentitiesPanel() {
   }, [loadAttempt]);
 
   function retryLoad() {
-    setFeedback(null);
     setLoading(true);
     setIdentities(null);
     setLoadAttempt((attempt) => attempt + 1);
