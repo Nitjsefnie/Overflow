@@ -273,8 +273,8 @@ describe("initial PostgreSQL materialization", () => {
       "040_forge_repository_columns.sql",
       "041_forge_identity_token_failed_at.sql",
       "042_gitlab_webhook_orphan_cleanup.sql",
-      "043_completed_work_credit_limits.sql",
       "043_repository_webhook_credentials.sql",
+      "044_completed_work_credit_limits.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
