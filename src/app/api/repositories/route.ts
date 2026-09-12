@@ -18,6 +18,7 @@ import {
   rejectUntrustedRequest,
 } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
+import { plural } from "@/lib/plural";
 import {
   changeRepositoryCatalog,
   unregisterRepository,
@@ -99,7 +100,9 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
       // ahead of the flow: a token GitHub reports as unable to administer
       // webhooks is the caller's authorization, refused with a stable code
       // and the remedy; a token GitHub no longer accepts is a credentials
-      // refusal; any other probe failure is upstream.
+      // refusal; a rate limit is the same documented 429 the gateway's steps
+      // answer, with the same retry guidance; any other probe failure is
+      // upstream.
       if (error instanceof GitHubWebhookScopeError) {
         return errorResponse(403, "GITHUB_WEBHOOK_SCOPE_REQUIRED", error.message);
       }
@@ -108,6 +111,16 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
           401,
           "GITHUB_CREDENTIALS",
           "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read its granted permissions. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.",
+        );
+      }
+      if (error instanceof GitHubScopeProbeError && (error.rateLimited || error.status === 429)) {
+        const delay = error.retryAfterSeconds === null
+          ? ""
+          : ` Retry after ${error.retryAfterSeconds} ${plural(error.retryAfterSeconds, "second")}.`;
+        return errorResponse(
+          429,
+          "GITHUB_RATE_LIMITED",
+          `GitHub rate-limited the request to read its granted permissions (HTTP ${error.status}).${delay} Please retry registration later.`,
         );
       }
       // A forge-identity refusal (malformed instance URL, unverified token)
