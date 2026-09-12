@@ -912,10 +912,16 @@ describe("dashboard projections", () => {
     const issues = await listEligibleIssues("member-1", {}, { sql });
 
     expect(issues.map((issue) => issue.id)).toEqual(["issue-old-high", "issue-new-high", "issue-low"]);
-    // Exact settled balance leads; equal balances retain reserve-then-age
-    // ordering. The emitted query may include comments before the sort keys.
-    expect(captures[0]?.text).toMatch(
-      /order by\s+(?:--[^\n]*\s+)*ranked\.settled_balance desc,\s+ranked\.opening_reserve_points desc,\s+ranked\.created_at asc/i,
+    // Strip line comments before checking the complete final ordering clause.
+    const normalizedQuery = (captures[0]?.text ?? "")
+      .split("\n")
+      .map((line) => line.split("--", 1)[0])
+      .join(" ")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+    expect(normalizedQuery.slice(normalizedQuery.lastIndexOf("order by "))).toBe(
+      "order by ranked.settled_balance desc, ranked.opening_reserve_points desc, ranked.created_at asc",
     );
   });
 
