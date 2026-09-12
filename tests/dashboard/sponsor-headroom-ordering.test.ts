@@ -7,22 +7,12 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { listEligibleIssues } from "@/lib/dashboard/queries";
 
 /**
- * The eligible board leads with a bucketed sponsor-headroom tier before the
- * reserve points a sponsor declares for themselves: a sponsor who has returned
- * more work than they have drawn (positive headroom) is offered ahead of one
- * in balance, who is offered ahead of one who has drawn far more than they
- * have returned. The tier orders but never filters — every open issue stays on
- * the board — and inside a tier the long-standing reserve-then-age keys stand.
- *
- * The tier absorbs the zero cliff: the first outsider claim puts a sponsor a
- * few points below zero, and burying them for it would punish exactly the
- * first step into the ledger. The boundary sits at minus ten — roughly one
- * full opening of reserve beyond a zero balance — so drawing past it means
- * more than one unredeemed opening, not a single claim.
+ * Settled balance orders the board exactly, without reservation subtraction
+ * or buckets. Equal balances retain reserve-descending, age-ascending order;
+ * available headroom remains a display field and never filters eligible rows.
  */
 describe("sponsor headroom ordering against PostgreSQL", () => {
-  /** The issue's repro, isolated: one insolvent sponsor, one solvent one. */
-  describe("the insolvent-versus-solvent repro", () => {
+  describe("equal balances with different reservations", () => {
     let container: StartedTestContainer | undefined;
     const originalDatabaseUrl = process.env.DATABASE_URL;
 
@@ -49,18 +39,16 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       }
     });
 
-    it("ranks the solvent sponsor's issues above the insolvent sponsor's and keeps all four on the board", async () => {
-      // Adam has drawn three outsider claims (30 reserved points) against a
-      // zero balance; Bob has reserved nothing. Reserve points alone would put
-      // Adam's older issues on top of each tier; the headroom tier must put
-      // Bob above him without dropping a single row.
+    it("ignores claims in ordering and keeps all four issues ordered by reserve then age", async () => {
+      // Both settled balances are zero. Adam's thirty reserved points affect
+      // display only; his older issues win each equal-reserve tie with Bob.
       const board = await listEligibleIssues(seededRepro.viewerId);
 
       expect(board.map((row) => row.title)).toEqual([
-        "bob ten",
-        "bob five",
         "adam ten",
+        "bob ten",
         "adam five",
+        "bob five",
       ]);
       const headroomByTitle = new Map(board.map((row) => [row.title, row.availableHeadroom]));
       expect(headroomByTitle.get("bob ten")).toBe(0);
@@ -68,12 +56,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
     });
   });
 
-  /**
-   * The tier boundaries, isolated: the zero cliff, balance-size neutrality,
-   * the inclusive minus-ten boundary, the demotion past it, and the display
-   * field every row still carries.
-   */
-  describe("the tier boundaries", () => {
+  describe("exact settled balances", () => {
     let container: StartedTestContainer | undefined;
     const originalDatabaseUrl = process.env.DATABASE_URL;
 
@@ -100,64 +83,20 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       }
     });
 
-    it("orders the whole board by tier before reserve points", async () => {
-      // Tier 0: Erin (+50) and Flor (+500). Tier 1: Carol (-5), Nina (-10),
-      // Dave (0), Hank (0). Tier 2: Gail (-11). Inside each tier, reserve
-      // points desc then created_at asc.
+    it("orders all eligible issues by +500, +50, zero, -5, -10, -11 before reserve or age", async () => {
+      // Negative balances are real settled debits, separate from the claims
+      // that also reduce Carol's, Nina's, and Gail's displayed headroom.
       const board = await listEligibleIssues(seededTiers.viewerId);
 
       expect(board.map((row) => row.title)).toEqual([
-        "erin five",
         "flor five",
-        "carol ten",
-        "nina ten",
+        "erin five",
         "dave five",
         "hank five",
+        "carol ten",
+        "nina ten",
         "gail ten",
       ]);
-    });
-
-    it("keeps a sponsor just past zero tiered with a balanced sponsor instead of burying them", async () => {
-      // Carol sits at -5 from one claimed five-pointer. A sign cliff would
-      // drop her below every zero-headroom sponsor; the minus-ten bucket
-      // keeps her with them, where her higher reserve keeps her ahead of Dave.
-      const board = await listEligibleIssues(seededTiers.viewerId);
-      const positionOf = (title: string) => board.findIndex((row) => row.title === title);
-
-      expect(positionOf("carol ten")).toBeLessThan(positionOf("dave five"));
-    });
-
-    it("does not let the largest positive balance monopolize the top tier", async () => {
-      // Erin at +50 and Flor at +500 share tier 0, so raw balance size ranks
-      // neither above the other: age decides.
-      const board = await listEligibleIssues(seededTiers.viewerId);
-      const positionOf = (title: string) => board.findIndex((row) => row.title === title);
-
-      expect(positionOf("erin five")).toBeLessThan(positionOf("flor five"));
-    });
-
-    it("demotes a sponsor past the minus-ten boundary below a balanced sponsor with lower reserve", async () => {
-      // Gail has drawn eleven points past balance and offers a ten-pointer;
-      // Hank has drawn nothing and offers a five-pointer. Reserve points alone
-      // would lead with Gail; the tier must not.
-      const board = await listEligibleIssues(seededTiers.viewerId);
-      const positionOf = (title: string) => board.findIndex((row) => row.title === title);
-
-      expect(positionOf("hank five")).toBeLessThan(positionOf("gail ten"));
-    });
-
-    it("keeps a sponsor at exactly minus ten in the balanced tier, above the demoted one", async () => {
-      // Nina sits exactly on the boundary: zero balance, one outsider-claimed
-      // ten-pointer. The boundary is inclusive, so she shares the balanced
-      // tier and outranks Hank's lower reserve per the standing keys, above
-      // the demoted Gail below her. A boundary mutated to exclusive
-      // (`> -10`) drops Nina into the demoted tier, behind Gail's older
-      // ten-pointer, and behind Hank — both assertions fire on that mutant.
-      const board = await listEligibleIssues(seededTiers.viewerId);
-      const positionOf = (title: string) => board.findIndex((row) => row.title === title);
-
-      expect(positionOf("nina ten")).toBeLessThan(positionOf("gail ten"));
-      expect(positionOf("nina ten")).toBeLessThan(positionOf("hank five"));
     });
 
     it("keeps the available-headroom display field on every returned row", async () => {
@@ -171,11 +110,11 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
         new Map([
           ["erin five", 50],
           ["flor five", 500],
-          ["carol ten", -5],
-          ["nina ten", -10],
+          ["carol ten", -10],
+          ["nina ten", -20],
           ["dave five", 0],
           ["hank five", 0],
-          ["gail ten", -11],
+          ["gail ten", -22],
         ]),
       );
     });
@@ -219,40 +158,42 @@ async function seedTierWorld(): Promise<void> {
   const gailId = await insertMember("gail", 820_006);
   const hankId = await insertMember("hank", 820_007);
 
-  // Carol: one claimed five-pointer puts her five past balance — tier 1.
+  // Carol: five settled debit points, plus five reserved points.
   const carolRepo = await insertRepository("carol/ridge", carolId);
   await insertIssue({ repositoryId: carolRepo, issueNumber: 1, title: "carol drawn", points: 5, createdAt: "2026-01-11T00:00:00.000Z", assigneeLogin: "drifter-4", assigneeId: 920_001 });
   await insertIssue({ repositoryId: carolRepo, issueNumber: 2, title: "carol ten", points: 10, createdAt: "2026-02-01T00:00:00.000Z" });
+  await seedSettledCredits(viewerId, carolId, 1, "carol-archive", 5);
 
-  // Dave: untouched zero balance — tier 1.
+  // Dave: untouched zero balance.
   const daveRepo = await insertRepository("dune/works", daveId);
   await insertIssue({ repositoryId: daveRepo, issueNumber: 1, title: "dave five", points: 5, createdAt: "2026-03-01T00:00:00.000Z" });
 
-  // Erin: fifty earned credits — tier 0.
+  // Erin: fifty earned credits.
   const erinRepo = await insertRepository("erin/hill", erinId);
   await insertIssue({ repositoryId: erinRepo, issueNumber: 1, title: "erin five", points: 5, createdAt: "2026-05-01T00:00:00.000Z" });
   await seedSettledCredits(erinId, viewerId, 5, "erin-archive");
 
-  // Flor: five hundred earned credits — also tier 0; size must not matter.
+  // Flor: five hundred earned credits, ahead of Erin despite her newer issue.
   const florRepo = await insertRepository("flor/mesa", florId);
   await insertIssue({ repositoryId: florRepo, issueNumber: 1, title: "flor five", points: 5, createdAt: "2026-05-02T00:00:00.000Z" });
   await seedSettledCredits(florId, viewerId, 50, "flor-archive");
 
-  // Gail: a ten-pointer and a one-pointer claimed by outsiders put her eleven
-  // past balance — one past the minus-ten boundary — tier 2.
+  // Gail: eleven settled debit points, plus eleven reserved points.
   const gailRepo = await insertRepository("gail/cove", gailId);
   await insertIssue({ repositoryId: gailRepo, issueNumber: 1, title: "gail drawn ten", points: 10, createdAt: "2026-01-12T00:00:00.000Z", assigneeLogin: "drifter-5", assigneeId: 920_002 });
   await insertIssue({ repositoryId: gailRepo, issueNumber: 2, title: "gail drawn one", points: 1, createdAt: "2026-01-13T00:00:00.000Z", assigneeLogin: "drifter-6", assigneeId: 920_003 });
   await insertIssue({ repositoryId: gailRepo, issueNumber: 3, title: "gail ten", points: 10, createdAt: "2026-04-01T00:00:00.000Z" });
+  await seedSettledCredits(viewerId, gailId, 1, "gail-archive-ten");
+  await seedSettledCredits(viewerId, gailId, 1, "gail-archive-one", 1);
 
-  // Nina: exactly on the boundary — zero balance, one outsider-claimed
-  // ten-pointer puts her at minus ten, the inclusive edge of the balanced tier.
+  // Nina: ten settled debit points, plus ten reserved points.
   const ninaId = await insertMember("nina", 820_008);
   const ninaRepo = await insertRepository("nina/moor", ninaId);
   await insertIssue({ repositoryId: ninaRepo, issueNumber: 1, title: "nina drawn", points: 10, createdAt: "2026-01-14T00:00:00.000Z", assigneeLogin: "drifter-7", assigneeId: 920_004 });
   await insertIssue({ repositoryId: ninaRepo, issueNumber: 2, title: "nina ten", points: 10, createdAt: "2026-06-01T00:00:00.000Z" });
+  await seedSettledCredits(viewerId, ninaId, 1, "nina-archive");
 
-  // Hank: untouched zero balance — tier 1.
+  // Hank: untouched zero balance, tied with Dave but with a newer issue.
   const hankRepo = await insertRepository("hank/dale", hankId);
   await insertIssue({ repositoryId: hankRepo, issueNumber: 1, title: "hank five", points: 5, createdAt: "2026-04-02T00:00:00.000Z" });
 
@@ -308,13 +249,12 @@ async function insertIssue(input: {
 }
 
 /**
- * Settles `count` ten-credit pieces of work in the sponsor's favour so the
- * balances view — settled credits minus owed credits — reports count times
- * ten. The fodder lives in an inactive repository so none of it reaches the
+ * Settles `count` pieces of work between the creditor and debtor. The
+ * fodder lives in an inactive repository so none of it reaches the
  * eligible board, and every settlement carries a unique proof hash.
  */
-async function seedSettledCredits(sponsorId: string, debtorId: string, count: number, archiveOwner: string): Promise<void> {
-  const archiveRepo = await insertRepository(archiveOwner, sponsorId, false);
+async function seedSettledCredits(creditorId: string, debtorId: string, count: number, archiveOwner: string, credits = 10): Promise<void> {
+  const archiveRepo = await insertRepository(archiveOwner, debtorId, false);
   // One reserved id block covers the fodder: issues first, pull requests after.
   const fodderBase = reserveExternalIds(2 * count);
   await sql`
@@ -350,7 +290,7 @@ async function seedSettledCredits(sponsorId: string, debtorId: string, count: nu
       settled_points, review_rounds, credits, proof_sha256, status
     )
     select
-      p.id, p.issue_id, ${sponsorId}, ${debtorId}, 5, 10, 0, 10,
+      p.id, p.issue_id, ${creditorId}, ${debtorId}, 5, ${credits}, 0, ${credits},
       md5(${archiveOwner} || p.pull_request_number::text) || md5(${"alt"} || ${archiveOwner} || p.pull_request_number::text), ${"SETTLED"}
     from pull_requests p
     where p.repository_id = ${archiveRepo}
