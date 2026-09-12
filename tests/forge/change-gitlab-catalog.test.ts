@@ -93,6 +93,7 @@ function fixture(options: {
     async appendDifficultySchemeVersion(args: {
       githubRepositoryId: number;
       sponsorId: string;
+      provider: "github" | "gitlab";
       scheme: unknown;
       effectiveFrom: Date;
     }) {
@@ -154,6 +155,7 @@ function appendCall(calls: { op: string; args: unknown }[]) {
   return call!.args as {
     githubRepositoryId: number;
     sponsorId: string;
+    provider: "github" | "gitlab";
     scheme: typeof scheme;
     effectiveFrom: Date;
   };
@@ -177,6 +179,9 @@ describe("changing a registered GitLab project's catalog (PATCH)", () => {
     const args = appendCall(f.calls);
     expect(args.githubRepositoryId).toBe(278964);
     expect(args.sponsorId).toBe("sponsor-1");
+    // The GitLab path resolves the row as gitlab, so the store's write-time
+    // provider check (issue 571) is told the forge this path resolved.
+    expect(args.provider).toBe("gitlab");
     expect(args.scheme).toEqual(scheme);
     expect(args.effectiveFrom).toBeInstanceOf(Date);
     // The change appends; nothing on the registration side is ever written.

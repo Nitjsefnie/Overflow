@@ -16,6 +16,7 @@ import type {
 } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
+  RepositoryProviderConflictError,
   RepositoryRegistrationEnforcementError,
   RepositorySchemeChangeForbiddenError,
   RepositorySchemeChangeOrderError,
@@ -35,6 +36,10 @@ type RepositoryRow = {
 
 type RepositoryStateRow = RepositoryRow & {
   unregistered_at: Date | null;
+};
+
+type UnregisterLockRow = RepositoryStateRow & {
+  provider: string;
 };
 
 type OAuthTokenRow = {
@@ -201,14 +206,18 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     return row === undefined ? null : toRegistrationState(row);
   }
 
-  public async unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome> {
+  public async unregisterRepository(input: {
+    ownerName: string;
+    sponsorId: string;
+    provider: "github" | "gitlab";
+  }): Promise<RepositoryUnregisterOutcome> {
     return await this.sql.begin(async (transaction) => {
-      // The row lock holds to the end of the transaction, so the sponsor
-      // check, the unregistered_at check and the write all see one committed
-      // state: two racing unregister calls resolve sequentially, and a
-      // concurrent createRepository reactivation cannot interleave between
-      // them.
-      const [row] = await transaction<RepositoryStateRow[]>`
+      // The row lock holds to the end of the transaction, so the provider
+      // check, the sponsor check, the unregistered_at check and the write all
+      // see one committed state: two racing unregister calls resolve
+      // sequentially, and a concurrent createRepository reactivation cannot
+      // interleave between them.
+      const [row] = await transaction<UnregisterLockRow[]>`
         select
           id,
           github_repository_id,
@@ -216,7 +225,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           sponsor_id,
           visibility,
           github_webhook_id,
-          unregistered_at
+          unregistered_at,
+          provider
         from registered_repositories
         where owner_name = ${input.ownerName}
         limit 1
@@ -224,6 +234,15 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       `;
       if (row === undefined) {
         return { kind: "NOT_REGISTERED" };
+      }
+      // Before the sponsor check, in the order the register.ts guard pins: a
+      // row another forge holds is a collision whoever asks (issue 571).
+      if (row.provider !== input.provider) {
+        return {
+          kind: "PROVIDER_CONFLICT",
+          githubRepositoryId: toSafeInteger(row.github_repository_id),
+          storedProvider: row.provider,
+        };
       }
       if (row.sponsor_id !== input.sponsorId) {
         return { kind: "FORBIDDEN" };
@@ -379,18 +398,21 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async appendDifficultySchemeVersion(input: {
     githubRepositoryId: number;
     sponsorId: string;
+    provider: "github" | "gitlab";
     scheme: DifficultyScheme;
     effectiveFrom: Date;
   }): Promise<RepositoryCatalogChange | null> {
     return await this.sql.begin(async (transaction) => {
         // The row lock serializes appends for one repository, so two racing
-        // sponsors' versions number themselves off the same committed history.
+        // sponsors' versions number themselves off the same committed history,
+        // and the provider check below holds at write time.
         const [row] = await transaction<{
           id: string;
           sponsor_id: string;
+          provider: string;
           difficulty_scheme: DifficultyScheme;
         }[]>`
-          select id, sponsor_id, difficulty_scheme
+          select id, sponsor_id, provider, difficulty_scheme
           from registered_repositories
           where github_repository_id = ${input.githubRepositoryId}
           limit 1
@@ -398,6 +420,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         `;
         if (row === undefined) {
           return null;
+        }
+        // Before the sponsor check, in the order the register.ts guard pins: a
+        // row another forge holds is a collision whoever asks (issue 571).
+        if (row.provider !== input.provider) {
+          throw new RepositoryProviderConflictError(input.githubRepositoryId, input.provider, row.provider);
         }
         if (row.sponsor_id !== input.sponsorId) {
           throw new RepositorySchemeChangeForbiddenError(input.githubRepositoryId);

@@ -117,6 +117,7 @@ describe("changing a repository's difficulty catalog", () => {
     const appendResult = await store.appendDifficultySchemeVersion({
       githubRepositoryId: repositoryGitHubId,
       sponsorId,
+      provider: "github",
       scheme: catalogV2(),
       effectiveFrom: v2EffectiveFrom,
     });

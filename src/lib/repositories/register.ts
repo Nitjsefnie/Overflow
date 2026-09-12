@@ -73,7 +73,14 @@ export type RepositoryUnregisterOutcome =
   | { kind: "UNREGISTERED"; repository: RegisteredRepository }
   | { kind: "ALREADY_UNREGISTERED"; repository: RegisteredRepository }
   | { kind: "NOT_REGISTERED" }
-  | { kind: "FORBIDDEN" };
+  | { kind: "FORBIDDEN" }
+  /**
+   * The row is held by another forge than the one the caller resolved it
+   * under (issue 571). Decided inside the write transaction, so a
+   * registration that moved the row between the caller's provider read and
+   * the write is refused rather than deactivated across forges.
+   */
+  | { kind: "PROVIDER_CONFLICT"; githubRepositoryId: number; storedProvider: string };
 
 export type RepositoryRegistrationGateway = {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
@@ -138,11 +145,15 @@ export type RepositoryRegistrationStore = {
    * Appends the submitted catalog as the repository's next version and moves
    * the stored current catalog in the same transaction (issue 180). Answers
    * `changed: false` when the submitted catalog already is the current one,
-   * and null when no registration holds the GitHub identity.
+   * and null when no registration holds the GitHub identity. `provider` is
+   * the forge the caller resolved the row under; the transaction refuses
+   * with `RepositoryProviderConflictError` when the stored provider differs,
+   * so the cross-forge check holds at write time (issue 571).
    */
   appendDifficultySchemeVersion(input: {
     githubRepositoryId: number;
     sponsorId: string;
+    provider: "github" | "gitlab";
     scheme: DifficultyScheme;
     effectiveFrom: Date;
   }): Promise<RepositoryCatalogChange | null>;
@@ -172,8 +183,15 @@ export type RepositoryRegistrationStore = {
    * the invariant the check constraint pins — an active row was never
    * unregistered — holds after every path. The row is locked by owner_name
    * for the whole decision, so a concurrent reactivation cannot interleave.
+   * `provider` is the forge the caller resolved the row under; a row another
+   * forge holds answers PROVIDER_CONFLICT, decided under the same lock
+   * (issue 571).
    */
-  unregisterRepository(input: { ownerName: string; sponsorId: string }): Promise<RepositoryUnregisterOutcome>;
+  unregisterRepository(input: {
+    ownerName: string;
+    sponsorId: string;
+    provider: "github" | "gitlab";
+  }): Promise<RepositoryUnregisterOutcome>;
   /**
    * The GitLab registration holding this owner/name path, with the hook
    * target fields the unregistration's forge-first deletion needs (issue
@@ -302,6 +320,41 @@ export class RepositorySchemeChangeOrderError extends Error {
   }
 }
 
+/**
+ * The store's write-time cross-forge refusal (issue 571): the row holding the
+ * forge id is registered under another provider than the one the caller
+ * resolved it as. Raised inside the store transaction, so it cannot be
+ * invalidated by a registration committing between the caller's provider
+ * read and the write.
+ */
+export class RepositoryProviderConflictError extends Error {
+  public constructor(
+    public readonly githubRepositoryId: number,
+    public readonly expectedProvider: "github" | "gitlab",
+    public readonly storedProvider: string,
+  ) {
+    super(`Forge id ${githubRepositoryId} is registered as provider '${storedProvider}', not '${expectedProvider}'.`);
+    this.name = "RepositoryProviderConflictError";
+  }
+}
+
+/**
+ * The one wording every cross-forge collision refusal carries, whether the
+ * out-of-transaction guard or the store's write-time re-check raised it: the
+ * forge the caller submitted under, the id, the provider the row holds, and
+ * which action was refused.
+ */
+function forgeCollisionMessage(
+  expectedProvider: "github" | "gitlab",
+  githubRepositoryId: number,
+  storedProvider: string,
+  refused: "registration" | "unregistration" | "catalog change",
+): string {
+  const subject = expectedProvider === "github" ? "GitHub repository" : "GitLab project";
+  return `${subject} ${githubRepositoryId} collides with forge id ${githubRepositoryId} already registered as provider '${storedProvider}'. `
+    + `An id's forge history never migrates between forges; ${refused} refused.`;
+}
+
 export async function registerRepository(
   dependencies: RepositoryRegistrationDependencies,
   input: RepositoryRegistrationInput,
@@ -364,11 +417,7 @@ export async function registerRepository(
   // forge history never migrates between forges.
   const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (existingProvider !== null && existingProvider !== "github") {
-    throw new RepositoryRegistrationError(
-      "CONFLICT",
-      `GitHub repository ${repository.id} collides with forge id ${repository.id} already registered as provider '${existingProvider}'. `
-        + "An id's forge history never migrates between forges; registration refused.",
-    );
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("github", repository.id, existingProvider, "registration"));
   }
 
   await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
@@ -641,11 +690,7 @@ async function registerGitLabRepository(
   // (GitHub-era settlements folded against this id) travels with the row.
   const existingProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (existingProvider !== null && existingProvider !== "gitlab") {
-    throw new RepositoryRegistrationError(
-      "CONFLICT",
-      `GitLab project ${repository.id} collides with forge id ${repository.id} already registered as provider '${existingProvider}'. `
-        + "An id's forge history never migrates between forges; registration refused.",
-    );
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("gitlab", repository.id, existingProvider, "registration"));
   }
 
   // Label existence through the gateway: the labels endpoint may refuse
@@ -1067,8 +1112,7 @@ export async function unregisterRepository(
   if (storedProvider !== null && storedProvider !== "github") {
     throw new RepositoryRegistrationError(
       "CONFLICT",
-      `GitHub repository ${state.repository.githubRepositoryId} collides with forge id ${state.repository.githubRepositoryId} already registered as provider '${storedProvider}'. `
-        + "An id's forge history never migrates between forges; unregistration refused.",
+      forgeCollisionMessage("github", state.repository.githubRepositoryId, storedProvider, "unregistration"),
     );
   }
 
@@ -1103,13 +1147,25 @@ export async function unregisterRepository(
     }
   }
 
-  const outcome = await unregisterThroughStore(dependencies.store, { ownerName, sponsorId: dependencies.actor.id });
+  const outcome = await unregisterThroughStore(dependencies.store, {
+    ownerName,
+    sponsorId: dependencies.actor.id,
+    provider: "github",
+  });
   if (outcome.kind === "NOT_REGISTERED") {
     // The row vanished between the lookup and the write. The registration is
     // gone either way, so NOT_FOUND is the honest answer.
     throw new RepositoryRegistrationError(
       "NOT_FOUND",
       `No registration holds the GitHub path ${ownerName}, so there is nothing to unregister.`,
+    );
+  }
+  if (outcome.kind === "PROVIDER_CONFLICT") {
+    // The row moved to another forge between the guard's read and the write;
+    // the store decided this under its lock, so the guard's refusal stands.
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      forgeCollisionMessage("github", outcome.githubRepositoryId, outcome.storedProvider, "unregistration"),
     );
   }
   if (outcome.kind === "FORBIDDEN") {
@@ -1236,6 +1292,7 @@ async function unregisterGitLabRepository(
   const outcome = await unregisterThroughStore(dependencies.store, {
     ownerName: state.repository.ownerName,
     sponsorId: dependencies.actor.id,
+    provider: "gitlab",
   });
   if (outcome.kind === "NOT_REGISTERED") {
     // The row vanished between the lookup and the write. The registration is
@@ -1243,6 +1300,14 @@ async function unregisterGitLabRepository(
     throw new RepositoryRegistrationError(
       "NOT_FOUND",
       "No GitLab registration matches that instance and project, so there is nothing to unregister.",
+    );
+  }
+  if (outcome.kind === "PROVIDER_CONFLICT") {
+    // The forge-identity lookup matched a GitLab row, but the row moved to
+    // another forge before the write; the store decided this under its lock.
+    throw new RepositoryRegistrationError(
+      "CONFLICT",
+      forgeCollisionMessage("gitlab", outcome.githubRepositoryId, outcome.storedProvider, "unregistration"),
     );
   }
   if (outcome.kind === "FORBIDDEN") {
@@ -1274,7 +1339,7 @@ async function findUnregisterTarget(
 
 async function unregisterThroughStore(
   store: RepositoryRegistrationStore,
-  input: { ownerName: string; sponsorId: string },
+  input: { ownerName: string; sponsorId: string; provider: "github" | "gitlab" },
 ): Promise<RepositoryUnregisterOutcome> {
   try {
     return await store.unregisterRepository(input);
@@ -1365,11 +1430,7 @@ export async function changeRepositoryCatalog(
   // migrates between forges.
   const storedProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (storedProvider !== null && storedProvider !== "github") {
-    throw new RepositoryRegistrationError(
-      "CONFLICT",
-      `GitHub repository ${repository.id} collides with forge id ${repository.id} already registered as provider '${storedProvider}'. `
-        + "An id's forge history never migrates between forges; catalog change refused.",
-    );
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("github", repository.id, storedProvider, "catalog change"));
   }
 
   // The sponsor check precedes every GitHub request: an outsider asking for a
@@ -1390,6 +1451,7 @@ export async function changeRepositoryCatalog(
     const change = await dependencies.store.appendDifficultySchemeVersion({
       githubRepositoryId: repository.id,
       sponsorId: dependencies.actor.id,
+      provider: "github",
       scheme: difficultyScheme,
       effectiveFrom: new Date(),
     });
@@ -1400,6 +1462,15 @@ export async function changeRepositoryCatalog(
     }
     return { ...change, repository: registered };
   } catch (error) {
+    if (error instanceof RepositoryProviderConflictError) {
+      // The row moved to another forge between the guard's read and the
+      // write; the store decided this under its lock, so the guard's refusal
+      // stands.
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        forgeCollisionMessage("github", error.githubRepositoryId, error.storedProvider, "catalog change"),
+      );
+    }
     if (error instanceof RepositorySchemeChangeForbiddenError) {
       throw new RepositoryRegistrationError("FORBIDDEN", error.message);
     }
@@ -1561,11 +1632,7 @@ async function changeGitLabRepositoryCatalog(
   // forge history (GitHub-era settlements folded against it) never migrates.
   const storedProvider = await dependencies.store.findRepositoryProviderById(repository.id);
   if (storedProvider !== null && storedProvider !== "gitlab") {
-    throw new RepositoryRegistrationError(
-      "CONFLICT",
-      `GitLab project ${repository.id} collides with forge id ${repository.id} already registered as provider '${storedProvider}'. `
-        + "An id's forge history never migrates between forges; catalog change refused.",
-    );
+    throw new RepositoryRegistrationError("CONFLICT", forgeCollisionMessage("gitlab", repository.id, storedProvider, "catalog change"));
   }
 
   // The sponsor check precedes any label request: an outsider asking for a
@@ -1600,6 +1667,7 @@ async function changeGitLabRepositoryCatalog(
     const change = await dependencies.store.appendDifficultySchemeVersion({
       githubRepositoryId: repository.id,
       sponsorId: dependencies.actor.id,
+      provider: "gitlab",
       scheme: difficultyScheme,
       effectiveFrom: new Date(),
     });
@@ -1610,6 +1678,15 @@ async function changeGitLabRepositoryCatalog(
     }
     return { ...change, repository: registered };
   } catch (error) {
+    if (error instanceof RepositoryProviderConflictError) {
+      // The row moved to another forge between the guard's read and the
+      // write; the store decided this under its lock, so the guard's refusal
+      // stands.
+      throw new RepositoryRegistrationError(
+        "CONFLICT",
+        forgeCollisionMessage("gitlab", error.githubRepositoryId, error.storedProvider, "catalog change"),
+      );
+    }
     if (error instanceof RepositorySchemeChangeForbiddenError) {
       throw new RepositoryRegistrationError("FORBIDDEN", error.message);
     }
