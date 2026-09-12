@@ -27,6 +27,12 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     if (dependencies.secret === undefined || dependencies.secret.length === 0) {
       return new Response(null, { status: 503 });
     }
+    // The token is header-only — no HMAC over the body, unlike GitHub — so a
+    // wrong token is refused here, before Content-Length is consulted and
+    // before a single body byte is read.
+    if (!verifyGitLabWebhookToken(token, dependencies.secret)) {
+      return new Response(null, { status: 401 });
+    }
 
     const contentLength = request.headers.get("content-length");
     if (contentLength !== null) {
@@ -42,9 +48,6 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     const rawBody = await readBodyWithinLimit(request);
     if (rawBody === null) {
       return new Response(null, { status: 413 });
-    }
-    if (!verifyGitLabWebhookToken(token, dependencies.secret)) {
-      return new Response(null, { status: 401 });
     }
 
     let payload: unknown;
