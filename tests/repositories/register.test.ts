@@ -150,6 +150,8 @@ describe("explicit repository registration", () => {
     // refuses. The refusal reads exactly as the guard's would have.
     const harness = createHarness({ existing: registeredRepository() });
     harness.dependencies.store.findRepositoryProviderById = async () => "github";
+    // The harness rows carry no provider, so the mock stands in for the race:
+    // this case pins the mapping of the store's refusal, not the race itself.
     const append = vi.spyOn(harness.dependencies.store, "appendDifficultySchemeVersion")
       .mockRejectedValueOnce(new RepositoryProviderConflictError(42, "github", "gitlab"));
 
@@ -912,6 +914,8 @@ describe("unregistering a registered repository", () => {
       abandonedRecords: [{ githubRepositoryId: 77, ownerName: "octo/abandoned", webhookId: 9, createdAt: "2026-09-01T00:00:00.000Z" }],
     });
     harness.dependencies.store.findRepositoryProviderById = async () => "github";
+    // The harness rows carry no provider, so the mock stands in for the race:
+    // this case pins the mapping of the store's refusal, not the race itself.
     const unregister = vi.spyOn(harness.dependencies.store, "unregisterRepository")
       .mockResolvedValueOnce({ kind: "PROVIDER_CONFLICT", githubRepositoryId: 42, storedProvider: "gitlab" });
 
