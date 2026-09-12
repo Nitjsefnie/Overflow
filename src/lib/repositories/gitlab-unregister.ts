@@ -6,10 +6,11 @@ import { RepositoryRegistrationError } from "@/lib/repositories/register";
  * The GitLab hook deletion an unregistration performs (issue 547, behavior 3).
  * Forge-first, like the GitHub flow: the hook is deleted on the instance
  * BEFORE the local row is touched, so a refusal leaves the registration
- * exactly as it stood. This module is deliberately self-contained — it reads
- * through its store seam and deletes through its gateway seam, and touches
- * nothing else — so the unregistration flow can adopt it wholesale when the
- * GitLab branch of `unregisterRepository` lands (the flow that will wire it).
+ * exactly as it stood. The GitLab branch of `unregisterRepository`
+ * (`unregisterGitLabRepository` in `register.ts`) adopts it wholesale. The
+ * module stays deliberately self-contained — it reads through its store seam
+ * and deletes through its gateway seam, and touches nothing else — so it can
+ * be tested through those seams independently of the flow that calls it.
  *
  * Outcomes:
  * - DELETED: this call deleted the hook (`webhookDeleted: true`).
