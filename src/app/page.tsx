@@ -1,12 +1,7 @@
-import { signIn } from "@/auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
-
-async function signInWithGitHub() {
-  "use server";
-  await signIn("github");
-}
+import { signInAsContributor, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
 
 export function LandingPage() {
   return (
@@ -18,9 +13,18 @@ export function LandingPage() {
           Overflow records completed contributions, visible proof, and the credit that moves between maintainers
           and contributors.
         </p>
-        <form action={signInWithGitHub}>
+        <form action={signInAsContributor}>
           <button className="action-button" type="submit">
             Sign in with GitHub
+          </button>
+        </form>
+        <p className="landing-action-note">
+          Contributing asks GitHub for nothing beyond your public profile. Registering a repository you
+          administer needs webhook administration on it, granted through a separate sign-in:
+        </p>
+        <form action={signInForRepositoryRegistration}>
+          <button className="quiet-button" type="submit">
+            Sign in to register a repository
           </button>
         </form>
         <Link className="text-link" href="/account-data">

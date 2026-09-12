@@ -78,15 +78,19 @@ describe("GitHub OAuth scope", () => {
     }
   });
 
-  it("asks the GitHub provider for exactly the webhook administration scope", async () => {
-    const { githubOAuthScope } = await import("@/auth");
+  // Issue 599: the provider default is the least-privilege sign-in. An
+  // explicit empty scope is required — an omitted scope makes @auth/core
+  // 0.41.3 (lib/utils/providers.js, normalizeOAuth) inject its OIDC default
+  // "openid profile email", which GitHub does not know.
+  it("gives the GitHub provider an explicit empty default scope", async () => {
+    const { GITHUB_CONTRIBUTOR_SCOPE } = await import("@/auth");
     // Imported after resetModules so this reference is the same module
     // instance the auth config captured.
     const { requestGitHubPublicIdentity } = await import("@/lib/auth/github-userinfo");
 
-    expect(githubOAuthScope).toBe("admin:repo_hook");
+    expect(GITHUB_CONTRIBUTOR_SCOPE).toBe("");
     expect(mocks.github).toHaveBeenCalledWith({
-      authorization: { params: { scope: "admin:repo_hook" } },
+      authorization: { params: { scope: "" } },
       userinfo: {
         url: "https://api.github.com/user",
         request: requestGitHubPublicIdentity,
@@ -94,14 +98,21 @@ describe("GitHub OAuth scope", () => {
     });
   });
 
-  it("never requests public repository write, full repository, hook write, email, or profile access", async () => {
-    const { githubOAuthScope } = await import("@/auth");
+  it("names webhook administration as the only repository-registration scope", async () => {
+    const { GITHUB_REPOSITORY_REGISTRATION_SCOPE } = await import("@/auth");
 
-    const requestedScopes = githubOAuthScope.split(" ");
+    expect(GITHUB_REPOSITORY_REGISTRATION_SCOPE).toBe("admin:repo_hook");
+    const requestedScopes = GITHUB_REPOSITORY_REGISTRATION_SCOPE.split(" ");
     expect(requestedScopes).not.toContain("public_repo");
     expect(requestedScopes).not.toContain("repo");
     expect(requestedScopes).not.toContain("write:repo_hook");
     expect(requestedScopes).not.toContain("user:email");
     expect(requestedScopes).not.toContain("read:user");
+  });
+
+  it("does not export the retired global scope", async () => {
+    const auth = await import("@/auth");
+
+    expect("githubOAuthScope" in auth).toBe(false);
   });
 });

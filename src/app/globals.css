@@ -781,6 +781,18 @@ button:disabled {
   font-size: clamp(1.25rem, 2.7vw, 1.75rem);
 }
 
+/* The two landing sign-ins (issue 599) sit below the contributor action the
+   fold contract measures; nothing here touches the stack above it. */
+.landing-action-note {
+  max-width: 52ch;
+  margin-top: 1.5rem;
+  color: var(--ink-muted);
+}
+
+.landing-hero .quiet-button {
+  margin-top: 0.75rem;
+}
+
 .landing-principles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
