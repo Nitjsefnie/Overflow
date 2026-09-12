@@ -23,6 +23,9 @@ type ForgeIdentityRow = {
 export function ForgeIdentitiesPanel() {
   const router = useRouter();
   const [identities, setIdentities] = useState<ForgeIdentityRow[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [instanceUrl, setInstanceUrl] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -30,20 +33,32 @@ export function ForgeIdentitiesPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     void (async () => {
       try {
         const response = await fetch("/api/forge-identities", { credentials: "same-origin" });
-        if (!response.ok) return;
+        if (!response.ok) throw new Error("Forge identity list request failed");
         const body = (await response.json()) as { identities: ForgeIdentityRow[] };
-        if (!cancelled) setIdentities(body.identities);
+        if (!cancelled) {
+          setIdentities(body.identities);
+          setLoadError(null);
+        }
       } catch {
-        // The section renders without the list; a refresh retries.
+        if (!cancelled) setLoadError("The linked identities could not be loaded. Check your connection and try again.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAttempt]);
+
+  function retryLoad() {
+    setLoading(true);
+    setIdentities(null);
+    setLoadAttempt((attempt) => attempt + 1);
+  }
 
   async function link(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -107,8 +122,16 @@ export function ForgeIdentitiesPanel() {
         Link a GitLab account so Overflow can read your repositories there with your token.
         The token is verified before it is stored, and it is stored encrypted — never displayed.
       </p>
-      {identities === null ? (
-        <p className="empty-copy">Loading linked identities…</p>
+      {loadError ? (
+        <>
+          <p className="feedback error" role="alert">{loadError}</p>
+          <button className="quiet-button" type="button" disabled={loading} onClick={retryLoad}>
+            Retry loading identities
+          </button>
+          {loading ? <p className="empty-copy" role="status">Loading linked identities…</p> : null}
+        </>
+      ) : identities === null ? (
+        <p className="empty-copy" role="status">Loading linked identities…</p>
       ) : identities.length === 0 ? (
         <p className="empty-copy">No forge identity is linked to this account yet.</p>
       ) : (

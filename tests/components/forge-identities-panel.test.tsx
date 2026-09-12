@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -118,6 +118,125 @@ describe("Forge identities panel", () => {
     // marker is beside it, not a replacement for it.
     expect(within(failed as HTMLElement).getByText("2026-09-10")).toBeInTheDocument();
     await act(async () => {});
+  });
+
+  it("replaces loading with an actionable retry after an initial HTTP failure", async () => {
+    fetchMock.mockReset().mockResolvedValue(Response.json(
+      { error: { code: "UPSTREAM_FAILURE", message: "The identity list is unavailable." } },
+      { status: 503 },
+    ));
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    expect(screen.queryByText("Loading linked identities…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry loading identities" })).toBeEnabled();
+  });
+
+  it("replaces loading with an actionable retry when the response cannot be parsed", async () => {
+    fetchMock.mockReset().mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new Error("malformed response")),
+    });
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    expect(screen.queryByText("Loading linked identities…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry loading identities" })).toBeEnabled();
+  });
+
+  it("retries a network-failed list request and renders the returned identity", async () => {
+    let resolveRetry!: (response: Response) => void;
+    const retryRequest = new Promise<Response>((resolve) => {
+      resolveRetry = resolve;
+    });
+    fetchMock.mockReset()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValueOnce(retryRequest);
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading identities" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[0]).toEqual(["/api/forge-identities", { credentials: "same-origin" }]);
+    expect(fetchMock.mock.calls[1]).toEqual(["/api/forge-identities", { credentials: "same-origin" }]);
+    expect(screen.getByRole("button", { name: "Retry loading identities" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading linked identities…");
+
+    await act(async () => {
+      resolveRetry(Response.json({
+        identities: [{
+          id: "identity-retried",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.com",
+          forgeLogin: "ada-retried",
+          verifiedAt: "2026-09-10T00:00:00.000Z",
+          tokenFailedAt: null,
+        }],
+      }));
+    });
+
+    expect(await screen.findByText("ada-retried")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry loading identities" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed retry actionable for another attempt", async () => {
+    fetchMock.mockReset()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("still offline"))
+      .mockResolvedValueOnce(Response.json({
+        identities: [{
+          id: "identity-recovered",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.example.com",
+          forgeLogin: "bob-recovered",
+          verifiedAt: "2026-09-10T00:00:00.000Z",
+          tokenFailedAt: null,
+        }],
+      }));
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toBeVisible();
+    const retry = screen.getByRole("button", { name: "Retry loading identities" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(retry);
+    expect(await screen.findByText("bob-recovered")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains the existing empty state after an empty successful load", async () => {
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByText("No forge identity is linked to this account yet.")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry loading identities" })).not.toBeInTheDocument();
+  });
+
+  it("does not update state when an in-flight list request settles after unmount", async () => {
+    let resolveInitial!: (response: Response) => void;
+    const initialRequest = new Promise<Response>((resolve) => {
+      resolveInitial = resolve;
+    });
+    fetchMock.mockReset().mockReturnValue(initialRequest);
+    const { unmount } = render(<ForgeIdentitiesPanel />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "/api/forge-identities",
+      { credentials: "same-origin" },
+    ));
+    unmount();
+    await act(async () => {
+      resolveInitial(Response.json({ identities: [] }));
+    });
+
+    // The console guard would surface an update from the unmounted panel; the
+    // empty body confirms there is no remounted view for the stale response.
+    expect(document.body).toHaveTextContent("");
   });
 
   it("ships a forge-link-form rule that separates the form's children", () => {
