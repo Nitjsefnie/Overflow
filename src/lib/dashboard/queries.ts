@@ -746,8 +746,7 @@ export async function listEligibleIssues(
     with reservations as materialized (
       -- The reservation total is priced once per sponsor here, and joined to
       -- that sponsor's issue rows below, rather than re-derived as correlated
-      -- subplans once per output row (and twice more inside the order-by tier,
-      -- which re-reads the headroom expression). Materialized on purpose: a
+      -- subplans once per output row. Materialized on purpose: a
       -- plain left join to a grouped subquery gets flattened by the planner
       -- back into a per-row parameterized aggregate, which is the defect this
       -- reshape exists to remove.
@@ -787,6 +786,7 @@ export async function listEligibleIssues(
       issues.opening_comparison_points,
       issues.opening_reserve_points,
       issues.claim_assignee_github_login,
+      coalesce(sponsor_balances.balance, 0) as settled_balance,
       (
         coalesce(sponsor_balances.balance, 0)
         - coalesce(reservations.reserved_points, 0)
@@ -810,20 +810,9 @@ export async function listEligibleIssues(
       )
     ) as ranked
     order by
-      -- Sponsor headroom tiers lead the ordering so a sponsor who has drawn
-      -- far more work than they have returned surfaces below one who has
-      -- not: positive headroom first (returned more than drawn), then
-      -- balance (the band down to minus ten absorbs the zero cliff, where a
-      -- first outsider claim would otherwise bury the sponsor the moment
-      -- their first issue is claimed), then everything deeper. The threshold
-      -- of minus ten is a design choice: roughly one full opening of reserve
-      -- beyond balance, so ranking past it takes more than a single unredeemed
-      -- opening's worth of drawing. The tier orders but never filters.
-      case
-        when ranked.available_headroom > 0 then 0
-        when ranked.available_headroom >= -10 then 1
-        else 2
-      end,
+      -- Repayment priority follows exact settled balance; open reservations
+      -- affect displayed headroom only, without changing ordering or eligibility.
+      ranked.settled_balance desc,
       ranked.opening_reserve_points desc,
       ranked.created_at asc
   `;
