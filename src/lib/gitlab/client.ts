@@ -207,7 +207,7 @@ export class GitLabGateway {
     // requests per issue plus one per merged closing merge request, the
     // simple correct cost on a reconciliation that runs on a budget hold,
     // not a hard rate ceiling.
-    const since = options?.since === undefined ? "" : `&updated_after=${encodeURIComponent(options.since)}`;
+    const since = options?.since === undefined ? "" : `?updated_after=${encodeURIComponent(options.since)}`;
     const objects = await this.listAllPages<GitLabIssueObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues${since}`,
       "keyset",

@@ -880,21 +880,27 @@ describe("GitLabGateway", () => {
     expect(closingPullRequests[0]).toMatchObject({ number: 17, state: "MERGED", mergeCommitOid: "a".repeat(40) });
   });
 
-  it("passes the since cursor as updated_after on issue reads", async () => {
-    const requests: string[] = [];
+  it("keeps the issues route when passing since as updated_after", async () => {
+    const requests: Request[] = [];
+    const since = "2026-09-11T00:00:00.000Z";
     const client = gateway(async (input) => {
       const request = new Request(input);
-      requests.push(request.url);
-      // Only the issue listing answers with issues; every per-issue timeline
-      // surface answers empty so the fixture never feeds an issue object to
-      // the merge-request parser.
-      if (!new URL(request.url).pathname.endsWith("/issues")) {
-        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      requests.push(request);
+      const url = new URL(request.url);
+      if (url.pathname !== "/api/v4/projects/gitlab-org%2Fgitlab/issues") {
+        return new Response("unexpected pathname", { status: 404 });
       }
-      return new Response(JSON.stringify([issue]), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
     });
-    await client.listIssues({ owner: "gitlab-org", name: "gitlab" }, { since: "2026-09-11T00:00:00.000Z" });
-    expect(requests.some((url) => url.includes("updated_after=2026-09-11T00%3A00%3A00.000Z"))).toBe(true);
+    await client.listIssues({ owner: "gitlab-org", name: "gitlab" }, { since });
+    expect(requests).toHaveLength(1);
+    const url = new URL(requests[0]!.url);
+    expect(url.pathname).toBe("/api/v4/projects/gitlab-org%2Fgitlab/issues");
+    expect(url.searchParams.get("updated_after")).toBe(since);
+    expect(url.searchParams.get("per_page")).toBe("100");
+    expect(url.searchParams.get("pagination")).toBe("keyset");
+    expect(url.searchParams.get("order_by")).toBe("created_at");
+    expect(url.searchParams.get("sort")).toBe("asc");
   });
 
   it("uses created_at keyset ordering and follows x-next-cursor for 101 issues", async () => {
