@@ -48,13 +48,23 @@ type RepositoryFormProps = {
   variant?: "registration" | "catalog-change";
   /**
    * The server action that sends the sponsor through GitHub authorization
-   * again for webhook administration (issue 599). The page's gate reads a
-   * JWT hint, so a session whose grant was since revoked or narrowed still
-   * reaches this form; when the route refuses with the scope code, the
-   * remedy is offered beside the refusal instead of leaving the sponsor to
-   * reload a page that keeps showing the form.
+   * again for webhook administration (issue 599). Rendered as its own form
+   * whenever the GitHub path is gated (`canAdministerGitHubWebhooks` false)
+   * and beside the route's scope refusal: the gate reads a JWT hint, so a
+   * session whose grant was since revoked or narrowed still reaches the
+   * fields and learns of it only from that refusal.
    */
   reauthorizeAction?: () => Promise<void>;
+  /**
+   * Whether the session's GitHub grant covers webhook administration, as the
+   * JWT hint recorded it (issue 599). False gates the GitHub registration
+   * path — the explanation and `reauthorizeAction` replace the GitHub fields
+   * and submit — and nothing else: the Forge choice stays, and a GitLab
+   * registration proceeds, since its hook is created with the linked
+   * identity's PAT. Absent means ungated (the catalog-change form, and any
+   * caller without a session to read).
+   */
+  canAdministerGitHubWebhooks?: boolean;
 };
 
 // Labels start empty: issue 258 removed label creation from registration, so a
@@ -116,6 +126,7 @@ export function RepositoryForm({
   initialValues = defaultValues,
   variant = "registration",
   reauthorizeAction,
+  canAdministerGitHubWebhooks,
 }: RepositoryFormProps) {
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
   const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
@@ -361,6 +372,13 @@ export function RepositoryForm({
     }
   }
 
+  // The GitHub registration path alone is gated on the hint: the Forge
+  // choice above it stays reachable, and the GitLab path needs no GitHub
+  // permission at all.
+  const githubGated = !isCatalogChange && provider === "github" && canAdministerGitHubWebhooks === false;
+  const offersReauthorization = reauthorizeAction !== undefined
+    && (githubGated || (feedback?.kind === "error" && feedback.code === WEBHOOK_SCOPE_REQUIRED_CODE));
+
   const registrationForm = (
     <form className="repository-form surface shadow-offset" aria-label={text.formLabel} onSubmit={submit} noValidate>
       <div className="form-intro">
@@ -418,6 +436,18 @@ export function RepositoryForm({
             <p className="field-help">Submit the GitLab project as a positive numeric id or a path with namespace.</p>
           ) : null}
         </>
+      ) : githubGated ? (
+        <section className="form-intro" aria-labelledby="webhook-administration-required-heading">
+          <h2 id="webhook-administration-required-heading">Webhook administration required</h2>
+          <p>
+            Registering a GitHub repository creates Overflow&apos;s webhook on it, which needs the GitHub{" "}
+            <code>admin:repo_hook</code> permission. This session does not carry that permission for GitHub: the
+            sign-in behind it granted public identity only, or it predates Overflow recording what GitHub granted.
+            Authorize webhook administration with the same GitHub account below and you return to this page with
+            the registration form; GitHub keeps the account and adds the grant to whatever it already holds.
+            Registering a GitLab project needs no GitHub permission — choose GitLab above.
+          </p>
+        </section>
       ) : (
         <label className="field">
           <span>GitHub repository</span>
@@ -432,138 +462,142 @@ export function RepositoryForm({
         </label>
       )}
 
-      <div className="form-grid">
-        <label className="field">
-          <span>Opening catalog display name</span>
-          <input
-            value={values.openingName}
-            onChange={(event) => setValues((current) => ({ ...current, openingName: event.target.value }))}
-            required
-          />
-        </label>
-        <label className="field">
-          <span>Actual catalog display name</span>
-          <input
-            value={values.actualName}
-            onChange={(event) => setValues((current) => ({ ...current, actualName: event.target.value }))}
-            required
-          />
-        </label>
-      </div>
+      {githubGated ? null : (
+        <>
+          <div className="form-grid">
+            <label className="field">
+              <span>Opening catalog display name</span>
+              <input
+                value={values.openingName}
+                onChange={(event) => setValues((current) => ({ ...current, openingName: event.target.value }))}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Actual catalog display name</span>
+              <input
+                value={values.actualName}
+                onChange={(event) => setValues((current) => ({ ...current, actualName: event.target.value }))}
+                required
+              />
+            </label>
+          </div>
 
-      {labelsStatus === "error" && provider === "github" && reference !== null ? (
-        <p className="labels-fetch-error">
-          Overflow could not read the labels of {reference.owner}/{reference.name}. Check that the repository is
-          public and that the owner and name are correct, then edit the GitHub repository field to try again.
-        </p>
-      ) : null}
-      {labelsStatus === "error" && provider === "gitlab" && instanceUrl !== "" ? (
-        <p className="labels-fetch-error">
-          Overflow could not read the labels of {project.trim()} on {instanceUrl}. Check that the project id or path
-          is correct and that your linked GitLab identity still has access, then edit the Project field to try again.
-        </p>
-      ) : null}
+          {labelsStatus === "error" && provider === "github" && reference !== null ? (
+            <p className="labels-fetch-error">
+              Overflow could not read the labels of {reference.owner}/{reference.name}. Check that the repository is
+              public and that the owner and name are correct, then edit the GitHub repository field to try again.
+            </p>
+          ) : null}
+          {labelsStatus === "error" && provider === "gitlab" && instanceUrl !== "" ? (
+            <p className="labels-fetch-error">
+              Overflow could not read the labels of {project.trim()} on {instanceUrl}. Check that the project id or path
+              is correct and that your linked GitLab identity still has access, then edit the Project field to try again.
+            </p>
+          ) : null}
 
-      <fieldset className="catalog-fieldset">
-        <legend>Opening catalog</legend>
-        <p className="field-help">Set any labels and their comparison and reservation points.</p>
-        <div className="catalog-rows">
-          {values.openingLabels.map((openingLabel, index) => (
-            <div className="catalog-row" key={openingLabel.rowId}>
-              <label className="field">
-                <span>Opening label {index + 1}</span>
-                <select
-                  value={openingLabel.label}
-                  onChange={(event) => updateOpeningLabel(setValues, index, "label", event.target.value)}
-                  disabled={labelsStatus !== "ready"}
-                  required
-                >
-                  <option value="" disabled>Select a label</option>
-                  {labelOptions(catalogLabels, values.openingLabels, index).map((label) => (
-                    <option key={label} value={label}>{label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="field compact-field">
-                <span>Comparison points for opening label {index + 1}</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={openingLabel.comparisonPoints}
-                  onChange={(event) =>
-                    updateOpeningLabel(setValues, index, "comparisonPoints", Number(event.target.value))
-                  }
-                  required
-                />
-              </label>
-              <label className="field compact-field">
-                <span>Reserve points for opening label {index + 1}</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={openingLabel.reservePoints}
-                  onChange={(event) => updateOpeningLabel(setValues, index, "reservePoints", Number(event.target.value))}
-                  required
-                />
-              </label>
-              <button
-                className="quiet-button"
-                type="button"
-                onClick={() => removeOpeningLabel(setValues, index)}
-                disabled={values.openingLabels.length === 1}
-              >
-                Remove label {index + 1}
-              </button>
+          <fieldset className="catalog-fieldset">
+            <legend>Opening catalog</legend>
+            <p className="field-help">Set any labels and their comparison and reservation points.</p>
+            <div className="catalog-rows">
+              {values.openingLabels.map((openingLabel, index) => (
+                <div className="catalog-row" key={openingLabel.rowId}>
+                  <label className="field">
+                    <span>Opening label {index + 1}</span>
+                    <select
+                      value={openingLabel.label}
+                      onChange={(event) => updateOpeningLabel(setValues, index, "label", event.target.value)}
+                      disabled={labelsStatus !== "ready"}
+                      required
+                    >
+                      <option value="" disabled>Select a label</option>
+                      {labelOptions(catalogLabels, values.openingLabels, index).map((label) => (
+                        <option key={label} value={label}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field compact-field">
+                    <span>Comparison points for opening label {index + 1}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={openingLabel.comparisonPoints}
+                      onChange={(event) =>
+                        updateOpeningLabel(setValues, index, "comparisonPoints", Number(event.target.value))
+                      }
+                      required
+                    />
+                  </label>
+                  <label className="field compact-field">
+                    <span>Reserve points for opening label {index + 1}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={openingLabel.reservePoints}
+                      onChange={(event) => updateOpeningLabel(setValues, index, "reservePoints", Number(event.target.value))}
+                      required
+                    />
+                  </label>
+                  <button
+                    className="quiet-button"
+                    type="button"
+                    onClick={() => removeOpeningLabel(setValues, index)}
+                    disabled={values.openingLabels.length === 1}
+                  >
+                    Remove label {index + 1}
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues, nextOpeningRowId)}>
-          Add opening label
-        </button>
-      </fieldset>
+            <button className="quiet-button" type="button" onClick={() => addOpeningLabel(setValues, nextOpeningRowId)}>
+              Add opening label
+            </button>
+          </fieldset>
 
-      <fieldset className="catalog-fieldset">
-        <legend>Actual catalog</legend>
-        <p className="field-help">Every point from 1 through 10 must have exactly one editable label.</p>
-        <div className="catalog-rows actual-catalog">
-          {values.actualLabels.map((actualLabel, index) => (
-            <div className="catalog-row actual-row" key={actualLabel.points}>
-              <label className="field">
-                <span>Actual label for {actualLabel.points} point{actualLabel.points === 1 ? "" : "s"}</span>
-                <select
-                  value={actualLabel.label}
-                  onChange={(event) => updateActualLabel(setValues, actualLabel.points, event.target.value)}
-                  disabled={labelsStatus !== "ready"}
-                  required
-                >
-                  <option value="" disabled>Select a label</option>
-                  {labelOptions(catalogLabels, values.actualLabels, index).map((label) => (
-                    <option key={label} value={label}>{label}</option>
-                  ))}
-                </select>
-              </label>
-              <p className="points-stamp">{actualLabel.points} {plural(actualLabel.points, "point")}</p>
+          <fieldset className="catalog-fieldset">
+            <legend>Actual catalog</legend>
+            <p className="field-help">Every point from 1 through 10 must have exactly one editable label.</p>
+            <div className="catalog-rows actual-catalog">
+              {values.actualLabels.map((actualLabel, index) => (
+                <div className="catalog-row actual-row" key={actualLabel.points}>
+                  <label className="field">
+                    <span>Actual label for {actualLabel.points} point{actualLabel.points === 1 ? "" : "s"}</span>
+                    <select
+                      value={actualLabel.label}
+                      onChange={(event) => updateActualLabel(setValues, actualLabel.points, event.target.value)}
+                      disabled={labelsStatus !== "ready"}
+                      required
+                    >
+                      <option value="" disabled>Select a label</option>
+                      {labelOptions(catalogLabels, values.actualLabels, index).map((label) => (
+                        <option key={label} value={label}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="points-stamp">{actualLabel.points} {plural(actualLabel.points, "point")}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </fieldset>
+          </fieldset>
 
-      {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
-      {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
-      {feedback?.kind === "warning" ? <p className="feedback warning" role="status">{feedback.message}</p> : null}
-      <button className="action-button" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? text.submitting : text.submit}
-      </button>
+          {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
+          {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+          {feedback?.kind === "warning" ? <p className="feedback warning" role="status">{feedback.message}</p> : null}
+          <button className="action-button" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? text.submitting : text.submit}
+          </button>
+        </>
+      )}
     </form>
   );
 
-  if (reauthorizeAction === undefined || feedback?.kind !== "error" || feedback.code !== WEBHOOK_SCOPE_REQUIRED_CODE) {
+  if (!offersReauthorization) {
     return registrationForm;
   }
-  // The remedy is its own form, a sibling of the registration form: a form
-  // cannot nest, and submitting the remedy must not resubmit the registration.
+  // The widening action is its own form, a sibling of the registration form:
+  // a form cannot nest, and submitting it must not resubmit the registration.
   return (
     <>
       {registrationForm}
