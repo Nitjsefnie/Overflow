@@ -42,6 +42,29 @@ describe("dashboard session authorization", () => {
     expect(redirect).not.toHaveBeenCalled();
   });
 
+  // Issue 599: the registration page reads the webhook-administration hint the
+  // JWT recorded from the granted scopes; anything but a literal true — an
+  // older JWT, a contributor grant — is not capable.
+  it.each([
+    { label: "a true hint", hint: true, expected: true },
+    { label: "a false hint", hint: false, expected: false },
+    { label: "no hint", hint: undefined, expected: false },
+    { label: "a non-boolean hint", hint: "true", expected: false },
+  ])("carries the webhook-administration hint through for $label", async ({ hint, expected }) => {
+    auth.mockResolvedValue({
+      user: {
+        id: "00000000-0000-4000-8000-000000000009",
+        name: "Sponsor",
+        ...(hint === undefined ? {} : { canAdministerWebhooks: hint }),
+      },
+    });
+    currentRole.mockResolvedValue("MEMBER");
+
+    const session = await requireMemberPageSession();
+
+    expect(session.user.canAdministerWebhooks).toBe(expected);
+  });
+
   it("sends a visitor with no signed-in identity to the landing page", async () => {
     auth.mockResolvedValue(null);
 

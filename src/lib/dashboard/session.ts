@@ -8,13 +8,23 @@ export type MemberPageSession = {
     id: string;
     role: UserRole;
     name: string;
+    /**
+     * Whether the granted GitHub scopes let this token administer repository
+     * webhooks (issue 599) — the JWT's hint from the initial sign-in, so a
+     * contributor grant or a JWT older than the hint reads false. Decides
+     * which surface the registration page shows; never whether a
+     * registration proceeds, which the route re-reads from GitHub.
+     */
+    canAdministerWebhooks: boolean;
   };
 };
 
 export async function requireMemberPageSession(): Promise<MemberPageSession> {
   const { auth } = await import("@/auth");
   const session = await auth();
-  const user = session?.user as { id?: unknown; name?: unknown; email?: unknown } | undefined;
+  const user = session?.user as
+    | { id?: unknown; name?: unknown; email?: unknown; canAdministerWebhooks?: unknown }
+    | undefined;
   if (typeof user?.id !== "string") {
     redirect("/");
   }
@@ -38,6 +48,7 @@ export async function requireMemberPageSession(): Promise<MemberPageSession> {
       id: user.id,
       role: currentRole,
       name: displayName(user.name, user.email),
+      canAdministerWebhooks: user.canAdministerWebhooks === true,
     },
   };
 }
