@@ -15,7 +15,10 @@ describe("landing page", () => {
     signIn.mockReset();
   });
 
-  it("submits GitHub sign-in through a server action", async () => {
+  // Issue 599: a contributor grants nothing beyond public identity, so the
+  // first action requests the explicit empty scope and lands on the member
+  // destination; the per-call scope overrides the provider default.
+  it("submits contributor GitHub sign-in through a server action with no scope", async () => {
     render(<LandingPage />);
 
     expect(screen.getByRole("heading", { name: "Cooperative credit for open-source work." })).toBeVisible();
@@ -24,7 +27,41 @@ describe("landing page", () => {
     expect(screen.queryByRole("link", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
     fireEvent.click(signInButton);
 
-    await waitFor(() => expect(signIn).toHaveBeenCalledWith("github"));
+    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
+      "github",
+      { redirectTo: "/dashboard" },
+      { scope: "" },
+    ));
+  });
+
+  // The maintainer action asks for webhook administration and returns to the
+  // registration page, so the sponsor lands where the wider grant is used.
+  it("submits repository-registration sign-in with webhook administration and returns to registration", async () => {
+    render(<LandingPage />);
+
+    const registerButton = screen.getByRole("button", { name: "Sign in to register a repository" });
+    expect(registerButton.closest("form")).not.toBeNull();
+    fireEvent.click(registerButton);
+
+    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
+      "github",
+      { redirectTo: "/repositories/new" },
+      { scope: "admin:repo_hook" },
+    ));
+  });
+
+  it("offers the contributor sign-in before the repository-registration sign-in, in separate forms", () => {
+    render(<LandingPage />);
+
+    const contributor = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    expect(contributor.closest("form")).not.toBe(registration.closest("form"));
+    expect(contributor.compareDocumentPosition(registration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The fold contract measures the first .action-button in the hero: the
+    // contributor action keeps that slot and the registration action sits
+    // below it as the quieter control.
+    expect(document.querySelector(".landing-hero .action-button")).toBe(contributor);
+    expect(registration).toHaveClass("quiet-button");
   });
 
   it("does not render a noninteractive landing mark", () => {

@@ -12,13 +12,22 @@ import {
   type PersistedGitHubUser,
 } from "@/lib/auth/sign-in-decision";
 import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
+import {
+  GITHUB_CONTRIBUTOR_SCOPE,
+  GITHUB_REPOSITORY_REGISTRATION_SCOPE,
+} from "@/lib/auth/github-oauth-scopes";
 
-export const githubOAuthScope = "admin:repo_hook";
+export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
 
 export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   providers: [
     GitHub({
-      authorization: { params: { scope: githubOAuthScope } },
+      // The least-privilege default (issue 599): public identity only, so any
+      // unlabelled signIn("github") grants nothing. The repository-registration
+      // sign-in passes GITHUB_REPOSITORY_REGISTRATION_SCOPE per call, which
+      // overrides this. Explicitly empty, never omitted — see
+      // src/lib/auth/github-oauth-scopes.ts.
+      authorization: { params: { scope: GITHUB_CONTRIBUTOR_SCOPE } },
       // GitHub's default userinfo request also hits /user/emails whenever the
       // profile has no public email. Overflow reads no email anywhere, so the
       // override fetches only the public identity fields. Reverting it
