@@ -973,13 +973,23 @@ describe("GitLabGateway", () => {
   });
 
   it("returns the raw diff body", async () => {
+    const rawDiffUrl = "https://gitlab.com/api/v4/projects/gitlab-org%2Fgitlab/merge_requests/17/raw_diffs";
+    const rawDiff = `diff --git a/src/example.ts b/src/example.ts
+index 0123456..789abcd 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1,2 +1,2 @@
+-old line
++new line
+`;
     const client = gateway(async (input) => {
       const request = new Request(input);
-      expect(request.url).toContain("/merge_requests/17/diff");
-      return new Response("diff --git a/x b/x", { status: 200 });
+      return request.url === rawDiffUrl
+        ? new Response(rawDiff, { status: 200 })
+        : new Response("not found", { status: 404 });
     });
     expect(await client.getPullRequestDiff({ owner: "gitlab-org", name: "gitlab" }, 17))
-      .toBe("diff --git a/x b/x");
+      .toBe(rawDiff);
   });
 
   it("creates and deletes hooks with the project-scoped shapes, and ensures the event flags", async () => {

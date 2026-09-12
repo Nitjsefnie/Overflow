@@ -500,7 +500,7 @@ export class GitLabGateway {
 
   public async getPullRequestDiff(repository: GitHubRepositoryReference, mergeRequestIid: number): Promise<string> {
     const response = await this.request(
-      `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/diff`,
+      `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/raw_diffs`,
     );
     return response.body;
   }
