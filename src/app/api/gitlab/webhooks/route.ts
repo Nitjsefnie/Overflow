@@ -53,15 +53,10 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     } catch {
       return new Response(null, { status: 400 });
     }
+    // Both payload kinds the hook subscribes to — issue and merge request —
+    // are accepted for processing, so the parser answers only ok or invalid;
+    // there is no deliberately-ignored (204) class on this receiver.
     const result = parseGitLabWebhookDeliveryDetailed(event, deliveryUuid, payload);
-    if (result.status === "ignored") {
-      // Deliberately ignored (a merge request payload) is a success to the
-      // instance — any 2xx counts as delivered — so it must not read as a
-      // rejection, or the instance's delivery log turns red on ignored
-      // traffic and hides real failures. 202 stays reserved for
-      // accepted-for-processing.
-      return new Response(null, { status: 204 });
-    }
     if (result.status !== "ok") {
       return new Response(null, { status: 400 });
     }

@@ -4,10 +4,12 @@ import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhook
 
 /**
  * The GitLab receiver mirrors the GitHub receiver's contract: 503 when no
- * secret is configured, 401 on a bad token, 400 on malformed traffic, 204 on
- * deliberately-ignored traffic, 202 accepted-for-processing, 413 over the
- * body cap. The token check replaces the HMAC; the delivery uuid header is
- * required (the namespaced dedup key is built from it, issue 547).
+ * secret is configured, 401 on a bad token, 400 on malformed traffic, 202
+ * accepted-for-processing, 413 over the body cap. Both payload kinds the hook
+ * subscribes to — issue and merge request — are accepted for processing; the
+ * receiver has no deliberately-ignored (204) class. The token check replaces
+ * the HMAC; the delivery uuid header is required (the namespaced dedup key is
+ * built from it, issue 547).
  */
 
 const secret = "webhook-secret";
@@ -141,12 +143,20 @@ describe("GitLab webhook route", () => {
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
-  it("answers 204 for a merge request delivery without processing it", async () => {
-    const processWebhookMock = vi.fn();
+  it("answers 202 for a merge request delivery and hands the processor its PULL_REQUEST subject", async () => {
+    const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
     const route = createGitLabWebhookPostHandler({ secret, processWebhook: processWebhookMock });
     const response = await route(request(mergeRequestPayload, gitlabHeaders({ "x-gitlab-event": "Merge Request Hook" })));
-    expect(response.status).toBe(204);
-    expect(processWebhookMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(202);
+    expect(processWebhookMock).toHaveBeenCalledExactlyOnceWith({
+      deliveryId: "gitlab:uuid-1",
+      event: "pull_request",
+      action: "closed",
+      repositoryGitHubId: 278964,
+      repositoryFullName: "gitlab-org/gitlab",
+      subject: { kind: "PULL_REQUEST", id: 401, number: 7 },
+      forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
+    });
   });
 
   it("answers 400 for an unrecognised object kind", async () => {

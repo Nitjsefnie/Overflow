@@ -69,6 +69,29 @@ function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: 
   })!;
 }
 
+function mergeRequestDelivery(options: { projectId: number; instanceUrl: string; uuid: string; mergeRequestId: number }) {
+  return parseGitLabWebhookDelivery("Merge Request Hook", options.uuid, {
+    object_kind: "merge_request",
+    event_type: "merge_request",
+    project: {
+      id: options.projectId,
+      name: "p",
+      path_with_namespace: `gl-group/project-${options.projectId}`,
+      web_url: `${options.instanceUrl}/gl-group/project-${options.projectId}`,
+    },
+    object_attributes: {
+      id: options.mergeRequestId,
+      iid: 7,
+      title: "Fix widget",
+      description: null,
+      state: "opened",
+      updated_at: "2026-09-08T11:00:00.000Z",
+      url: `${options.instanceUrl}/gl-group/p/-/merge_requests/7`,
+      action: "approved",
+    },
+  })!;
+}
+
 async function deliver(delivery: ReturnType<typeof issueDelivery>) {
   const store = new PostgresFoldStore();
   return processWebhook({
@@ -129,6 +152,29 @@ describe("GitLab webhook delivery materialization", () => {
     // The dedup key is namespaced: it can never collide with a GitHub guid.
     expect(await sql`select github_delivery_id, processing_state::text as processing_state from webhook_deliveries where github_delivery_id = 'gitlab:db-uuid-1'`)
       .toEqual([{ github_delivery_id: "gitlab:db-uuid-1", processing_state: "PROCESSED" }]);
+  });
+
+  it("marks a merge request delivery's own PULL_REQUEST subject dirty and queues the fold", async () => {
+    const projectId = externalId++;
+    const instanceUrl = "https://gitlab.example.com";
+    const mergeRequestId = externalId++;
+    const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
+
+    await expect(deliver(mergeRequestDelivery({ projectId, instanceUrl, uuid: "db-uuid-mr-1", mergeRequestId })))
+      .resolves.toEqual({ status: "PROCESSED" });
+
+    // The MR's own subject, not an issue's: an approval that moves no issue
+    // still invalidates the MR's evidence ahead of the periodic sweep.
+    expect(await sql`
+      select kind::text as kind, github_subject_id::text as github_subject_id, subject_number
+      from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}
+    `).toEqual([{ kind: "PULL_REQUEST", github_subject_id: String(mergeRequestId), subject_number: 7 }]);
+    expect(await sql`select state::text as state, reason::text as reason from repository_reconciliation_jobs where repository_id = ${repositoryId}`)
+      .toEqual([{ state: "PENDING", reason: "WEBHOOK" }]);
+    // No issue view rides on an MR delivery, so no issue row is written.
+    expect(await sql`select github_issue_id from issues where repository_id = ${repositoryId}`).toEqual([]);
+    expect(await sql`select processing_state::text as processing_state from webhook_deliveries where github_delivery_id = 'gitlab:db-uuid-mr-1'`)
+      .toEqual([{ processing_state: "PROCESSED" }]);
   });
 
   it("replays the same webhook uuid as a duplicate without re-enqueueing the fold", async () => {
