@@ -774,6 +774,28 @@ export async function listEligibleIssues(
     sponsor_credit_limits as materialized (
       -- Replay completed-work history once for all accounts, never per issue.
       select account_id, credit_limit from account_credit_limits
+    ),
+    repayment_issues as materialized (
+      -- One unclaimed opening per exhausted sponsor, across all active
+      -- repositories. Pick before presentation filters so filtering cannot
+      -- nominate a different exception. Immutable forge keys break price/age ties.
+      select distinct on (repositories.sponsor_id)
+        repositories.sponsor_id, issues.id
+      from issues
+      join registered_repositories as repositories on repositories.id = issues.repository_id
+      join users as sponsors on sponsors.id = repositories.sponsor_id
+      left join sponsor_balances on sponsor_balances.account_id = sponsors.id
+      left join sponsor_credit_limits on sponsor_credit_limits.account_id = sponsors.id
+      where issues.state = 'OPEN'
+        and issues.claim_assignee_github_login is null
+        and repositories.active = true
+        and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
+        and coalesce(sponsor_balances.balance, 0) <= -coalesce(sponsor_credit_limits.credit_limit, 10)
+      order by repositories.sponsor_id,
+        issues.opening_reserve_points asc, issues.created_at asc,
+        repositories.provider, coalesce(repositories.instance_url, ''),
+        coalesce(repositories.forge_project_id, repositories.github_repository_id),
+        issues.issue_number
     )
     select
       ranked.*
@@ -802,6 +824,7 @@ export async function listEligibleIssues(
     left join sponsor_balances on sponsor_balances.account_id = sponsors.id
     left join sponsor_credit_limits on sponsor_credit_limits.account_id = sponsors.id
     left join reservations on reservations.sponsor_id = sponsors.id
+    left join repayment_issues on repayment_issues.id = issues.id
     where issues.state = 'OPEN'
       and repositories.active = true
       and sponsors.id <> ${accountId}
@@ -809,6 +832,7 @@ export async function listEligibleIssues(
       and (
         issues.claim_assignee_github_login is not null
         or coalesce(sponsor_balances.balance, 0) > -coalesce(sponsor_credit_limits.credit_limit, 10)
+        or repayment_issues.id is not null
       )
       and (${repositoryFilter}::text is null or repositories.owner_name = ${repositoryFilter})
       and (${openingLabelFilter}::text is null or issues.opening_label = ${openingLabelFilter})
