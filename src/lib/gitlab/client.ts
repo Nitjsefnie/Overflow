@@ -210,6 +210,7 @@ export class GitLabGateway {
     const since = options?.since === undefined ? "" : `&updated_after=${encodeURIComponent(options.since)}`;
     const objects = await this.listAllPages<GitLabIssueObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues${since}`,
+      "keyset",
     );
     const issues: GitHubIssue[] = [];
     for (const object of objects) {
@@ -398,7 +399,8 @@ export class GitLabGateway {
     }
     try {
       const commits = await this.listAllPages<{ committed_at: string | null; committed_date: string }>(
-        `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits?per_page=100`,
+        `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits`,
+        "offset",
       );
       const timestamps = commits
         .map((commit) => commit.committed_at ?? commit.committed_date)
@@ -418,6 +420,7 @@ export class GitLabGateway {
   ): Promise<GitHubIssueReference[]> {
     const objects = await this.listAllPages<{ id: number; iid: number; project_id: number }>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${subject.number}/closes_issues`,
+      "offset",
     );
     return objects.map((object) => ({ id: object.id, number: object.iid, repositoryGitHubId: object.project_id }));
   }
@@ -432,6 +435,7 @@ export class GitLabGateway {
     void _initialPage;
     const objects = await this.listAllPages<GitLabMergeRequestObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues/${issueIid}/closed_by`,
+      "offset",
     );
     const mapped: GitLabMergeRequest[] = [];
     for (const object of objects) {
@@ -586,25 +590,92 @@ export class GitLabGateway {
     return { status, headers, body };
   }
 
-  private async listAllPages<T>(path: string): Promise<T[]> {
-    // Keyset pagination (contract gap 7, live-verified): offset pagination
-    // drifts when rows shift between pages, and reconciliation reads exactly
-    // the surfaces where that would silently skip evidence. Ordered by id
-    // ascending, following the x-next-page-cursor the server hands back.
+  private async listAllPages<T>(path: string, mode: "keyset" | "offset"): Promise<T[]> {
+    // Pagination controls are endpoint-specific. A server Link is authoritative;
+    // header fallbacks update the current query without losing opaque parameters.
     const items: T[] = [];
-    let cursor: string | null = null;
+    const api = new URL(`${this.instanceUrl}/api/v4/`);
+    const separator = path.includes("?") ? "&" : "?";
+    const parameters = mode === "keyset"
+      ? "per_page=100&pagination=keyset&order_by=created_at&sort=asc"
+      : "per_page=100&page=1";
+    let target = new URL(`${this.instanceUrl}/api/v4${path}${separator}${parameters}`);
+    const collectionPath = target.pathname;
+    const requested = new Set<string>();
+    const cursors = new Set<string>();
+    let page = 1;
     for (;;) {
-      const separator = path.includes("?") ? "&" : "?";
-      const base = `${path}${separator}per_page=100&pagination=keyset&order_by=id&sort=asc`;
-      const target = cursor === null ? base : `${base}&cursor=${encodeURIComponent(cursor)}`;
-      const response = await this.request(target);
-      const payload = await responseJson<T[]>(response);
-      items.push(...payload);
-      cursor = response.headers.get("x-next-page-cursor");
-      if (cursor === null || cursor === "") break;
+      const normalized = new URL(target);
+      normalized.searchParams.sort();
+      if (requested.has(normalized.href)) throw new Error("GitLab returned a repeated pagination target.");
+      requested.add(normalized.href);
+      for (const cursor of target.searchParams.getAll("cursor")) {
+        if (cursor === "") continue;
+        if (cursors.has(cursor)) throw new Error("GitLab returned a repeated pagination cursor.");
+        cursors.add(cursor);
+      }
+      const response = await this.request(`${target.pathname.slice(api.pathname.length - 1)}${target.search}`);
+      items.push(...await responseJson<T[]>(response));
+      const link = nextLink(response.headers.get("link"));
+      if (link !== null) {
+        let next: URL;
+        try {
+          next = new URL(link, target);
+        } catch {
+          throw new Error("GitLab returned an invalid pagination Link URL.");
+        }
+        if (/[\s\\#]/.test(link) || next.username !== "" || next.password !== ""
+          || next.origin !== api.origin || !next.pathname.startsWith(api.pathname)
+          || next.pathname !== collectionPath) {
+          throw new Error("GitLab returned an unsafe pagination Link URL.");
+        }
+        const linkedPage = next.searchParams.get("page");
+        if (mode === "offset" && linkedPage !== null) {
+          const nextPage = Number(linkedPage);
+          if (!/^\d+$/.test(linkedPage) || !Number.isSafeInteger(nextPage) || nextPage <= page) {
+            throw new Error("GitLab returned an invalid pagination Link page.");
+          }
+          page = nextPage;
+        }
+        target = next;
+        continue;
+      }
+      const next = response.headers.get(mode === "keyset" ? "x-next-cursor" : "x-next-page");
+      if (next === null || next === "") break;
+      if (mode === "offset") {
+        const nextPage = Number(next);
+        if (!/^\d+$/.test(next) || !Number.isSafeInteger(nextPage) || nextPage <= page) {
+          throw new Error(`GitLab returned an invalid x-next-page header: ${JSON.stringify(next)}.`);
+        }
+        page = nextPage;
+      }
+      target.searchParams.set(mode === "keyset" ? "cursor" : "page", next);
     }
     return items;
   }
+}
+
+function nextLink(header: string | null): string | null {
+  if (header === null || header.trim() === "") return null;
+  // Parse complete relation entries: commas in URI references or quoted
+  // parameters are data, not separators. Reject ambiguous or partial entries.
+  const entry = /\s*<([^<>]*)>((?:\s*;\s*[\w!#$%&'*+.^`|~-]+\s*=\s*(?:"(?:[^"\\]|\\.)*"|[\w!#$%&'*+.^`|~-]+))*)\s*(,|$)/gy;
+  const parameter = /;\s*([\w!#$%&'*+.^`|~-]+)\s*=\s*("(?:[^"\\]|\\.)*"|[\w!#$%&'*+.^`|~-]+)/g;
+  let next: string | null = null;
+  while (entry.lastIndex < header.length) {
+    const match = entry.exec(header);
+    if (match === null || (match[3] === "," && header.slice(entry.lastIndex).trim() === "")) {
+      throw new Error("GitLab returned a malformed pagination Link header.");
+    }
+    for (const attribute of match[2]!.matchAll(parameter)) {
+      if (attribute[1]!.toLowerCase() !== "rel") continue;
+      const value = attribute[2]!.replace(/^"|"$/g, "").replace(/\\(.)/g, "$1");
+      if (!value.split(/\s+/).includes("next")) continue;
+      if (next !== null || match[1] === "") throw new Error("GitLab returned an invalid pagination Link relation.");
+      next = match[1]!;
+    }
+  }
+  return next;
 }
 
 function toGitHubRepository(project: GitLabProject): GitHubRepository {
