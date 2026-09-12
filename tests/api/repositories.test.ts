@@ -1218,11 +1218,11 @@ describe("POST /api/repositories granted-scope check", () => {
   const userUrl = "https://api.github.com/user";
   const repositoryUrl = "https://api.github.com/repos/octo/overflow";
 
-  function githubAnswering(grantedScopes: string | null, userStatus = 200) {
+  function githubAnswering(grantedScopes: string | null, userStatus = 200, userHeaders: Record<string, string> = {}) {
     return vi.fn<typeof fetch>(async (input) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === userUrl) {
-        const headers = new Headers({ "content-type": "application/json" });
+        const headers = new Headers({ "content-type": "application/json", ...userHeaders });
         if (grantedScopes !== null) headers.set("x-oauth-scopes", grantedScopes);
         return new Response(JSON.stringify({ id: 4242, login: "octocat" }), { status: userStatus, headers });
       }
@@ -1310,6 +1310,76 @@ describe("POST /api/repositories granted-scope check", () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "GITHUB_CREDENTIALS" } });
     expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+  });
+
+  // The probe precedes the gateway, so a rate limit GitHub answers it with
+  // must reach the same documented 429 the gateway's would — the retry
+  // guidance and delay included — for cookie and bearer callers alike.
+  it.each([
+    { label: "an explicit 429", status: 429, caller: "cookie" as const },
+    { label: "a 403 carrying rate-limit evidence", status: 403, caller: "cookie" as const },
+    { label: "an explicit 429 for a bearer caller", status: 429, caller: "bearer" as const },
+  ])("answers the documented 429 when GitHub rate-limits the scope probe with $label", async ({ status, caller }) => {
+    wireStores();
+    if (caller === "bearer") {
+      vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+    } else {
+      readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    }
+    const fetchGitHub = githubAnswering("admin:repo_hook", status, { "x-ratelimit-remaining": "0", "retry-after": "60" });
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(caller === "bearer" ? authorizedRequest(validInput()) : jsonRequest(validInput()));
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "GITHUB_RATE_LIMITED",
+        message: `GitHub rate-limited the request to read its granted permissions (HTTP ${status}). Retry after 60 seconds. Please retry registration later.`,
+      },
+    });
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+  });
+
+  it("answers the documented 429 without a delay sentence when GitHub supplies none", async () => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering("admin:repo_hook", 429, { "x-ratelimit-remaining": "0" });
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "GITHUB_RATE_LIMITED",
+        message: "GitHub rate-limited the request to read its granted permissions (HTTP 429). Please retry registration later.",
+      },
+    });
+  });
+
+  it("keeps a 403 without rate-limit evidence on the generic upstream path", async () => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering("admin:repo_hook", 403);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "UPSTREAM_FAILURE" } });
+  });
+
+  it("keeps the credentials refusal ahead of rate-limit evidence on a 401", async () => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering("admin:repo_hook", 401, { "x-ratelimit-remaining": "0", "retry-after": "60" });
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "GITHUB_CREDENTIALS" } });
   });
 
   it("answers 502 when the scope probe itself fails upstream", async () => {

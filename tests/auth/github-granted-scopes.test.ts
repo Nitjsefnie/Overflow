@@ -9,8 +9,8 @@ import {
 const GITHUB_USER_URL = "https://api.github.com/user";
 const accessToken = "stored-oauth-token";
 
-function userResponse(scopes: string | null, status = 200): Response {
-  const headers = new Headers({ "content-type": "application/json" });
+function userResponse(scopes: string | null, status = 200, extraHeaders: Record<string, string> = {}): Response {
+  const headers = new Headers({ "content-type": "application/json", ...extraHeaders });
   if (scopes !== null) {
     headers.set("x-oauth-scopes", scopes);
   }
@@ -57,6 +57,33 @@ describe("readGitHubGrantedScopes", () => {
     expect(failure).toBeInstanceOf(GitHubScopeProbeError);
     expect((failure as GitHubScopeProbeError).status).toBe(status);
     expect((failure as Error).message).not.toContain(accessToken);
+  });
+
+  // The probe sits ahead of the gateway, so a rate limit GitHub answers it
+  // with must classify exactly as the gateway's would — same evidence, same
+  // retry delay — or the caller-visible 429 contract is lost to a 502.
+  it.each<{ label: string; status: number; headers: Record<string, string>; retryAfterSeconds: number | null }>([
+    { label: "an explicit 429 with a retry delay", status: 429, headers: { "x-ratelimit-remaining": "0", "retry-after": "60" }, retryAfterSeconds: 60 },
+    { label: "a 403 carrying rate-limit evidence", status: 403, headers: { "x-ratelimit-remaining": "0", "retry-after": "60" }, retryAfterSeconds: 60 },
+    { label: "a 429 without a retry delay", status: 429, headers: { "x-ratelimit-remaining": "0" }, retryAfterSeconds: null },
+  ])("marks $label as rate-limited on the probe error", async ({ status, headers, retryAfterSeconds }) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => userResponse("admin:repo_hook", status, headers));
+
+    const failure = await readGitHubGrantedScopes(accessToken, fetchMock).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitHubScopeProbeError);
+    expect((failure as GitHubScopeProbeError).status).toBe(status);
+    expect((failure as GitHubScopeProbeError).rateLimited).toBe(true);
+    expect((failure as GitHubScopeProbeError).retryAfterSeconds).toBe(retryAfterSeconds);
+  });
+
+  it.each([401, 403, 500])("leaves a %i response without rate-limit evidence unclassified", async (status) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => userResponse("admin:repo_hook", status));
+
+    const failure = await readGitHubGrantedScopes(accessToken, fetchMock).catch((error: unknown) => error);
+
+    expect((failure as GitHubScopeProbeError).rateLimited).toBe(false);
+    expect((failure as GitHubScopeProbeError).retryAfterSeconds).toBeNull();
   });
 
   it("fails the probe when the transport never settles within the deadline", async () => {

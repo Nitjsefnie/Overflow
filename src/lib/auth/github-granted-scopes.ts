@@ -15,20 +15,31 @@
  * transport is aborted and the probe fails as an upstream failure.
  */
 import { grantsWebhookAdministration, parseGrantedScopes } from "@/lib/auth/github-oauth-scopes";
+import { classifyGitHubRateLimit, type GitHubRateLimitDetails } from "@/lib/github/errors";
 
 const GITHUB_API_USER_URL = "https://api.github.com/user";
 
 /** The same deadline the GitHub REST and GraphQL clients give every request. */
 const defaultTimeoutMs = 10_000;
 
-/** GitHub answered the probe with a non-2xx status: the token is refused (401) or GitHub is unavailable. */
-export class GitHubScopeProbeError extends Error {
+/**
+ * GitHub answered the probe with a non-2xx status: the token is refused
+ * (401), GitHub is rate-limiting it, or GitHub is unavailable. Rate-limit
+ * evidence is classified exactly as the GitHub gateway classifies its own
+ * responses (`classifyGitHubRateLimit`), so the probe — which runs ahead of
+ * the gateway — cannot turn a documented 429 into an outage.
+ */
+export class GitHubScopeProbeError extends Error implements GitHubRateLimitDetails {
   readonly status: number;
+  readonly rateLimited: boolean;
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number) {
+  constructor(status: number, rateLimit: GitHubRateLimitDetails = { rateLimited: false, retryAfterSeconds: null }) {
     super(`GitHub /user responded ${status} to the granted-scope probe.`);
     this.name = "GitHubScopeProbeError";
     this.status = status;
+    this.rateLimited = rateLimit.rateLimited;
+    this.retryAfterSeconds = rateLimit.retryAfterSeconds;
   }
 }
 
@@ -77,7 +88,10 @@ export async function readGitHubGrantedScopes(
       deadline,
     ]);
     if (!response.ok) {
-      throw new GitHubScopeProbeError(response.status);
+      // The body is read only for the secondary-rate-limit marker the
+      // gateway's classifier also looks for; it is never parsed or surfaced.
+      const body = await response.text().catch(() => null);
+      throw new GitHubScopeProbeError(response.status, classifyGitHubRateLimit(response.status, response.headers, body));
     }
     return parseGrantedScopes(response.headers.get("x-oauth-scopes"));
   } finally {
