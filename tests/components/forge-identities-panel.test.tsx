@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -11,6 +11,26 @@ const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 const fetchMock = vi.fn();
+const existingIdentity = {
+  id: "identity-1",
+  provider: "gitlab",
+  instanceUrl: "https://gitlab.com",
+  forgeLogin: "ada",
+  verifiedAt: "2026-09-10T00:00:00.000Z",
+  tokenFailedAt: null,
+};
+
+function fillLinkForm() {
+  fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: "https://gitlab.com" } });
+  fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: "test-token" } });
+}
+
+async function submitLinkForm() {
+  fillLinkForm();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Link identity" }));
+  });
+}
 
 beforeEach(() => {
   spyOnConsoleOutput();
@@ -29,6 +49,116 @@ afterEach(() => {
 });
 
 describe("Forge identities panel", () => {
+  it.each([
+    ["rejects", () => Promise.reject(new TypeError("Failed to fetch"))],
+    ["returns non-2xx", () => Promise.resolve(Response.json({ error: { message: "Unavailable" } }, { status: 503 }))],
+    ["returns malformed JSON", () => Promise.resolve(new Response("{"))],
+  ])("keeps the confirmed link success when the follow-up list request %s", async (_failure, listResponse) => {
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ identities: [existingIdentity] }))
+      .mockResolvedValueOnce(Response.json({}, { status: 201 }))
+      .mockImplementationOnce(listResponse);
+    render(<ForgeIdentitiesPanel />);
+    await screen.findByText("ada");
+    await submitLinkForm();
+
+    expect(screen.getByRole("status")).toHaveTextContent("Forge identity linked.");
+    expect(screen.getByRole("alert")).toHaveTextContent(/list could not be refreshed.*may be out of date/i);
+    expect(screen.queryByText(/link request could not reach/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/instance url/i)).toHaveValue("");
+    expect(screen.getByLabelText(/personal access token/i)).toHaveValue("");
+    expect(screen.getByRole("list")).toHaveTextContent("ada");
+    expect(screen.getByRole("button", { name: /unlink ada/i })).toBeEnabled();
+    fillLinkForm();
+    expect(screen.getByRole("button", { name: "Link identity" })).toBeEnabled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls).toEqual([
+      ["/api/forge-identities", { credentials: "same-origin" }],
+      ["/api/forge-identities", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ instanceUrl: "https://gitlab.com", token: "test-token" }),
+      }],
+      ["/api/forge-identities", { credentials: "same-origin" }],
+    ]);
+  });
+
+  it("shows link success while refreshing and renders the refreshed list before releasing busy", async () => {
+    let resolveList!: (response: Response) => void;
+    const listResponse = new Promise<Response>((resolve) => { resolveList = resolve; });
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ identities: [] }))
+      .mockResolvedValueOnce(Response.json({}, { status: 201 }))
+      .mockReturnValueOnce(listResponse);
+    render(<ForgeIdentitiesPanel />);
+    await screen.findByText(/no forge identity is linked/i);
+    await submitLinkForm();
+
+    expect(screen.getByRole("status")).toHaveTextContent("Forge identity linked.");
+    expect(screen.getByLabelText(/instance url/i)).toHaveValue("");
+    expect(screen.getByLabelText(/personal access token/i)).toHaveValue("");
+    fillLinkForm();
+    expect(screen.getByRole("button", { name: "Link identity" })).toBeDisabled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveList(Response.json({ identities: [existingIdentity] }));
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Forge identity linked.");
+    expect(screen.getByRole("list")).toHaveTextContent("ada");
+    expect(screen.queryByText(/no forge identity is linked/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Link identity" })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears a prior refresh warning on a later successful submission", async () => {
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ identities: [] }))
+      .mockResolvedValueOnce(Response.json({}, { status: 201 }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(Response.json({}, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ identities: [existingIdentity] }));
+    render(<ForgeIdentitiesPanel />);
+    await screen.findByText(/no forge identity is linked/i);
+    await submitLinkForm();
+    expect(screen.getByRole("alert")).toHaveTextContent(/list could not be refreshed/i);
+
+    await submitLinkForm();
+
+    expect(screen.getByRole("status")).toHaveTextContent("Forge identity linked.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("list")).toHaveTextContent("ada");
+    expect(screen.getByLabelText(/instance url/i)).toHaveValue("");
+    expect(screen.getByLabelText(/personal access token/i)).toHaveValue("");
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it.each([
+    ["rejects", () => Promise.reject(new TypeError("Failed to fetch")), /link request could not reach Overflow/i],
+    ["returns non-2xx", () => Promise.resolve(Response.json({ error: { message: "Token rejected by GitLab." } }, { status: 422 })), /token rejected by GitLab/i],
+    ["returns non-2xx without JSON", () => Promise.resolve(new Response("Unavailable", { status: 503 })), /identity could not be linked/i],
+  ])("keeps mutation failure behavior when the POST %s", async (_failure, postResponse, message) => {
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ identities: [existingIdentity] }))
+      .mockImplementationOnce(postResponse);
+    render(<ForgeIdentitiesPanel />);
+    await screen.findByText("ada");
+    await submitLinkForm();
+
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/instance url/i)).toHaveValue("https://gitlab.com");
+    expect(screen.getByLabelText(/personal access token/i)).toHaveValue("test-token");
+    expect(screen.getByRole("button", { name: "Link identity" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /unlink ada/i })).toBeEnabled();
+    expect(screen.getByRole("list")).toHaveTextContent("ada");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("names the read_api scope where the token is asked for", async () => {
     render(<ForgeIdentitiesPanel />);
 
