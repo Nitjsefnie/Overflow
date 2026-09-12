@@ -288,6 +288,46 @@ describe("repository registration form", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(message);
   });
 
+  // Issue 599: the page's gate reads a JWT hint, so a session whose grant was
+  // since revoked or narrowed still reaches the form; the route's authoritative
+  // scope refusal is what tells it. The refusal must then carry a working
+  // remedy, or the sponsor is left reloading a page that keeps showing the form.
+  describe("stale webhook-scope refusal", () => {
+    const scopeMessage = "The GitHub authorization Overflow holds for your account cannot administer repository webhooks: registration needs the admin:repo_hook scope.";
+
+    it("offers the reauthorization action beside the route's scope refusal", async () => {
+      const reauthorize = vi.fn(async () => {});
+      stubFormApi(() => Response.json({
+        error: { code: "GITHUB_WEBHOOK_SCOPE_REQUIRED", message: scopeMessage },
+      }, { status: 403 }));
+      render(<RepositoryForm initialValues={initialValues} reauthorizeAction={reauthorize} />);
+
+      fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+      expect((await screen.findByRole("alert")).textContent).toBe(scopeMessage);
+      const authorize = screen.getByRole("button", { name: "Authorize webhook administration on GitHub" });
+      const remedyForm = authorize.closest("form");
+      expect(remedyForm).not.toBeNull();
+      // Its own form: submitting the remedy must not resubmit the registration.
+      expect(remedyForm).not.toBe(screen.getByRole("form", { name: "Register one repository" }));
+      fireEvent.click(authorize);
+      await waitFor(() => expect(reauthorize).toHaveBeenCalledTimes(1));
+    });
+
+    it("offers no reauthorization action for any other refusal", async () => {
+      const reauthorize = vi.fn(async () => {});
+      stubFormApi(() => Response.json({
+        error: { code: "FORBIDDEN", message: "GitHub administrator permission is required for the submitted repository." },
+      }, { status: 403 }));
+      render(<RepositoryForm initialValues={initialValues} reauthorizeAction={reauthorize} />);
+
+      fireEvent.submit(screen.getByRole("form", { name: "Register one repository" }));
+
+      await screen.findByRole("alert");
+      expect(screen.queryByRole("button", { name: "Authorize webhook administration on GitHub" })).not.toBeInTheDocument();
+    });
+  });
+
   it("keeps configured display names and the catalog's picked labels editable", async () => {
     stubFormApi(() => Response.json({ repository: { ownerName: "co-op/harbour" } }, { status: 201 }));
     render(<RepositoryForm initialValues={initialValues} />);

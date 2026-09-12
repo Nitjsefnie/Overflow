@@ -12,7 +12,7 @@ export default async function NewRepositoryPage() {
   return (
     <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
       {session.user.canAdministerWebhooks ? (
-        <RepositoryForm />
+        <RepositoryForm reauthorizeAction={signInForRepositoryRegistration} />
       ) : (
         <WebhookAdministrationRequired />
       )}
