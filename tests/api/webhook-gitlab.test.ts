@@ -127,11 +127,33 @@ describe("GitLab webhook route", () => {
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
+  // GitLab's token is header-only (no HMAC over the body, unlike GitHub), so
+  // a wrong token is refused before the body is touched: the tracked stream
+  // must hand out zero bytes. The single-chunk body is well under the cap, so
+  // a receiver that reads first and verifies second still answers 401 here —
+  // only the byte count tells the two orderings apart.
   it("answers 401 for a wrong token without reading the delivery further", async () => {
+    const { stream, record } = trackedBodyStream(1);
     const processWebhookMock = vi.fn();
     const route = createGitLabWebhookPostHandler({ secret, processWebhook: processWebhookMock });
-    const response = await route(request("{", gitlabHeaders({ "x-gitlab-token": "wrong-token" })));
+    const response = await route(streamRequest(stream, { "x-gitlab-token": "wrong-token" }));
     expect(response.status).toBe(401);
+    expect(record.handedOutBytes).toBe(0);
+    expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  // Ordering control: the token check precedes the declared-size check, so a
+  // wrong token on a delivery declared over the cap is a 401, not a 413.
+  it("answers 401, not 413, for a wrong token on a delivery declared over the cap", async () => {
+    const { stream, record } = trackedBodyStream(CHUNK_COUNT);
+    const processWebhookMock = vi.fn();
+    const route = createGitLabWebhookPostHandler({ secret, processWebhook: processWebhookMock });
+    const response = await route(streamRequest(stream, {
+      "x-gitlab-token": "wrong-token",
+      "content-length": String(WEBHOOK_BODY_LIMIT_BYTES + 1),
+    }));
+    expect(response.status).toBe(401);
+    expect(record.handedOutBytes).toBe(0);
     expect(processWebhookMock).not.toHaveBeenCalled();
   });
 
