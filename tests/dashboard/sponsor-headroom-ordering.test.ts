@@ -83,7 +83,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       }
     });
 
-    it("orders all eligible issues by +500, +50, zero, -5, -10, -11 before reserve or age", async () => {
+    it("hides unclaimed issues at the -10 settled cutoff while preserving exact balance ordering", async () => {
       // Negative balances are real settled debits, separate from the claims
       // that also reduce Carol's, Nina's, and Gail's displayed headroom.
       const board = await listEligibleIssues(seededTiers.viewerId);
@@ -94,15 +94,13 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
         "dave five",
         "hank five",
         "carol ten",
-        "nina ten",
-        "gail ten",
       ]);
     });
 
     it("keeps the available-headroom display field on every returned row", async () => {
       const board = await listEligibleIssues(seededTiers.viewerId);
 
-      expect(board).toHaveLength(7);
+      expect(board).toHaveLength(5);
       for (const row of board) {
         expect(row.availableHeadroom).toBeDefined();
       }
@@ -111,10 +109,8 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
           ["erin five", 50],
           ["flor five", 500],
           ["carol ten", -10],
-          ["nina ten", -20],
           ["dave five", 0],
           ["hank five", 0],
-          ["gail ten", -22],
         ]),
       );
     });

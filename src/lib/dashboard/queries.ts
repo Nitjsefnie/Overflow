@@ -770,6 +770,10 @@ export async function listEligibleIssues(
       -- One balances pass per query for the same reason; the view already
       -- holds one row per account, so the join cannot fan out.
       select account_id, balance from balances
+    ),
+    sponsor_credit_limits as materialized (
+      -- Replay completed-work history once for all accounts, never per issue.
+      select account_id, credit_limit from account_credit_limits
     )
     select
       ranked.*
@@ -796,11 +800,16 @@ export async function listEligibleIssues(
     join registered_repositories as repositories on repositories.id = issues.repository_id
     join users as sponsors on sponsors.id = repositories.sponsor_id
     left join sponsor_balances on sponsor_balances.account_id = sponsors.id
+    left join sponsor_credit_limits on sponsor_credit_limits.account_id = sponsors.id
     left join reservations on reservations.sponsor_id = sponsors.id
     where issues.state = 'OPEN'
       and repositories.active = true
       and sponsors.id <> ${accountId}
       and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
+      and (
+        issues.claim_assignee_github_login is not null
+        or coalesce(sponsor_balances.balance, 0) > -coalesce(sponsor_credit_limits.credit_limit, 10)
+      )
       and (${repositoryFilter}::text is null or repositories.owner_name = ${repositoryFilter})
       and (${openingLabelFilter}::text is null or issues.opening_label = ${openingLabelFilter})
       and (
