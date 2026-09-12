@@ -536,6 +536,32 @@ export class GitLabGateway {
     );
   }
 
+  public async configureWebhook(
+    repository: GitHubRepositoryReference,
+    webhookId: number,
+    configuration: GitHubWebhookConfiguration,
+  ): Promise<void> {
+    try {
+      const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/hooks/${webhookId}`;
+      const before = await responseJson<GitLabHookObject>(await this.request(path));
+      const subscriptions = Object.fromEntries(Object.entries(before)
+        .filter(([key, value]) => key.endsWith("_events") && key !== "issues_events" && typeof value === "boolean"));
+      const after = await responseJson<GitLabHookObject>(await this.request(path, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...subscriptions, issue_events: true, merge_requests_events: true,
+          url: configuration.callbackUrl, token: configuration.secret }),
+      }));
+      if (before.id !== webhookId || after.id !== webhookId || after.url !== configuration.callbackUrl
+        || after.issues_events !== true || after.merge_requests_events !== true
+        || Object.entries(subscriptions).some(([key, value]) => value === true && (after as unknown as Record<string, unknown>)[key] !== true)) {
+        throw new Error("GitLab webhook configuration verification failed.");
+      }
+    } catch (error) {
+      if (error instanceof GitLabApiError) throw new GitLabApiError(error.status);
+      throw error;
+    }
+  }
+
   public async ensureWebhookEvents(
     repository: GitHubRepositoryReference,
     webhookId: number,

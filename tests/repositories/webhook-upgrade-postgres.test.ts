@@ -49,14 +49,91 @@ afterAll(async () => {
 });
 
 describe("upgrading actual persisted registrations", () => {
+  it("reuses durable material after timeout, finalization failure, and queue failure", async () => {
+    const [registered] = await sql<{ id: string }[]>`
+      insert into registered_repositories
+        (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+      values (46, 'retry/project', ${sponsorIds[0]!}, 'PUBLIC', 85, ${sql.json(validDifficultyScheme())}) returning id
+    `;
+    const registrations = new PostgresRepositoryStore(sql, key);
+    const queue = new PostgresFoldStore(sql, key);
+    let phase = "timeout";
+    let remote = { id: 85, name: "web", type: "Repository", active: true,
+      events: ["issues", "issue_comment", "pull_request", "pull_request_review"],
+      config: { url: "https://old.test/hook", content_type: "json", insecure_ssl: "0", secret: "masked" },
+    };
+    const writes: Array<{ url: string; secret: string }> = [];
+    const outcomes: string[] = [];
+    const dependencies = {
+      store: {
+        listActiveRepositoryIds: async () => [registered.id],
+        findActiveRepositoryById: registrations.findActiveRepositoryById.bind(registrations),
+        findActiveRepositoryForgeById: registrations.findActiveRepositoryForgeById.bind(registrations),
+        getGitHubAccessToken: async () => "synthetic-sponsor-token",
+        getForgeToken: async () => null,
+        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
+        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
+        finalizeWebhookCredential: async (credential: Parameters<typeof registrations.finalizeWebhookCredential>[0]) => {
+          if (phase === "finalize") throw new Error("synthetic database failure");
+          return registrations.finalizeWebhookCredential(credential);
+        },
+        requestRepositoryRederivation: async (id: string, at: Date) => {
+          if (phase === "queue") throw new Error("synthetic queue failure");
+          return queue.requestRepositoryRederivation(id, at);
+        },
+      },
+      webhookUrls: { github: "https://overflow.test/api/github/webhooks", gitlab: "" },
+      createGateway: () => new GitHubGateway({ accessToken: "synthetic-sponsor-token", fetch: async (input, init) => {
+        const request = new Request(input, init);
+        if (request.url.endsWith("/repositories/46")) return Response.json({ id: 46, name: "project",
+          full_name: "retry/project", private: false, owner: { login: "retry" },
+          html_url: "https://github.com/retry/project", permissions: { admin: true } });
+        if (request.method === "PATCH") {
+          const body = await request.json();
+          remote = { ...remote, ...body };
+          writes.push({ url: body.config.url, secret: body.config.secret });
+          if (phase === "timeout") throw new Error("synthetic timeout after remote success");
+        }
+        return Response.json(remote);
+      } }),
+      createGitLabGateway: () => { throw new Error("unexpected GitLab gateway"); },
+      write: (line: string) => { outcomes.push(line); },
+    };
+    try {
+      let material: { webhook_credential_id: string; encrypted_webhook_secret: Buffer } | undefined;
+      for (const step of ["timeout", "finalize", "queue", "ok"]) {
+        phase = step;
+        expect(await runWebhookUpgradeCli([], dependencies)).toBe(step === "ok" ? 0 : 1);
+        const [row] = await sql<{ webhook_credential_id: string; encrypted_webhook_secret: Buffer; webhook_configured_at: Date | null }[]>`
+          select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+          from registered_repositories where id = ${registered.id}
+        `;
+        material ??= { webhook_credential_id: row.webhook_credential_id, encrypted_webhook_secret: row.encrypted_webhook_secret };
+        expect(row).toMatchObject(material);
+        expect(row.webhook_configured_at !== null, JSON.stringify({ step, outcomes })).toBe(step === "queue" || step === "ok");
+      }
+      expect(writes).toHaveLength(4);
+      expect(writes.every((write) => write.url === writes[0].url && write.secret === writes[0].secret)).toBe(true);
+      expect(outcomes.join("\n")).not.toContain(writes[0].secret);
+      expect(await sql`select reason, state from repository_reconciliation_jobs where repository_id = ${registered.id}`)
+        .toEqual([{ reason: "REDERIVATION", state: "PENDING" }]);
+    } finally {
+      await sql`delete from repository_reconciliation_jobs where repository_id = ${registered.id}`;
+      await sql`delete from registered_repositories where id = ${registered.id}`;
+    }
+  });
+
   it("persists the same dirty issue and WEBHOOK job for signed issue and comment deliveries", async () => {
     const [registered] = await sql<{ id: string }[]>`
       insert into registered_repositories
         (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
       values (45, 'comments/current', ${sponsorIds[0]!}, 'PUBLIC', 84, ${sql.json(validDifficultyScheme())}) returning id
     `;
-    const previousSecret = process.env.GITHUB_WEBHOOK_SECRET;
-    process.env.GITHUB_WEBHOOK_SECRET = "comment-secret";
+    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
+    process.env.TOKEN_ENCRYPTION_KEY = key;
+    const credential = (await new PostgresRepositoryStore(sql, key).stageWebhookCredential({
+      repositoryId: registered.id, provider: "github", instanceUrl: null, projectId: 45, webhookId: 84,
+    }))!;
     try {
       for (const [event, action] of [["issues", "edited"], ["issue_comment", "created"], ["issue_comment", "edited"], ["issue_comment", "deleted"]]) {
         // Each delivery must create both effects itself; an earlier issue
@@ -68,8 +145,8 @@ describe("upgrading actual persisted registrations", () => {
             title: "Issue", body: null, html_url: "https://github.com/comments/current/issues/11" },
           comment: { body: "unrelated text", user: { login: "other-author" } },
         });
-        const signature = createHmac("sha256", "comment-secret").update(body).digest("hex");
-        const response = await POST(new Request("https://overflow.test/api/github/webhooks", {
+        const signature = createHmac("sha256", credential.secret).update(body).digest("hex");
+        const response = await POST(new Request(`https://overflow.test/api/github/webhooks?hook=${credential.credentialId}`, {
           method: "POST", body, headers: { "x-github-event": event!, "x-github-delivery": `${event}-${action}`,
             "x-hub-signature-256": `sha256=${signature}` },
         }));
@@ -85,15 +162,15 @@ describe("upgrading actual persisted registrations", () => {
       await sql`delete from repository_reconciliation_jobs where repository_id = ${registered!.id}`;
       await sql`delete from repository_reconciliation_dirty_subjects where repository_id = ${registered!.id}`;
       await sql`delete from registered_repositories where id = ${registered!.id}`;
-      if (previousSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
-      else process.env.GITHUB_WEBHOOK_SECRET = previousSecret;
+      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
     }
   });
 
   it("enumerates only active registrations and reports missing sponsor tokens through the actual command", () => {
     const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, NODE_OPTIONS: "", DATABASE_URL: started.databaseUrl, TOKEN_ENCRYPTION_KEY: key, GITHUB_WEBHOOK_SECRET: "original-secret" },
+      env: { ...process.env, NODE_OPTIONS: "", DATABASE_URL: started.databaseUrl, TOKEN_ENCRYPTION_KEY: key, GITHUB_WEBHOOK_SECRET: "" },
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);
@@ -114,9 +191,13 @@ describe("upgrading actual persisted registrations", () => {
     const queue = new PostgresFoldStore(sql, key);
     const requests: { method: string; path: string; token: string | null }[] = [];
     const remoteEvents = new Map([[42, ["issues", "pull_request", "pull_request_review", "push"]], [43, ["issues", "pull_request", "pull_request_review", "push"]]]);
+    const remoteUrls = new Map<number, string>();
     const lines: string[] = [];
     const dependencies = {
       store: {
+        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
+        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
+        finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
         listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
         findActiveRepositoryById: (id: string) => registrations.findActiveRepositoryById(id),
         findActiveRepositoryForgeById: (id: string) => registrations.findActiveRepositoryForgeById(id),
@@ -124,7 +205,7 @@ describe("upgrading actual persisted registrations", () => {
         getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },
         requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
       },
-      webhookSecret: "original-secret",
+      webhookUrls: { github: "https://overflow.example/api/github/webhooks", gitlab: "https://overflow.example/api/gitlab/webhooks" },
       createGateway: (accessToken: string) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
         const request = new Request(input, init);
         const path = new URL(request.url).pathname;
@@ -139,11 +220,12 @@ describe("upgrading actual persisted registrations", () => {
         if (request.method === "PATCH") {
           const update = await request.json();
           remoteEvents.get(repositoryId)!.push(...update.add_events);
+          remoteUrls.set(repositoryId, update.config.url);
         }
         return Response.json({
           id: repositoryId + 39, name: "web", type: "Repository", active: true,
           events: remoteEvents.get(repositoryId),
-          config: { url: "https://overflow.example/api/github/webhooks", content_type: "json", insecure_ssl: "0", secret: "********" },
+          config: { url: remoteUrls.get(repositoryId) ?? "https://overflow.example/api/github/webhooks", content_type: "json", insecure_ssl: "0", secret: "********" },
         });
       } }),
       createGitLabGateway: () => { throw new Error("must not build a GitLab gateway for a GitHub registration"); },
@@ -153,6 +235,8 @@ describe("upgrading actual persisted registrations", () => {
     expect(await runWebhookUpgradeCli([], dependencies)).toBe(0);
     expect(requests.filter((request) => request.method === "PATCH").sort((a, b) => a.path.localeCompare(b.path))).toEqual([
       { method: "PATCH", path: "/repos/current/42/hooks/81", token: "Bearer oauth-token-0" },
+      { method: "PATCH", path: "/repos/current/42/hooks/81", token: "Bearer oauth-token-0" },
+      { method: "PATCH", path: "/repos/current/43/hooks/82", token: "Bearer oauth-token-1" },
       { method: "PATCH", path: "/repos/current/43/hooks/82", token: "Bearer oauth-token-1" },
     ]);
     expect(await sql`select repository_id, reason, state, rederivation_generation::int from repository_reconciliation_jobs order by repository_id`).toEqual(

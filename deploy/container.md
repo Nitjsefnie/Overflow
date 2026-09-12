@@ -56,7 +56,7 @@ derives from the directory, and start with `docker compose --profile app up
 The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
 `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `TOKEN_ENCRYPTION_KEY`, `APP_URL`,
-`GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET`, `MODERATOR_GITHUB_USER_IDS`, and
+`GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL`, `MODERATOR_GITHUB_USER_IDS`, and
 `GITHUB_GRAPHQL_BUDGET_RESERVE`. Compose feeds that file to the container and
 then overrides `DATABASE_URL` to reach postgres over the compose network by
 service name, so the loopback address a host-side `.env` would carry never

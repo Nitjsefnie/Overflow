@@ -115,9 +115,10 @@ access token of the GitLab identity you linked on the *Ledger* page (or over
 that exact instance the request is refused. The project must be public, and the
 linked identity must hold maintainer permission on it — directly or inherited
 through its group; a project failing either is refused before anything is
-stored. A project hook is installed on the instance with the same shared webhook
-secret the GitHub hooks carry — deliveries arrive at the GitLab receiver
-configured under `GITLAB_WEBHOOK_URL` — and the initial import is queued
+stored. A project hook is installed with its own independently generated secret
+and a callback UUID bound to that project and instance. Deliveries arrive at the
+GitLab receiver configured under `GITLAB_WEBHOOK_URL`; credential material is
+encrypted at rest and omitted from API responses. The initial import is queued
 exactly as for a GitHub registration. The catalog labels must already exist on
 the project; the *Register a repository* form has no GitLab path, and neither
 has `PATCH`.

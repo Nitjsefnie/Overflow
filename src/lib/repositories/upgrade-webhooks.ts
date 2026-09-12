@@ -2,6 +2,7 @@ import type { GitHubGateway } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
 import type { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { webhookCallbackUrl } from "@/lib/webhooks/credentials";
 
 export type WebhookUpgradeOutcome = {
   repositoryId: string;
@@ -15,7 +16,8 @@ export type WebhookUpgradeOutcome = {
 
 export type WebhookUpgradeDependencies = {
   store: Pick<PostgresFoldStore, "listActiveRepositoryIds" | "requestRepositoryRederivation">
-    & Pick<PostgresRepositoryStore, "findActiveRepositoryById" | "findActiveRepositoryForgeById" | "getGitHubAccessToken">
+    & Pick<PostgresRepositoryStore, "findActiveRepositoryById" | "findActiveRepositoryForgeById" | "getGitHubAccessToken"
+      | "stageWebhookCredential" | "finalizeWebhookCredential" | "withWebhookUpgradeLock">
     & {
       /**
        * The sponsor's decrypted GitLab PAT for a normalized instance, or null
@@ -24,10 +26,10 @@ export type WebhookUpgradeDependencies = {
        */
       getForgeToken(sponsorId: string, instanceUrl: string): Promise<string | null>;
     };
-  createGateway(accessToken: string, sponsorId: string): Pick<GitHubGateway, "getRepositoryById" | "ensureWebhookEvents">;
+  createGateway(accessToken: string, sponsorId: string): Pick<GitHubGateway, "getRepositoryById" | "configureWebhook">;
   /** Builds the GitLab gateway a GitLab registration's hook is verified through. */
-  createGitLabGateway(instanceUrl: string, token: string): Pick<GitLabGateway, "getRepositoryById" | "ensureWebhookEvents">;
-  webhookSecret: string;
+  createGitLabGateway(instanceUrl: string, token: string): Pick<GitLabGateway, "getRepositoryById" | "configureWebhook">;
+  webhookUrls: Record<"github" | "gitlab", string>;
   report(outcome: WebhookUpgradeOutcome): void;
 };
 
@@ -38,7 +40,10 @@ export async function upgradeRepositoryWebhooks(
   const repositoryIds = await dependencies.store.listActiveRepositoryIds();
   const summary = { succeeded: 0, failed: 0 };
   for (const repositoryId of repositoryIds) {
-    const outcome = await upgradeRegistration(dependencies, repositoryId);
+    const outcome = await dependencies.store.withWebhookUpgradeLock(repositoryId,
+      () => upgradeRegistration(dependencies, repositoryId)).catch((): WebhookUpgradeOutcome => ({
+      repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED",
+    }));
     dependencies.report(outcome);
     if (outcome.failure === null) summary.succeeded++;
     else summary.failed++;
@@ -47,7 +52,7 @@ export async function upgradeRepositoryWebhooks(
 }
 
 async function upgradeRegistration(
-  { store, createGateway, createGitLabGateway, webhookSecret }: WebhookUpgradeDependencies,
+  { store, createGateway, createGitLabGateway, webhookUrls }: WebhookUpgradeDependencies,
   repositoryId: string,
 ): Promise<WebhookUpgradeOutcome> {
   const outcome: WebhookUpgradeOutcome = {
@@ -69,7 +74,7 @@ async function upgradeRegistration(
 
     if (forge.provider === "gitlab") {
       return await upgradeGitLabRegistration(
-        { store, createGitLabGateway, webhookSecret },
+        { store, createGitLabGateway, webhookUrls },
         repositoryId,
         registration,
         registration.githubWebhookId,
@@ -93,7 +98,14 @@ async function upgradeRegistration(
     ) return outcome;
 
     outcome.failure = "SUBSCRIPTION_FAILED";
-    await github.ensureWebhookEvents(repository, registration.githubWebhookId, webhookSecret);
+    const credential = await store.stageWebhookCredential({
+      repositoryId, provider: "github", instanceUrl: null, projectId: repository.id, webhookId: registration.githubWebhookId,
+    });
+    if (credential === null) return outcome;
+    await github.configureWebhook(repository, registration.githubWebhookId, {
+      callbackUrl: webhookCallbackUrl(webhookUrls.github, credential.credentialId), secret: credential.secret,
+    });
+    if (!await store.finalizeWebhookCredential(credential)) return outcome;
     outcome.subscription = "VERIFIED";
 
     return await queueRederivation({ store }, repositoryId, outcome);
@@ -112,7 +124,7 @@ async function upgradeRegistration(
  * credential, and relinking (which re-verifies live) is the remedy.
  */
 async function upgradeGitLabRegistration(
-  { store, createGitLabGateway, webhookSecret }: Pick<WebhookUpgradeDependencies, "store" | "createGitLabGateway" | "webhookSecret">,
+  { store, createGitLabGateway, webhookUrls }: Pick<WebhookUpgradeDependencies, "store" | "createGitLabGateway" | "webhookUrls">,
   repositoryId: string,
   registration: { id: string; sponsorId: string; githubRepositoryId: number },
   webhookId: number,
@@ -135,11 +147,16 @@ async function upgradeGitLabRegistration(
   ) return outcome;
 
   outcome.failure = "SUBSCRIPTION_FAILED";
-  await gitlab.ensureWebhookEvents(
+  const credential = await store.stageWebhookCredential({
+    repositoryId, provider: "gitlab", instanceUrl: forge.instanceUrl, projectId: repository.id, webhookId,
+  });
+  if (credential === null) return outcome;
+  await gitlab.configureWebhook(
     { owner: repository.owner, name: repository.name },
     webhookId,
-    webhookSecret,
+    { callbackUrl: webhookCallbackUrl(webhookUrls.gitlab, credential.credentialId), secret: credential.secret },
   );
+  if (!await store.finalizeWebhookCredential(credential)) return outcome;
   outcome.subscription = "VERIFIED";
 
   return await queueRederivation({ store }, repositoryId, outcome);

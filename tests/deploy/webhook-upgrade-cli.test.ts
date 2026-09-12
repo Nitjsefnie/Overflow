@@ -6,6 +6,9 @@ function fixture() {
   const lines: string[] = [];
   const dependencies: WebhookUpgradeCliDependencies = {
     store: {
+      withWebhookUpgradeLock: async (_id, operation) => operation(),
+      stageWebhookCredential: async () => { throw new Error("must not stage without sponsor credentials"); },
+      finalizeWebhookCredential: async () => false,
       listActiveRepositoryIds: async () => ["repository-1", "repository-2"],
       findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
       findActiveRepositoryForgeById: async () => ({ provider: "github", instanceUrl: null }),
@@ -15,7 +18,7 @@ function fixture() {
     },
     createGateway: () => { throw new Error("must not access GitHub without credentials"); },
     createGitLabGateway: () => { throw new Error("must not build a GitLab gateway for a GitHub registration"); },
-    webhookSecret: "existing-secret",
+    webhookUrls: { github: "https://overflow.example/api/github/webhooks", gitlab: "https://overflow.example/api/gitlab/webhooks" },
     write: (line) => { lines.push(line); },
   };
   return { lines, dependencies };

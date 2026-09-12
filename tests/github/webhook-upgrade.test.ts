@@ -12,6 +12,44 @@ const hook = {
 afterEach(() => vi.useRealTimers());
 
 describe("upgrading persisted GitHub webhook subscriptions", () => {
+  it("sanitizes upstream errors during scoped configuration", async () => {
+    const gateway = new GitHubGateway({ accessToken: "token", fetch: async () =>
+      new Response("synthetic-private-hook-secret", { status: 403 }) });
+    const error = await gateway.configureWebhook(repository, 81, { callbackUrl: "https://example.test", secret: "test-secret" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ status: 403, body: null });
+  });
+  it("explicitly configures callback and scoped secret even for complete subscriptions", async () => {
+    let remote = { ...structuredClone(hook), events: [...hook.events, "issue_comment"] };
+    const requests: Request[] = [];
+    const gateway = new GitHubGateway({ accessToken: "sponsor-token", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.method === "PATCH") {
+        const body = await request.clone().json();
+        remote = { ...remote, ...body, events: [...remote.events, ...body.add_events] };
+      }
+      return Response.json({ ...remote, config: { ...remote.config, secret: "********" } });
+    } });
+    await gateway.configureWebhook?.(repository, 81, { callbackUrl: "https://example.test/hook?hook=scoped", secret: "scoped-secret" });
+    expect(requests.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+    expect(remote.config).toMatchObject({ url: "https://example.test/hook?hook=scoped", secret: "scoped-secret" });
+    expect(remote.events).toContain("push");
+    expect(remote.active).toBe(false);
+  });
+
+  it.each(["id", "url", "events"])("refuses a scoped configuration response with wrong %s", async (wrong) => {
+    const gateway = new GitHubGateway({ accessToken: "token", fetch: async (_input, init) => {
+      if (init?.method !== "PATCH") return Response.json(hook);
+      const body = JSON.parse(String(init.body));
+      return Response.json({ ...hook, id: wrong === "id" ? 82 : 81,
+        config: { ...body.config, url: wrong === "url" ? "https://wrong.test" : body.config.url },
+        events: wrong === "events" ? ["push"] : [...hook.events, "issue_comment"],
+      });
+    } });
+    await expect(gateway.configureWebhook?.(repository, 81, { callbackUrl: "https://example.test/hook", secret: "synthetic-secret" }))
+      .rejects.toThrow();
+  });
+
   it("adds comments to the exact hook, preserves configuration and unrelated events, and safely reruns", async () => {
     let remote = structuredClone(hook);
     const requests: Request[] = [];

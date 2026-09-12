@@ -136,6 +136,7 @@ describe("migration 038: forge identities and provider columns", () => {
     const store = new PostgresRepositoryStore();
     const created = await store.createRepository({
       githubRepositoryId: 920_001,
+      webhookCredential: null,
       ownerName: "gitlab-group/gitlab-project",
       sponsorId: row!.sponsor_id,
       visibility: "PUBLIC",
@@ -162,6 +163,7 @@ describe("migration 038: forge identities and provider columns", () => {
     const store = new PostgresRepositoryStore();
     const created = await store.createRepository({
       githubRepositoryId: 920_002,
+      webhookCredential: null,
       ownerName: "gitlab-group/another-project",
       sponsorId: row!.sponsor_id,
       visibility: "PUBLIC",
@@ -174,6 +176,9 @@ describe("migration 038: forge identities and provider columns", () => {
     const credentialReads: string[] = [];
     const dependencies: WebhookUpgradeDependencies = {
       store: {
+        withWebhookUpgradeLock: async (_id, operation) => operation(),
+        stageWebhookCredential: async () => { throw new Error("must not stage a hookless registration"); },
+        finalizeWebhookCredential: async () => false,
         listActiveRepositoryIds: async () => [created!.id],
         findActiveRepositoryById: async (id) => (created!.id === id ? { ...created! } : null),
         findActiveRepositoryForgeById: async () => ({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" }),
@@ -186,7 +191,7 @@ describe("migration 038: forge identities and provider columns", () => {
           throw new Error("no queue work may be requested for a webhook-less repository");
         },
       },
-      webhookSecret: "secret",
+      webhookUrls: { github: "", gitlab: "" },
       createGateway: () => {
         throw new Error("no gateway may be built for a webhook-less repository");
       },

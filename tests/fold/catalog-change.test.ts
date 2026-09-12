@@ -64,6 +64,7 @@ describe("changing a repository's difficulty catalog", () => {
     const store = new PostgresRepositoryStore(sql, tokenEncryptionKey);
     const repositoryGitHubId = externalId++;
     const created = await store.createRepository({
+      webhookCredential: null,
       githubRepositoryId: repositoryGitHubId,
       ownerName: `catalog/repo-${repositoryGitHubId}`,
       visibility: "PUBLIC",

@@ -46,7 +46,6 @@ jobs:
       TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       APP_URL: https://overflow.invalid
       GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
-      GITHUB_WEBHOOK_SECRET: ci-placeholder-webhook-secret
       MODERATOR_GITHUB_USER_IDS: "1"
 
     steps:

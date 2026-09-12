@@ -12,6 +12,7 @@ import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { gitlabWebhookError } from "@/lib/repositories/gitlab-forge-errors";
 import { deleteGitLabWebhookForUnregistration } from "@/lib/repositories/gitlab-unregister";
+import { generateWebhookCredential, webhookCallbackUrl, type WebhookCredential } from "@/lib/webhooks/credentials";
 import type {
   GitHubRepository,
   GitHubRepositoryReference,
@@ -49,6 +50,7 @@ export type RegisteredRepository = {
 };
 
 export type NewRegisteredRepository = Omit<RegisteredRepository, "id"> & {
+  webhookCredential: WebhookCredential | null;
   difficultyScheme: DifficultyScheme;
   /** Forge columns; absent on the GitHub path, where the store defaults them. */
   provider?: "github" | "gitlab";
@@ -232,7 +234,7 @@ export type RepositoryRegistrationDependencies = {
   actor: { id: string; role: UserRole; enforcementState?: EnforcementState };
   github: RepositoryRegistrationGateway;
   store: RepositoryRegistrationStore;
-  webhook: GitHubWebhookConfiguration;
+  webhook: { callbackUrl: string };
   scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
   /**
    * The submitter's verified linked identity for the submitted instance —
@@ -422,9 +424,13 @@ export async function registerRepository(
 
   await verifySchemeLabelsExist(dependencies.github, submittedRepository, repository, difficultyScheme, "register again");
 
+  const webhookCredential = generateWebhookCredential();
   let webhook: GitHubWebhook;
   try {
-    webhook = await dependencies.github.createWebhook(submittedRepository, dependencies.webhook);
+    webhook = await dependencies.github.createWebhook(submittedRepository, {
+      callbackUrl: webhookCallbackUrl(dependencies.webhook.callbackUrl, webhookCredential.id),
+      secret: webhookCredential.secret,
+    });
   } catch (error) {
     throw githubSetupError(error, repository, "create the repository webhook");
   }
@@ -437,6 +443,7 @@ export async function registerRepository(
       sponsorId: dependencies.actor.id,
       visibility: repository.visibility,
       githubWebhookId: webhook.id,
+      webhookCredential,
       difficultyScheme,
     });
   } catch (error) {
@@ -709,13 +716,15 @@ async function registerGitLabRepository(
     );
   }
 
-  // The project hook is installed before anything is stored, exactly like the
-  // GitHub path: the hook carries the same shared webhook secret (the GitLab
-  // `token` parameter, echoed back on every delivery as X-Gitlab-Token), and
-  // the callback URL the deployment configures for GitLab deliveries.
+  // Install the scoped hook before persisting, retaining compensating cleanup
+  // when the local registration cannot be saved.
+  const webhookCredential = generateWebhookCredential();
   let webhook: GitHubWebhook;
   try {
-    webhook = await gateway.createWebhook({ owner: repository.owner, name: repository.name }, dependencies.webhook);
+    webhook = await gateway.createWebhook({ owner: repository.owner, name: repository.name }, {
+      callbackUrl: webhookCallbackUrl(dependencies.webhook.callbackUrl, webhookCredential.id),
+      secret: webhookCredential.secret,
+    });
   } catch (error) {
     throw gitlabWebhookError(error, "create the project webhook", "registration");
   }
@@ -728,6 +737,7 @@ async function registerGitLabRepository(
       sponsorId: dependencies.actor.id,
       visibility: repository.visibility,
       githubWebhookId: webhook.id,
+      webhookCredential,
       difficultyScheme,
       provider: "gitlab",
       instanceUrl,

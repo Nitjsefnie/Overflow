@@ -22,8 +22,10 @@ import {
   RepositorySchemeChangeOrderError,
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
-import { getSql } from "@/lib/db/client";
-import { decryptToken } from "@/lib/security/token-cipher";
+import { getCoordinationSql, getSql } from "@/lib/db/client";
+import { decryptToken, encryptToken } from "@/lib/security/token-cipher";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { generateWebhookCredential, type WebhookCredentialRecord, type WebhookCredentialTarget } from "@/lib/webhooks/credentials";
 
 type RepositoryRow = {
   id: string;
@@ -59,6 +61,12 @@ type EnforcementStateRow = {
   enforcement_state: EnforcementState;
 };
 
+type WebhookCredentialRow = {
+  id: string; webhook_credential_id: string | null; encrypted_webhook_secret: Buffer | null;
+  provider: "github" | "gitlab"; instance_url: string | null;
+  project_id: string | number; github_webhook_id: string | number; webhook_configured_at: Date | null;
+};
+
 export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
@@ -75,6 +83,80 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     // No row holds the id: no provider to collide with. Rows that predate
     // migration 038 carry the default 'github'.
     return row === undefined ? null : row.provider;
+  }
+
+  public async findWebhookCredential(selector: string, provider: "github" | "gitlab"): Promise<WebhookCredentialRecord | null> {
+    const [row] = await this.sql<WebhookCredentialRow[]>`
+      select id, webhook_credential_id, encrypted_webhook_secret, provider, instance_url,
+        case when provider = 'github' then github_repository_id else forge_project_id end as project_id,
+        github_webhook_id, webhook_configured_at
+      from registered_repositories
+      where webhook_credential_id = ${selector} and provider = ${provider}
+        and active = true and unregistered_at is null
+        and github_webhook_id is not null and encrypted_webhook_secret is not null
+    `;
+    if (row === undefined) return null;
+    return this.toWebhookCredential(row);
+  }
+
+  /** A row lock mints once; the transaction commits pending material before any remote update. */
+  public async stageWebhookCredential(target: WebhookCredentialTarget): Promise<WebhookCredentialRecord | null> {
+    return await this.sql.begin(async (transaction) => {
+      const [row] = await transaction<WebhookCredentialRow[]>`
+        select id, webhook_credential_id, encrypted_webhook_secret, provider, instance_url,
+          case when provider = 'github' then github_repository_id else forge_project_id end as project_id,
+          github_webhook_id, webhook_configured_at
+        from registered_repositories
+        where id = ${target.repositoryId} and provider = ${target.provider}
+          and instance_url is not distinct from ${target.instanceUrl}
+          and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${target.projectId}
+          and github_webhook_id = ${target.webhookId} and active = true and unregistered_at is null
+        for update
+      `;
+      if (row === undefined) return null;
+      if (row.webhook_credential_id !== null) return this.toWebhookCredential(row);
+      const credential = generateWebhookCredential();
+      const encrypted = Buffer.from(encryptToken(credential.secret, this.tokenEncryptionKey ?? ""), "utf8");
+      await transaction`
+        update registered_repositories set webhook_credential_id = ${credential.id},
+          encrypted_webhook_secret = ${encrypted}, webhook_configured_at = null
+        where id = ${row.id}
+      `;
+      return this.toWebhookCredential({ ...row, webhook_credential_id: credential.id, encrypted_webhook_secret: encrypted });
+    });
+  }
+
+  public async finalizeWebhookCredential(credential: WebhookCredentialRecord): Promise<boolean> {
+    const [row] = await this.sql<{ id: string }[]>`
+      update registered_repositories set webhook_configured_at = coalesce(webhook_configured_at, now())
+      where id = ${credential.repositoryId} and webhook_credential_id = ${credential.credentialId}
+        and provider = ${credential.provider} and instance_url is not distinct from ${credential.instanceUrl}
+        and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${credential.projectId}
+        and github_webhook_id = ${credential.webhookId} and active = true and unregistered_at is null
+      returning id
+    `;
+    return row !== undefined;
+  }
+
+  public async withWebhookUpgradeLock<T>(repositoryId: string, operation: () => Promise<T>): Promise<T> {
+    return getCoordinationSql().begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtextextended(${`webhook-upgrade:${repositoryId}`}, 0))`;
+      return operation();
+    }) as Promise<T>;
+  }
+
+  private toWebhookCredential(row: WebhookCredentialRow): WebhookCredentialRecord {
+    if (row.webhook_credential_id === null || row.encrypted_webhook_secret === null) {
+      throw new Error("Webhook credential material is incomplete.");
+    }
+    return {
+      repositoryId: row.id, credentialId: row.webhook_credential_id,
+      secret: decryptToken(Buffer.from(row.encrypted_webhook_secret).toString("utf8"), this.tokenEncryptionKey ?? ""),
+      provider: row.provider,
+      instanceUrl: row.instance_url === null ? null : normalizeInstanceUrl(row.instance_url),
+      projectId: toSafeInteger(row.project_id), webhookId: toSafeInteger(row.github_webhook_id),
+      configuredAt: row.webhook_configured_at,
+    };
   }
 
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<RegisteredRepository | null> {
@@ -277,6 +359,10 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   }
 
   public async createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null> {
+    const credential = repository.webhookCredential;
+    const encryptedSecret = credential == null ? null : Buffer.from(
+      encryptToken(credential.secret, this.tokenEncryptionKey ?? ""), "utf8",
+    );
     try {
       // The registration and its first catalog version are one statement, so a
       // repository row never exists without the version that governs from its
@@ -307,7 +393,10 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             difficulty_scheme,
             provider,
             instance_url,
-            forge_project_id
+            forge_project_id,
+            webhook_credential_id,
+            encrypted_webhook_secret,
+            webhook_configured_at
           )
           select
             ${repository.githubRepositoryId},
@@ -318,7 +407,10 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             ${this.sql.json(repository.difficultyScheme)},
             ${repository.provider ?? "github"},
             ${repository.instanceUrl ?? null},
-            ${repository.forgeProjectId ?? null}
+            ${repository.forgeProjectId ?? null},
+            ${credential?.id ?? null},
+            ${encryptedSecret},
+            ${credential == null ? null : new Date()}
           from eligible_sponsor
           on conflict (github_repository_id) do update set
             owner_name = excluded.owner_name,
@@ -329,6 +421,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             provider = excluded.provider,
             instance_url = excluded.instance_url,
             forge_project_id = excluded.forge_project_id,
+            webhook_credential_id = excluded.webhook_credential_id,
+            encrypted_webhook_secret = excluded.encrypted_webhook_secret,
+            webhook_configured_at = excluded.webhook_configured_at,
             active = true,
             unregistered_at = null,
             updated_at = now()

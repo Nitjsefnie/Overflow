@@ -35,10 +35,6 @@ export async function runWebhookUpgradeCli(
 }
 
 function productionDependencies(write: (line: string) => void): WebhookUpgradeCliDependencies {
-  const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-  if (webhookSecret === undefined || webhookSecret.length === 0) {
-    throw new Error("Existing webhook secret must be configured.");
-  }
   const registrations = new PostgresRepositoryStore();
   const queue = new PostgresFoldStore();
   const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
@@ -48,6 +44,9 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
   const forgeIdentities = new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey);
   return {
     store: {
+      stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
+      finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
+      withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
       listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
       findActiveRepositoryById: (id) => registrations.findActiveRepositoryById(id),
       findActiveRepositoryForgeById: (id) => registrations.findActiveRepositoryForgeById(id),
@@ -57,7 +56,7 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
     },
     createGateway: (accessToken, owner) => new GitHubGateway({ accessToken, owner }),
     createGitLabGateway: (instanceUrl, token) => new GitLabGateway({ instanceUrl, token }),
-    webhookSecret,
+    webhookUrls: { github: process.env.GITHUB_WEBHOOK_URL ?? "", gitlab: process.env.GITLAB_WEBHOOK_URL ?? "" },
     write,
   };
 }

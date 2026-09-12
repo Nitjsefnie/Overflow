@@ -44,6 +44,11 @@ export interface ForgeGateway {
     configuration: GitHubWebhookConfiguration,
   ): Promise<GitHubWebhook>;
   deleteWebhook(repository: GitHubRepositoryReference, webhookId: number): Promise<void>;
+  configureWebhook(
+    repository: GitHubRepositoryReference,
+    webhookId: number,
+    configuration: GitHubWebhookConfiguration,
+  ): Promise<void>;
   ensureWebhookEvents(
     repository: GitHubRepositoryReference,
     webhookId: number,
