@@ -19,6 +19,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type { RepositoryRouteDependencies, RepositoryRouteSession } from "@/app/api/repositories/route";
+import { GitHubWebhookScopeError } from "@/lib/auth/github-granted-scopes";
 
 import {
   RepositoryRegistrationEnforcementError,
@@ -142,6 +143,28 @@ describe("POST /api/repositories", () => {
         message: "GitHub administrator permission is required for the submitted repository.",
       },
     });
+  });
+
+  // Issue 599: the scope check runs while the wiring resolves, ahead of the
+  // registration flow, so its refusal is mapped here — the stable code the
+  // form and API clients act on.
+  it("returns a structured 403 with the scope code when the stored token cannot administer webhooks", async () => {
+    const registrationDependencies = vi.fn(async () => {
+      throw new GitHubWebhookScopeError(["read:user"]);
+    });
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
+      createRegistrationDependencies: registrationDependencies,
+    });
+
+    const response = await handler(jsonRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("GITHUB_WEBHOOK_SCOPE_REQUIRED");
+    expect(body.error.message).toContain("admin:repo_hook");
+    expect(body.error.message).toMatch(/sign in to register a repository/i);
   });
 
   it("returns a structured 409 when the submitted repository is already registered", async () => {
@@ -915,10 +938,16 @@ describe("Overflow token registration", () => {
       vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
       vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
       vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
-      const request = vi.fn<typeof fetch>(async () => Response.json({ data: {
-        rateLimit: { remaining: 42, resetAt: "2026-09-07T11:00:00Z" },
-        repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
-      } }));
+      // The granted-scope probe (issue 599) precedes the gateway: /user
+      // answers with webhook administration; everything else is GraphQL.
+      const request = vi.fn<typeof fetch>(async (input) =>
+        String(input) === "https://api.github.com/user"
+          ? new Response("{}", { status: 200, headers: { "x-oauth-scopes": "admin:repo_hook" } })
+          : Response.json({ data: {
+              rateLimit: { remaining: 42, resetAt: "2026-09-07T11:00:00Z" },
+              repository: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+            } }),
+      );
       vi.stubGlobal("fetch", request);
       // Exercise GraphQL on the gateway the route actually constructs, then stop
       // registration before any persistence. This probes wiring through behavior.
@@ -928,7 +957,8 @@ describe("Overflow token registration", () => {
       });
       const response = await POST(path === "token" ? authorizedRequest() : jsonRequest(validInput()));
       expect(response.status).toBe(502);
-      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(String(request.mock.calls[0]![0])).toBe("https://api.github.com/user");
       expect(budget.owners()).toEqual([tokenAccount.id]);
       expect(budget.read(tokenAccount.id)?.remaining).toBe(42);
     } finally {
@@ -1025,7 +1055,14 @@ describe("Overflow token registration", () => {
       .mockResolvedValue("ACTIVE");
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
-    const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    // The granted-scope probe (issue 599) precedes the repository read: /user
+    // answers with webhook administration so the flow proceeds, and the
+    // repository read answers an outage.
+    const fetchGitHub = vi.fn<typeof fetch>(async (input) =>
+      String(input) === "https://api.github.com/user"
+        ? new Response("{}", { status: 200, headers: { "x-oauth-scopes": "admin:repo_hook" } })
+        : new Response(null, { status: 503 }),
+    );
     vi.stubGlobal("fetch", fetchGitHub);
 
     const credentials: string[] = [];
@@ -1056,10 +1093,15 @@ describe("Overflow token registration", () => {
         createHash("sha256").update(credential).digest());
       expect(storedToken).toHaveBeenNthCalledWith(index + 1, account.id);
       expect(enforcement).toHaveBeenNthCalledWith(index + 1, account.id);
-      expect(fetchGitHub).toHaveBeenNthCalledWith(index + 1,
+      // Two GitHub calls per identity, both on that identity's own token: the
+      // scope probe, then the repository read.
+      const [probeUrl, probeInit] = fetchGitHub.mock.calls[index * 2]!;
+      expect(String(probeUrl)).toBe("https://api.github.com/user");
+      expect(new Headers(probeInit?.headers).get("authorization")).toBe(`Bearer ${oauth}`);
+      expect(fetchGitHub).toHaveBeenNthCalledWith(index * 2 + 2,
         "https://api.github.com/repos/octo/overflow", expect.objectContaining({ headers: expect.any(Headers) }),
       );
-      const [, init] = fetchGitHub.mock.calls[index];
+      const [, init] = fetchGitHub.mock.calls[index * 2 + 1]!;
       expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${oauth}`);
       expect(response.status).toBe(502);
       expect(await response.text()).not.toContain(credential);
@@ -1068,7 +1110,7 @@ describe("Overflow token registration", () => {
     expect(bearerLookup).toHaveBeenCalledTimes(identities.length);
     expect(storedToken).toHaveBeenCalledTimes(identities.length);
     expect(enforcement).toHaveBeenCalledTimes(identities.length);
-    expect(fetchGitHub).toHaveBeenCalledTimes(identities.length);
+    expect(fetchGitHub).toHaveBeenCalledTimes(identities.length * 2);
   });
 
   // A bearer credential is supplied deliberately by the client; a browser never
@@ -1163,6 +1205,126 @@ const {
   foreignText: foreignTextRequest,
   trustedText: trustedTextRequest,
 } = guardedRequests("/api/repositories");
+
+/**
+ * Issue 599: the granted scopes are read from GitHub itself — the
+ * X-OAuth-Scopes header of an authenticated /user response — before the
+ * registration flow is even constructed, for the cookie session and the
+ * bearer token alike. Neither the scope the sign-in requested nor the JWT's
+ * hint is consulted: a token GitHub reports as hookless is refused with the
+ * stable code, and no repository or webhook request follows.
+ */
+describe("POST /api/repositories granted-scope check", () => {
+  const userUrl = "https://api.github.com/user";
+  const repositoryUrl = "https://api.github.com/repos/octo/overflow";
+
+  function githubAnswering(grantedScopes: string | null, userStatus = 200) {
+    return vi.fn<typeof fetch>(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === userUrl) {
+        const headers = new Headers({ "content-type": "application/json" });
+        if (grantedScopes !== null) headers.set("x-oauth-scopes", grantedScopes);
+        return new Response(JSON.stringify({ id: 4242, login: "octocat" }), { status: userStatus, headers });
+      }
+      // Anything past the probe: the flow ran. Answer an outage so the test
+      // can tell "reached the repository read" from "registered".
+      return new Response(null, { status: 503 });
+    });
+  }
+
+  function wireStores(oauthToken = "stored-github-oauth-token") {
+    vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue(oauthToken);
+    vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
+    vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
+  }
+
+  function requestedUrls(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
+    return fetchMock.mock.calls.map(([input]) => String(input instanceof Request ? input.url : input));
+  }
+
+  it.each([
+    { label: "the contributor grant", granted: "" },
+    { label: "no scopes header", granted: null },
+    { label: "identity scopes only", granted: "read:user, user:email" },
+    { label: "hook write without delete", granted: "write:repo_hook" },
+  ])("refuses a cookie session whose token GitHub reports as $label before any repository request", async ({ granted }) => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER", canAdministerWebhooks: true } });
+    const fetchGitHub = githubAnswering(granted);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("GITHUB_WEBHOOK_SCOPE_REQUIRED");
+    expect(body.error.message).toContain("admin:repo_hook");
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+    const [, init] = fetchGitHub.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer stored-github-oauth-token");
+  });
+
+  it("refuses a bearer caller whose token GitHub reports as hookless before any repository request", async () => {
+    wireStores("bearer-account-oauth-token");
+    vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash").mockResolvedValue(tokenAccount);
+    const fetchGitHub = githubAnswering("read:user");
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(authorizedRequest(validInput()));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "GITHUB_WEBHOOK_SCOPE_REQUIRED" } });
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+    const [, init] = fetchGitHub.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer bearer-account-oauth-token");
+    expect(readSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "the registration grant", granted: "admin:repo_hook" },
+    { label: "the registration grant beside identity scopes", granted: "read:user, admin:repo_hook" },
+    { label: "full repository access", granted: "repo" },
+    { label: "public repository access", granted: "public_repo" },
+  ])("lets a token GitHub reports with $label through to the repository read", async ({ granted }) => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering(granted);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl, repositoryUrl]);
+    // The 503 the stub answers the repository read with: the flow ran and
+    // failed upstream, which is the point — the scope check stood aside.
+    expect(response.status).toBe(502);
+  });
+
+  it("answers 401 with the credentials code when GitHub no longer accepts the stored token", async () => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering("admin:repo_hook", 401);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "GITHUB_CREDENTIALS" } });
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+  });
+
+  it("answers 502 when the scope probe itself fails upstream", async () => {
+    wireStores();
+    readSession.mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
+    const fetchGitHub = githubAnswering("admin:repo_hook", 503);
+    vi.stubGlobal("fetch", fetchGitHub);
+
+    const response = await POST(jsonRequest(validInput()));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "UPSTREAM_FAILURE" } });
+    expect(requestedUrls(fetchGitHub)).toEqual([userUrl]);
+  });
+});
 
 describe("PATCH /api/repositories", () => {
   it("returns a structured 401 without a session", async () => {

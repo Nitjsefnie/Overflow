@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { UserRole } from "@/lib/db/types";
+import {
+  GitHubScopeProbeError,
+  GitHubWebhookScopeError,
+  requireWebhookAdministration,
+} from "@/lib/auth/github-granted-scopes";
+import { isParticipationEligible, type UserRole } from "@/lib/db/types";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubGateway } from "@/lib/github/client";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
@@ -89,6 +94,21 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     } catch (error) {
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
+      }
+      // The granted-scope check (issue 599) runs while the wiring resolves,
+      // ahead of the flow: a token GitHub reports as unable to administer
+      // webhooks is the caller's authorization, refused with a stable code
+      // and the remedy; a token GitHub no longer accepts is a credentials
+      // refusal; any other probe failure is upstream.
+      if (error instanceof GitHubWebhookScopeError) {
+        return errorResponse(403, "GITHUB_WEBHOOK_SCOPE_REQUIRED", error.message);
+      }
+      if (error instanceof GitHubScopeProbeError && error.status === 401) {
+        return errorResponse(
+          401,
+          "GITHUB_CREDENTIALS",
+          "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read its granted permissions. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.",
+        );
       }
       // A forge-identity refusal (malformed instance URL, unverified token)
       // is the submitter's input, not an upstream failure: it maps to the
@@ -245,6 +265,9 @@ export const POST = createRepositoryPostHandler({
       scheduleInitialImport(repositoryId: string) {
         return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
+      // Registration is the flow that creates a webhook, so it alone asks
+      // GitHub whether the stored token may (issue 599).
+      requireWebhookAdministration: true,
     });
   },
 });
@@ -340,7 +363,15 @@ async function parseUnregisterInput(request: Request): Promise<RepositoryUnregis
 async function buildRegistrationDependencies(
   session: RepositoryRouteSession,
   input: Partial<RepositoryRegistrationInput>,
-  extras: { scheduleInitialImport?: (repositoryId: string) => Promise<unknown> },
+  extras: {
+    scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
+    /**
+     * Ask GitHub whether the stored token's granted scopes can administer
+     * webhooks before the flow is built (issue 599). The GitHub path only:
+     * a GitLab submission's hook is created with the linked identity's PAT.
+     */
+    requireWebhookAdministration?: boolean;
+  },
 ): Promise<RepositoryRegistrationDependencies> {
   const store = new PostgresRepositoryStore();
   const accessToken = await store.getGitHubAccessToken(session.user.id);
@@ -350,6 +381,15 @@ async function buildRegistrationDependencies(
   }
   if (enforcementState === null) {
     throw new Error("Account enforcement state was unavailable.");
+  }
+  // An ineligible account is refused by the flow's own enforcement gate
+  // before any GitHub work; the probe stands aside so that ordering holds.
+  if (
+    extras.requireWebhookAdministration === true &&
+    input.provider !== "gitlab" &&
+    isParticipationEligible(enforcementState)
+  ) {
+    await requireWebhookAdministration(accessToken);
   }
 
   let forgeIdentity: { instanceUrl: string; token: string } | null = null;
