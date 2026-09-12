@@ -9,7 +9,10 @@ import {
  * processor already speaks: subject ISSUE, the raw issue view, and a delivery
  * id namespaced with `gitlab:` so it can never collide with a GitHub delivery
  * guid. The repository is resolved by forge identity — provider + instance +
- * project id — never by the numeric id alone.
+ * project id — never by the numeric id alone. A merge request payload maps
+ * the same way onto a PULL_REQUEST subject with no issue view, so an MR
+ * approval, merge or edit that moves no issue still invalidates the MR's own
+ * subject instead of waiting for the periodic sweep.
  */
 
 const project = {
@@ -118,18 +121,91 @@ describe("GitLab webhook issue delivery", () => {
   });
 });
 
-describe("GitLab webhook delivery classification", () => {
-  it("classifies a merge_request payload as deliberately ignored, not invalid", () => {
-    // The hook is installed with merge request events too, but MR evidence is
-    // read fresh per issue reconciliation; a merge that closes an issue moves
-    // the issue itself, whose delivery does the invalidating. The route must
-    // answer 2xx so the instance's delivery log stays green on this traffic.
-    expect(parseGitLabWebhookDeliveryDetailed("Merge Request Hook", "uuid-2", payload({
-      object_kind: "merge_request",
-      object_attributes: { ...issueAttributes, action: "merge" },
-    }))).toEqual({ status: "ignored" });
+const mergeRequestAttributes = {
+  id: 401,
+  iid: 7,
+  title: "Fix widget",
+  description: null,
+  state: "merged",
+  updated_at: "2026-09-08T11:00:00.000Z",
+  url: "https://gitlab.com/gitlab-org/gitlab/-/merge_requests/7",
+  action: "merge",
+};
+
+function mergeRequestPayload(attributeOverrides: Record<string, unknown> = {}) {
+  return {
+    object_kind: "merge_request",
+    event_type: "merge_request",
+    project,
+    object_attributes: { ...mergeRequestAttributes, ...attributeOverrides },
+    changes: {},
+  };
+}
+
+function parseMergeRequest(payloadValue: unknown, deliveryUuid = "uuid-mr") {
+  return parseGitLabWebhookDeliveryDetailed("Merge Request Hook", deliveryUuid, payloadValue);
+}
+
+describe("GitLab webhook merge request delivery", () => {
+  it("maps a merge request payload onto a PULL_REQUEST subject with no issue view", () => {
+    // Strict equality: the delivery must carry no `issue` key at all, since the
+    // processor applies the issue view only for ISSUE subjects.
+    expect(parseMergeRequest(mergeRequestPayload())).toStrictEqual({
+      status: "ok",
+      delivery: {
+        deliveryId: "gitlab:uuid-mr",
+        event: "pull_request",
+        action: "closed",
+        repositoryGitHubId: 278964,
+        repositoryFullName: "gitlab-org/gitlab",
+        subject: { kind: "PULL_REQUEST", id: 401, number: 7 },
+        forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
+      },
+    });
   });
 
+  it.each([
+    { action: "open", event: "pull_request", github: "opened" },
+    { action: "reopen", event: "pull_request", github: "reopened" },
+    { action: "update", event: "pull_request", github: "edited" },
+    { action: "close", event: "pull_request", github: "closed" },
+    { action: "merge", event: "pull_request", github: "closed" },
+    { action: "approved", event: "pull_request_review", github: "submitted" },
+    { action: "approval", event: "pull_request_review", github: "submitted" },
+    { action: "unapproved", event: "pull_request_review", github: "dismissed" },
+    { action: "unapproval", event: "pull_request_review", github: "dismissed" },
+  ])("maps the GitLab merge request action $action onto $event/$github", ({ action, event, github }) => {
+    const result = parseMergeRequest(mergeRequestPayload({ action }));
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.delivery.event).toBe(event);
+    expect(result.delivery.action).toBe(github);
+    // The subject id is the MR's global id and the number its iid: that is the
+    // pair the GitLab gateway records in closingPullRequests, and the fold
+    // matches dirty PULL_REQUEST subjects against the PR's id.
+    expect(result.delivery.subject).toEqual({ kind: "PULL_REQUEST", id: 401, number: 7 });
+    expect("issue" in result.delivery).toBe(false);
+  });
+
+  it.each([
+    { name: "an unknown action", body: mergeRequestPayload({ action: "sparkle" }) },
+    { name: "an empty action", body: mergeRequestPayload({ action: "  " }) },
+    { name: "a missing iid", body: mergeRequestPayload({ iid: undefined }) },
+    { name: "a non-integer iid", body: mergeRequestPayload({ iid: 2.5 }) },
+    { name: "a subject id of zero", body: mergeRequestPayload({ id: 0 }) },
+    { name: "no object_attributes", body: { object_kind: "merge_request", project } },
+    { name: "no project", body: { object_kind: "merge_request", object_attributes: mergeRequestAttributes } },
+    { name: "an unparsable project web_url", body: { ...mergeRequestPayload(), project: { ...project, web_url: "not a url" } } },
+  ])("classifies a merge request payload with $name as invalid", ({ body }) => {
+    expect(parseMergeRequest(body)).toEqual({ status: "invalid" });
+  });
+
+  it("classifies a missing delivery uuid as invalid", () => {
+    expect(parseMergeRequest(mergeRequestPayload(), "   ")).toEqual({ status: "invalid" });
+  });
+});
+
+describe("GitLab webhook delivery classification", () => {
   it("classifies an unrecognised object_kind as invalid", () => {
     expect(parseGitLabWebhookDeliveryDetailed("Push Hook", "uuid-3", payload({ object_kind: "push" }))).toEqual({
       status: "invalid",
