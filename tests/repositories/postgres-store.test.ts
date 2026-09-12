@@ -263,6 +263,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     const result = await store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: changedScheme(),
       effectiveFrom,
     });
@@ -289,6 +290,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: difficultyScheme(),
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).resolves.toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
@@ -307,6 +309,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: outsider,
+      provider: "github",
       scheme: changedScheme(),
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).rejects.toThrow(RepositorySchemeChangeForbiddenError);
@@ -322,6 +325,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: externalId++,
       sponsorId: await sponsor(),
+      provider: "github",
       scheme: changedScheme(),
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).resolves.toBeNull();
@@ -335,6 +339,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: incomplete,
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).rejects.toMatchObject({ code: "23514" });
@@ -353,6 +358,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: reordered,
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).resolves.toMatchObject({ changed: false, versionNumber: null, effectiveFrom: null });
@@ -370,6 +376,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: changedScheme(),
       effectiveFrom: new Date(Date.now() + 2 * DAY_MS),
     });
@@ -377,6 +384,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     await expect(store.appendDifficultySchemeVersion({
       githubRepositoryId: submission.githubRepositoryId,
       sponsorId: submission.sponsorId,
+      provider: "github",
       scheme: difficultyScheme(),
       effectiveFrom: new Date(Date.now() + DAY_MS),
     })).rejects.toThrow(RepositorySchemeChangeOrderError);
@@ -390,6 +398,77 @@ describe("changing a registered repository's difficulty catalog", () => {
     expect(versions).toHaveLength(2);
     expect(Number(versions[1]!.effective_from)).toBeGreaterThan(Date.now());
   });
+
+  // The cross-forge check holds at write time (issue 571): the guard in
+  // register.ts reads the stored provider outside this transaction, so a row
+  // that changed forge between that read and the write must still be refused
+  // here, with nothing appended and the current catalog unmoved.
+  it("refuses a GitHub-shaped change on a row a GitLab registration holds, inside the write transaction", async () => {
+    const submission = await registeredGitLabViaStore();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      provider: "github",
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toMatchObject({
+      name: "RepositoryProviderConflictError",
+      githubRepositoryId: submission.githubRepositoryId,
+      expectedProvider: "github",
+      storedProvider: "gitlab",
+    });
+
+    await expectCatalogUnchanged(submission.githubRepositoryId);
+  });
+
+  it("refuses a GitLab-shaped change on a row a GitHub registration holds, inside the write transaction", async () => {
+    const submission = await registeredViaStore();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: submission.sponsorId,
+      provider: "gitlab",
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toMatchObject({
+      name: "RepositoryProviderConflictError",
+      githubRepositoryId: submission.githubRepositoryId,
+      expectedProvider: "gitlab",
+      storedProvider: "github",
+    });
+
+    await expectCatalogUnchanged(submission.githubRepositoryId);
+  });
+
+  it("refuses the cross-forge collision before the sponsor check inside the transaction", async () => {
+    // Same order as the guard: a non-sponsor asking to change a row another
+    // forge holds learns the collision, not the sponsor refusal.
+    const submission = await registeredGitLabViaStore();
+
+    await expect(store.appendDifficultySchemeVersion({
+      githubRepositoryId: submission.githubRepositoryId,
+      sponsorId: await sponsor(),
+      provider: "github",
+      scheme: changedScheme(),
+      effectiveFrom: new Date(Date.now() + DAY_MS),
+    })).rejects.toMatchObject({ name: "RepositoryProviderConflictError", storedProvider: "gitlab" });
+
+    await expectCatalogUnchanged(submission.githubRepositoryId);
+  });
+
+  async function expectCatalogUnchanged(githubRepositoryId: number): Promise<void> {
+    const [current] = await sql<{ scheme: unknown }[]>`
+      select difficulty_scheme as scheme from registered_repositories
+      where github_repository_id = ${githubRepositoryId}
+    `;
+    expect(current?.scheme).toEqual(difficultyScheme());
+    const versions = await sql<{ count: number | string }[]>`
+      select count(*) as count from repository_difficulty_scheme_versions
+      where github_repository_id = ${githubRepositoryId}
+    `;
+    expect(Number(versions[0]!.count)).toBe(1);
+  }
 
   // The catalog-change tests register through the store rather than the direct
   // insert above: a registration that never passed through createRepository
@@ -436,6 +515,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: submission.sponsorId,
+      provider: "github",
     })).resolves.toMatchObject({
       kind: "UNREGISTERED",
       repository: {
@@ -462,6 +542,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: await sponsor(),
+      provider: "github",
     })).resolves.toEqual({ kind: "FORBIDDEN" });
 
     const [row] = await sql<UnregistrationRow[]>`
@@ -477,6 +558,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: `registration/nobody-${externalId++}`,
       sponsorId: await sponsor(),
+      provider: "github",
     })).resolves.toEqual({ kind: "NOT_REGISTERED" });
   });
 
@@ -485,6 +567,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: submission.sponsorId,
+      provider: "github",
     })).resolves.toMatchObject({ kind: "UNREGISTERED" });
 
     const [afterFirst] = await sql<UnregistrationRow[]>`
@@ -495,6 +578,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: submission.sponsorId,
+      provider: "github",
     })).resolves.toMatchObject({
       kind: "ALREADY_UNREGISTERED",
       repository: { githubRepositoryId: submission.githubRepositoryId },
@@ -531,6 +615,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: submission.sponsorId,
+      provider: "github",
     })).resolves.toMatchObject({ kind: "UNREGISTERED" });
 
     const resubmission = newRepository({
@@ -572,6 +657,7 @@ describe("unregistering a repository against the real registered_repositories co
     await expect(store.unregisterRepository({
       ownerName: submission.ownerName,
       sponsorId: submission.sponsorId,
+      provider: "github",
     })).resolves.toMatchObject({ kind: "UNREGISTERED" });
 
     const resubmission = newRepository({
@@ -624,32 +710,71 @@ describe("unregistering a repository against the real registered_repositories co
     expect(Number(versions[0]!.count)).toBe(1);
   });
 
+  // The cross-forge check holds at write time (issue 571): the guard in
+  // register.ts reads the stored provider outside this transaction, so a row
+  // that changed forge between that read and the write must still be refused
+  // here, leaving it active.
+  it("refuses a GitHub-shaped unregistration of a row a GitLab registration holds, inside the write transaction", async () => {
+    const submission = await registeredGitLabViaStore();
+
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+      provider: "github",
+    })).resolves.toEqual({
+      kind: "PROVIDER_CONFLICT",
+      githubRepositoryId: submission.githubRepositoryId,
+      storedProvider: "gitlab",
+    });
+
+    await expectStillActive(submission.ownerName);
+  });
+
+  it("refuses a GitLab-shaped unregistration of a row a GitHub registration holds, inside the write transaction", async () => {
+    const submission = await registeredViaStore();
+
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: submission.sponsorId,
+      provider: "gitlab",
+    })).resolves.toEqual({
+      kind: "PROVIDER_CONFLICT",
+      githubRepositoryId: submission.githubRepositoryId,
+      storedProvider: "github",
+    });
+
+    await expectStillActive(submission.ownerName);
+  });
+
+  it("refuses the cross-forge collision before the sponsor check inside the transaction", async () => {
+    // Same order as the guard: a non-sponsor asking to unregister a row
+    // another forge holds learns the collision, not the sponsor refusal.
+    const submission = await registeredGitLabViaStore();
+
+    await expect(store.unregisterRepository({
+      ownerName: submission.ownerName,
+      sponsorId: await sponsor(),
+      provider: "github",
+    })).resolves.toMatchObject({ kind: "PROVIDER_CONFLICT", storedProvider: "gitlab" });
+
+    await expectStillActive(submission.ownerName);
+  });
+
+  async function expectStillActive(ownerName: string): Promise<void> {
+    const [row] = await sql<UnregistrationRow[]>`
+      select active, unregistered_at
+      from registered_repositories
+      where owner_name = ${ownerName}
+    `;
+    expect(row.active).toBe(true);
+    expect(row.unregistered_at).toBeNull();
+  }
+
   // The catalog-change tests register through the store rather than the direct insert
   // above: a registration that never passed through createRepository carries no catalog
   // version history for a reactivation's append to continue.
   async function registeredViaStore(scheme: DifficultyScheme = difficultyScheme()): Promise<NewRegisteredRepository> {
     const submission = newRepository({ sponsorId: await sponsor(), difficultyScheme: scheme });
-
-    await expect(store.createRepository(submission)).resolves.toMatchObject({
-      githubRepositoryId: submission.githubRepositoryId,
-    });
-    return submission;
-  }
-
-  // A GitLab registration carries no webhook and stores the forge identity the
-  // forge-identity finder matches on: provider 'gitlab', the normalized instance
-  // URL, and the numeric project id, with the path-with-namespace owner name.
-  async function registeredGitLabViaStore(
-    overrides: Partial<NewRegisteredRepository> = {},
-  ): Promise<NewRegisteredRepository> {
-    const submission = newRepository({
-      sponsorId: await sponsor(),
-      githubWebhookId: null,
-      provider: "gitlab",
-      instanceUrl: "https://gitlab.example.com",
-      forgeProjectId: externalId++,
-      ...overrides,
-    });
 
     await expect(store.createRepository(submission)).resolves.toMatchObject({
       githubRepositoryId: submission.githubRepositoryId,
@@ -872,6 +997,7 @@ describe("unregistering a repository against the real registered_repositories co
       await expect(store.unregisterRepository({
         ownerName: submission.ownerName,
         sponsorId: submission.sponsorId,
+        provider: "gitlab",
       })).resolves.toMatchObject({ kind: "UNREGISTERED" });
 
       await expect(store.findRepositoryRegistrationStateByForgeIdentity({
@@ -1015,6 +1141,29 @@ function newRepository(
     difficultyScheme: difficultyScheme(),
     ...overrides,
   };
+}
+
+// A GitLab registration carries no webhook and stores the forge identity the
+// forge-identity finder matches on: provider 'gitlab', the normalized instance
+// URL, and the numeric project id, with the path-with-namespace owner name.
+// Registered through the store so the row carries the catalog version history
+// a reactivation's or a catalog change's append continues.
+async function registeredGitLabViaStore(
+  overrides: Partial<NewRegisteredRepository> = {},
+): Promise<NewRegisteredRepository> {
+  const submission = newRepository({
+    sponsorId: await sponsor(),
+    githubWebhookId: null,
+    provider: "gitlab",
+    instanceUrl: "https://gitlab.example.com",
+    forgeProjectId: externalId++,
+    ...overrides,
+  });
+
+  await expect(store.createRepository(submission)).resolves.toMatchObject({
+    githubRepositoryId: submission.githubRepositoryId,
+  });
+  return submission;
 }
 
 async function registeredRepository(): Promise<NewRegisteredRepository> {
