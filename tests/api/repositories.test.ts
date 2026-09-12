@@ -1623,6 +1623,7 @@ describe("DELETE /api/repositories", () => {
     expect(unregister).toHaveBeenCalledExactlyOnceWith({
       ownerName: "group/subgroup/project",
       sponsorId: tokenAccount.id,
+      provider: "gitlab",
     });
   });
 
