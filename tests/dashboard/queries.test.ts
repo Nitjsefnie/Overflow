@@ -1613,6 +1613,7 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         created_at timestamptz
       );
       create table balances (account_id text, balance integer);
+      create table account_credit_limits (account_id text, repaid_debt numeric, credit_limit numeric);
       create table ledger_entries (account_id text, amount integer);
       create table settlements (
         id text primary key,
