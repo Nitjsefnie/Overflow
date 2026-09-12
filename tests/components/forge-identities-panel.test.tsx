@@ -277,6 +277,39 @@ describe("Forge identities panel", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("ignores an initial list failure after a successful post-link refresh", async () => {
+    const linkedIdentity = {
+      id: "identity-cross-path",
+      provider: "gitlab",
+      instanceUrl: "https://gitlab.com",
+      forgeLogin: "cross-path-login",
+      verifiedAt: "2026-09-10T00:00:00.000Z",
+      tokenFailedAt: null,
+    };
+    let rejectInitialRequest!: (reason?: unknown) => void;
+    const initialRequest = new Promise<Response>((_resolve, reject) => {
+      rejectInitialRequest = reject;
+    });
+    fetchMock.mockReset()
+      .mockReturnValueOnce(initialRequest)
+      .mockResolvedValueOnce(Response.json({ identity: linkedIdentity }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ identities: [linkedIdentity] }));
+    render(<ForgeIdentitiesPanel />);
+
+    fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: linkedIdentity.instanceUrl } });
+    fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: "token-for-link" } });
+    fireEvent.click(screen.getByRole("button", { name: "Link identity" }));
+    expect(await screen.findByText(linkedIdentity.forgeLogin)).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      rejectInitialRequest(new Error("stale initial list failure"));
+    });
+
+    expect(screen.getByText(linkedIdentity.forgeLogin)).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("does not let a stale successful load replace the newer StrictMode result", async () => {
     let resolveStaleRequest!: (response: Response) => void;
     const staleRequest = new Promise<Response>((resolve) => {
@@ -392,60 +425,6 @@ describe("Forge identities panel", () => {
       resolveRetryRequest(Response.json({ identities: [] }));
     });
     expect(screen.getByText(linkFailureMessage)).toBeVisible();
-  });
-
-  it("preserves an unlink failure while retrying a failed initial list", async () => {
-    const linkedIdentity = {
-      id: "identity-unlink-after-failure",
-      provider: "gitlab",
-      instanceUrl: "https://gitlab.com",
-      forgeLogin: "unlink-after-failure",
-      verifiedAt: "2026-09-10T00:00:00.000Z",
-      tokenFailedAt: null,
-    };
-    const unlinkFailureMessage = "The identity could not be unlinked. Try again.";
-    let rejectInitialRequest!: (reason?: unknown) => void;
-    const initialRequest = new Promise<Response>((_resolve, reject) => {
-      rejectInitialRequest = reject;
-    });
-    let resolveRetryRequest!: (response: Response) => void;
-    const retryRequest = new Promise<Response>((resolve) => {
-      resolveRetryRequest = resolve;
-    });
-    fetchMock.mockReset()
-      .mockReturnValueOnce(initialRequest)
-      .mockResolvedValueOnce(Response.json({ identity: linkedIdentity }, { status: 201 }))
-      .mockResolvedValueOnce(Response.json({ identities: [linkedIdentity] }))
-      .mockResolvedValueOnce(Response.json(
-        { error: { code: "UPSTREAM_FAILURE", message: unlinkFailureMessage } },
-        { status: 502 },
-      ))
-      .mockReturnValueOnce(retryRequest);
-    render(<ForgeIdentitiesPanel />);
-
-    fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: linkedIdentity.instanceUrl } });
-    fireEvent.change(screen.getByLabelText(/personal access token/i), { target: { value: "token-for-link" } });
-    fireEvent.click(screen.getByRole("button", { name: "Link identity" }));
-    expect(await screen.findByText(linkedIdentity.forgeLogin)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", {
-      name: `Unlink ${linkedIdentity.forgeLogin} on ${linkedIdentity.instanceUrl}`,
-    }));
-    expect(await screen.findByText(unlinkFailureMessage)).toBeVisible();
-
-    await act(async () => {
-      rejectInitialRequest(new Error("initial list unavailable"));
-    });
-    const retry = await screen.findByRole("button", { name: "Retry loading identities" });
-    fireEvent.click(retry);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
-
-    expect(screen.getByText(unlinkFailureMessage)).toBeVisible();
-    expect(retry).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Loading linked identities…");
-    await act(async () => {
-      resolveRetryRequest(Response.json({ identities: [] }));
-    });
-    expect(screen.getByText(unlinkFailureMessage)).toBeVisible();
   });
 
   it("ships a forge-link-form rule that separates the form's children", () => {

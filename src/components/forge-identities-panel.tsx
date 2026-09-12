@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type ForgeIdentityRow = {
   id: string;
@@ -26,6 +26,7 @@ export function ForgeIdentitiesPanel() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const listRequestVersion = useRef(0);
   const [instanceUrl, setInstanceUrl] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -33,20 +34,23 @@ export function ForgeIdentitiesPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    const requestVersion = ++listRequestVersion.current;
     setLoading(true);
     void (async () => {
       try {
         const response = await fetch("/api/forge-identities", { credentials: "same-origin" });
         if (!response.ok) throw new Error("Forge identity list request failed");
         const body = (await response.json()) as { identities: ForgeIdentityRow[] };
-        if (!cancelled) {
+        if (!cancelled && requestVersion === listRequestVersion.current) {
           setIdentities(body.identities);
           setLoadError(null);
         }
       } catch {
-        if (!cancelled) setLoadError("The linked identities could not be loaded. Check your connection and try again.");
+        if (!cancelled && requestVersion === listRequestVersion.current) {
+          setLoadError("The linked identities could not be loaded. Check your connection and try again.");
+        }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestVersion === listRequestVersion.current) setLoading(false);
       }
     })();
     return () => {
@@ -55,6 +59,7 @@ export function ForgeIdentitiesPanel() {
   }, [loadAttempt]);
 
   function retryLoad() {
+    listRequestVersion.current += 1;
     setLoading(true);
     setIdentities(null);
     setLoadAttempt((attempt) => attempt + 1);
@@ -80,11 +85,14 @@ export function ForgeIdentitiesPanel() {
       setInstanceUrl("");
       setFeedback({ kind: "success", message: "Forge identity linked." });
       router.refresh();
+      const requestVersion = ++listRequestVersion.current;
       const list = await fetch("/api/forge-identities", { credentials: "same-origin" });
       if (list.ok) {
         const listBody = (await list.json()) as { identities: ForgeIdentityRow[] };
-        setIdentities(listBody.identities);
-        setLoadError(null);
+        if (requestVersion === listRequestVersion.current) {
+          setIdentities(listBody.identities);
+          setLoadError(null);
+        }
       }
     } catch {
       setFeedback({ kind: "error", message: "The link request could not reach Overflow. Check your connection and try again." });
