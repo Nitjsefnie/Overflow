@@ -867,7 +867,7 @@ describe("dashboard projections", () => {
     await expect(getDashboard("member-1", { sql })).rejects.toThrow("Settlement status was invalid.");
   });
 
-  it("orders eligible work by sponsor headroom tier first, then repository reserve order, oldest issues second", async () => {
+  it("orders eligible work by settled sponsor balance descending, then reserve descending and age ascending", async () => {
     const { sql, captures } = sqlHarness([
       [
         {
@@ -912,12 +912,10 @@ describe("dashboard projections", () => {
     const issues = await listEligibleIssues("member-1", {}, { sql });
 
     expect(issues.map((issue) => issue.id)).toEqual(["issue-old-high", "issue-new-high", "issue-low"]);
-    // The headroom tier leads (returned more than drawn, then balance down to
-    // minus ten, then deeper), and the reserve-then-age keys stand inside a
-    // tier. The comment block between `order by` and the tier is part of the
-    // captured text, so the pin spans it explicitly.
+    // Exact settled balance leads; equal balances retain reserve-then-age
+    // ordering. The emitted query may include comments before the sort keys.
     expect(captures[0]?.text).toMatch(
-      /order by\s+(?:--[^\n]*\s+)*case\s+when ranked\.available_headroom > 0 then 0\s+when ranked\.available_headroom >= -10 then 1\s+else 2\s+end,\s+ranked\.opening_reserve_points desc,\s+ranked\.created_at asc/i,
+      /order by\s+(?:--[^\n]*\s+)*ranked\.settled_balance desc,\s+ranked\.opening_reserve_points desc,\s+ranked\.created_at asc/i,
     );
   });
 
