@@ -13,7 +13,10 @@ export type RepositoryFormValues = {
   actualLabels: ActualDifficultyLabel[];
 };
 
-type Feedback = { kind: "error" | "success" | "warning"; message: string } | null;
+type Feedback = { kind: "error" | "success" | "warning"; message: string; code?: string } | null;
+
+/** The route's refusal for a stored authorization GitHub reports as unable to administer webhooks (issue 599). */
+const WEBHOOK_SCOPE_REQUIRED_CODE = "GITHUB_WEBHOOK_SCOPE_REQUIRED";
 
 type OpeningLabelRow = OpeningDifficultyLabel & { rowId: string };
 
@@ -43,6 +46,15 @@ type RepositoryFormProps = {
    * edits the catalog they know, and settled work keeps its price either way.
    */
   variant?: "registration" | "catalog-change";
+  /**
+   * The server action that sends the sponsor through GitHub authorization
+   * again for webhook administration (issue 599). The page's gate reads a
+   * JWT hint, so a session whose grant was since revoked or narrowed still
+   * reaches this form; when the route refuses with the scope code, the
+   * remedy is offered beside the refusal instead of leaving the sponsor to
+   * reload a page that keeps showing the form.
+   */
+  reauthorizeAction?: () => Promise<void>;
 };
 
 // Labels start empty: issue 258 removed label creation from registration, so a
@@ -100,7 +112,11 @@ const copy = {
   },
 } as const;
 
-export function RepositoryForm({ initialValues = defaultValues, variant = "registration" }: RepositoryFormProps) {
+export function RepositoryForm({
+  initialValues = defaultValues,
+  variant = "registration",
+  reauthorizeAction,
+}: RepositoryFormProps) {
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
   const [values, setValues] = useState<RepositoryFormState>(() => createFormState(initialValues));
   const [feedback, setFeedback] = useState<Feedback>(null);
@@ -320,6 +336,7 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
         setFeedback({
           kind: "error",
           message: responseBody?.error?.message ?? text.failure,
+          code: responseBody?.error?.code,
         });
         return;
       }
@@ -344,7 +361,7 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
     }
   }
 
-  return (
+  const registrationForm = (
     <form className="repository-form surface shadow-offset" aria-label={text.formLabel} onSubmit={submit} noValidate>
       <div className="form-intro">
         <p className="eyebrow">{text.eyebrow}</p>
@@ -541,6 +558,22 @@ export function RepositoryForm({ initialValues = defaultValues, variant = "regis
       </button>
     </form>
   );
+
+  if (reauthorizeAction === undefined || feedback?.kind !== "error" || feedback.code !== WEBHOOK_SCOPE_REQUIRED_CODE) {
+    return registrationForm;
+  }
+  // The remedy is its own form, a sibling of the registration form: a form
+  // cannot nest, and submitting the remedy must not resubmit the registration.
+  return (
+    <>
+      {registrationForm}
+      <form className="repository-form-remedy" action={reauthorizeAction}>
+        <button className="action-button" type="submit">
+          Authorize webhook administration on GitHub
+        </button>
+      </form>
+    </>
+  );
 }
 
 type RegistrationResponse = {
@@ -549,7 +582,7 @@ type RegistrationResponse = {
   claimPath?: ClaimPathVerdict;
   changed?: boolean;
   versionNumber?: number | null;
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
 };
 
 // Registration only queues the import of the issues that already exist in the
