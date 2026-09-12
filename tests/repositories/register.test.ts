@@ -12,6 +12,7 @@ import type {
 } from "@/lib/repositories/register";
 import {
   RepositoryOwnerNameConflictError,
+  RepositoryProviderConflictError,
   RepositoryRegistrationEnforcementError,
   RepositoryRegistrationError,
   RepositoryWebhookIdConflictError,
@@ -143,6 +144,24 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
+  it("maps the store's write-time provider refusal on the catalog-change path to the guard's CONFLICT", async () => {
+    // The row flips forge between the guard's read and the write (issue 571):
+    // the guard sees github and passes, the transaction sees gitlab and
+    // refuses. The refusal reads exactly as the guard's would have.
+    const harness = createHarness({ existing: registeredRepository() });
+    harness.dependencies.store.findRepositoryProviderById = async () => "github";
+    const append = vi.spyOn(harness.dependencies.store, "appendDifficultySchemeVersion")
+      .mockRejectedValueOnce(new RepositoryProviderConflictError(42, "github", "gitlab"));
+
+    const error = await changeRepositoryCatalog(harness.dependencies, createInput()).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    expect((error as Error).message).toBe(
+      "GitHub repository 42 collides with forge id 42 already registered as provider 'gitlab'. "
+        + "An id's forge history never migrates between forges; catalog change refused.",
+    );
+    expect(append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ githubRepositoryId: 42, provider: "github" }));
+  });
+
   it("carries a catalog change past the forge guard when the stored provider is github", async () => {
     const harness = createHarness({ existing: registeredRepository() });
     harness.dependencies.store.findRepositoryProviderById = async () => "github";
@@ -157,6 +176,7 @@ describe("explicit repository registration", () => {
     expect(append).toHaveBeenCalledExactlyOnceWith({
       githubRepositoryId: 42,
       sponsorId: "moderator-id",
+      provider: "github",
       scheme: toDifficultyScheme(createInput()),
       effectiveFrom: expect.any(Date),
     });
@@ -766,7 +786,7 @@ describe("unregistering a registered repository", () => {
       alreadyUnregistered: false,
     });
     expect(harness.callOrder).toEqual(["deleteWebhook:501", "unregisterRepository:octo/overflow"]);
-    expect(harness.unregisterInputs).toEqual([{ ownerName: "octo/overflow", sponsorId: "moderator-id" }]);
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "octo/overflow", sponsorId: "moderator-id", provider: "github" }]);
     // The flow runs no GitHub pre-checks: the deletion is the only GitHub request (E2).
     expect(harness.githubCalls).toEqual([]);
   });
@@ -882,6 +902,29 @@ describe("unregistering a registered repository", () => {
     expect(harness.deletedWebhookIds).toEqual([]);
   });
 
+  it("maps the store's write-time provider refusal on the unregistration path to the guard's CONFLICT", async () => {
+    // The row flips forge between the guard's read and the write (issue 571):
+    // the guard sees github and passes, the transaction sees gitlab and
+    // refuses without deactivating. The refusal reads exactly as the guard's
+    // would have, and the flow ends there — no drain runs after it.
+    const harness = createHarness({
+      existing: registeredRepository(),
+      abandonedRecords: [{ githubRepositoryId: 77, ownerName: "octo/abandoned", webhookId: 9, createdAt: "2026-09-01T00:00:00.000Z" }],
+    });
+    harness.dependencies.store.findRepositoryProviderById = async () => "github";
+    const unregister = vi.spyOn(harness.dependencies.store, "unregisterRepository")
+      .mockResolvedValueOnce({ kind: "PROVIDER_CONFLICT", githubRepositoryId: 42, storedProvider: "gitlab" });
+
+    const error = await unregisterRepository(harness.dependencies, { repositoryUrl: "octo/overflow" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ name: "RepositoryRegistrationError", code: "CONFLICT" });
+    expect((error as Error).message).toBe(
+      "GitHub repository 42 collides with forge id 42 already registered as provider 'gitlab'. "
+        + "An id's forge history never migrates between forges; unregistration refused.",
+    );
+    expect(unregister).toHaveBeenCalledExactlyOnceWith({ ownerName: "octo/overflow", sponsorId: "moderator-id", provider: "github" });
+    expect(harness.callOrder).toEqual(["deleteWebhook:501"]);
+  });
+
   it("carries an unregistration past the forge guard when the stored provider is github", async () => {
     const harness = createHarness({ existing: registeredRepository() });
     harness.dependencies.store.findRepositoryProviderById = async () => "github";
@@ -986,7 +1029,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
     // Never the GitHub-shaped path finder: a nested group's path is not a
     // two-segment owner/name reference.
     expect(harness.stateLookupsByOwnerName).toEqual([]);
-    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id" }]);
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id", provider: "gitlab" }]);
     expect(harness.callOrder).toEqual(["unregisterRepository:group/subgroup/project"]);
     expect(harness.githubCalls).toEqual([]);
   });
@@ -1239,7 +1282,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
       webhookDeleted: false,
       alreadyUnregistered: false,
     });
-    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id" }]);
+    expect(harness.unregisterInputs).toEqual([{ ownerName: "group/subgroup/project", sponsorId: "moderator-id", provider: "gitlab" }]);
   });
 
   it("leaves the row untouched when the sponsor has no identity on the instance, so a relink converges", async () => {
@@ -1812,7 +1855,7 @@ function createHarness(options: HarnessOptions = {}) {
   const stateLookupsByOwnerName: string[] = [];
   const forgeIdentityLookups: Array<{ provider: string; instanceUrl: string; forgeProjectId?: number; ownerName?: string }> = [];
   const gitlabWebhookTargetLookups: string[] = [];
-  const unregisterInputs: Array<{ ownerName: string; sponsorId: string }> = [];
+  const unregisterInputs: Array<{ ownerName: string; sponsorId: string; provider: "github" | "gitlab" }> = [];
   const callOrder: string[] = [];
   const scheduledRepositoryIds: string[] = [];
   const workflowReadRepositoryCounts: number[] = [];
