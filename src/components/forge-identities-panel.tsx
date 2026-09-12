@@ -27,6 +27,7 @@ export function ForgeIdentitiesPanel() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,30 +49,37 @@ export function ForgeIdentitiesPanel() {
   async function link(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFeedback(null);
+    setRefreshWarning(null);
     setBusy(true);
     try {
-      const response = await fetch("/api/forge-identities", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ instanceUrl, token }),
-      });
-      const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
-      if (!response.ok) {
-        setFeedback({ kind: "error", message: body?.error?.message ?? "The identity could not be linked. Try again." });
+      try {
+        const response = await fetch("/api/forge-identities", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ instanceUrl, token }),
+        });
+        const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+        if (!response.ok) {
+          setFeedback({ kind: "error", message: body?.error?.message ?? "The identity could not be linked. Try again." });
+          return;
+        }
+      } catch {
+        setFeedback({ kind: "error", message: "The link request could not reach Overflow. Check your connection and try again." });
         return;
       }
       setToken("");
       setInstanceUrl("");
       setFeedback({ kind: "success", message: "Forge identity linked." });
-      router.refresh();
-      const list = await fetch("/api/forge-identities", { credentials: "same-origin" });
-      if (list.ok) {
+      try {
+        router.refresh();
+        const list = await fetch("/api/forge-identities", { credentials: "same-origin" });
+        if (!list.ok) throw new Error("Identity list refresh failed");
         const listBody = (await list.json()) as { identities: ForgeIdentityRow[] };
         setIdentities(listBody.identities);
+      } catch {
+        setRefreshWarning("The linked identities list could not be refreshed and may be out of date. Refresh the page to update it.");
       }
-    } catch {
-      setFeedback({ kind: "error", message: "The link request could not reach Overflow. Check your connection and try again." });
     } finally {
       setBusy(false);
     }
@@ -203,6 +211,7 @@ export function ForgeIdentitiesPanel() {
       </form>
       {feedback?.kind === "error" ? <p className="feedback error" role="alert">{feedback.message}</p> : null}
       {feedback?.kind === "success" ? <p className="feedback success" role="status">{feedback.message}</p> : null}
+      {refreshWarning ? <p className="feedback error" role="alert">{refreshWarning}</p> : null}
     </section>
   );
 }
