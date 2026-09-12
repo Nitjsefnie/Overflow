@@ -266,7 +266,7 @@ describe("repository registration page token panel", () => {
     { memberId: "member-with-token", summary: { createdAt: new Date(createdAt) } },
   ])("passes the member summary for $memberId to the panel below the form", async ({ memberId, summary }) => {
     requireMemberPageSession.mockReset().mockResolvedValue({
-      user: { id: memberId, name: "Ada", role: "MEMBER" },
+      user: { id: memberId, name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
     });
     getTokenSummary.mockReset().mockResolvedValue(summary);
     render(await NewRepositoryPage());
