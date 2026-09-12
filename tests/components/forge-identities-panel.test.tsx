@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -237,6 +238,39 @@ describe("Forge identities panel", () => {
     // The console guard would surface an update from the unmounted panel; the
     // empty body confirms there is no remounted view for the stale response.
     expect(document.body).toHaveTextContent("");
+  });
+
+  it("ignores a stale rejection from the canceled StrictMode effect", async () => {
+    let rejectStaleRequest!: (reason?: unknown) => void;
+    const staleRequest = new Promise<Response>((_resolve, reject) => {
+      rejectStaleRequest = reject;
+    });
+    fetchMock.mockReset()
+      .mockReturnValueOnce(staleRequest)
+      .mockResolvedValueOnce(Response.json({
+        identities: [{
+          id: "identity-strict-mode",
+          provider: "gitlab",
+          instanceUrl: "https://gitlab.com",
+          forgeLogin: "strict-mode-login",
+          verifiedAt: "2026-09-10T00:00:00.000Z",
+          tokenFailedAt: null,
+        }],
+      }));
+    render(
+      <StrictMode>
+        <ForgeIdentitiesPanel />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("strict-mode-login")).toBeVisible();
+    await act(async () => {
+      rejectStaleRequest(new Error("stale network failure"));
+    });
+
+    expect(screen.getByText("strict-mode-login")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("ships a forge-link-form rule that separates the form's children", () => {
