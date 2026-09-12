@@ -9,6 +9,7 @@ import {
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import type { ForgeIdentityStore } from "@/lib/forge/identities";
 import type { UserRole } from "@/lib/db/types";
+import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 export type ForgeIdentitiesRouteSession = {
   user: { id: string; role: UserRole };
@@ -76,6 +77,11 @@ export function createForgeIdentitiesGetHandler(dependencies: ForgeIdentitiesRou
 
 export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRouteDependencies) {
   return async function postForgeIdentity(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await dependencies.getSession();
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
@@ -103,6 +109,11 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
 
 export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentitiesRouteDependencies) {
   return async function deleteForgeIdentity(request: Request): Promise<Response> {
+    const untrusted = rejectUntrustedRequest(request);
+    if (untrusted !== null) {
+      return untrusted;
+    }
+
     const session = await dependencies.getSession();
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");

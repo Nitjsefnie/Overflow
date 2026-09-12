@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createForgeIdentitiesDeleteHandler,
   createForgeIdentitiesGetHandler,
@@ -6,6 +6,11 @@ import {
   type ForgeIdentitiesRouteDependencies,
 } from "@/app/api/forge-identities/route";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
+import { foreignOrigin, guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
+
+useTrustedOrigin();
+
+const { json: mutationRequest } = guardedRequests("/api/forge-identities");
 
 const TEST_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url");
 const SESSION = { user: { id: "user-1", role: "MEMBER" as const } };
@@ -47,37 +52,31 @@ function fixture(options: {
     },
   };
   const dependencies: ForgeIdentitiesRouteDependencies = {
-    getSession: async () => options.session === undefined ? SESSION : options.session,
-    createIdentityStore: () => store,
+    getSession: vi.fn(async () => options.session === undefined ? SESSION : options.session),
+    createIdentityStore: vi.fn(() => store),
     tokenEncryptionKey: TEST_KEY,
-    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       // A linkable token: /user answers, and the token's own record carries read_api.
       const url = new Request(input, init).url;
       const payload = url.endsWith("/api/v4/personal_access_tokens/self")
         ? { id: 7, name: "overflow", scopes: ["read_api"] }
         : { id: 4242, username: "tester" };
       return new Response(JSON.stringify(payload), { status: 200 });
-    }) as typeof fetch,
+    }),
+    claimPastWork: vi.fn(async () => {}),
   };
   return { dependencies, calls };
-}
-
-function postRequest(body: unknown): Request {
-  return new Request("https://overflow.example/api/forge-identities", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }
 
 describe("forge identities API", () => {
   it("requires a session for every operation", async () => {
     const f = fixture({ session: null });
     expect((await createForgeIdentitiesGetHandler(f.dependencies)()).status).toBe(401);
-    expect((await createForgeIdentitiesPostHandler(f.dependencies)(postRequest({
+    expect((await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
       instanceUrl: "https://gitlab.example.com",
       token: "glpat-x",
     }))).status).toBe(401);
-    expect((await createForgeIdentitiesDeleteHandler(f.dependencies)(postRequest({ id: "identity-1" }))).status).toBe(401);
+    expect((await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: "identity-1" }, "DELETE"))).status).toBe(401);
   });
 
   it("lists the caller's identities and never a token", async () => {
@@ -103,7 +102,7 @@ describe("forge identities API", () => {
 
   it("links with the session's user id and answers 201", async () => {
     const f = fixture();
-    const response = await createForgeIdentitiesPostHandler(f.dependencies)(postRequest({
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
       instanceUrl: "https://gitlab.example.com",
       token: "glpat-x",
     }));
@@ -115,8 +114,8 @@ describe("forge identities API", () => {
 
   it("rejects a malformed link body", async () => {
     const f = fixture();
-    expect((await createForgeIdentitiesPostHandler(f.dependencies)(postRequest({ instanceUrl: "x" }))).status).toBe(400);
-    expect((await createForgeIdentitiesPostHandler(f.dependencies)(postRequest({
+    expect((await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({ instanceUrl: "x" }))).status).toBe(400);
+    expect((await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
       instanceUrl: "https://gitlab.example.com",
       token: "glpat-x",
       extra: true,
@@ -127,7 +126,7 @@ describe("forge identities API", () => {
     const f = fixture({ upsertResult: null });
     // upsertResult null is the cross-account refusal; the UNVERIFIED path is
     // exercised by the service tests — here the mapping is what is pinned.
-    const response = await createForgeIdentitiesPostHandler(f.dependencies)(postRequest({
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
       instanceUrl: "https://gitlab.example.com",
       token: "glpat-x",
     }));
@@ -136,13 +135,86 @@ describe("forge identities API", () => {
 
   it("deletes only the caller's own identity and answers 404 on a foreign or absent id", async () => {
     const f = fixture({ deleted: true });
-    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(postRequest({ id: "identity-9" }));
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: "identity-9" }, "DELETE"));
     expect(response.status).toBe(200);
     const deletion = f.calls.find((call) => call.op === "deleteForUser");
     expect(deletion!.args).toEqual({ identityId: "identity-9", userId: "user-1" });
 
     const foreign = fixture({ deleted: false });
-    const refused = await createForgeIdentitiesDeleteHandler(foreign.dependencies)(postRequest({ id: "identity-9" }));
+    const refused = await createForgeIdentitiesDeleteHandler(foreign.dependencies)(mutationRequest({ id: "identity-9" }, "DELETE"));
     expect(refused.status).toBe(404);
+  });
+});
+
+describe.each([
+  {
+    method: "POST",
+    createHandler: createForgeIdentitiesPostHandler,
+    body: { instanceUrl: "https://gitlab.example.com", token: "glpat-x" },
+    successStatus: 201,
+    storeOperation: "upsertIdentity",
+  },
+  {
+    method: "DELETE",
+    createHandler: createForgeIdentitiesDeleteHandler,
+    body: { id: "identity-1" },
+    successStatus: 200,
+    storeOperation: "deleteForUser",
+  },
+])("$method forge identity request boundary", ({ method, createHandler, body, successStatus, storeOperation }) => {
+  async function expectRejection(request: Request, status: number, code: string) {
+    const f = fixture();
+    const parseBody = vi.spyOn(request, "json");
+
+    const response = await createHandler(f.dependencies)(request);
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toMatchObject({ error: { code } });
+    expect(f.dependencies.getSession).not.toHaveBeenCalled();
+    expect(parseBody).not.toHaveBeenCalled();
+    expect(request.bodyUsed).toBe(false);
+    expect(f.dependencies.createIdentityStore).not.toHaveBeenCalled();
+    expect(f.dependencies.fetch).not.toHaveBeenCalled();
+    expect(f.dependencies.claimPastWork).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+  }
+
+  it.each([
+    ["foreign", foreignOrigin],
+    ["missing", null],
+    ["different scheme", "http://overflow.example"],
+    ["different port", "https://overflow.example:8443"],
+    ["lookalike host", "https://overflow.example.attacker.example"],
+    ["opaque", "null"],
+  ])("rejects a %s origin before authentication, body parsing, or side effects", async (_name, origin) => {
+    const request = mutationRequest(body, method);
+    if (origin === null) {
+      request.headers.delete("origin");
+    } else {
+      request.headers.set("origin", origin);
+    }
+
+    await expectRejection(request, 403, "FORBIDDEN");
+  });
+
+  it.each(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""])(
+    "rejects explicit Content-Type %j before authentication, body parsing, or side effects",
+    async (contentType) => {
+      const request = mutationRequest(body, method, { "content-type": contentType });
+
+      await expectRejection(request, 415, "UNSUPPORTED_MEDIA_TYPE");
+    },
+  );
+
+  it("allows a trusted request with genuinely absent Content-Type", async () => {
+    const f = fixture();
+    const request = mutationRequest(body, method);
+    request.headers.delete("content-type");
+    expect(request.headers.has("content-type")).toBe(false);
+
+    const response = await createHandler(f.dependencies)(request);
+
+    expect(response.status).toBe(successStatus);
+    expect(f.calls).toContainEqual({ op: storeOperation, args: expect.objectContaining({ userId: "user-1" }) });
   });
 });
