@@ -1,6 +1,6 @@
 import { webhookCredential } from "../support/webhook-credential";
 import { createHmac } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
 import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
@@ -73,6 +73,11 @@ beforeEach(() => {
   registerRepositoryMock.mockReset();
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
 describe("production reconciliation wiring", () => {
   it.each([
     { event: "issues", action: "edited" },
@@ -107,6 +112,14 @@ describe("production reconciliation wiring", () => {
     vi.stubEnv("GITHUB_WEBHOOK_SECRET", secret);
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     readSession.mockResolvedValue({ user: { id: "member-1", role: "MEMBER" } });
+    // The production wiring asks GitHub which scopes the sponsor token holds
+    // before building the flow (issue 599); answer that one probe here so
+    // nothing in this test reaches the network.
+    const probe = vi.fn<typeof fetch>(async (input) => {
+      expect(String(input)).toBe("https://api.github.com/user");
+      return new Response("{}", { status: 200, headers: { "x-oauth-scopes": "admin:repo_hook" } });
+    });
+    vi.stubGlobal("fetch", probe);
     registerRepositoryMock.mockImplementation(
       async (dependencies: { scheduleInitialImport?: (id: string) => Promise<unknown> }) => {
         await dependencies.scheduleInitialImport?.("repository-from-registration");
@@ -118,6 +131,7 @@ describe("production reconciliation wiring", () => {
     const registrationResponse = await postRepository(registrationRequest());
 
     expect([webhookResponse.status, registrationResponse.status]).toEqual([202, 201]);
+    expect(probe).toHaveBeenCalledTimes(1);
     // A swap between two valid members of the reason union compiles, so the
     // pairing of route to literal is what this asserts.
     expect(enqueued).toEqual([
