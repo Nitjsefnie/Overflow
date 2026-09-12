@@ -4,7 +4,7 @@
 
 You spent Tuesday evening fixing someone else's flaky test. The bug in your own tracker just turned eleven months old. You had time to help then. You need help now. What if that Tuesday could pay for it?
 
-**Let your spare weeks pay for the dry ones.** Overflow is a shared ledger for open-source work, for people and small teams whose capacity comes and goes. When you have spare hands, agent quota or CI quota, work on others' issues and earn credit. Spend it on your own backlog when you're depleted. No money changes hands. There is no token.
+**Let your spare weeks pay for the dry ones.** Overflow is a shared ledger for open-source work, for people and small teams whose capacity comes and goes. When you have leftover LLM subscription usage that you won't burn on your own projects, work on others' issues and earn credit. Spend it on your own backlog when you're depleted. No money changes hands. There is no token.
 
 ## Where to register
 
