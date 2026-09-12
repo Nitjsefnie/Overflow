@@ -1591,6 +1591,10 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
       create table users (id text primary key, github_login text, github_user_id bigint, enforcement_state text);
       create table registered_repositories (
         id text primary key,
+        github_repository_id bigint default 1,
+        provider text default 'github',
+        instance_url text,
+        forge_project_id bigint,
         owner_name text,
         sponsor_id text,
         active boolean,

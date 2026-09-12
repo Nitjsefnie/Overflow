@@ -83,7 +83,7 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
       }
     });
 
-    it("hides unclaimed issues at the -10 settled cutoff while preserving exact balance ordering", async () => {
+    it("keeps one unclaimed issue per exhausted sponsor while preserving exact balance ordering", async () => {
       // Negative balances are real settled debits, separate from the claims
       // that also reduce Carol's, Nina's, and Gail's displayed headroom.
       const board = await listEligibleIssues(seededTiers.viewerId);
@@ -94,13 +94,15 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
         "dave five",
         "hank five",
         "carol ten",
+        "nina ten",
+        "gail ten",
       ]);
     });
 
     it("keeps the available-headroom display field on every returned row", async () => {
       const board = await listEligibleIssues(seededTiers.viewerId);
 
-      expect(board).toHaveLength(5);
+      expect(board).toHaveLength(7);
       for (const row of board) {
         expect(row.availableHeadroom).toBeDefined();
       }
@@ -111,6 +113,8 @@ describe("sponsor headroom ordering against PostgreSQL", () => {
           ["carol ten", -10],
           ["dave five", 0],
           ["hank five", 0],
+          ["nina ten", -20],
+          ["gail ten", -22],
         ]),
       );
     });

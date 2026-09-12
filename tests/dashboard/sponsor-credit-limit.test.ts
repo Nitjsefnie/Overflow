@@ -32,14 +32,160 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     else process.env.DATABASE_URL = originalDatabaseUrl;
   });
 
-  it("grows the limit after ten repaid credits so a later -10 balance stays discoverable", async () => {
-    // A fixed -10 cutoff loses this issue after a full debt/repayment cycle.
+  it("keeps an exhausted sponsor discoverable to a contributor with no repositories", async () => {
     const sponsor = await account();
     const worker = await account();
+    const viewerExternalId = nextId();
+    const [viewer] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${viewerExternalId}, ${`contributor-${viewerExternalId}`}) returning id
+    `;
+    await issue(sponsor.repositoryId, "OPEN");
+    await settle(worker, sponsor, 10, 1);
+    const visible = await listEligibleIssues(viewer.id, { repository: sponsor.ownerName });
+    expect(visible.map((row) => row.id)).toEqual([sponsor.issueId]);
+    expect(visible[0]).toMatchObject({ claimState: "OPEN", availableHeadroom: -10 });
+  });
+
+  it("keeps one issue per exhausted sponsor after an outsider drains the market", async () => {
+    const alice = await account();
+    const bob = await account();
+    const outsider = await account();
+    const aliceNext = await issue(alice.repositoryId, "OPEN");
+    await issue(bob.repositoryId, "OPEN");
+    const market = async (viewer: Account) => (await listEligibleIssues(viewer.id))
+      .filter((row) => [alice.login, bob.login].includes(row.sponsorLogin!))
+      .map((row) => row.id);
+    expect(await market(outsider)).toHaveLength(4);
+    await settle(outsider, alice, 10, 1);
+    await settle(outsider, bob, 10, 2);
+    expect(await creditState(outsider)).toEqual({ balance: 20, repaidDebt: 0, creditLimit: 10 });
+    expect(await market(outsider)).toEqual([alice.issueId, bob.issueId]);
+    expect(await market(alice)).toEqual([bob.issueId]);
+    expect(await market(bob)).toEqual([alice.issueId]);
+    // Completing more outsider work can deepen debt, but rolls the one open slot forward.
+    await settle(outsider, alice, 5, 3, alice.issueId);
+    expect(await market(outsider)).toEqual([bob.issueId, aliceNext]);
+    expect(await creditState(alice)).toEqual({ balance: -15, repaidDebt: 0, creditLimit: 10 });
+  });
+
+  it("chooses one exception across repositories and labels before presentation filters, then restores ordinary discovery on repayment", async () => {
+    const sponsor = await account();
+    const second = await account();
+    const worker = await account();
+    await sql`update registered_repositories set sponsor_id = ${sponsor.id} where id = ${second.repositoryId}`;
+    const expensive = await issue(sponsor.repositoryId, "OPEN", { points: 10, label: "L" });
+    // A newer cheap issue wins over the older five-point issues in either repository.
+    const canonical = await issue(second.repositoryId, "OPEN", { points: 1, label: "S" });
+    const visible = async (filters: EligibleIssueFilters = {}) => (await listEligibleIssues(worker.id, filters))
+      .filter((row) => row.sponsorLogin === sponsor.login).map((row) => row.id);
+    const all = [sponsor.issueId, second.issueId, expensive, canonical];
+    expect((await visible()).sort()).toEqual([...all].sort());
+    await settle(worker, sponsor, 10, 1);
+    expect(await visible()).toEqual([canonical]);
+    expect(await visible({ repository: sponsor.ownerName })).toEqual([]);
+    expect(await visible({ openingLabel: "M" })).toEqual([]);
+    expect(await visible({ repository: second.ownerName, openingLabel: "M" })).toEqual([]);
+    expect(await visible({ repository: second.ownerName, openingLabel: "S" })).toEqual([canonical]);
+    await settle(sponsor, worker, 1, 2);
+    expect(await creditState(sponsor)).toEqual({ balance: -9, repaidDebt: 1, creditLimit: 10 });
+    expect((await visible()).sort()).toEqual([...all].sort());
+  });
+
+  it("rolls the exception past claims and closures while retaining claimed views and reservations", async () => {
+    const sponsor = await account();
+    const worker = await account();
+    const next = await issue(sponsor.repositoryId, "OPEN");
+    const last = await issue(sponsor.repositoryId, "OPEN");
+    await settle(worker, sponsor, 10, 1);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
+    await sql`update issues set claim_assignee_github_login = ${worker.login},
+      claim_assignee_github_user_id = ${worker.githubId} where id = ${sponsor.issueId}`;
+    expect(await board(sponsor, worker)).toEqual([next]);
+    expect(await board(sponsor, worker, { claimState: "CLAIMED" })).toEqual([sponsor.issueId]);
+    expect(await board(sponsor, worker, { claimState: "ALL" })).toEqual([sponsor.issueId, next]);
+    const rows = await listEligibleIssues(worker.id, { repository: sponsor.ownerName, claimState: "ALL" });
+    expect(rows.map((row) => row.availableHeadroom)).toEqual([-15, -15]);
+    await sql`update issues set state = 'CLOSED' where id = ${next}`;
+    expect(await board(sponsor, worker)).toEqual([last]);
+    await sql`update issues set state = 'CLOSED' where id = ${sponsor.issueId}`;
+    expect(await board(sponsor, worker, { claimState: "CLAIMED" })).toEqual([]);
+    expect(await board(sponsor, worker, { claimState: "ALL" })).toEqual([last]);
+  });
+
+  it("preserves viewer, active-repository and enforcement exclusions for exceptions", async () => {
+    const sponsor = await account();
+    const inactive = await account();
+    const worker = await account();
+    await sql`update registered_repositories set sponsor_id = ${sponsor.id}, active = false
+      where id = ${inactive.repositoryId}`;
+    await issue(inactive.repositoryId, "OPEN", { points: 1, label: "S" });
+    await settle(worker, sponsor, 10, 1);
+    for (const state of ["ACTIVE", "WARNED", "UNDER_AUDIT"]) {
+      await sql`update users set enforcement_state = ${state} where id = ${sponsor.id}`;
+      expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
+      expect(await board(inactive, worker)).toEqual([]);
+      expect(await board(sponsor, sponsor, { claimState: "ALL" })).toEqual([]);
+    }
+    for (const state of ["RECALIBRATING", "BANNED"]) {
+      await sql`update users set enforcement_state = ${state} where id = ${sponsor.id}`;
+      expect(await board(sponsor, worker, { claimState: "ALL" })).toEqual([]);
+    }
+  });
+
+  it("breaks equal prices by age, then immutable provider, instance, project and issue identity", async () => {
+    const sponsor = await account();
+    const worker = await account();
+    const githubLater = await account();
+    const gitlabLaterInstance = await account();
+    const gitlabLaterProject = await account();
+    const gitlabFirst = await account();
+    const repositories = [githubLater, gitlabLaterInstance, gitlabLaterProject, gitlabFirst];
+    for (const repository of repositories) {
+      await sql`update registered_repositories set sponsor_id = ${sponsor.id} where id = ${repository.repositoryId}`;
+    }
+    await sql`update registered_repositories set provider = 'gitlab', instance_url = 'https://z.example',
+      forge_project_id = 1 where id = ${gitlabLaterInstance.repositoryId}`;
+    await sql`update registered_repositories set provider = 'gitlab', instance_url = 'https://a.example',
+      forge_project_id = 20 where id = ${gitlabLaterProject.repositoryId}`;
+    await sql`update registered_repositories set provider = 'gitlab', instance_url = 'https://a.example',
+      forge_project_id = 10 where id = ${gitlabFirst.repositoryId}`;
+    const lowerIssueNumber = await issue(sponsor.repositoryId, "OPEN");
+    await sql`update issues set issue_number = 1 where id = ${lowerIssueNumber}`;
+    const ids = [sponsor.issueId, lowerIssueNumber, ...repositories.map((repository) => repository.issueId)];
+    await sql`update issues set created_at = '2026-01-02' where id in ${sql(ids)}`;
+    // Age precedes even the forge provider key.
+    await sql`update issues set created_at = '2026-01-01' where id = ${gitlabLaterInstance.issueId}`;
+    await settle(worker, sponsor, 10, 1);
+    const visible = async () => (await listEligibleIssues(worker.id))
+      .filter((row) => row.sponsorLogin === sponsor.login).map((row) => row.id);
+    expect(await visible()).toEqual([gitlabLaterInstance.issueId]);
+    await sql`update issues set created_at = '2026-01-02' where id = ${gitlabLaterInstance.issueId}`;
+    // Insertion order, UUIDs, names and global GitHub issue ids cannot break a tie.
+    await sql`update registered_repositories set owner_name = ${`zzz-${nextId()}/renamed`}
+      where id = ${sponsor.repositoryId}`;
+    const [recreated] = await sql<{ id: string }[]>`
+      update issues set id = gen_random_uuid(), title = 'renamed canonical issue'
+      where id = ${lowerIssueNumber} returning id
+    `;
+    const expectedOrder = [recreated.id, sponsor.issueId, githubLater.issueId,
+      gitlabFirst.issueId, gitlabLaterProject.issueId, gitlabLaterInstance.issueId];
+    for (const expected of expectedOrder) {
+      expect(await visible()).toEqual([expected]);
+      await sql`update issues set state = 'CLOSED' where id = ${expected}`;
+    }
+    expect(await visible()).toEqual([]);
+  });
+
+  it("grows the limit after ten repaid credits so a later -10 balance stays discoverable", async () => {
+    // A fixed -10 cutoff would leave only the exception after a debt/repayment cycle.
+    const sponsor = await account();
+    const worker = await account();
+    const secondIssue = await issue(sponsor.repositoryId, "OPEN");
     await settle(worker, sponsor, 10, 1);
     await settle(sponsor, worker, 10, 2);
     await settle(worker, sponsor, 10, 3);
-    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId, secondIssue]);
     expect(await creditState(sponsor)).toEqual({ balance: -10, repaidDebt: 10, creditLimit: 11 });
   });
 
@@ -59,12 +205,12 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
     expect(await creditState(sponsor)).toEqual({ balance: 0, repaidDebt: 0, creditLimit: 10 });
     await settle(worker, sponsor, 10, 1);
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
     expect(await board(sponsor, worker, { claimState: "ALL" })).toContain(claimedIssue);
     expect(await board(sponsor, worker, { claimState: "CLAIMED" })).toContain(claimedIssue);
     await settle(worker, sponsor, 5, 2, claimedIssue);
     expect(await creditState(sponsor)).toEqual({ balance: -15, repaidDebt: 0, creditLimit: 10 });
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
     await settle(sponsor, worker, 6, 3);
     expect(await creditState(sponsor)).toEqual({ balance: -9, repaidDebt: 6, creditLimit: 10 });
     expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
@@ -86,7 +232,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     await settle(worker, sponsor, 10, 8);
     await settle(worker, sponsor, 10, 9);
     expect(await creditState(sponsor)).toEqual({ balance: -11, repaidDebt: 10, creditLimit: 11 });
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
     await settle(sponsor, worker, 10, 10);
     expect(await creditState(sponsor)).toEqual({ balance: -1, repaidDebt: 20, creditLimit: 12 });
     expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
@@ -126,7 +272,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     contribution.credits = contribution.settledPoints = 6;
     await publish();
     expect(await creditState(sponsor)).toEqual({ balance: -14, repaidDebt: 6, creditLimit: 10 });
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
   });
 
   it("does not repay debt or grow the limit for completed self-work", async () => {
@@ -166,7 +312,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     await adjustment(sponsor, worker, debt.id, -10, 3, adjustmentId);
     expect(await creditState(sponsor)).toEqual({ balance: -10, repaidDebt: 0, creditLimit: 10 });
     expect(await creditState(worker)).toEqual({ balance: -10, repaidDebt: 10, creditLimit: 11 });
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
   });
 
   it("replays late-arriving settlements by merge time rather than materialization time", async () => {
@@ -200,7 +346,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     await settle(sponsor, worker, 10, 2);
     await settle(worker, sponsor, 10, 3);
     // NULLS LAST would replay the earning before either debit: no demonstrated
-    // repayment, a limit of ten, and no visible issue at the final -10 balance.
+    // repayment and a limit of ten at the final -10 balance.
     const facts = async () => ({ state: await creditState(sponsor), visible: await board(sponsor, worker) });
     const expected = {
       state: { balance: -10, repaidDebt: 10, creditLimit: 11 }, visible: [sponsor.issueId],
@@ -236,7 +382,7 @@ describe("completed-work receiving limits against PostgreSQL", () => {
     await sql`update settlements set status = 'SETTLED', creditor_id = ${sponsor.id},
       review_rounds = 10, credits = 0 where id = ${contribution.id}`;
     expect(await creditState(sponsor)).toEqual({ balance: -10, repaidDebt: 0, creditLimit: 10 });
-    expect(await board(sponsor, worker)).toEqual([]);
+    expect(await board(sponsor, worker)).toEqual([sponsor.issueId]);
   });
 });
 
@@ -259,14 +405,18 @@ async function account(): Promise<Account> {
   return { id: user.id, githubId, login, repositoryId: repository.id, ownerName, issueId };
 }
 
-async function issue(repositoryId: string, state: "OPEN" | "CLOSED"): Promise<string> {
+async function issue(
+  repositoryId: string,
+  state: "OPEN" | "CLOSED",
+  rating = { points: 5, label: "M" },
+): Promise<string> {
   const id = nextId();
   const [row] = await sql<{ id: string }[]>`
     insert into issues (
       github_issue_id, repository_id, issue_number, title, body, url, state,
       opening_label, opening_comparison_points, opening_reserve_points
     ) values (${id}, ${repositoryId}, ${id}, ${`issue ${id}`}, '', ${`https://github.com/limit/work/issues/${id}`},
-      ${state}, 'M', 5, 5) returning id
+      ${state}, ${rating.label}, ${rating.points}, ${rating.points}) returning id
   `;
   return row.id;
 }

@@ -23,9 +23,9 @@ Go to <https://overflow.nitjsefni.eu> and sign in with GitHub. Register a reposi
 
 ## Why it can't be abused
 
-**More room to borrow comes from paying it back.** Every account starts with a credit limit of 10 below zero. At or below that limit, its unclaimed issues disappear from discovery. Already-claimed issues can still complete, even if they take the balance farther below the limit. Only settled credits count toward the cutoff. Claims never count.
+**More room to borrow comes from paying it back.** Every account starts with a credit limit of 10 below zero. At or below that limit, discovery keeps one open, unclaimed issue per sponsor across all its eligible repositories: lowest reserve points first, then oldest opening, with immutable forge identity breaking ties. Repository and label filters may hide that issue but never select a replacement. Claiming or closing it moves the exception to the next eligible issue. Already-claimed issues can still complete, even if they take the balance farther below the limit. Only settled credits count toward the cutoff. Claims never count.
 
-Completed work for others repays a negative balance immediately. Repay enough to rise above the cutoff and your unclaimed issues reappear. Every 10 credits repaid while negative adds 1 to your limit. Only the portion that repays debt counts. Self-work creates no credit.
+Completed work for others repays a negative balance immediately. Repay enough to rise above the cutoff and ordinary discovery of all your unclaimed issues resumes. Every 10 credits repaid while negative adds 1 to your limit. Only the portion that repays debt counts. Self-work creates no credit. The exception bounds concurrently visible unclaimed work to one issue per exhausted sponsor; it does not bound cumulative debt or guarantee recovery.
 
 Only the sponsor prices work, at merge time, after the work exists. A claim is not a payment. Only a merged closing PR settles. Distinct review rounds are subtracted from the actual points, so repeated requests for changes reduce the credit earned.
 
