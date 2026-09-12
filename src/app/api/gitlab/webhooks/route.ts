@@ -3,9 +3,12 @@ import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { processWebhook } from "@/lib/webhooks/processor";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 
 export type GitLabWebhookRouteDependencies = {
-  secret: string | undefined;
+  lookupCredential: WebhookCredentialLookup;
   processWebhook(delivery: GitHubWebhookDelivery): Promise<unknown>;
 };
 
@@ -24,13 +27,21 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     if (event === null || deliveryUuid === null || token === null) {
       return new Response(null, { status: 400 });
     }
-    if (dependencies.secret === undefined || dependencies.secret.length === 0) {
+    const selector = webhookSelector(request.url);
+    if (selector === null) return new Response(null, { status: 401 });
+    let credential;
+    try {
+      credential = await dependencies.lookupCredential(selector, "gitlab");
+    } catch {
       return new Response(null, { status: 503 });
+    }
+    if (credential === null || credential.provider !== "gitlab" || credential.credentialId !== selector) {
+      return new Response(null, { status: 401 });
     }
     // The token is header-only — no HMAC over the body, unlike GitHub — so a
     // wrong token is refused here, before Content-Length is consulted and
     // before a single body byte is read.
-    if (!verifyGitLabWebhookToken(token, dependencies.secret)) {
+    if (!verifyGitLabWebhookToken(token, credential.secret)) {
       return new Response(null, { status: 401 });
     }
 
@@ -64,6 +75,11 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       return new Response(null, { status: 400 });
     }
     const delivery = result.delivery;
+    if (delivery.repositoryGitHubId !== credential.projectId || delivery.forge?.provider !== "gitlab"
+      || credential.instanceUrl === null
+      || delivery.forge.instanceUrl !== normalizeInstanceUrl(credential.instanceUrl)) {
+      return new Response(null, { status: 401 });
+    }
 
     try {
       await dependencies.processWebhook(delivery);
@@ -116,7 +132,7 @@ async function readBodyWithinLimit(request: Request): Promise<Buffer | null> {
 
 export async function POST(request: Request): Promise<Response> {
   return createGitLabWebhookPostHandler({
-    secret: process.env.GITHUB_WEBHOOK_SECRET,
+    lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
     processWebhook: async (delivery) => {
       const store = new PostgresFoldStore();
       return processWebhook({

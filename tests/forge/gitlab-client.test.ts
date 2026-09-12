@@ -1,6 +1,44 @@
 import { describe, expect, it, vi } from "vitest";
 import { GitLabGateway, GitLabApiError } from "@/lib/gitlab/client";
 
+describe("scoped GitLab hook configuration", () => {
+  it("sanitizes upstream errors during scoped GitLab configuration", async () => {
+    const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "token", fetch: async () =>
+      new Response("synthetic-private-hook-secret", { status: 403 }) });
+    const error = await gateway.configureWebhook({ owner: "group", name: "project" }, 81,
+      { callbackUrl: "https://example.test", secret: "test-secret" }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ status: 403, body: null });
+  });
+  it("updates the callback and token together despite complete event subscriptions", async () => {
+    let remote = { id: 81, url: "https://old.test/hook", token: "old", issues_events: true,
+      merge_requests_events: true, push_events: true };
+    const methods: string[] = [];
+    const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "synthetic-pat", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      methods.push(request.method);
+      if (request.method === "PUT") remote = { ...remote, ...await request.json() };
+      return Response.json({ ...remote, token: undefined });
+    } });
+    await gateway.configureWebhook?.({ owner: "group", name: "project" }, 81,
+      { callbackUrl: "https://overflow.test/hook?hook=scoped", secret: "scoped-token" });
+    expect(methods).toEqual(["GET", "PUT"]);
+    expect(remote).toMatchObject({ url: "https://overflow.test/hook?hook=scoped", token: "scoped-token", push_events: true });
+  });
+
+  it.each(["id", "url", "events", "preserved event"])("rejects a configured GitLab hook with incorrect %s", async (wrong) => {
+    const before = { id: 81, url: "https://old.test", issues_events: true, merge_requests_events: true, push_events: true };
+    const gateway = new GitLabGateway({ instanceUrl: "https://gitlab.test", token: "synthetic-pat", fetch: async (_input, init) => {
+      if (init?.method !== "PUT") return Response.json(before);
+      const config = JSON.parse(String(init.body));
+      return Response.json({ ...before, id: wrong === "id" ? 82 : 81,
+        url: wrong === "url" ? "https://wrong.test" : config.url, issues_events: wrong !== "events",
+        push_events: wrong === "preserved event" ? "false" : true });
+    } });
+    await expect(gateway.configureWebhook?.({ owner: "group", name: "project" }, 81,
+      { callbackUrl: "https://overflow.test/hook", secret: "synthetic-token" })).rejects.toThrow();
+  });
+});
+
 /**
  * Fixtures model the contract's live-verified shapes: real field names from
  * the forge-evidence probe (an untracked working document, recoverable from

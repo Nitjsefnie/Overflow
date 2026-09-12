@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -15,6 +16,7 @@ import {
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { decryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -57,12 +59,138 @@ describe("registering a repository against the real registered_repositories cons
     expect(await store.findActiveRepositoryById("00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 
+  it("encrypts scoped webhook material while keeping repository responses secret-free", async () => {
+    const submission = {
+      ...newRepository({ sponsorId: await sponsor() }),
+      webhookCredential: {
+        id: "181a4fbb-64d1-44fd-82da-cd191613798c",
+        secret: "synthetic-scoped-webhook-secret",
+      },
+    };
+    const created = await store.createRepository(submission);
+    const [row] = await sql<{
+      webhook_credential_id: string | null;
+      encrypted_webhook_secret: Buffer | null;
+      webhook_configured_at: Date | null;
+    }[]>`
+      select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+      from registered_repositories where id = ${created!.id}
+    `;
+    expect(row.webhook_credential_id).toBe(submission.webhookCredential.id);
+    expect(row.encrypted_webhook_secret).not.toEqual(Buffer.from(submission.webhookCredential.secret));
+    expect(decryptToken(row.encrypted_webhook_secret!.toString("utf8"), tokenEncryptionKey))
+      .toBe(submission.webhookCredential.secret);
+    expect(row.webhook_configured_at).toBeInstanceOf(Date);
+    for (const value of [created, await store.findActiveRepositoryById(created!.id)]) {
+      expect(Object.keys(value!)).toEqual([
+        "id", "githubRepositoryId", "ownerName", "sponsorId", "visibility", "githubWebhookId",
+      ]);
+      expect(JSON.stringify(value)).not.toContain(submission.webhookCredential.secret);
+    }
+  });
+
   it("names the held owner/name path when a new numeric identity is submitted under a claimed path", async () => {
     const held = await registeredRepository();
     const submission = newRepository({ sponsorId: await sponsor(), ownerName: held.ownerName });
 
     await expect(store.createRepository(submission)).rejects.toThrow(RepositoryOwnerNameConflictError);
     await expect(countOf(submission.githubRepositoryId)).resolves.toBe(0);
+  });
+
+  it.each(["github", "gitlab"] as const)("privately looks up only an active %s scoped credential", async (provider) => {
+    const credential = { id: randomUUID(), secret: "independent-synthetic-credential" };
+    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: credential,
+      provider, ...(provider === "gitlab" ? { instanceUrl: "https://GITLAB.example/", forgeProjectId: 999 } : {}),
+    });
+    const created = (await store.createRepository(submission))!;
+    expect(await store.findWebhookCredential(credential.id, provider)).toMatchObject({
+      repositoryId: created.id, credentialId: credential.id, secret: credential.secret, provider,
+      projectId: provider === "github" ? submission.githubRepositoryId : 999,
+      instanceUrl: provider === "github" ? null : "https://gitlab.example",
+      webhookId: submission.githubWebhookId,
+    });
+    expect(await store.findWebhookCredential(credential.id, provider === "github" ? "gitlab" : "github")).toBeNull();
+    expect(await store.findWebhookCredential(randomUUID(), provider)).toBeNull();
+    await sql`update registered_repositories set active = false where id = ${created.id}`;
+    expect(await store.findWebhookCredential(credential.id, provider)).toBeNull();
+    await sql`update registered_repositories set unregistered_at = now() where id = ${created.id}`;
+    expect(await store.findWebhookCredential(credential.id, provider)).toBeNull();
+  });
+
+  it("replaces credentials on reactivation and invalidates the old selector", async () => {
+    const first = { id: randomUUID(), secret: "first-synthetic-secret" };
+    const second = { id: randomUUID(), secret: "second-synthetic-secret" };
+    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: first });
+    const created = (await store.createRepository(submission))!;
+    await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${created.id}`;
+    expect(await store.createRepository({ ...submission, githubWebhookId: externalId++, webhookCredential: second }))
+      .toMatchObject({ id: created.id });
+    expect(await store.findWebhookCredential(first.id, "github")).toBeNull();
+    expect(await store.findWebhookCredential(second.id, "github")).toMatchObject({ secret: second.secret });
+  });
+
+  it("fails closed when scoped ciphertext or the encryption key is unusable", async () => {
+    const credential = { id: randomUUID(), secret: "synthetic-secret" };
+    const created = (await store.createRepository(newRepository({ sponsorId: await sponsor(), webhookCredential: credential })))!;
+    await expect(new PostgresRepositoryStore(sql, "").findWebhookCredential(credential.id, "github")).rejects.toThrow();
+    await sql`update registered_repositories set encrypted_webhook_secret = ${Buffer.from("corrupt")} where id = ${created.id}`;
+    await expect(store.findWebhookCredential(credential.id, "github")).rejects.toThrow();
+  });
+
+  it("durably stages one credential for concurrent legacy upgrade attempts", async () => {
+    const submission = newRepository({ sponsorId: await sponsor() });
+    const created = (await store.createRepository(submission))!;
+    const target = { repositoryId: created.id, provider: "github" as const, instanceUrl: null,
+      projectId: submission.githubRepositoryId, webhookId: submission.githubWebhookId!,
+    };
+    const [first, second] = await Promise.all([
+      store.stageWebhookCredential?.(target), store.stageWebhookCredential?.(target),
+    ]);
+    expect(first).toMatchObject({ ...target, credentialId: expect.any(String), secret: expect.any(String), configuredAt: null });
+    expect(second).toEqual(first);
+    expect(await new PostgresRepositoryStore(sql, tokenEncryptionKey).stageWebhookCredential(target)).toEqual(first);
+    expect(await store.findWebhookCredential(first!.credentialId, "github")).toEqual(first);
+    const [row] = await sql<{ encrypted_webhook_secret: Buffer; webhook_configured_at: Date | null }[]>`
+      select encrypted_webhook_secret, webhook_configured_at from registered_repositories where id = ${created.id}
+    `;
+    expect(row.encrypted_webhook_secret.toString("utf8")).not.toBe(first!.secret);
+    expect(row.webhook_configured_at).toBeNull();
+  });
+
+  it("holds and releases the cross-process registration upgrade lock", async () => {
+    const id = randomUUID();
+    const tryLock = async () => {
+      const [row] = await sql<{ locked: boolean }[]>`
+        select pg_try_advisory_xact_lock(hashtextextended(${`webhook-upgrade:${id}`}, 0)) as locked
+      `;
+      return row.locked;
+    };
+    expect(await store.withWebhookUpgradeLock(id, tryLock)).toBe(false);
+    expect(await tryLock()).toBe(true);
+    await expect(store.withWebhookUpgradeLock(id, async () => { throw new Error("synthetic failure"); })).rejects.toThrow("synthetic failure");
+    expect(await tryLock()).toBe(true);
+  });
+
+  it("finalizes only the staged credential and immutable registration generation", async () => {
+    const submission = newRepository({ sponsorId: await sponsor() });
+    const created = (await store.createRepository(submission))!;
+    const target = { repositoryId: created.id, provider: "github" as const, instanceUrl: null,
+      projectId: submission.githubRepositoryId, webhookId: submission.githubWebhookId!,
+    };
+    const staged = await store.stageWebhookCredential?.(target);
+    expect(staged).not.toBeUndefined();
+    expect(await store.finalizeWebhookCredential?.(staged!)).toBe(true);
+    expect((await store.findWebhookCredential(staged!.credentialId, "github"))!.configuredAt).toBeInstanceOf(Date);
+    expect(await store.finalizeWebhookCredential({ ...staged!, credentialId: randomUUID() })).toBe(false);
+    expect(await store.finalizeWebhookCredential({ ...staged!, projectId: target.projectId + 1 })).toBe(false);
+    expect(await store.finalizeWebhookCredential({ ...staged!, webhookId: target.webhookId + 1 })).toBe(false);
+    await sql`update registered_repositories set active = false, unregistered_at = now() where id = ${created.id}`;
+    expect(await store.finalizeWebhookCredential(staged!)).toBe(false);
+    expect(await store.stageWebhookCredential(target)).toBeNull();
+    const replacement = { id: randomUUID(), secret: "reactivated-synthetic-secret" };
+    await store.createRepository({ ...submission, webhookCredential: replacement });
+    expect(await store.finalizeWebhookCredential(staged!)).toBe(false);
+    expect(await store.stageWebhookCredential(target)).toMatchObject({ credentialId: replacement.id, secret: replacement.secret });
   });
 
   it("carries the claimed path on the owner/name conflict it raises", async () => {
@@ -1138,6 +1266,7 @@ function newRepository(
     ownerName: `registration/repo-${githubRepositoryId}`,
     visibility: "PUBLIC",
     githubWebhookId: externalId++,
+    webhookCredential: null,
     difficultyScheme: difficultyScheme(),
     ...overrides,
   };

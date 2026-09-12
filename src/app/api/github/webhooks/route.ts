@@ -5,9 +5,11 @@ import {
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { processWebhook } from "@/lib/webhooks/processor";
+import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 
 export type GitHubWebhookRouteDependencies = {
-  secret: string | undefined;
+  lookupCredential: WebhookCredentialLookup;
   processWebhook(delivery: GitHubWebhookDelivery): Promise<unknown>;
 };
 
@@ -27,8 +29,16 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     if (event === null || deliveryId === null || signature === null) {
       return new Response(null, { status: 400 });
     }
-    if (dependencies.secret === undefined || dependencies.secret.length === 0) {
+    const selector = webhookSelector(request.url);
+    if (selector === null) return new Response(null, { status: 401 });
+    let credential;
+    try {
+      credential = await dependencies.lookupCredential(selector, "github");
+    } catch {
       return new Response(null, { status: 503 });
+    }
+    if (credential === null || credential.provider !== "github" || credential.credentialId !== selector) {
+      return new Response(null, { status: 401 });
     }
 
     const contentLength = request.headers.get("content-length");
@@ -46,7 +56,7 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     if (rawBody === null) {
       return new Response(null, { status: 413 });
     }
-    if (!verifyGitHubWebhookSignature(rawBody, signature, dependencies.secret)) {
+    if (!verifyGitHubWebhookSignature(rawBody, signature, credential.secret)) {
       return new Response(null, { status: 401 });
     }
 
@@ -57,6 +67,9 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
       return new Response(null, { status: 400 });
     }
     const result = parseGitHubWebhookDeliveryDetailed(event, deliveryId, payload);
+    if (githubPayloadRepositoryId(payload) !== credential.projectId) {
+      return new Response(null, { status: 401 });
+    }
     if (result.status === "ignored") {
       // Deliberately ignored (a PR-carrying issue envelope) is a success to
       // GitHub — any 2xx counts as delivered — so it must not read as a
@@ -119,7 +132,7 @@ async function readBodyWithinLimit(request: Request): Promise<Buffer | null> {
 
 export async function POST(request: Request): Promise<Response> {
   return createGitHubWebhookPostHandler({
-    secret: process.env.GITHUB_WEBHOOK_SECRET,
+    lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
     processWebhook: async (delivery) => {
       const store = new PostgresFoldStore();
       return processWebhook({

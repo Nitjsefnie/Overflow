@@ -1,8 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 
 /**
- * The GitLab hook carries the same shared secret the GitHub hooks carry, as
- * its `token` parameter, and echoes it back on every delivery in the
+ * Each GitLab hook carries its own scoped secret as its `token` parameter,
+ * and echoes it back on every delivery in the
  * `X-Gitlab-Token` header. The comparison is constant-time — the same shape
  * the GitHub HMAC check uses: a length mismatch answers false without the
  * comparison (which would throw), and equal-length buffers compare through

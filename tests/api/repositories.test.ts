@@ -943,6 +943,7 @@ describe("Overflow token registration", () => {
   // GitHub callback and reads the sponsor's PAT through the identity store.
   it("installs the GitLab hook at GITLAB_WEBHOOK_URL through the production POST wiring", async () => {
     const forge = productionGitLabWiring();
+    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "");
     const project = gitlabProjectPayload();
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationState").mockResolvedValue(null);
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryProviderById").mockResolvedValue(null);
@@ -982,13 +983,17 @@ describe("Overflow token registration", () => {
     const hookBody = JSON.parse(await hookPost!.text()) as Record<string, unknown>;
     // The receiver the hook delivers to is the GitLab one, not the GitHub
     // callback the same wiring hands a GitHub registration.
-    expect(hookBody.url).toBe(gitlabWebhookUrl);
-    expect(hookBody.token).toBe("webhook-secret");
+    const callback = new URL(String(hookBody.url));
+    expect(callback.origin + callback.pathname).toBe(gitlabWebhookUrl);
+    expect(callback.searchParams.get("hook")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(hookBody.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(await response.json())).not.toContain(String(hookBody.token));
     expect(createRepository).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       provider: "gitlab",
       instanceUrl: "https://gitlab.example.com",
       githubWebhookId: 9001,
       sponsorId: tokenAccount.id,
+      webhookCredential: { id: callback.searchParams.get("hook"), secret: hookBody.token },
     }));
   });
 
@@ -1587,6 +1592,7 @@ describe("DELETE /api/repositories", () => {
   // route constructs, and nothing else in this suite drives that wiring.
   it("deletes the GitLab hook through the sponsor's forge token via the production DELETE wiring", async () => {
     const forge = productionGitLabWiring();
+    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "");
     const target = gitlabTarget(tokenAccount.id);
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationStateByForgeIdentity")
       .mockResolvedValue({ repository: target, unregisteredAt: null });
@@ -1956,7 +1962,6 @@ function successfulDependencies(
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
-      secret: "webhook-secret-for-test",
     },
     async scheduleInitialImport() {
       return undefined;

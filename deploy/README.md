@@ -647,13 +647,18 @@ for the test harness; production sets none of them and runs on the defaults:
 operator-facing, not a test knob: `OVERFLOW_DEPLOY_CI_GATE`, whose only
 accepted non-default value is `skip` (the gate paragraph above).
 
-Every revision deploy finishes by upgrading existing webhook subscriptions after
-the new parser-capable release is serving and its readiness check succeeds. Keep
-the original `GITHUB_WEBHOOK_SECRET` in the loaded environment; the upgrade must
-not rotate it. Avoid concurrent manual hook-configuration edits. The command
-preserves callback configuration, active state and unrelated subscriptions,
-verifies each persisted hook at the repository's current numeric-ID-resolved
-location, then requests full upstream repair through the rederivation mechanism.
+Every revision deploy finishes by upgrading existing hooks after the new release
+is serving and its readiness check succeeds. Migration 043 must precede the
+scoped-credential receiver code. Legacy hooks cannot authenticate until this
+upgrade configures their new callback UUID and independent secret. Keep the
+callback base URLs and `TOKEN_ENCRYPTION_KEY` available; do not rotate the
+encryption key. Avoid concurrent manual hook-configuration edits. The command
+preserves active state and unrelated subscriptions, verifies each persisted hook
+at its current numeric-ID-resolved location, then requests full upstream repair.
+Pending credential material is durable: retry a failed run without reminting it.
+Missing sponsor credentials require relinking before that registration can upgrade.
+After all registrations migrate, retire the old shared credential and assess any
+reuse elsewhere. Rolling back to a shared-credential receiver reopens that trust boundary.
 Historical missed deliveries have no known dirty subject; an ordinary incremental
 queue pass cannot guarantee their repair. Startup recovery does not replace this upgrade.
 

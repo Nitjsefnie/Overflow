@@ -30,6 +30,24 @@ const claimWorkflow: ClaimPathEvidence = {
 };
 
 describe("explicit repository registration", () => {
+  it("generates independent webhook credentials for each registration attempt", async () => {
+    const first = createHarness();
+    const second = createHarness();
+    await registerRepository(first.dependencies, createInput());
+    await registerRepository(second.dependencies, createInput());
+    const a = first.createdRepositories[0] as typeof first.createdRepositories[0] & {
+      webhookCredential?: { id: string; secret: string };
+    };
+    const b = second.createdRepositories[0] as typeof second.createdRepositories[0] & {
+      webhookCredential?: { id: string; secret: string };
+    };
+    expect(a.webhookCredential).toEqual({ id: expect.any(String), secret: expect.any(String) });
+    expect(a.webhookCredential!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(Buffer.from(a.webhookCredential!.secret, "base64url")).toHaveLength(32);
+    expect(b.webhookCredential!.id).not.toBe(a.webhookCredential!.id);
+    expect(b.webhookCredential!.secret).not.toBe(a.webhookCredential!.secret);
+  });
+
   it("normalizes a canonical GitHub repository URL", () => {
     expect(parseGitHubRepository("https://github.com/octo/overflow.git")).toEqual({
       owner: "octo",
@@ -2049,7 +2067,6 @@ function createHarness(options: HarnessOptions = {}) {
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
-      secret: "webhook-secret-for-test",
     },
     ...(options.forgeIdentity !== undefined ? { forgeIdentity: options.forgeIdentity } : {}),
     ...(options.getForgeToken !== undefined ? { getForgeToken: options.getForgeToken } : {}),

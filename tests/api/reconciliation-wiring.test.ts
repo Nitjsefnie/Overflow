@@ -1,3 +1,4 @@
+import { webhookCredential } from "../support/webhook-credential";
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
@@ -46,6 +47,9 @@ vi.mock("@/lib/fold/postgres-store", () => ({
 }));
 vi.mock("@/lib/repositories/postgres-store", () => ({
   PostgresRepositoryStore: class {
+    async findWebhookCredential() {
+      return webhookCredential("github");
+    }
     async getGitHubAccessToken() {
       return "sponsor-token";
     }
@@ -86,7 +90,7 @@ describe("production reconciliation wiring", () => {
       comment: { body: "unrelated text", user: { login: "unrelated-author" } },
     });
     const signature = createHmac("sha256", secret).update(body).digest("hex");
-    const response = await POST(new Request("https://overflow.test/api/github/webhooks", {
+    const response = await POST(new Request("https://overflow.test/api/github/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
       method: "POST", body,
       headers: {
         "x-github-event": event, "x-github-delivery": `${event}-${action}`,
@@ -126,7 +130,7 @@ describe("production reconciliation wiring", () => {
     const store = createQueueingStore();
     const folded: string[] = [];
     const route = createGitHubWebhookPostHandler({
-      secret,
+      lookupCredential: async () => webhookCredential("github", secret),
       processWebhook: (delivery) =>
         processWebhook(
           {
@@ -165,7 +169,7 @@ function webhookRequest(): Request {
     pull_request: { id: 201, number: 11 },
   });
   const signature = createHmac("sha256", secret).update(body).digest("hex");
-  return new Request("https://overflow.test/api/github/webhooks", {
+  return new Request("https://overflow.test/api/github/webhooks?hook=181a4fbb-64d1-44fd-82da-cd191613798c", {
     method: "POST",
     headers: {
       "content-type": "application/json",

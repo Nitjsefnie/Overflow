@@ -283,6 +283,34 @@ export class GitHubGateway implements ForgeGateway {
     });
   }
 
+  public async configureWebhook(
+    repository: GitHubRepositoryReference,
+    webhookId: number,
+    configuration: GitHubWebhookConfiguration,
+  ): Promise<void> {
+    try {
+      const path = `/repos/${segment(repository.owner)}/${segment(repository.name)}/hooks/${webhookId}`;
+      const before = parseWebhook(await this.request(path), webhookId);
+      const after = parseWebhook(await this.request(path, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          add_events: githubWebhookEvents.filter((event) => !subscribesTo(before.events, event)),
+          active: before.active,
+          config: { ...before.config, url: configuration.callbackUrl, secret: configuration.secret },
+        }),
+      }), webhookId);
+      if (after.config.url !== configuration.callbackUrl
+        || ![...githubWebhookEvents, ...before.events].every((event) => subscribesTo(after.events, event))
+        || after.active !== before.active) {
+        throw new Error("GitHub webhook configuration verification failed.");
+      }
+    } catch (error) {
+      if (error instanceof GitHubApiError) throw new GitHubApiError(error.status, error.rateLimited, error.retryAfterSeconds);
+      throw error;
+    }
+  }
+
   public async ensureWebhookEvents(
     repository: GitHubRepositoryReference,
     webhookId: number,

@@ -92,6 +92,40 @@ describe("initial PostgreSQL materialization", () => {
     );
   });
 
+  it.each([
+    ["selector without secret", true, false, false, true],
+    ["secret without selector", false, true, false, true],
+    ["configured without material", false, false, true, true],
+    ["material without hook", true, true, false, false],
+  ])("rejects invalid scoped webhook state: %s", async (_label, id, secret, configured, hook) => {
+    const repositoryId = await insertRepository(sql, await insertUser(sql));
+    await expect(sql`
+      update registered_repositories set
+        webhook_credential_id = ${id ? randomUUID() : null},
+        encrypted_webhook_secret = ${secret ? Buffer.from("encrypted-test-material") : null},
+        webhook_configured_at = ${configured ? new Date() : null},
+        github_webhook_id = case when ${hook} then github_webhook_id else null end
+      where id = ${repositoryId}
+    `).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("prevents two registrations from sharing a scoped webhook selector", async () => {
+    const sponsorId = await insertUser(sql);
+    const first = await insertRepository(sql, sponsorId);
+    const second = await insertRepository(sql, sponsorId);
+    const selector = randomUUID();
+    await sql`
+      update registered_repositories set webhook_credential_id = ${selector},
+        encrypted_webhook_secret = ${Buffer.from("first-encrypted-material")}
+      where id = ${first}
+    `;
+    await expect(sql`
+      update registered_repositories set webhook_credential_id = ${selector},
+        encrypted_webhook_secret = ${Buffer.from("second-encrypted-material")}
+      where id = ${second}
+    `).rejects.toMatchObject({ code: "23505" });
+  });
+
   it("loads fold users and the repository sponsor by immutable GitHub ids", async () => {
     const firstId = await insertUserWithLogin(sql, "id-lookup-before-rename");
     const secondId = await insertUserWithLogin(sql, "id-lookup-second");
@@ -239,6 +273,7 @@ describe("initial PostgreSQL materialization", () => {
       "040_forge_repository_columns.sql",
       "041_forge_identity_token_failed_at.sql",
       "042_gitlab_webhook_orphan_cleanup.sql",
+      "043_repository_webhook_credentials.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 

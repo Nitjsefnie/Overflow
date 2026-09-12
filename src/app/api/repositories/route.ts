@@ -380,21 +380,17 @@ async function buildRegistrationDependencies(
 }
 
 /**
- * The webhook configuration the registration's hook creation carries. The
- * secret is the one shared secret both receivers verify (issue 547); the
- * callback URL is the receiver the forge delivers to — `GITHUB_WEBHOOK_URL`
+ * The callback base for registration. Each registration adds its own selector
+ * and generates an independent secret. The base is `GITHUB_WEBHOOK_URL`
  * for a GitHub registration, `GITLAB_WEBHOOK_URL` for a GitLab one.
  */
-function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: string; secret: string } {
+function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: string } {
   const callbackUrl = provider === "gitlab"
     ? process.env.GITLAB_WEBHOOK_URL
     : process.env.GITHUB_WEBHOOK_URL;
-  const secret = process.env.GITHUB_WEBHOOK_SECRET;
   if (
     callbackUrl === undefined ||
-    callbackUrl.length === 0 ||
-    secret === undefined ||
-    secret.length === 0
+    callbackUrl.length === 0
   ) {
     throw new Error(
       provider === "gitlab"
@@ -403,7 +399,7 @@ function requiredWebhookConfiguration(provider?: "gitlab"): { callbackUrl: strin
     );
   }
 
-  return { callbackUrl, secret };
+  return { callbackUrl };
 }
 
 /**

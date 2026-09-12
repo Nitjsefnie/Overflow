@@ -156,7 +156,7 @@ function fixture(options: {
       throw new Error("the GitHub gateway must not be called on the GitLab path");
     } }),
     store,
-    webhook: { callbackUrl: "https://overflow.example/api/gitlab/webhooks", secret: "s3cret" },
+    webhook: { callbackUrl: "https://overflow.example/api/gitlab/webhooks" },
     forgeFetch: gitlabFetch,
     forgeIdentity: options.linkedIdentity === undefined
       ? { instanceUrl: "https://gitlab.com", token: "glpat-live" }
@@ -169,6 +169,22 @@ function fixture(options: {
 }
 
 describe("GitLab repository registration", () => {
+  it("sends a scoped callback and token matching the persisted credential", async () => {
+    const f = fixture();
+    f.dependencies.webhook.callbackUrl += "?deployment=test";
+    await registerRepository(f.dependencies, input());
+    const body = await f.hookRequests[0]!.json() as { url: string; token: string };
+    const callback = new URL(body.url);
+    expect(callback.searchParams.get("hook")).not.toBeNull();
+    expect(callback.searchParams.get("hook")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(callback.searchParams.get("deployment")).toBe("test");
+    expect(callback.pathname).toBe("/api/gitlab/webhooks");
+    expect(Buffer.from(body.token, "base64url")).toHaveLength(32);
+    expect(f.calls.find((call) => call.op === "createRepository")!.args).toMatchObject({
+      webhookCredential: { id: callback.searchParams.get("hook"), secret: body.token },
+    });
+  });
+
   it("installs a project hook, stores its id, and queues the initial import", async () => {
     const f = fixture();
     const result = await registerRepository(f.dependencies, input());
@@ -187,8 +203,8 @@ describe("GitLab repository registration", () => {
     expect(hookPost.headers.get("authorization")).toBe("Bearer glpat-live");
     const hookBody = JSON.parse(await hookPost.text()) as Record<string, unknown>;
     expect(hookBody).toMatchObject({
-      url: "https://overflow.example/api/gitlab/webhooks",
-      token: "s3cret",
+      url: expect.stringMatching(/^https:\/\/overflow\.example\/api\/gitlab\/webhooks\?hook=[0-9a-f-]{36}$/),
+      token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       issue_events: true,
       merge_requests_events: true,
       push_events: false,

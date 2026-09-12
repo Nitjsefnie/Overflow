@@ -51,10 +51,9 @@ Create a GitHub OAuth application and a public HTTPS webhook endpoint. Configure
 APP_URL=https://<public-host>
 GITHUB_WEBHOOK_URL=https://<public-host>/api/github/webhooks
 GITLAB_WEBHOOK_URL=https://<public-host>/api/gitlab/webhooks
-GITHUB_WEBHOOK_SECRET=<the-one-shared-webhook-secret-configured-in-both-forges>
 ```
 
-GitHub must be able to reach the webhook URL over public HTTPS. Keep the webhook secret private and set the same value in GitHub and `GITHUB_WEBHOOK_SECRET`. A GitLab registration installs its project hook against `GITLAB_WEBHOOK_URL`, carrying the same shared secret; the GitLab instance must also reach that URL over public HTTPS. The webhook endpoint rejects deliveries larger than 25 MiB with HTTP 413.
+Both forges must be able to reach their callback URLs over public HTTPS. Every registration gets an independent secret and a callback UUID in the `hook` query parameter. Secrets are encrypted with `TOKEN_ENCRYPTION_KEY`; they are never returned by the repository API. A credential authenticates only its registered provider, immutable repository/project ID, and GitLab instance. Receivers reject deliveries larger than 25 MiB with HTTP 413.
 
 ## Operating an instance: the production service
 
@@ -97,8 +96,8 @@ as issue events, regardless of the comment text, author or issue state.
 The fold's pricing, author/edit evidence rules and fifteen-minute grace are unchanged.
 
 Deploy and verify the comment-capable release before upgrading existing hooks.
-With the deployment's `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, and original
-`GITHUB_WEBHOOK_SECRET` loaded, run:
+With the deployment's `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`,
+`GITHUB_WEBHOOK_URL`, and `GITLAB_WEBHOOK_URL` loaded, run:
 
 ```bash
 pnpm webhooks:upgrade
@@ -108,11 +107,17 @@ This enumerates active registrations, decrypts each sponsor's OAuth token, and
 resolves the current public repository by its immutable GitHub ID. It updates
 the persisted hook ID at that repository's current owner/name. GitHub's
 [additive webhook update](https://docs.github.com/en/rest/repos/webhooks#update-a-repository-webhook)
-retains unrelated subscriptions; the command retains the hook's callback
-configuration and active state, and resends the original secret because GitHub
-warns that omitting it can remove it. Do not substitute a new secret or run this
-while someone is editing hook configuration. Hooks already covering all required
-events (including wildcard hooks) need no write.
+retains unrelated subscriptions and active state. The command stages an encrypted,
+independent credential, then configures its callback UUID and secret together,
+even when event subscriptions are already complete. It verifies the returned hook
+ID, callback URL, and events before marking the credential configured. Retries
+reuse pending or configured material, including after a remote timeout or queue
+failure. Avoid concurrent manual hook edits.
+
+Migration 043 must run before the scoped receivers start. Legacy hooks are rejected
+until upgraded; there is no shared-secret fallback. Run the upgrade promptly and
+complete the queued full reconciliation to recover gaps. Retire the previous
+shared credential after all registrations migrate; keep `TOKEN_ENCRYPTION_KEY`.
 
 Each JSON outcome identifies the registration by its local ID, reports
 `subscription` separately from `queue`, and names a sanitized failure stage.
@@ -148,7 +153,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
-| `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` | Public GitHub and GitLab webhook URLs and the one shared secret both forges carry |
+| `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 | `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
 

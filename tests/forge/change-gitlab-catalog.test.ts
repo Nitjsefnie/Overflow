@@ -140,7 +140,7 @@ function fixture(options: {
       throw new Error("the GitHub gateway must not be called on the GitLab path");
     } }),
     store,
-    webhook: { callbackUrl: "https://overflow.example/api/github/webhooks", secret: "s3cret" },
+    webhook: { callbackUrl: "https://overflow.example/api/github/webhooks" },
     forgeFetch: gitlabFetch,
     forgeIdentity: options.linkedIdentity === undefined
       ? { instanceUrl: "https://gitlab.com", token: "glpat-live" }

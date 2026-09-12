@@ -91,6 +91,27 @@ afterAll(async () => {
 });
 
 describe("upgrading an already-deployed database", () => {
+  it("leaves legacy webhook credentials unconfigured when upgrading from 042", async () => {
+    await onNewDatabase("scoped_webhook_upgrade", async (sql) => {
+      await runMigrations({ upTo: "042_gitlab_webhook_orphan_cleanup.sql" });
+      const sponsor = await insertAccount(sql, "scoped-webhook", "ACTIVE");
+      const repository = await insertRepository(sql, sponsor);
+      await runMigrations();
+      const [row] = await sql<{ data: Record<string, unknown> }[]>`
+        select to_jsonb(r) as data from registered_repositories r where id = ${repository.id}
+      `;
+      expect(row.data).toMatchObject({
+        id: repository.id,
+        github_repository_id: repository.row.github_repository_id,
+        github_webhook_id: repository.row.github_webhook_id,
+        active: true,
+        webhook_credential_id: null,
+        encrypted_webhook_secret: null,
+        webhook_configured_at: null,
+      });
+    });
+  });
+
   it.each([1800, 39])("reclaims an unmarked legacy lease with %s seconds left after upgrade", async (seconds) => {
     await onNewDatabase(`legacy_lease_${seconds}`, async (sql) => {
       await runMigrations({ upTo: "020_repository_reconciliation_jobs.sql" });

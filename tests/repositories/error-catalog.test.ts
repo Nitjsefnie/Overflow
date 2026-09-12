@@ -1029,7 +1029,6 @@ async function surfacedFailure(failure: RegistrationFailure): Promise<{ code: st
     },
     webhook: {
       callbackUrl: "https://overflow.example/api/github/webhooks",
-      secret: "webhook-secret-for-test",
     },
   };
   failure.raise(dependencies);

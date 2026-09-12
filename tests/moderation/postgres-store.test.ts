@@ -182,6 +182,7 @@ describe("PostgreSQL account moderation transitions", () => {
     await expect(registrationStore.getEnforcementState(targetId)).resolves.toBe("BANNED");
     await expect(
       registrationStore.createRepository({
+        webhookCredential: null,
         githubRepositoryId: nextExternalId(),
         ownerName: "example/banned-registration",
         sponsorId: targetId,
@@ -646,6 +647,7 @@ describe("PostgreSQL account moderation transitions", () => {
     `;
 
     const registration = {
+      webhookCredential: null,
       githubRepositoryId,
       ownerName: `example/registration-${githubRepositoryId}`,
       sponsorId,
