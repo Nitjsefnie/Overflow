@@ -245,7 +245,7 @@ db/*
 !db/migrations/
 db/migrations/*
 !db/migrations/*.sql
-!db/migrations/043_completed_work_credit_limits.sql
+!db/migrations/044_completed_work_credit_limits.sql
 !db/migrations/021_reconciliation_lease_duration.sql
 !db/migrations/026_incremental_reconciliation.sql
 !db/migrations/028_repository_reconciliation_cost.sql
