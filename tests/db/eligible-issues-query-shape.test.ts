@@ -18,9 +18,9 @@ import {
  * 1. EQUITY — the shipped implementation and a reference copy of the ORIGINAL
  *    correlated headroom expression agree row for row (same rows, same order)
  *    over a fixture that exercises every coalesce, exclusion and identity
- *    branch. The reference is a verbatim copy of the pre-reshape query, so
- *    this is the differencing-against-source-of-truth check: parity is proven
- *    over real data, not by re-reading the SQL.
+ *    branch. The reference retains the pre-reshape correlated calculations
+ *    with exact settled-balance ordering: parity is proven over real data,
+ *    not by re-reading the SQL.
  *
  * 2. SHAPE — EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) of the query the shipped
  *    implementation actually issues, asserting the per-sponsor aggregates
@@ -68,14 +68,15 @@ describe("eligible issues query shape against PostgreSQL", () => {
     const allBoard = await listEligibleIssues(seeded.viewerId, { claimState: "ALL" });
     // Compared as an ordered list, not a title-keyed map: a map would silently
     // mask a duplicate-titled fixture row, while the list pins board order
-    // (all rows land in the balanced tier, so reserve desc then created_at
-    // asc decides) as well as every value.
+    // (settled balance desc, then reserve desc and created_at asc) as well as
+    // every value.
     expect(allBoard.map((row) => [row.title, row.availableHeadroom])).toEqual([
       // Cascade: balance +20 from settled credits; 10 + 10 + 10 reserved
       // (the unreconciled null-id assignee DOES count) → -10, visible.
       ["cascade unreconciled ten", -10],
       ["cascade outsider ten one", -10],
       ["cascade outsider ten two", -10],
+      ["cascade open one", -10],
       // Aurora: no balances row at all (coalesce to 0); 3 + 6 reserved (the
       // self-claimed four-pointer does NOT reserve; the archived six-pointer
       // in the INACTIVE repository does) → -9. Borealis: nothing reserved,
@@ -87,19 +88,18 @@ describe("eligible issues query shape against PostgreSQL", () => {
       ["aurora self claimed four", -9],
       ["aurora claimed three", -9],
       ["borealis open two", 0],
-      ["cascade open one", -10],
     ]);
 
     const openBoard = await listEligibleIssues(seeded.viewerId);
-    // Default claim state shows only unclaimed issues, ordered by tier (all
-    // three sponsors land in the balanced tier: 0, -9 and -10 are all >= -10),
-    // then reserve desc, then created_at asc.
+    // Cascade's +20 settled balance leads despite its -10 headroom and lower
+    // reserve. Aurora and Borealis tie at zero settled balance, so reserve
+    // desc then created_at asc orders their unclaimed issues.
     expect(openBoard.map((row) => row.title)).toEqual([
+      "cascade open one",
       "aurora second eight",
       "borealis open seven",
       "aurora open five",
       "borealis open two",
-      "cascade open one",
     ]);
 
     // Exclusions hold: enforcement_state and the viewer's own repositories
@@ -175,11 +175,10 @@ describe("eligible issues query shape against PostgreSQL", () => {
 });
 
 /**
- * The reference: a verbatim copy of the eligible-issues query as it stood
- * BEFORE the reshape (correlated per-row headroom), differenced against the
- * shipped implementation over real data. Changed only where the shipped code
- * interpolates parameters ($1 viewer account, $2/$3 repository filter,
- * $4/$5 label filter, $6-$8 claim state).
+ * The reference retains the pre-reshape correlated per-row headroom and reads
+ * settled balance independently for the current ordering policy. It uses
+ * positional parameters where the shipped code interpolates values ($1 viewer
+ * account, $2/$3 repository filter, $4/$5 label filter, $6-$8 claim state).
  */
 const ORIGINAL_CORRELATED_REFERENCE = `
 select
@@ -197,6 +196,7 @@ select
   issues.opening_comparison_points,
   issues.opening_reserve_points,
   issues.claim_assignee_github_login,
+  coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0) as settled_balance,
   (
     coalesce((select balances.balance from balances where balances.account_id = sponsors.id), 0)
     - coalesce((
@@ -227,11 +227,7 @@ where issues.state = 'OPEN'
   )
 ) as ranked
 order by
-  case
-    when ranked.available_headroom > 0 then 0
-    when ranked.available_headroom >= -10 then 1
-    else 2
-  end,
+  ranked.settled_balance desc,
   ranked.opening_reserve_points desc,
   ranked.created_at asc
 `;
