@@ -155,6 +155,8 @@ describe("completed-work receiving limits against PostgreSQL", () => {
       forge_project_id = 10 where id = ${gitlabFirst.repositoryId}`;
     const lowerIssueNumber = await issue(sponsor.repositoryId, "OPEN");
     await sql`update issues set issue_number = 1 where id = ${lowerIssueNumber}`;
+    // The later GitHub repository must lose even with a lower issue number.
+    await sql`update issues set issue_number = 2 where id = ${githubLater.issueId}`;
     const ids = [sponsor.issueId, lowerIssueNumber, ...repositories.map((repository) => repository.issueId)];
     await sql`update issues set created_at = '2026-01-02' where id in ${sql(ids)}`;
     // Age precedes even the forge provider key.
