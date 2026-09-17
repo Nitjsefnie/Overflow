@@ -48,10 +48,9 @@ export function AccountDataNotice() {
           </li>
           <li>when you linked the identity and when linking or re-linking last successfully verified it</li>
           <li>
-            when Overflow last recorded a rejected background reconciliation read on the instance, if any; it
-            tries to update this time on all your GitLab identities on that instance after each such rejection,
-            even if their tokens work. This time does not identify which token was used. A successful re-link
-            clears it for the re-linked identity
+            when Overflow last recorded a rejected background reconciliation read made through this identity&apos;s
+            token, if any. Reads through other identities are not recorded here. A successful re-link clears it
+            for the re-linked identity
           </li>
         </ul>
         <p>
@@ -126,8 +125,8 @@ export function AccountDataNotice() {
             Revoking a personal access token on its GitLab instance makes Overflow&apos;s stored copy unusable at
             its next use. It does not delete the linked identity. Only rejected background reconciliation reads —
             periodic sweeps, initial imports, and webhook-triggered updates — cause Overflow to try to record or
-            update the failure time on all your GitLab identities on that instance, including repeated failures
-            and identities whose tokens work. Other rejected reads and webhook operations surface an error
+            update the failure time on the identity whose token was used for the read, including repeated failures.
+            Other rejected reads and webhook operations surface an error
             without recording a failure time; the labels lookup error tells you to re-link.
           </li>
           <li>
@@ -156,14 +155,17 @@ export function AccountDataNotice() {
           <li>
             Unlinking does not unregister repositories registered under that identity. A registration without a
             webhook can be unregistered without a token. Removing an existing webhook and background reconciliation
-            reads need the selected sponsor identity&apos;s token to have the required access. Overflow does not
-            automatically try another linked identity if that token fails, so linking another GitLab account with
-            access may not restore these operations.
+            reads need the selected sponsor identity&apos;s token to have the required access. For each operation,
+            Overflow prefers a linked identity without a recorded failure, choosing the most recently verified
+            among those identities. A rejected background reconciliation read causes Overflow to try to record
+            the failure on the identity whose token was used and fails that operation without trying another
+            identity. Later operations then prefer an identity without a recorded failure, so linking another
+            GitLab account with access restores later operations; the operation that hit the rejection still fails.
           </li>
           <li>
             To revoke a GitLab token, delete it yourself in your instance&apos;s personal access tokens settings.
             Overflow&apos;s stored copy then fails at its next use. Only a rejected background reconciliation read
-            causes Overflow to try to record the failure time on all your GitLab identities on that instance.
+            causes Overflow to try to record the failure time on the identity whose token was used.
           </li>
           <li>
             Request deletion of your account row, or an export of its stored fields, by opening an issue at{" "}
