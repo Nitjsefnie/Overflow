@@ -2,7 +2,7 @@
 
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { RedirectSignal, mocks } = vi.hoisted(() => {
   class RedirectSignal extends Error {
@@ -33,6 +33,10 @@ import ModerationPage from "@/app/moderation/page";
 import HomePage from "@/app/page";
 import SessionPage from "@/app/session/page";
 import { requireMemberPageSession } from "@/lib/dashboard/session";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 // Each entry is the module that serves that path, except "/dashboard": that one runs
 // requireMemberPageSession() in place of the page module, because all eight pages

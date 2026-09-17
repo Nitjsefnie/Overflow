@@ -1,10 +1,14 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import ModerationPage from "@/app/moderation/page";
 import { UnwritableClosureQueue } from "@/components/unwritable-closure-queue";
 import type { UnwritableClosureProjection } from "@/lib/dashboard/queries";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { sql, memberSession } = vi.hoisted(() => ({
   sql: vi.fn(),

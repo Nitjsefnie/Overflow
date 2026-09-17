@@ -2,10 +2,14 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { ApiTokenPanel } from "@/components/api-token-panel";
 import NewRepositoryPage from "@/app/repositories/new/page";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { getTokenSummary, requireMemberPageSession, redirect, refresh } = vi.hoisted(() => ({
   getTokenSummary: vi.fn(),
