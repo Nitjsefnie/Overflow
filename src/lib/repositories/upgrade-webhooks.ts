@@ -24,7 +24,7 @@ export type WebhookUpgradeDependencies = {
        * when no verified identity is linked there (production:
        * PostgresForgeIdentityStore.getForgeToken).
        */
-      getForgeToken(sponsorId: string, instanceUrl: string): Promise<string | null>;
+      getForgeToken(sponsorId: string, instanceUrl: string): Promise<{ token: string; identityId: string } | null>;
     };
   createGateway(accessToken: string, sponsorId: string): Pick<GitHubGateway, "getRepositoryById" | "configureWebhook">;
   /** Builds the GitLab gateway a GitLab registration's hook is verified through. */
@@ -133,9 +133,9 @@ async function upgradeGitLabRegistration(
 ): Promise<WebhookUpgradeOutcome> {
   outcome.failure = "CREDENTIALS_FAILED";
   if (forge.instanceUrl === null || forge.instanceUrl.length === 0) return outcome;
-  const token = await store.getForgeToken(registration.sponsorId, forge.instanceUrl);
-  if (token === null || token.length === 0) return outcome;
-  const gitlab = createGitLabGateway(forge.instanceUrl, token);
+  const forgeCredential = await store.getForgeToken(registration.sponsorId, forge.instanceUrl);
+  if (forgeCredential === null || forgeCredential.token.length === 0) return outcome;
+  const gitlab = createGitLabGateway(forge.instanceUrl, forgeCredential.token);
 
   outcome.failure = "REPOSITORY_FAILED";
   const repository = await gitlab.getRepositoryById(registration.githubRepositoryId);

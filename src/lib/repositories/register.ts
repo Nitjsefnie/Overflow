@@ -248,7 +248,7 @@ export type RepositoryRegistrationDependencies = {
    * PostgresForgeIdentityStore.getForgeToken). The GitLab unregistration's
    * forge-first hook deletion reads the sponsor's credential through it.
    */
-  getForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
+  getForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
   /** Injectable transport for the GitLab gateway; production uses global fetch. */
   forgeFetch?: typeof fetch;
 };

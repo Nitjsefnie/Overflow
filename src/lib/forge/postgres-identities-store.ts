@@ -29,26 +29,30 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
   }
 
   /**
-   * The linked instance's PAT, decrypted for gateway use — the credential the
-   * GitLab registration and reconciliation paths read with. Null when the
-   * user has no verified identity on that instance. The identity's own
-   * normalization guarantees the lookup matches the stored row.
+   * The normalized instance's decrypted PAT and supplying identity id. Prefer
+   * un-failed credentials, then the oldest failure stamp; equal failure stamps
+   * (including null) prefer the most recently verified identity. Failed-only
+   * sets still resolve; null means the user has no identity on that instance.
    */
-  public async getForgeToken(userId: string, instanceUrl: string): Promise<string | null> {
+  public async getForgeToken(userId: string, instanceUrl: string): Promise<{ token: string; identityId: string } | null> {
     const normalized = normalizeInstanceUrl(instanceUrl);
     if (this.tokenEncryptionKey === undefined || this.tokenEncryptionKey.length === 0) {
       throw new Error("Token encryption key must be configured.");
     }
-    const [row] = await this.sql<{ encrypted_token: Buffer }[]>`
-      select encrypted_token
+    const [row] = await this.sql<{ id: string; encrypted_token: Buffer }[]>`
+      select id, encrypted_token
       from user_forge_identities
       where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
+      order by token_failed_at asc nulls first, verified_at desc
       limit 1
     `;
     if (row === undefined) {
       return null;
     }
-    return decryptToken(Buffer.from(row.encrypted_token).toString("utf8"), this.tokenEncryptionKey);
+    return {
+      token: decryptToken(Buffer.from(row.encrypted_token).toString("utf8"), this.tokenEncryptionKey),
+      identityId: row.id,
+    };
   }
 
   public async listForUser(userId: string): Promise<ForgeIdentityView[]> {
@@ -69,19 +73,17 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
   }
 
   /**
-   * Marks the owner's identity on this instance as needing re-verification.
-   * The statement matches the exact normalized instance and the provider the
-   * gateway reads with, so a rejection made through one linked identity never
-   * marks another's. Rows that do not exist match nothing and the mark is
-   * silently done — the marker records a failure the fold already surfaced,
+   * Marks only the credential-supplying GitLab identity as needing re-verification.
+   * Matching both the identity id and owner means a rejection never marks
+   * another identity, even on the same instance. Missing or foreign rows match
+   * nothing and silently succeed — the marker records a failure the fold already surfaced,
    * so there is nothing to refuse here.
    */
-  public async markTokenRejected(userId: string, instanceUrl: string): Promise<void> {
-    const normalized = normalizeInstanceUrl(instanceUrl);
+  public async markTokenRejected(userId: string, identityId: string): Promise<void> {
     await this.sql`
       update user_forge_identities
       set token_failed_at = now()
-      where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
+      where id = ${identityId} and user_id = ${userId} and provider = 'gitlab'
     `;
   }
 

@@ -32,13 +32,13 @@ import { GitLabApiError } from "@/lib/gitlab/client";
 export type ReconcileAsSponsorOptions = {
   rederive?: boolean;
   /** Decrypts the linked identity's PAT for a GitLab repository's instance. */
-  resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
+  resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
   /**
    * Records a rejected credential on the linked identity (the re-link
    * signal). Best-effort: a failure here is logged and the fold's own error
    * stands — see the credential guard in `sponsorGateway`.
    */
-  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>;
+  markCredentialRejected?: (identityId: string) => Promise<void>;
 };
 
 export function reconcileRepositoryAsSponsor(
@@ -92,8 +92,8 @@ export function sponsorGateway(
   store: ReconciliationStore,
   repositoryId: string,
   createGateway: (accessToken: string, owner: string) => ReconciliationGateway,
-  resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>,
-  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>,
+  resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>,
+  markCredentialRejected?: (identityId: string) => Promise<void>,
 ): ReconciliationGateway {
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
@@ -114,8 +114,8 @@ export function sponsorGateway(
             "No forge-credential resolver is wired, so the GitLab repository cannot fold (fail-closed).",
           );
         }
-        const token = await resolveForgeToken(repository.sponsor.id, instanceUrl);
-        if (token === null) {
+        const credential = await resolveForgeToken(repository.sponsor.id, instanceUrl);
+        if (credential === null) {
           throw new Error(
             "No verified GitLab identity is linked for this repository's instance, so the reconciliation failed closed.",
           );
@@ -124,12 +124,12 @@ export function sponsorGateway(
           resolveGateway({
             provider: "gitlab",
             instanceUrl,
-            github: { accessToken: token },
-            gitlab: { instanceUrl, token },
+            github: { accessToken: credential.token },
+            gitlab: { instanceUrl, token: credential.token },
           }) as ReconciliationGateway,
           repository.sponsor.id,
           instanceUrl,
-          markCredentialRejected,
+          markCredentialRejected === undefined ? undefined : () => markCredentialRejected(credential.identityId),
         );
       }
       const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
@@ -169,7 +169,7 @@ function guardGitLabCredential(
   gateway: ReconciliationGateway,
   userId: string,
   instanceUrl: string,
-  markCredentialRejected?: (userId: string, instanceUrl: string) => Promise<void>,
+  markCredentialRejected?: () => Promise<void>,
 ): ReconciliationGateway {
   const guarded = async <T>(read: () => Promise<T>): Promise<T> => {
     try {
@@ -180,7 +180,7 @@ function guardGitLabCredential(
       }
       if (markCredentialRejected !== undefined) {
         try {
-          await markCredentialRejected(userId, instanceUrl);
+          await markCredentialRejected();
         } catch (markError) {
           console.error(
             `Marking the rejected GitLab credential failed for user ${userId} on ${instanceUrl}.`,

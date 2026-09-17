@@ -35,8 +35,8 @@ export async function registerNodejs(): Promise<void> {
   // exercise this exact wiring against fakes).
   const resolveForgeToken = (userId: string, instanceUrl: string) =>
     new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
-  const markCredentialRejected = (userId: string, instanceUrl: string) =>
-    new PostgresForgeIdentityStore(getSql()).markTokenRejected(userId, instanceUrl);
+  const markCredentialRejected = (userId: string, identityId: string) =>
+    new PostgresForgeIdentityStore(getSql()).markTokenRejected(userId, identityId);
 
   startReconciliationWorker({
     drain: async () => {
@@ -50,7 +50,12 @@ export async function registerNodejs(): Promise<void> {
           reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
             ...options,
             resolveForgeToken,
-            markCredentialRejected,
+            markCredentialRejected: async (identityId) => {
+              const repository = await store.getRepository(repositoryId);
+              if (repository !== null) {
+                await markCredentialRejected(repository.sponsor.id, identityId);
+              }
+            },
           }),
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of

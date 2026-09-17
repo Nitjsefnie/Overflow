@@ -452,7 +452,7 @@ describe("GET /api/repositories/labels (GitLab)", () => {
     delete process.env.TOKEN_ENCRYPTION_KEY;
     try {
       stubGitLabGatewayLabels(["bug"]);
-      getForgeToken.mockResolvedValue("gitlab-pat");
+      getForgeToken.mockResolvedValue({ token: "gitlab-pat", identityId: "identity-1" });
 
       const response = await labelsRoute.GET(gitlabLabelsRequest());
       const body = await response.json();
@@ -548,7 +548,7 @@ function gitlabLabelsRequest(project = "group/proj"): Request {
 
 function stubLinkedIdentity(token = "gitlab-pat"): void {
   vi.stubEnv("TOKEN_ENCRYPTION_KEY", "token-encryption-key");
-  getForgeToken.mockResolvedValue(token);
+  getForgeToken.mockResolvedValue({ token, identityId: "identity-1" });
 }
 
 function stubGitLabGatewayLabels(labels: string[]): void {

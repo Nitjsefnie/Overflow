@@ -1259,7 +1259,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
       existing: registeredGitLabRepository(),
       storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
       gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
-      getForgeToken: async () => "glpat-live",
+      getForgeToken: async () => ({ token: "glpat-live", identityId: "identity-1" }),
       forgeFetch: async (input, init) => {
         const request = new Request(input, init);
         gitlabRequests.push(request);
@@ -1292,7 +1292,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
       existing: registeredGitLabRepository(),
       storeUnregisterOutcome: { kind: "UNREGISTERED", repository: registeredGitLabRepository() },
       gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
-      getForgeToken: async () => "glpat-live",
+      getForgeToken: async () => ({ token: "glpat-live", identityId: "identity-1" }),
       forgeFetch: async () => new Response(null, { status: 404 }),
     });
 
@@ -1332,7 +1332,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
     const harness = createHarness({
       existing: registeredGitLabRepository(),
       gitlabWebhookTarget: { sponsorId: "moderator-id", githubWebhookId: 9001, instanceUrl },
-      getForgeToken: async () => "glpat-live",
+      getForgeToken: async () => ({ token: "glpat-live", identityId: "identity-1" }),
       forgeFetch: async () => new Response("refused", { status: 403 }),
     });
 
@@ -1841,7 +1841,7 @@ type HarnessOptions = {
   /** The stored instance URL of the GitLab fixture row (default: the fixture instance). */
   gitlabInstanceUrl?: string | null;
   /** The sponsor's forge-identity token lookup, handed to the unregistration wiring. */
-  getForgeToken?: (userId: string, instanceUrl: string) => Promise<string | null>;
+  getForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
   /** Injectable transport for the drain's GitLab gateway. */
   forgeFetch?: typeof fetch;
   /** The rejection the fake cleanup-record write raises (after recording the call). */

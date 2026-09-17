@@ -43,7 +43,7 @@ function fixture(options: { provider?: string; instanceUrl?: string | null } = {
       getGitHubAccessToken: async (sponsorId) => { credentials.push(sponsorId); return `token-${sponsorId}`; },
       getForgeToken: async (sponsorId, instanceUrl) => {
         forgeCredentials.push(`${sponsorId}@${instanceUrl}`);
-        return `glpat-${sponsorId}`;
+        return { token: `glpat-${sponsorId}`, identityId: "identity-1" };
       },
       requestRepositoryRederivation: async (repositoryId) => { queued.push({ repositoryId, reason: "REDERIVATION" }); },
     },

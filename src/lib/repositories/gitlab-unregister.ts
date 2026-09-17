@@ -37,7 +37,7 @@ export type GitLabWebhookUnregistrationStore = {
     instanceUrl: string | null;
   } | null>;
   /** The sponsor's decrypted GitLab PAT for a normalized instance, or null. */
-  getForgeToken(userId: string, instanceUrl: string): Promise<string | null>;
+  getForgeToken(userId: string, instanceUrl: string): Promise<{ token: string; identityId: string } | null>;
 };
 
 export type GitLabWebhookUnregistrationDependencies = {
@@ -82,8 +82,8 @@ export async function deleteGitLabWebhookForUnregistration(
     );
   }
 
-  const token = await dependencies.store.getForgeToken(input.sponsorId, target.instanceUrl);
-  if (token === null || token.length === 0) {
+  const credential = await dependencies.store.getForgeToken(input.sponsorId, target.instanceUrl);
+  if (credential === null || credential.token.length === 0) {
     throw new RepositoryRegistrationError(
       "GITHUB_CREDENTIALS",
       "A verified GitLab identity linked to this instance is required to unregister a GitLab repository. "
@@ -98,7 +98,7 @@ export async function deleteGitLabWebhookForUnregistration(
       "The GitLab registration's stored path is not a path with namespace, so its project hook cannot be addressed.",
     );
   }
-  const gateway = dependencies.createGateway(target.instanceUrl, token);
+  const gateway = dependencies.createGateway(target.instanceUrl, credential.token);
   try {
     await gateway.deleteWebhook(reference, target.githubWebhookId);
     return { kind: "DELETED" };
