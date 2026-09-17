@@ -226,6 +226,33 @@ describe("GitLab collection pagination", () => {
     return { client, requests };
   }
 
+  it("reads catalog labels beyond the first 100 labels and stops after page two", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ name: `label-${index}` }));
+    const { client, requests } = collectionClient(`${projectPath}/labels`, (request) =>
+      new URL(request.url).searchParams.get("page") === "2"
+        ? json([{ name: "settled: 10" }])
+        : json(firstPage, { "x-next-page": "2" }), 2);
+
+    const labels = await client.listRepositoryLabels(repository);
+
+    expect.soft(labels.size).toBe(101);
+    expect.soft(labels.has("settled: 10")).toBe(true);
+    expect.soft(requests).toHaveLength(2);
+    expect(labels).toEqual(new Set([...firstPage.map((label) => label.name), "settled: 10"]));
+  });
+
+  it("stops after 100 labels when x-next-page is empty", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ name: `label-${index}` }));
+    const { client, requests } = collectionClient(`${projectPath}/labels`, () =>
+      json(firstPage, { "x-next-page": "" }), 1);
+
+    const labels = await client.listRepositoryLabels(repository);
+
+    expect(labels.size).toBe(100);
+    expect(labels).toEqual(new Set(firstPage.map((label) => label.name)));
+    expect(requests).toHaveLength(1);
+  });
+
   it("follows the next Link relation and preserves opaque parameters", async () => {
     const next = `${issuesUrl}?pagination=keyset&order_by=created_at&sort=asc&per_page=100&created_at=opaque%2Bvalue&id_after=42&cursor=a%2Fb%3D`;
     const { client, requests } = collectionClient(`${projectPath}/issues`, (_, hit) => hit === 1
