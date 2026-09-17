@@ -119,9 +119,9 @@ stored. A project hook is installed with its own independently generated secret
 and a callback UUID bound to that project and instance. Deliveries arrive at the
 GitLab receiver configured under `GITLAB_WEBHOOK_URL`; credential material is
 encrypted at rest and omitted from API responses. The initial import is queued
-exactly as for a GitHub registration. The catalog labels must already exist on
-the project; the *Register a repository* form has no GitLab path, and neither
-has `PATCH`.
+exactly as for a GitHub registration. The *Register a repository* form takes
+GitLab submissions, and `PATCH` accepts the same body. The catalog labels must
+already exist on the project.
 
 The body takes the catalog fields above plus these. Extra fields are still
 rejected.
