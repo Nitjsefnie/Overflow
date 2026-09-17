@@ -174,6 +174,21 @@ describe("module size ratchet", () => {
     expect(countLines("")).toBe(0);
   });
 
+  it.each([
+    ["Unicode", "src/lib/é-mutant.ts"],
+    ["newline", "src/lib/newline\nmutant.ts"],
+  ])("reports over for a tracked %s filename end to end", (_label, path) => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
+    git("init", "-q");
+    git("config", "core.quotePath", "true");
+    filesWithLines({ [path]: 900 });
+    git("add", "--", path);
+
+    expect(runCheck(root, document())).toMatchObject([
+      { kind: "over", path },
+    ]);
+  });
+
   it("checks tracked files end to end, including growth and unstaged deletion", () => {
     const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
     git("init", "-q");
