@@ -48,8 +48,10 @@ export function AccountDataNotice() {
           </li>
           <li>when you linked the identity and when linking or re-linking last successfully verified it</li>
           <li>
-            when Overflow last recorded a rejected periodic reconciliation read using the token, if any; it tries
-            to update this time on each such rejection, and a successful re-link clears it
+            when Overflow last recorded a rejected background reconciliation read on the instance, if any; it
+            tries to update this time on all your GitLab identities on that instance after each such rejection,
+            even if their tokens work. This time does not identify which token was used. A successful re-link
+            clears it for the re-linked identity
           </li>
         </ul>
         <p>
@@ -76,10 +78,17 @@ export function AccountDataNotice() {
         <p>
           For GitLab repositories, Overflow decrypts the stored personal access token for each use. Reads during
           registration and the labels lookup when you submit a GitLab repository path use your own linked identity
-          for that instance. Creating and removing webhooks during registration and unregistration, and unattended
-          periodic reconciliation sweeps, use the token of the account that registered the repository — its
-          sponsor. Any of that account&apos;s linked identities on the instance with the needed access can supply
-          the token. The token is never displayed or included in any response from Overflow.
+          for that instance. Creating and removing webhooks during registration and unregistration, and background
+          reconciliation reads — periodic sweeps, initial imports, and webhook-triggered updates — use the token
+          of the account that registered the repository — its sponsor. Overflow selects one linked identity
+          belonging to the relevant account on that instance, without checking its access or guaranteeing which
+          identity is chosen. It does not automatically try the others if that token fails. Keeping a second,
+          working identity linked does not guarantee reconciliation keeps working. The token is never displayed
+          or included in any response from Overflow.
+        </p>
+        <p>
+          Linking claims your eligible past unclaimed GitLab settlements. Ongoing reconciliation credits GitLab
+          contributions to your Overflow account through your linked numeric GitLab user id.
         </p>
       </section>
 
@@ -93,8 +102,8 @@ export function AccountDataNotice() {
         <p>
           Your linked GitLab identities are shown only to you in your dashboard&apos;s forge-identities panel,
           which displays each identity&apos;s instance URL, login, and last-verified date, and warns of a recorded
-          rejected reconciliation read. Other members and moderators still see only your GitHub login. The stored
-          GitLab token is displayed to no one.
+          rejected background reconciliation read. Other members and moderators still see only your GitHub login.
+          The stored GitLab token is displayed to no one.
         </p>
       </section>
 
@@ -115,10 +124,11 @@ export function AccountDataNotice() {
           <li>Your linked GitLab identities persist while your account exists; nothing expires automatically.</li>
           <li>
             Revoking a personal access token on its GitLab instance makes Overflow&apos;s stored copy unusable at
-            its next use. It does not delete the linked identity. Only rejected periodic reconciliation reads
-            cause Overflow to try to record or update the failure time, including repeated failures. Other
-            rejected reads and webhook operations surface an error without recording a failure time; the labels
-            lookup error tells you to re-link.
+            its next use. It does not delete the linked identity. Only rejected background reconciliation reads —
+            periodic sweeps, initial imports, and webhook-triggered updates — cause Overflow to try to record or
+            update the failure time on all your GitLab identities on that instance, including repeated failures
+            and identities whose tokens work. Other rejected reads and webhook operations surface an error
+            without recording a failure time; the labels lookup error tells you to re-link.
           </li>
           <li>
             Re-linking refreshes the stored token, updates the last successful verification time, and clears the
@@ -145,14 +155,15 @@ export function AccountDataNotice() {
           </li>
           <li>
             Unlinking does not unregister repositories registered under that identity. A registration without a
-            webhook can be unregistered without a token. Removing an existing webhook and reconciliation reads
-            need a token from any of the sponsor&apos;s linked identities on that instance with the needed access.
-            If none remains, those operations fail until the sponsor links or re-links a suitable identity.
+            webhook can be unregistered without a token. Removing an existing webhook and background reconciliation
+            reads need the selected sponsor identity&apos;s token to have the required access. Overflow does not
+            automatically try another linked identity if that token fails, so linking another GitLab account with
+            access may not restore these operations.
           </li>
           <li>
             To revoke a GitLab token, delete it yourself in your instance&apos;s personal access tokens settings.
-            Overflow&apos;s stored copy then fails at its next use. Only a rejected periodic reconciliation read
-            causes Overflow to try to record the failure time.
+            Overflow&apos;s stored copy then fails at its next use. Only a rejected background reconciliation read
+            causes Overflow to try to record the failure time on all your GitLab identities on that instance.
           </li>
           <li>
             Request deletion of your account row, or an export of its stored fields, by opening an issue at{" "}
