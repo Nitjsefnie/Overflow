@@ -243,8 +243,9 @@ describe("GitLab collection pagination", () => {
 
   it("stops after 100 labels when x-next-page is empty", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ name: `label-${index}` }));
-    const { client, requests } = collectionClient(`${projectPath}/labels`, () =>
-      json(firstPage, { "x-next-page": "" }), 1);
+    const { client, requests } = collectionClient(`${projectPath}/labels`, (_, hit) => hit === 1
+      ? json(firstPage, { "x-next-page": "" })
+      : json([]), 2);
 
     const labels = await client.listRepositoryLabels(repository);
 
