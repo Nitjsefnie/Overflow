@@ -104,6 +104,51 @@ describe("image provenance (issue 461)", () => {
 // image carries. The build is slow, so this test owns a long timeout.
 describe("built image", () => {
   it(
+    "ships a non-empty project LICENSE at /app/LICENSE",
+    { timeout: 1_200_000 },
+    () => {
+      const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+      const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      }).trim();
+      execFileSync(
+        "docker",
+        [
+          "build",
+          "--build-arg",
+          `SOURCE_SHA=${sourceSha}`,
+          "-t",
+          "overflow-576-license",
+          ".",
+        ],
+        {
+          cwd: repoRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      // Check the image's file without starting the app or its migrations;
+      // --rm cleans up the container even when the license check fails.
+      expect(
+        () => execFileSync(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--entrypoint",
+            "test",
+            "overflow-576-license",
+            "-s",
+            "/app/LICENSE",
+          ],
+          { stdio: ["ignore", "pipe", "pipe"] },
+        ),
+        "the built image's /app/LICENSE must exist and be non-empty",
+      ).not.toThrow();
+    },
+  );
+
+  it(
     "selects a non-root runtime user",
     { timeout: 1_200_000 },
     () => {

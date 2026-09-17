@@ -51,6 +51,7 @@ COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/db ./db
 COPY --from=build /app/src/lib/db ./src/lib/db
 COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
+COPY --from=build /app/LICENSE ./LICENSE
 # The base image's built-in non-root account: the migration step and the server
 # share it (see deploy/container.md, "Decisions").
 USER node
