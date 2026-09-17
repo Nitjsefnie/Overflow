@@ -2,10 +2,14 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
 import { ForgeIdentitiesPanel } from "@/components/forge-identities-panel";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 

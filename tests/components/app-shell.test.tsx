@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   signOutAction: vi.fn(),
@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth/sign-out-action", () => ({ signOutAction: mocks.signOutAction }));
 
 import { AppShell } from "@/components/app-shell";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 describe("application shell sign-out", () => {
   afterEach(() => {

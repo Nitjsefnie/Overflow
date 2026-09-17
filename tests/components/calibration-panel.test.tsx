@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import CalibrationProofPage from "@/app/calibration/[id]/page";
 import CalibrationPage from "@/app/calibration/page";
 import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
@@ -10,6 +10,10 @@ import type { RepositoryCalibrationEntry } from "@/lib/calibration/statistics";
 import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { redirect, refresh, sql } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn(), sql: vi.fn() }));
 
