@@ -14,6 +14,10 @@ import {
 } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 
+// Rebind the runner to this file's filesystem and database mocks.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
+
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationsDirectory = path.join(repositoryRoot, "db/migrations");
 
