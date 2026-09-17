@@ -2,9 +2,13 @@ import { webhookCredential } from "../support/webhook-credential";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as database from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createGitLabWebhookPostHandler, POST } from "@/app/api/gitlab/webhooks/route";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
+
+// The route and the spies must share the same persistence module instances.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 /**
  * The GitLab receiver mirrors the GitHub receiver's contract: 503 when no

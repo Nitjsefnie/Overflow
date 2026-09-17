@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { ReconciliationDependencies, ReconciliationRepository } from "@/lib/fold/reconcile";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
@@ -71,6 +71,9 @@ vi.mock("@/lib/fold/postgres-store", () => ({
 }));
 
 beforeEach(() => {
+  // register() must import this file's worker/sweep doubles, never a cached
+  // consumer that captured another file's mocks or real background schedulers.
+  vi.resetModules();
   enqueued.length = 0;
   startSweep.mockReset();
   startWorker.mockReset();
@@ -87,6 +90,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation", () => {
   it("starts the worker and the sweep, and sweeps under the sweep's own reason", async () => {

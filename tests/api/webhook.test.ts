@@ -5,9 +5,13 @@ import type { SqlClient } from "@/lib/db/types";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler, POST } from "@/app/api/github/webhooks/route";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
+
+// The route and the spies must share the same persistence module instances.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const secret = "webhook-secret";
 const rawPayload = JSON.stringify({
