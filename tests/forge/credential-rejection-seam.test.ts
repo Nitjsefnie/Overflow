@@ -50,7 +50,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
 
   function gatewayFor(
     repository: ReconciliationRepository,
-    markCredentialRejected: (userId: string, instanceUrl: string) => Promise<void>,
+    markCredentialRejected: (identityId: string) => Promise<void>,
   ): ReconciliationGateway {
     return sponsorGateway(
       storeFor(repository),
@@ -58,7 +58,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
       () => {
         throw new Error("the GitHub factory must not run for a GitLab fold");
       },
-      async () => "glpat-linked-identity-token",
+      async () => ({ token: "glpat-linked-identity-token", identityId: "identity-1" }),
       markCredentialRejected,
     );
   }
@@ -76,7 +76,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
 
     expect(error).toBeInstanceOf(ForgeCredentialRejectedError);
     expect((error as Error).message).not.toContain("pat-abc123");
-    expect(mark).toHaveBeenCalledExactlyOnceWith("sponsor-1", INSTANCE);
+    expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
   });
 
   it("marks the identity and rethrows the typed error on a 403 read", async () => {
@@ -88,7 +88,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
 
     expect(error).toBeInstanceOf(ForgeCredentialRejectedError);
     expect((error as Error).message).not.toContain("scope reduced");
-    expect(mark).toHaveBeenCalledExactlyOnceWith("sponsor-1", INSTANCE);
+    expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
   });
 
   it.each([
@@ -147,7 +147,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
         },
         getPullRequestDiff: async () => "",
       }),
-      async () => "unused",
+      async () => ({ token: "unused", identityId: "unused-identity" }),
       mark,
     );
 
@@ -167,11 +167,29 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
 
     const error = await gateway.getPullRequestDiff(...DIFF_REQUEST).then(() => null, (caught: unknown) => caught);
 
-    expect(mark).toHaveBeenCalledExactlyOnceWith("sponsor-1", INSTANCE);
+    expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
     expect(error).toBeInstanceOf(GitLabApiError);
     expect((error as GitLabApiError).status).toBe(401);
     expect(error).not.toBeInstanceOf(ForgeCredentialRejectedError);
     expect((error as Error).message).not.toContain("marker store is down");
+  });
+
+  it("keeps the supplied identity after rejection without retrying or re-resolving", async () => {
+    const transport = vi.fn(async () => new Response("denied", { status: 401 }));
+    vi.stubGlobal("fetch", transport);
+    const resolve = vi.fn(async () => ({ token: "token-a", identityId: "identity-a" }));
+    const mark = vi.fn(async () => {});
+    const gateway = sponsorGateway(storeFor(repositoryRow()), "repo-1", () => {
+      throw new Error("GitHub factory must not run");
+    }, resolve, mark);
+
+    await expect(gateway.getPullRequestDiff(...DIFF_REQUEST)).rejects.toBeInstanceOf(ForgeCredentialRejectedError);
+    expect(transport).toHaveBeenCalledTimes(1);
+    resolve.mockResolvedValue({ token: "token-b", identityId: "identity-b" });
+    await expect(gateway.getPullRequestDiff(...DIFF_REQUEST)).rejects.toBeInstanceOf(ForgeCredentialRejectedError);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith("sponsor-1", INSTANCE);
+    expect(mark.mock.calls).toEqual([["identity-a"], ["identity-a"]]);
+    expect(transport).toHaveBeenCalledTimes(2);
   });
 
   it("passes a healthy read through untouched", async () => {

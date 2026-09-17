@@ -58,12 +58,12 @@ export function normalizeInstanceUrl(value: string): string {
 export interface ForgeIdentityStore {
   listForUser(userId: string): Promise<ForgeIdentityView[]>;
   /**
-   * Records that a read made through the user's identity on this instance was
+   * Records that a read made through the user's specified GitLab identity was
    * rejected as an authentication or scope failure. Best-effort at the caller:
    * the identity stays readable either way, and the fold's own failure path
    * still runs. Repeated failures re-stamp the marker.
    */
-  markTokenRejected(userId: string, instanceUrl: string): Promise<void>;
+  markTokenRejected(userId: string, identityId: string): Promise<void>;
   upsertIdentity(input: {
     userId: string;
     provider: string;

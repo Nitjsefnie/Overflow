@@ -31,7 +31,7 @@ function fixture(options: {
         ? { sponsorId: "sponsor-1", githubWebhookId: 9001, instanceUrl: "https://gitlab.example.com" }
         : options.target,
     ),
-    getForgeToken: vi.fn().mockResolvedValue(options.token !== undefined ? options.token : "glpat-live"),
+    getForgeToken: vi.fn().mockResolvedValue(options.token === null ? null : { token: options.token ?? "glpat-live", identityId: "identity-1" }),
   };
   const dependencies: GitLabWebhookUnregistrationDependencies = {
     store,

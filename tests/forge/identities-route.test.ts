@@ -39,8 +39,8 @@ function fixture(options: {
       calls.push({ op: "listForUser", args: { userId } });
       return options.list ?? [];
     },
-    async markTokenRejected(userId, instanceUrl) {
-      calls.push({ op: "markTokenRejected", args: { userId, instanceUrl } });
+    async markTokenRejected(userId, identityId) {
+      calls.push({ op: "markTokenRejected", args: { userId, identityId } });
     },
     async upsertIdentity(input) {
       calls.push({ op: "upsertIdentity", args: input });

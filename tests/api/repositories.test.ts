@@ -710,7 +710,7 @@ function productionGitLabWiring() {
   vi.stubEnv("GITLAB_WEBHOOK_URL", gitlabWebhookUrl);
   vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
   const getForgeToken = vi.spyOn(PostgresForgeIdentityStore.prototype, "getForgeToken")
-    .mockResolvedValue("glpat-production-wire");
+    .mockResolvedValue({ token: "glpat-production-wire", identityId: "identity-1" });
   const requests: Request[] = [];
   return { getForgeToken, requests };
 }

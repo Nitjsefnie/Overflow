@@ -195,16 +195,16 @@ async function gitlabLabelsResponse(
     );
   }
 
-  let pat: string | null;
+  let credential: { token: string; identityId: string } | null;
   try {
-    pat = await new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey).getForgeToken(userId, instanceUrl);
+    credential = await new PostgresForgeIdentityStore(getSql(), tokenEncryptionKey).getForgeToken(userId, instanceUrl);
   } catch {
     // The identity read is this arm's store read; a failure of it is an
     // upstream problem of the GitLab arm and must not answer with the
     // GitHub-worded 502 the outer catch fall-through would give it.
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to read the repository labels on GitLab.");
   }
-  if (pat === null) {
+  if (credential === null) {
     return errorResponse(
       404,
       "NOT_FOUND",
@@ -212,7 +212,7 @@ async function gitlabLabelsResponse(
     );
   }
 
-  const gateway = new GitLabGateway({ instanceUrl, token: pat });
+  const gateway = new GitLabGateway({ instanceUrl, token: credential.token });
   try {
     let labels: Set<string>;
     if ("id" in project) {
