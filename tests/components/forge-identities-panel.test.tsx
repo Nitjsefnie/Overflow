@@ -50,6 +50,94 @@ afterEach(() => {
 
 describe("Forge identities panel", () => {
   it.each([
+    ["returns non-2xx", () => Promise.resolve(Response.json({ error: { message: "Unavailable" } }, { status: 503 }))],
+    ["rejects", () => Promise.reject(new TypeError("Failed to fetch"))],
+    ["returns malformed JSON", () => Promise.resolve(new Response("{"))],
+  ])("offers retry when the initial list request %s and renders a successful retry", async (_failure, listResponse) => {
+    fetchMock
+      .mockImplementationOnce(listResponse)
+      .mockResolvedValueOnce(Response.json({ identities: [existingIdentity] }));
+    render(<ForgeIdentitiesPanel />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not.*load.*try again/i);
+    expect(screen.queryByText("Loading linked identities…")).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toBeVisible();
+    fireEvent.click(retry);
+
+    expect(await screen.findByRole("list")).toHaveTextContent("ada");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading linked identities…")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls).toEqual([
+      ["/api/forge-identities", { credentials: "same-origin" }],
+      ["/api/forge-identities", { credentials: "same-origin" }],
+    ]);
+  });
+
+  it("shows loading during retry, prevents duplicate requests, and allows retry after another failure", async () => {
+    let resolveList!: (response: Response) => void;
+    const listResponse = new Promise<Response>((resolve) => { resolveList = resolve; });
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockReturnValueOnce(listResponse)
+      .mockResolvedValueOnce(Response.json({ identities: [] }));
+    render(<ForgeIdentitiesPanel />);
+    expect(screen.getByText("Loading linked identities…")).toBeInTheDocument();
+    await screen.findByRole("alert");
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+
+    expect(screen.getByText("Loading linked identities…")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolveList(Response.json({ error: { message: "Unavailable" } }, { status: 503 }));
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not.*load.*try again/i);
+    expect(screen.queryByText("Loading linked identities…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText(/no forge identity is linked/i)).toHaveClass("empty-copy");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["success", "failure"])("settles an in-flight retry after unmount without console output on %s", async (outcome) => {
+    let resolveList!: (response: Response) => void;
+    let rejectList!: (error: Error) => void;
+    const listResponse = new Promise<Response>((resolve, reject) => {
+      resolveList = resolve;
+      rejectList = reject;
+    });
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockReturnValueOnce(listResponse);
+    const { unmount } = render(<ForgeIdentitiesPanel />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByText("Loading linked identities…")).toBeInTheDocument();
+    unmount();
+
+    await act(async () => {
+      if (outcome === "success") {
+        resolveList(Response.json({ identities: [existingIdentity] }));
+      } else {
+        rejectList(new TypeError("Failed to fetch"));
+      }
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expectNoConsoleOutput();
+  });
+
+  it.each([
     ["rejects", () => Promise.reject(new TypeError("Failed to fetch"))],
     ["returns non-2xx", () => Promise.resolve(Response.json({ error: { message: "Unavailable" } }, { status: 503 }))],
     ["returns malformed JSON", () => Promise.resolve(new Response("{"))],
