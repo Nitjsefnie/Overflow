@@ -111,22 +111,14 @@ describe("the backup and restore procedure", () => {
     writeFileSync(keptFile, "keep");
     utimesSync(keptFile, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
 
-    const result = (() => {
-      // A caller's umask cannot be relied on: under a default 022 the dump
-      // would land world-readable, and the archive carries the database's
-      // contents. Force the hostile umask so the assertion below proves the
-      // script constrains the file's mode itself.
-      const callerUmask = process.umask(0o022);
-      try {
-        return runScript(
-          backupScript,
-          ["--output-dir", backupDir, "--retention-days", "14"],
-          scriptEnv(),
-        );
-      } finally {
-        process.umask(callerUmask);
-      }
-    })();
+    // Force a hostile umask in the child: workers cannot change process.umask,
+    // and the test must not change the permissions policy of other test files.
+    // The archive carries database contents, so the script must constrain its
+    // mode even when the caller would otherwise create world-readable files.
+    const result = spawnSync("sh", [
+      "-c", 'umask 022; exec sh "$@"', "backup-with-hostile-umask",
+      backupScript, "--output-dir", backupDir, "--retention-days", "14",
+    ], { env: scriptEnv(), encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
     dumpPath = printedDumpPath(result.stdout);
