@@ -480,10 +480,10 @@ export class GitLabGateway {
   public async listRepositoryLabels(repository: GitHubRepositoryReference): Promise<Set<string>> {
     let labels: Set<string>;
     try {
-      const response = await this.request(
-        `/projects/${segment(`${repository.owner}/${repository.name}`)}/labels?per_page=100`,
+      const payload = await this.listAllPages<{ name: string }>(
+        `/projects/${segment(`${repository.owner}/${repository.name}`)}/labels`,
+        "offset",
       );
-      const payload = await responseJson<Array<{ name: string }>>(response);
       labels = new Set(payload.filter((label) => typeof label.name === "string").map((label) => label.name));
     } catch (error) {
       if (!(error instanceof GitLabApiError) || (error.status !== 401 && error.status !== 403)) {
