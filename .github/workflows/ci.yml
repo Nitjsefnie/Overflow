@@ -75,6 +75,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Module size ceilings
+        run: node scripts/check-module-size.ts
+
       - name: Typecheck
         run: pnpm typecheck
 

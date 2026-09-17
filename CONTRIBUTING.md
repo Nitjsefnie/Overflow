@@ -307,6 +307,20 @@ Give the panel its own class next to `.surface` and put the spacing there.
 `padding: clamp(...)`, and the measure and rhythm of the headings and paragraphs
 inside it.
 
+### Module size is ratcheted
+
+`node scripts/check-module-size.ts` enforces per-tree line ceilings — 800
+lines for `src/`, 2500 for `tests/` — against the committed baseline in
+`scripts/module-size.json`. The check fails when a baseline file grows past
+its recorded count, when an unlisted file crosses its ceiling, when a
+baseline file is deleted, or when a baseline file shrinks below the ceiling
+and its entry has not been dropped. Run
+`node scripts/check-module-size.ts --tighten` to record shrinkage: it
+lowers counts and drops graduated or deleted entries, and it never writes an
+increase. There are exactly two remedies for an over-ceiling file: shrink
+it, or relocate code into a new module. Recorded counts are never raised by
+hand and entries are never added by hand.
+
 ## Pull-request admission
 
 Use [the pull-request template](.github/PULL_REQUEST_TEMPLATE.md), keeping its
