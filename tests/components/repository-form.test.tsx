@@ -982,10 +982,13 @@ describe("repository form forge selection", () => {
     expect(url).toBe("/api/repositories");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
-    expect(JSON.parse(String(init.body))).toEqual({
+    const body = JSON.parse(String(init.body));
+    expect(body.repositoryUrl).toBe("group/proj");
+    expect(body).toEqual({
       provider: "gitlab",
       instanceUrl: "https://gitlab.example",
       project: "group/proj",
+      repositoryUrl: "group/proj",
       openingName: "Opening catalog",
       actualName: "Result catalog",
       openingLabels: [

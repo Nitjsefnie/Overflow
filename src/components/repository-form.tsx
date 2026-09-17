@@ -333,6 +333,7 @@ export function RepositoryForm({
             provider: "gitlab",
             instanceUrl,
             project: project.trim(),
+            repositoryUrl: project.trim(),
             ...toCatalogInput(values),
           }
         : toRegistrationInput(values);
