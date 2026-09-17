@@ -1,0 +1,17 @@
+{
+  "ceilings": {
+    "src": 800,
+    "tests": 2500
+  },
+  "module_size_baseline": {
+    "src/components/repository-form.tsx": 836,
+    "src/lib/dashboard/queries.ts": 1736,
+    "src/lib/fold/postgres-store.ts": 2792,
+    "src/lib/fold/repository-fold.ts": 1479,
+    "src/lib/github/client.ts": 1518,
+    "src/lib/moderation/credit-adjustment-store.ts": 946,
+    "src/lib/repositories/register.ts": 2046,
+    "tests/db/schema.test.ts": 5126,
+    "tests/github/graphql.test.ts": 3018
+  }
+}
