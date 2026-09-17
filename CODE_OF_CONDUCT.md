@@ -59,7 +59,7 @@ upheld. These do:
 ## Reporting
 
 Report conduct problems by opening an issue on this repository's public
-tracker: <https://github.com/Nitjsefni/Overflow/issues>.
+tracker: <https://github.com/Nitjsefnie/Overflow/issues>.
 
 That is the only route, on purpose: it is the only one that verifiably
 reaches the maintainer and the only one any stranger can use. There is no
