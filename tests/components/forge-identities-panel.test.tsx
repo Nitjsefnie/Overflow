@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -106,6 +107,35 @@ describe("Forge identities panel", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores a cancelled initial request failure while the replacement request is pending", async () => {
+    let rejectStale!: (error: Error) => void;
+    let resolveReplacement!: (response: Response) => void;
+    const staleResponse = new Promise<Response>((_resolve, reject) => { rejectStale = reject; });
+    const replacementResponse = new Promise<Response>((resolve) => { resolveReplacement = resolve; });
+    fetchMock
+      .mockReturnValueOnce(staleResponse)
+      .mockReturnValueOnce(replacementResponse);
+    render(<StrictMode><ForgeIdentitiesPanel /></StrictMode>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      rejectStale(new TypeError("Failed to fetch"));
+    });
+
+    try {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByText("Loading linked identities…")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        resolveReplacement(Response.json({ identities: [existingIdentity] }));
+      });
+    }
+
+    expect(screen.getByRole("list")).toHaveTextContent("ada");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each(["success", "failure"])("settles an in-flight retry after unmount without console output on %s", async (outcome) => {
