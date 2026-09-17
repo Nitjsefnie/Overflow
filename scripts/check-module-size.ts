@@ -129,14 +129,14 @@ export function applyTighten(
 }
 
 export function trackedModules(root: string): string[] {
-  const res = spawnSync("git", ["ls-files", "src", "tests"], {
+  const res = spawnSync("git", ["ls-files", "-z", "src", "tests"], {
     cwd: root,
     encoding: "utf8",
   });
   if (res.status !== 0) {
     throw new Error(`git ls-files failed: ${res.stderr}`);
   }
-  return res.stdout.split("\n").filter((p) => /\.(ts|tsx)$/.test(p) && p.length > 0);
+  return res.stdout.split("\0").filter((p) => /\.(ts|tsx)$/.test(p) && p.length > 0);
 }
 
 function trackedLineCounts(root: string): Map<string, number> {
