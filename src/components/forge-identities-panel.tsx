@@ -23,6 +23,8 @@ type ForgeIdentityRow = {
 export function ForgeIdentitiesPanel() {
   const router = useRouter();
   const [identities, setIdentities] = useState<ForgeIdentityRow[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [instanceUrl, setInstanceUrl] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,17 +36,17 @@ export function ForgeIdentitiesPanel() {
     void (async () => {
       try {
         const response = await fetch("/api/forge-identities", { credentials: "same-origin" });
-        if (!response.ok) return;
+        if (!response.ok) throw new Error("Identity list load failed");
         const body = (await response.json()) as { identities: ForgeIdentityRow[] };
         if (!cancelled) setIdentities(body.identities);
       } catch {
-        // The section renders without the list; a refresh retries.
+        if (!cancelled) setLoadFailed(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAttempt]);
 
   async function link(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -116,7 +118,25 @@ export function ForgeIdentitiesPanel() {
         The token is verified before it is stored, and it is stored encrypted — never displayed.
       </p>
       {identities === null ? (
-        <p className="empty-copy">Loading linked identities…</p>
+        loadFailed ? (
+          <>
+            <p className="feedback error" role="alert">
+              Linked identities could not be loaded. Check your connection and try again.
+            </p>
+            <button
+              className="quiet-button"
+              type="button"
+              onClick={() => {
+                setLoadFailed(false);
+                setLoadAttempt((attempt) => attempt + 1);
+              }}
+            >
+              Retry
+            </button>
+          </>
+        ) : (
+          <p className="empty-copy">Loading linked identities…</p>
+        )
       ) : identities.length === 0 ? (
         <p className="empty-copy">No forge identity is linked to this account yet.</p>
       ) : (
