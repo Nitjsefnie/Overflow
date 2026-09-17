@@ -80,10 +80,14 @@ export function AccountDataNotice() {
           for that instance. Creating and removing webhooks during registration and unregistration, and background
           reconciliation reads — periodic sweeps, initial imports, and webhook-triggered updates — use the token
           of the account that registered the repository — its sponsor. Overflow selects one linked identity
-          belonging to the relevant account on that instance, without checking its access or guaranteeing which
-          identity is chosen. It does not automatically try the others if that token fails. Keeping a second,
-          working identity linked does not guarantee reconciliation keeps working. The token is never displayed
-          or included in any response from Overflow.
+          belonging to the relevant account on that instance, preferring identities without a recorded failure
+          and choosing the most recently verified among them. If the instance rejects a read for authentication
+          or access during background reconciliation, Overflow tries to record the failure on the identity
+          whose token was used.
+          That operation fails without trying another token. Later operations prefer identities without a recorded
+          failure, so a second working identity linked to the same Overflow account, or re-linking a working identity
+          on that account, restores later operations; the rejected operation still fails. The token is never
+          displayed or included in any response from Overflow.
         </p>
         <p>
           Linking claims your eligible past unclaimed GitLab settlements. Ongoing reconciliation credits GitLab
