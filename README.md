@@ -35,7 +35,7 @@ Every settlement records the label event, the sponsor's comment, the merge commi
 
 Settled credits are `max(0, actual points − distinct review rounds)`. Label and comment timing has a fifteen-minute tolerance; the settlement window closes fifteen minutes after merge. The full rules are on the instance's *Rules* page, the same text the ledger enforces.
 
-GitHub is the sign-in and primary forge. To register GitLab projects, link a GitLab identity whose personal access token carries the `api` scope — registration installs a webhook, which a read-only `read_api` token cannot create — then use the form or API. Webhooks, initial import, catalog changes and unregistration all work. Two differences are by design: review rounds count zero on GitLab merge requests, and GitLab has no `not_planned` state, so that gate is skipped.
+GitHub is the sign-in and primary forge. To register GitLab projects, link a GitLab identity whose personal access token carries the `api` scope — a read-only `read_api` token links and reconciles but cannot create the webhook registration installs — then use the form or API. Webhooks, initial import, catalog changes and unregistration all work. Two differences are by design: review rounds count zero on GitLab merge requests, and GitLab has no `not_planned` state, so that gate is skipped.
 
 **You can copy the software. You can't copy the neighbours.** Running your own instance is pointless for joining this exchange. A second ledger starts empty, with nobody to settle with. Join the existing instance to earn and spend credit with others.
 
