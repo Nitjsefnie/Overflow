@@ -84,9 +84,12 @@ export function AccountDataNotice() {
           and choosing the most recently verified among them. If the instance rejects a read for authentication
           or access during background reconciliation, Overflow tries to record the failure on the identity
           whose token was used.
-          That operation fails without trying another token. Later operations prefer identities without a recorded
-          failure, so a second working identity linked to the same Overflow account, or re-linking a working identity
-          on that account, restores later operations; the rejected operation still fails. The token is never
+          That operation fails without trying another token. Once the rejection is successfully recorded, later
+          operations prefer identities without a recorded failure, so an already-linked working identity on the same
+          Overflow account and instance can restore later operations. If recording fails, the rejected identity can
+          be selected again. Newly linking or successfully re-linking a working identity on that account and instance
+          refreshes its verification time and leaves it without a recorded failure, making it the preferred identity.
+          This can restore later operations; the rejected operation still fails. The token is never
           displayed or included in any response from Overflow.
         </p>
         <p>
@@ -163,8 +166,12 @@ export function AccountDataNotice() {
             Overflow prefers a linked identity without a recorded failure, choosing the most recently verified
             among those identities. A rejected background reconciliation read causes Overflow to try to record
             the failure on the identity whose token was used and fails that operation without trying another
-            identity. Later operations then prefer an identity without a recorded failure, so linking another
-            GitLab account with access restores later operations; the operation that hit the rejection still fails.
+            identity. Once the rejection is successfully recorded, later operations prefer identities without a
+            recorded failure, so an already-linked working identity on the same account and instance can restore
+            later operations. If recording fails, the rejected identity can be selected again. Newly linking or
+            successfully re-linking a working identity on that account and instance refreshes its verification time
+            and leaves it without a recorded failure, making it the preferred identity. This can restore later
+            operations; the operation that hit the rejection still fails.
           </li>
           <li>
             To revoke a GitLab token, delete it yourself in your instance&apos;s personal access tokens settings.
