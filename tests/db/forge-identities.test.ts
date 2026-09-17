@@ -476,6 +476,14 @@ describe("identity-scoped credentials", () => {
     expect(await store.getForgeToken(userId, instanceUrl)).toEqual({ token: "token-b", identityId: b.id });
   });
 
+  it("prefers the oldest failure even when another failed identity was verified more recently", async () => {
+    const { store, userId, instanceUrl, a, b } = await linkedPair();
+    // A was verified first; B's newer verification must not outrank A's older failure.
+    await sql`update user_forge_identities set token_failed_at = '2026-09-03' where id = ${a.id}`;
+    await sql`update user_forge_identities set token_failed_at = '2026-09-04' where id = ${b.id}`;
+    expect(await store.getForgeToken(userId, instanceUrl)).toEqual({ token: "token-a", identityId: a.id });
+  });
+
   it("prefers the most recently verified un-failed identity", async () => {
     const { store, userId, instanceUrl, b } = await linkedPair();
     expect(await store.getForgeToken(userId, instanceUrl)).toEqual({ token: "token-b", identityId: b.id });
