@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveRouteCredential } = vi.hoisted(() => ({
   resolveRouteCredential: vi.fn(),
@@ -7,6 +7,10 @@ const { resolveRouteCredential } = vi.hoisted(() => ({
 vi.mock("@/lib/security/route-credential", () => ({ resolveRouteCredential }));
 
 import { requiredMemberSession } from "@/lib/security/member-route-auth";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 type GateResult = Awaited<ReturnType<typeof requiredMemberSession>>;
 

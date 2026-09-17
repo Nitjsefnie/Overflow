@@ -1,12 +1,16 @@
 import { webhookCredential } from "../support/webhook-credential";
 import { createHmac } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
 import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { drainReconciliationJobs, type ReconciliationWorkerStore } from "@/lib/fold/reconciliation-worker";
 import { processWebhook, type WebhookDeliveryStore } from "@/lib/webhooks/processor";
 import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
+
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 /**
  * The wiring these two tests cover is the production `POST` handlers' own
@@ -68,6 +72,7 @@ const secret = "webhook-secret";
 useTrustedOrigin();
 
 beforeEach(() => {
+  vi.resetModules();
   enqueued.length = 0;
   readSession.mockReset();
   registerRepositoryMock.mockReset();
