@@ -13,6 +13,9 @@ export default defineConfig({
     },
   },
   test: {
+    // A new cross-file leak must fail the suite instead of being absorbed by
+    // per-file worker isolation.
+    isolate: false,
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
     // next-auth is ESM that imports "next/server" without an extension, which
