@@ -112,7 +112,11 @@ The same endpoint registers a GitLab project when the body carries
 `provider: "gitlab"`. Registration then reads the project with the personal
 access token of the GitLab identity you linked on the *Ledger* page (or over
 `POST /api/forge-identities`) for that instance; without a verified identity on
-that exact instance the request is refused. The project must be public, and the
+that exact instance the request is refused. The identity's token must carry the
+`api` scope — registration installs a project webhook, which a read-only
+`read_api` token cannot create; such an identity still links and reconciles,
+but registering with it is refused when the hook is installed. The project must
+be public, and the
 linked identity must hold maintainer permission on it — directly or inherited
 through its group; a project failing either is refused before anything is
 stored. A project hook is installed with its own independently generated secret
@@ -284,7 +288,8 @@ which continues to serve the web form.
 A repository's difficulty catalog is a versioned series, not a fixed choice.
 `PATCH /api/repositories` accepts the same body a registration takes and appends
 the submitted catalog as the repository's next catalog version; the browser form
-on the *Register a repository* page does the same. The version begins governing
+on the *Register a repository* page does the same for a GitHub repository. The
+version begins governing
 at the moment of the change, so:
 
 - closures whose evidence window closed before the change keep resolving at
