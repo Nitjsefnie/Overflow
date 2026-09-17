@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -9,6 +9,11 @@ import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reco
 import type { GitHubIssue } from "@/lib/github/types";
 import { encryptToken } from "@/lib/security/token-cipher";
 import { verifiedRepositoryAt } from "../support/verified-repository";
+
+// The real store, migrations, and pool teardown must share this file's module
+// graph, not consumers that captured another file's database mock.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 /**
  * The rename the fold has to survive, driven through the entry point that lost

@@ -1,13 +1,17 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertUniformMigrationNumberWidth,
   assertUniqueMigrationNumbers,
   listMigrationNames,
   runMigrations,
 } from "../../scripts/migrate";
+
+// Rebind the runner to this file's filesystem and database mocks.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const migrationsOnDisk = vi.hoisted(() => ({ entries: [] as string[] }));
 const databaseClient = vi.hoisted(() => ({
