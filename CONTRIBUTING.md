@@ -169,32 +169,46 @@ loads, not the wider Next.js family). A run with no signed-in contract never
 requires it; the default contracts include signed-in pages. Refusals exit 2;
 measured failures exit 1.
 
-On pull requests the job ends with a Base freshness step that fails when the
-base the run built against is no longer `main`'s tip, so a green run against a
-stale base fails — update the branch to re-run the checks against current
-`main`.
+On pull requests the job ends with a Base freshness step that certifies the
+run when the base is unchanged, or has advanced only disjointly from the
+files this pull request changes — an advance that touched none of them
+carried its own required checks, so only cross-file interaction goes
+unverified. An advance that shares a file with the pull request fails the
+step: update the branch onto current `main` so the required checks re-run
+across the interaction. The gate also refuses on anything it cannot judge —
+a failed or empty API response, or an unrepresentative compare (more than
+200 commits, an empty file list, or exactly 300 files, the compare API's
+truncation bound).
 
 Use `pnpm test --run` — the same command CI runs — for anything you are going
 to report. `--run` is what pins a single non-interactive pass regardless of how
 your terminal is attached; `pnpm test:watch` is the watching variant, for use
 while you work rather than in a result you paste into a pull request.
 
-**Two suites need a container runtime.** `tests/db/schema.test.ts` and
-`tests/moderation/postgres-store.test.ts` each start a real `postgres:17-alpine`
-through testcontainers and run the actual migrations against it. Without Docker
-reachable, both fail in `beforeAll` with
+**Suites that start a container need a container runtime.** A growing set of
+suites starts a real `postgres:17-alpine` through testcontainers — most via
+the shared helper `tests/support/postgres-container.ts` — and runs the actual
+migrations against it. The set moves as suites adopt the helper, so enumerate
+it rather than trusting a list printed here:
+
+```bash
+grep -rl testcontainers tests/
+```
+
+Without Docker reachable, they fail in `beforeAll` with
 
 ```
 Error: Could not find a working container runtime strategy
 ```
 
-and their 49 tests are reported as **skipped** while the run as a whole exits
-nonzero. Read that summary carefully: `49 skipped` is not `49 passed`, and those
-are precisely the tests that pin the migration path, the materialization
-invariants the schema enforces, and the moderation state transitions — the parts
-most likely to break and the parts a unit test with a stubbed store cannot
-notice. If you changed anything under `db/`, `src/lib/db/`, `src/lib/fold/` or
-`src/lib/moderation/` and your run says skipped, you have not tested it.
+and their tests are reported as **skipped** while the run as a whole exits
+nonzero. Read that summary carefully: skipped is not passed, and those suites
+are precisely the ones that pin the migration path, the materialization
+invariants the schema enforces, and the moderation state transitions — the
+parts most likely to break and the parts a unit test with a stubbed store
+cannot notice. If you changed anything under `db/`, `src/lib/db/`,
+`src/lib/fold/` or `src/lib/moderation/` and your run says skipped, you have
+not tested it.
 
 A second workflow, `.github/workflows/actionlint.yml`, checks the workflows
 themselves: actionlint for schema, expression and shell correctness, and zizmor
