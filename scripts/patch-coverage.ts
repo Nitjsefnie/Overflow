@@ -41,8 +41,8 @@ const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
 // Reads a unified diff and returns each file's added lines as new-side
 // line numbers. Deleted files produce no entries; a hunks's `\ No newline`
-// marker and a context line carrying no leading blank ("" rather than " ")
-// are both survived.
+// marker, a context line carrying no leading blank ("" rather than " "),
+// and added content that itself begins with plus signs are all survived.
 export function parseDiff(diffText: string): Map<string, number[]> {
   const added = new Map<string, number[]>();
   let path: string | null = null;
@@ -55,23 +55,27 @@ export function parseDiff(diffText: string): Map<string, number[]> {
       inHunk = false;
       continue;
     }
-    if (raw.startsWith("+++ ")) {
-      const target = raw.slice(4).trim();
-      path = target === "/dev/null" ? null : target.replace(/^b\//, "");
-      inHunk = false;
-      continue;
-    }
     const hunk = HUNK_HEADER.exec(raw);
     if (hunk) {
       nextLine = Number(hunk[1]);
       inHunk = true;
       continue;
     }
-    if (!inHunk || path === null) continue;
+    if (!inHunk) {
+      // Header area only. Checked here rather than first, because added
+      // hunk content starting "++ " renders as a raw "+++ …" line.
+      if (raw.startsWith("+++ ")) {
+        const target = raw.slice(4).trim();
+        path = target === "/dev/null" ? null : target.replace(/^b\//, "");
+      }
+      continue;
+    }
     if (raw.startsWith("+")) {
-      const lines = added.get(path) ?? [];
-      lines.push(nextLine);
-      added.set(path, lines);
+      if (path !== null) {
+        const lines = added.get(path) ?? [];
+        lines.push(nextLine);
+        added.set(path, lines);
+      }
       nextLine += 1;
     } else if (raw.startsWith("-") || raw.startsWith("\\")) {
       // removed line or no-newline marker: the new side does not move

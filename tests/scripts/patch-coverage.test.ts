@@ -120,6 +120,26 @@ describe("added-line parsing", () => {
   it("returns an empty map for an empty diff", () => {
     expect(parseDiff("").size).toBe(0);
   });
+
+  it("reads added lines whose content starts with plus signs as content", () => {
+    // An added line whose content begins "++ " renders as a raw "+++ …"
+    // line — indistinguishable from a file header unless the parser knows
+    // it is inside a hunk. The line after each proves the hunk recovered.
+    const tricky = [
+      "diff --git a/src/lib/plus.ts b/src/lib/plus.ts",
+      "index 0000000..6666666",
+      "--- /dev/null",
+      "+++ b/src/lib/plus.ts",
+      "@@ -0,0 +1,4 @@",
+      "+plus first",
+      "+++ header-looking",
+      "++++ triple-header",
+      "+plus last",
+    ].join("\n");
+    const added = parseDiff(tricky);
+    expect(added.size).toBe(1);
+    expect(added.get("src/lib/plus.ts")).toEqual([1, 2, 3, 4]);
+  });
 });
 
 describe("cobertura parsing", () => {
