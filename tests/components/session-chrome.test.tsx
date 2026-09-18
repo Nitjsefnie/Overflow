@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   signOutAction: vi.fn(),
@@ -14,6 +14,10 @@ vi.mock("@/lib/auth/sign-out-action", () => ({ signOutAction: mocks.signOutActio
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 
 import SessionPage from "@/app/session/page";
+
+// Rebind the session page and shell to this file's action mocks.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 // Issue 281: the recovery route rendered a bare main.landing-page, the same
 // symptom issue 38 described for the landing route. The route now composes the

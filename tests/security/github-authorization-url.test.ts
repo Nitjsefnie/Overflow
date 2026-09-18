@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Dynamic auth imports retain this file's mocks until the graph is cleared.
+afterAll(() => { vi.resetModules(); });
 
 /**
  * Issue 599, at the framework boundary: the authorization URL the pinned

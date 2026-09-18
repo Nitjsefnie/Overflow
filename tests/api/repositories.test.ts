@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   expectNoDependencyCall,
@@ -38,6 +38,10 @@ import {
   createRepositoryPostHandler,
   createRepositoryPatchHandler,
 } from "@/app/api/repositories/route";
+
+// Release stores evaluated with this file's mocked database client.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));

@@ -1,6 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as labelsRoute from "@/app/api/repositories/labels/route";
+
+// Release stores evaluated with this file's mocked database client.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const {
   readSession,

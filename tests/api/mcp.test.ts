@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 import {
   createMcpPostHandler,
@@ -11,6 +11,10 @@ import {
 } from "@/app/api/moderation/route";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 import type { ToolDefinition } from "@/lib/mcp/protocol";
+
+// Bind the page/route graph to this file's mocks and release it afterward.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 // The production POST export reads the session through @/auth; the mock keeps
 // its unauthenticated arm DB-free so the export itself can be driven.
