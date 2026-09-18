@@ -103,6 +103,7 @@ describe("closing the shared clients before the backend of an in-flight query di
           from pg_stat_activity
           where state = 'active'
             and pid <> pg_backend_pid()
+            and datname = current_database()
             and query like ${inFlightStatementPattern}
         `;
         backendPid = running[0]?.pid;
