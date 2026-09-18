@@ -113,9 +113,11 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
 
 /**
  * The shared path: one server per run (started by tests/support/global-setup.ts),
- * one role and database per call. The role is SUPERUSER because 001_initial.sql
- * runs CREATE EXTENSION, which needs superuser; that mirrors today, where the
- * POSTGRES_USER of a private container is that database's superuser.
+ * one role and database per call. The role stays SUPERUSER, mirroring the
+ * POSTGRES_USER of a private container; the privilege that is load-bearing is
+ * CREATEDB — tests/db/backup-restore.test.ts has the suite role create and
+ * drop scratch databases. (The CREATE EXTENSION in 001_initial.sql does not
+ * need it: pgcrypto is TRUSTED since PG13 and installs without superuser.)
  */
 async function startOnSharedServer(options: Pick<PostgresContainerOptions, "database" | "user" | "password">): Promise<StartedPostgres> {
   const { database, user, password } = options;
