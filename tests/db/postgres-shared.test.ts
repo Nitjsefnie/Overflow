@@ -89,6 +89,30 @@ describe("suites share one postgres server through startPostgresContainer", () =
     expect(seen).toEqual([{ datname: secondDatabaseName }]);
   });
 
+  it("gives two calls with identical options distinct role names and distinct database names", async () => {
+    // Guard against a constant suffix: the uniqueness contract is per call,
+    // not per option set, so the same options twice must still collide on
+    // nothing.
+    const options = { database: "shared_twin", user: "shared_twin", password: "shared_twin" };
+    const first = await start(options);
+    const second = await start(options);
+    facades.push(first.container, second.container);
+
+    const firstUrl = new URL(first.databaseUrl);
+    const secondUrl = new URL(second.databaseUrl);
+    const firstDatabase = firstUrl.pathname.slice(1);
+    const secondDatabase = secondUrl.pathname.slice(1);
+    const firstRole = decodeURIComponent(firstUrl.username);
+    const secondRole = decodeURIComponent(secondUrl.username);
+
+    expect(firstDatabase).toMatch(/^shared_twin_[0-9a-f]{8}$/);
+    expect(secondDatabase).toMatch(/^shared_twin_[0-9a-f]{8}$/);
+    expect(firstDatabase).not.toBe(secondDatabase);
+    expect(firstRole).toMatch(/^shared_twin_[0-9a-f]{8}$/);
+    expect(secondRole).toMatch(/^shared_twin_[0-9a-f]{8}$/);
+    expect(firstRole).not.toBe(secondRole);
+  });
+
   it("keeps the shared server serving after a suite stops its container facade", async () => {
     const first = await start({ database: "shared_third", user: "shared_third", password: "shared_third" });
     const second = await start({ database: "shared_fourth", user: "shared_fourth", password: "shared_fourth" });
