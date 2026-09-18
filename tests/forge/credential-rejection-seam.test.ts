@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sponsorGateway } from "@/lib/fold/reconcile-as-sponsor";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import type { ReconciliationGateway, ReconciliationRepository } from "@/lib/fold/reconcile";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
+
+afterEach(() => { vi.unstubAllGlobals(); });
 
 /**
  * The credential-rejection seam: a read made through the linked identity that
