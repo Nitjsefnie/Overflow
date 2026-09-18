@@ -164,9 +164,13 @@ describe("the coverage comment workflow", () => {
   it("refuses a body over the API's 65536-character comment limit", () => {
     const runs = steps.map((step) => step.run ?? "").join("\n");
     expect(
+      runs.match(/chars > \d+/g)?.length,
+      "exactly one size comparison must exist",
+    ).toBe(1);
+    expect(
       runs,
-      "the size guard must compare the assembled body against the API's 65536-character limit — a truncated percentage would look current",
-    ).toContain("65536");
+      "the size guard must compare the assembled body against the API's 65536-character limit — pinning the comparison itself, not the constant, because the ::error:: message literal also contains 65536 and would otherwise keep a raised guard green — a truncated percentage would look current",
+    ).toContain("chars > 65536");
   });
 
   it("publishes a check run named exactly 'coverage comment'", () => {

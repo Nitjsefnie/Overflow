@@ -83,9 +83,9 @@ jobs:
 
       # Cross-run artifact download: run-id scopes it to the triggering run,
       # and github-token is required for cross-run downloads. The
-      # continue-on-error is the missing-artifact path — docs-only runs upload
-      # nothing, and a missing artifact must reach the not-measured body, not
-      # fail the job.
+      # continue-on-error is the no-report path — a docs-only run uploads
+      # nothing and a failed download retrieves nothing, and either must
+      # reach the not-measured body, not fail the job.
       - name: Download the patch coverage artifact
         id: artifact
         if: steps.pr.outputs.found == 'true'
@@ -117,7 +117,7 @@ jobs:
           if [[ "$CONCLUSION" != "success" ]]; then
             printf '%s\n\nThe ci run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$CONCLUSION" "$stale" > "$body_file"
           elif [[ ! -f patch-coverage/patch-coverage.json ]]; then
-            printf '%s\n\nThe ci run produced no patch-coverage artifact, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
+            printf '%s\n\nNo patch coverage report could be retrieved for this run, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
           elif [[ "$(jq -r '.measured // false' patch-coverage/patch-coverage.json)" != "true" ]]; then
             printf '%s\n\nThe patch-coverage artifact from this run is not measurable, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
           else
