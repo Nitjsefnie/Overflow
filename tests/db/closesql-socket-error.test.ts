@@ -10,6 +10,8 @@ const inFlightSleepSeconds = 300;
 const inFlightStatement = `select pg_sleep(${inFlightSleepSeconds})`;
 let container: StartedTestContainer | undefined;
 let databaseUrl: string;
+/** The backend the test strands mid-pg_sleep; afterAll reaps it server-side. */
+let strandedBackendPid: number | undefined;
 
 /** Relay real protocol traffic, then reset the client-facing socket instead of sending a FIN. */
 async function startResetProxy(target: { host: string; port: number }) {
@@ -64,6 +66,21 @@ describe("closing the shared clients before a socket error", () => {
   });
 
   afterAll(async () => {
+    // The reset socket means no client-side signal can reach the backend this
+    // test strands mid-pg_sleep(300): closeSql() settles while the server-side
+    // session keeps sleeping, and on a private container stop() used to reap
+    // it. On the shared server the suite reaps what it stranded itself — the
+    // survivor audit in vitest.setup.ts (rightly) fails this file otherwise.
+    // A backend already gone terminates to false; any other failure is left
+    // for the audit to report.
+    if (strandedBackendPid !== undefined) {
+      const reaper = postgres(databaseUrl, { max: 1 });
+      try {
+        await reaper`select pg_terminate_backend(${strandedBackendPid})`.catch(() => undefined);
+      } finally {
+        await reaper.end({ timeout: 5 });
+      }
+    }
     await container?.stop();
     if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = originalDatabaseUrl;
@@ -80,6 +97,7 @@ describe("closing the shared clients before a socket error", () => {
 
     try {
       const [backend] = await sql<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      strandedBackendPid = backend!.pid;
       // Longer than the test timeout: completion cannot rescue a stranded shutdown.
       const inFlight = sql`select pg_sleep(${sql.unsafe(String(inFlightSleepSeconds))})`.then(
         () => "resolved",
