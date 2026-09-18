@@ -592,6 +592,52 @@ describe("scripts/deploy-revision.sh", () => {
     expect(await readdir(fixture.tree)).toContain(previous);
   });
 
+  it("prunes when the previous release is exactly third-newest, the keep-3 boundary's last kept name", async () => {
+    // The deploy's own release name uses the real clock, so it sorts newest;
+    // exactly one release sorts between it and the previous one (20260909
+    // above the default 20260908), placing the previous release at the
+    // boundary's last included position. The automated prune must fire: this
+    // is the run whose `--keep 3` decides the just-replaced rollback target
+    // survives, so both narrower and wider retention windows must fail here.
+    const fixture = await makeFixture({
+      extraReleases: [
+        ".next-release-20260909T000000Z-abc1234",
+        ".next-release-20260907T000000Z-def5678",
+        ".next-release-20260906T000000Z-abc1234",
+      ],
+    });
+    const result = await runDeploy(fixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.map(describeEntry)).toContain(`pnpm release:prune ${fixture.tree} --keep 3`);
+  });
+
+  it("warns without pruning when the previous release is exactly fourth-newest, the first name past the keep-3 boundary", async () => {
+    // Two releases sort above the previous one (20260910 and 20260909 above
+    // the default 20260908), placing it one past the boundary: the guard must
+    // refuse the automated prune — the alternative silently deletes the
+    // just-replaced rollback target — and warn instead, keeping everything.
+    const fixture = await makeFixture({
+      extraReleases: [
+        ".next-release-20260910T000000Z-abc1234",
+        ".next-release-20260909T000000Z-abc1234",
+        ".next-release-20260907T000000Z-def5678",
+      ],
+    });
+    const result = await runDeploy(fixture);
+
+    expect(result.status, result.stderr).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
+    const previous = path.basename(fixture.prevDir);
+    const warning = `${result.stdout}\n${result.stderr}`;
+    expect(warning).toContain(previous);
+    expect(warning).toContain("pnpm release:prune");
+    expect(warning).toContain("--keep");
+    expect(await readdir(fixture.tree)).toContain(previous);
+  });
+
   it("satisfies the fence with the real flock binary, proving the fd 9 wiring", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, {}, { omitFlockShim: true });
