@@ -321,6 +321,26 @@ increase. There are exactly two remedies for an over-ceiling file: shrink
 it, or relocate code into a new module. Recorded counts are never raised by
 hand and entries are never added by hand.
 
+### Coverage is floored
+
+CI measures line coverage over `src/` with
+`pnpm test --run --coverage --coverage.include='src/**'`, and
+`node scripts/check-coverage-floor.ts` fails when the measurement falls below
+the floor recorded in `scripts/coverage.json`. A change that touched only
+documentation — the `.md`, `.txt`, `.rst` and `.adoc` extensions, plus
+`LICENSE` — skips the measurement entirely, because it cannot move the
+number.
+
+The floor was seeded from the tree that introduced it: the first real
+measurement, 92.89% lines, with the floor one point below it. From there the
+number moves in one direction only. After a `main` push that measured more
+than 0.5 points above the record, CI recalibrates through
+`node scripts/calibrate-coverage.ts`: the new measurement is recorded and the
+floor rises to one point below it. A drop, or a rise within that hysteresis,
+changes nothing. **The floor is never lowered by hand.** A red floor means
+coverage regressed, and the remedy is to test the code you changed — not to
+edit the record.
+
 ## Pull-request admission
 
 Use [the pull-request template](.github/PULL_REQUEST_TEMPLATE.md), keeping its
