@@ -8,6 +8,7 @@ import {
   floorViolation,
   round2,
   type CoverageFloorDoc,
+  type CoverageSummary,
 } from "../../scripts/check-coverage-floor.ts";
 
 let root: string;
@@ -52,6 +53,21 @@ describe("coverage floor", () => {
       /below the 72.5% floor/,
     );
   });
+
+  it("fails closed when the measured percentage is missing or not finite", () => {
+    const bad = (pct: unknown) => ({ total: { lines: { pct } } });
+    for (const pct of [NaN, Infinity, -Infinity, "73", null]) {
+      expect(
+        floorViolation(bad(pct) as unknown as CoverageSummary, doc(74.0, 73.0)),
+      ).toMatch(/missing or not a finite number/);
+    }
+    expect(
+      floorViolation(
+        { total: { lines: {} } } as unknown as CoverageSummary,
+        doc(74.0, 73.0),
+      ),
+    ).toMatch(/missing or not a finite number/);
+  });
 });
 
 describe("coverage floor CLI", () => {
@@ -95,6 +111,34 @@ describe("coverage floor CLI", () => {
     });
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("below the 72.9% floor");
+  });
+
+  it("exits 1 when the summary percentage is missing or not a finite number", () => {
+    git("init", "-q");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, "scripts/coverage.json"),
+      `${JSON.stringify(doc(74.0, 73.0), null, 2)}\n`,
+    );
+    mkdirSync(join(root, "coverage"), { recursive: true });
+    const raw = (json: string) =>
+      writeFileSync(join(root, "coverage/coverage-summary.json"), `${json}\n`);
+    const run = () =>
+      spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
+
+    raw('{"total":{"lines":{}}}');
+    expect(run().status).toBe(1);
+
+    raw('{"total":{"lines":{"pct":null}}}');
+    expect(run().status).toBe(1);
+
+    // JSON carries no NaN or Infinity literal: 1e999 parses to Infinity and
+    // a bare NaN parses to null, so the non-finite space is covered by the
+    // three shapes above plus the NaN unit case.
+    raw('{"total":{"lines":{"pct":1e999}}}');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("not a finite number");
   });
 
   it("exits 2 when the summary or the floor document is missing", () => {

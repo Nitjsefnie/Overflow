@@ -47,8 +47,19 @@ export function floorViolation(
   summary: CoverageSummary,
   doc: CoverageFloorDoc,
 ): string | null {
-  const measured = summary.total.lines.pct;
   const floor = doc.languages.typescript.floor;
+  // JSON.parse hands back whatever the summary carries, so the declared
+  // number type is not proof: a missing, null or out-of-range percentage
+  // must fail the check, never pass it vacuously.
+  const measured: unknown = summary.total.lines.pct;
+  if (typeof measured !== "number" || !Number.isFinite(measured)) {
+    const shown =
+      typeof measured === "number" ? String(measured) : JSON.stringify(measured) ?? "absent";
+    return (
+      `line coverage is missing or not a finite number (got ${shown}) — ` +
+      "refusing to pass"
+    );
+  }
   if (measured < floor) {
     return `line coverage ${measured}% is below the ${floor}% floor`;
   }
