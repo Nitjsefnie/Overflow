@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { ReconciliationDependencies, ReconciliationRepository } from "@/lib/fold/reconcile";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import type { ReconciliationWorkerDependencies, ReconciliationWorkerSchedule } from "@/lib/fold/reconciliation-worker";
@@ -124,6 +123,8 @@ describe("server instrumentation", () => {
       requests.push(new Request(input, init));
       return new Response("denied", { status: 401 });
     });
+    // Match the constructor from the worker's graph after beforeEach resets it.
+    const { ForgeCredentialRejectedError } = await import("@/lib/forge/gateway");
     const { register } = await import("@/instrumentation");
     await register();
 
