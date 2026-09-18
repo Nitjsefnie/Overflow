@@ -96,9 +96,12 @@ jobs:
         run: node scripts/check-coverage-floor.ts
 
       # Informational, never a gate. The diff base is the checked-out
-      # commit's first parent — a pull_request run tests the merge commit,
-      # whose first parent is the pull request's head — never the event's
-      # base SHA, which can trail the merge ref the run actually tests.
+      # commit's first parent — on a pull_request run that is the merge
+      # commit's base-side parent (GitHub merges the head into the base, so
+      # the base tip is the first parent and the head the second), which
+      # makes HEAD^1..HEAD exactly the change the pull request carries.
+      # Never the event's base SHA, which can trail the base tip the merge
+      # ref was actually built against.
       - name: Patch coverage report
         if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
         run: git diff HEAD^1 HEAD | node scripts/patch-coverage.ts coverage/cobertura-coverage.xml
