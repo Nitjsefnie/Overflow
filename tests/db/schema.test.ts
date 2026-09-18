@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
+import { cancelUngrantedAdvisoryBackends, ungrantedAdvisoryWaiterCount } from "../support/advisory-lock-probe";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 import {
@@ -2890,32 +2891,17 @@ describe("initial PostgreSQL materialization", () => {
       // Synchronize deterministically with the former blocking implementation. The
       // nonblocking coordinator never creates an ungranted advisory lock, so this
       // bounded probe simply expires while its callers wait outside the pool.
-      const blockingWaitersDetected = await conditionWithin(async () => {
-        const [locks] = await observer<{ waiting: number }[]>`
-          select count(*)::integer as waiting
-          from pg_locks
-          where locktype = 'advisory' and granted = false
-            and database = (select oid from pg_database where datname = current_database())
-        `;
-        return locks.waiting >= sharedPoolCapacity - 1;
-      }, 750);
+      const blockingWaitersDetected = await conditionWithin(
+        async () => (await ungrantedAdvisoryWaiterCount(observer)) >= sharedPoolCapacity - 1,
+        750,
+      );
 
       expect(runOrder).toEqual(["owner"]);
       await expect(resolveWithin(ordinaryQuery, 750)).resolves.toEqual([{ value: 1 }]);
       expect(blockingWaitersDetected).toBe(false);
     } finally {
       releaseOwnerFetch();
-      // Scoped to this suite's database: pg_locks is cluster-wide, and on the
-      // shared server cancelling another suite's waiting advisory backend
-      // would break that suite's run.
-      await observer`
-        select pg_cancel_backend(pid)
-        from pg_locks
-        where locktype = 'advisory'
-          and granted = false
-          and pid <> pg_backend_pid()
-          and database = (select oid from pg_database where datname = current_database())
-      `;
+      await cancelUngrantedAdvisoryBackends(observer);
       await Promise.all([reconciliationCleanup, ordinaryQuery]);
       await observer.end();
     }
