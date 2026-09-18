@@ -63,6 +63,12 @@ describe("vitest.config.ts maxWorkers resolution", () => {
     expect((await importTestConfig()).maxWorkers).toBe(2);
   });
 
+  it("honours a numeric VITEST_MAX_WORKERS with CI unset too", async () => {
+    // beforeEach leaves CI unset; the override must not depend on CI being set.
+    process.env.VITEST_MAX_WORKERS = "4";
+    expect((await importTestConfig()).maxWorkers).toBe(4);
+  });
+
   it.each(["lots", "4x", "3.5", "", "-2", " 4"])(
     "treats the non-numeric VITEST_MAX_WORKERS %j as unset (CI set, so unbounded)",
     async (value) => {
