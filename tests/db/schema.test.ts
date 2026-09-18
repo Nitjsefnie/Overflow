@@ -2895,6 +2895,7 @@ describe("initial PostgreSQL materialization", () => {
           select count(*)::integer as waiting
           from pg_locks
           where locktype = 'advisory' and granted = false
+            and database = (select oid from pg_database where datname = current_database())
         `;
         return locks.waiting >= sharedPoolCapacity - 1;
       }, 750);
@@ -2904,12 +2905,16 @@ describe("initial PostgreSQL materialization", () => {
       expect(blockingWaitersDetected).toBe(false);
     } finally {
       releaseOwnerFetch();
+      // Scoped to this suite's database: pg_locks is cluster-wide, and on the
+      // shared server cancelling another suite's waiting advisory backend
+      // would break that suite's run.
       await observer`
         select pg_cancel_backend(pid)
         from pg_locks
         where locktype = 'advisory'
           and granted = false
           and pid <> pg_backend_pid()
+          and database = (select oid from pg_database where datname = current_database())
       `;
       await Promise.all([reconciliationCleanup, ordinaryQuery]);
       await observer.end();
