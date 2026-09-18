@@ -302,6 +302,9 @@ tests/calibration/*
 !tests/components/
 tests/components/*
 !tests/components/*.tsx
+!tests/config/
+tests/config/*
+!tests/config/*.ts
 !tests/dashboard/
 tests/dashboard/*
 !tests/dashboard/*.ts
