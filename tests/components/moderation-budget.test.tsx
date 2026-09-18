@@ -68,6 +68,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
   if (previousStore) Object.defineProperty(globalThis, storeKey, previousStore);
   else Reflect.deleteProperty(globalThis, storeKey);
+  // Release components dynamically loaded with this file's navigation mock.
+  vi.resetModules();
 });
 
 describe("moderation budget integration", () => {

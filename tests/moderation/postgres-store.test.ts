@@ -12,6 +12,10 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { RepositoryRegistrationEnforcementError } from "@/lib/repositories/register";
 
+// Keep auth, stores and pool cleanup on this file's graph, then release it.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
+
 const capturedAuth = vi.hoisted(() => ({ config: null as NextAuthConfig | null }));
 vi.mock("next-auth", () => ({
   default: (config: NextAuthConfig) => {

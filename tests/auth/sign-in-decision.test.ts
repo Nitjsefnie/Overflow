@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { NextAuthConfig, Profile } from "next-auth";
 import {
   SIGN_IN_REFUSAL_REASONS,
@@ -6,6 +6,9 @@ import {
   readGitHubIdentity,
   type PersistGitHubIdentity,
 } from "@/lib/auth/sign-in-decision";
+
+// Dynamic auth imports retain this file's mocks until the graph is cleared.
+afterAll(() => { vi.resetModules(); });
 
 const mocks = vi.hoisted(() => ({
   github: vi.fn(() => ({ id: "github" })),

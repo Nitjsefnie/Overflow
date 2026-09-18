@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Dynamic auth imports retain this file's mocks until the graph is cleared.
+afterAll(() => { vi.resetModules(); });
 
 const mocks = vi.hoisted(() => {
   const signIn = vi.fn();

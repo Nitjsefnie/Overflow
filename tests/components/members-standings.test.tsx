@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { sql } = vi.hoisted(() => ({ sql: vi.fn() }));
 
@@ -14,6 +14,10 @@ vi.mock("@/lib/dashboard/session", async (importOriginal) => ({
 }));
 
 import MembersStandingsPage from "@/app/members/page";
+
+// Bind the page/route graph to this file's mocks and release it afterward.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 function respondWith(options: { standings?: unknown[] | Error } = {}) {
   sql.mockImplementation(async (strings: TemplateStringsArray) => {

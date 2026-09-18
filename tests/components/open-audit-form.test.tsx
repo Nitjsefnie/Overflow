@@ -1,11 +1,15 @@
 /** @vitest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import ModerationPage from "@/app/moderation/page";
 import { OpenAuditForm } from "@/components/open-audit-form";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+
+// Bind the page/route graph to this file's mocks and release it afterward.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 const { redirect, refresh, sql } = vi.hoisted(() => ({ redirect: vi.fn(), refresh: vi.fn(), sql: vi.fn() }));
 

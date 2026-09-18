@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   signOutAction: vi.fn(),
@@ -23,6 +23,10 @@ vi.mock("@/lib/db/client", () => ({ getSql: mocks.getSql }));
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: mocks.getCurrentUserRole }));
 
 import SessionPage, { SessionRecovery } from "@/app/session/page";
+
+// Rebind the session page and shell to this file's action mocks.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
 
 describe("session recovery route", () => {
   afterEach(() => {
