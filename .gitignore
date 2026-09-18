@@ -277,6 +277,7 @@ scripts/*
 !scripts/measure-header-geometry.mjs
 !scripts/check-page-geometry.mjs
 !scripts/module-size.json
+!scripts/coverage.json
 
 !tests/
 tests/*
