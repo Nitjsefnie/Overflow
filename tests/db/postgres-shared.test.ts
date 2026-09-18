@@ -1,7 +1,10 @@
 import postgres, { type Sql } from "postgres";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { survivorVerdict, type SurvivorRow } from "../support/global-setup";
-import { startPostgresContainer } from "../support/postgres-container";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  assertNoSharedProvisionSurvivors,
+  resolveSharedPostgresFacts,
+  startPostgresContainer,
+} from "../support/postgres-container";
 
 /**
  * Regression tests for the shared-postgres arrangement (issue 626): every
@@ -13,24 +16,6 @@ import { startPostgresContainer } from "../support/postgres-container";
  * the two databases live on two different servers, stop() really does stop,
  * and no parked failure is ever thrown.
  */
-
-/**
- * The parked-error regression needs inject to return a parked failure, which
- * only happens when Docker is down. A per-file override stands in for that
- * state; tests 1 and 2 leave it unset, so the real inject runs.
- */
-const injectOverride = vi.hoisted(() => ({ inject: undefined as undefined | (() => unknown) }));
-
-vi.mock(import("vitest"), async (importOriginal) => {
-  const actual = await importOriginal<typeof import("vitest")>();
-  return {
-    ...actual,
-    inject: (...args: Parameters<typeof actual.inject>) =>
-      injectOverride.inject
-        ? (injectOverride.inject() as ReturnType<typeof actual.inject>)
-        : actual.inject(...args),
-  };
-});
 
 /** Suite-style options; the shared path ignores nothing we pass here. */
 function start(options: { database: string; user: string; password: string }) {
@@ -134,47 +119,41 @@ describe("suites share one postgres server through startPostgresContainer", () =
     expect(await client(third.databaseUrl)`select 1 as after_stop_third`).toEqual([{ after_stop_third: 1 }]);
   });
 
-  it("throws the parked error verbatim when global setup parked a failure", async () => {
+  it("throws the parked error verbatim when global setup parked a failure", () => {
+    // The decision is pinned at the exported resolver: the vi.mock inject
+    // override this test once used stopped working when vitest.setup.ts
+    // pulled the real helper module into every worker ahead of any per-file
+    // mock registration, so the mock never fired again. The inject wiring
+    // around the resolver is one line and is exercised by every provisioning
+    // test above.
     const parkedMessage = "docker unavailable: parked by tests/support/global-setup.ts for this run";
-    injectOverride.inject = () => ({ error: parkedMessage });
-    try {
-      let thrown: unknown;
-      try {
-        await startPostgresContainer({ database: "shared_parked", user: "shared_parked", password: "shared_parked" });
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown, "startPostgresContainer must throw when global setup parked a failure").toBeInstanceOf(Error);
-      expect((thrown as Error).message).toBe(parkedMessage);
-    } finally {
-      injectOverride.inject = undefined;
-    }
+    expect(() => resolveSharedPostgresFacts({ error: parkedMessage })).toThrow(parkedMessage);
+    expect(() => resolveSharedPostgresFacts(undefined)).toThrow(/no shared postgres was provided/);
+    expect(resolveSharedPostgresFacts({ host: "127.0.0.1", port: 5432, adminUser: "u", adminPassword: "p", containerId: "c" }).host).toBe("127.0.0.1");
   });
 });
 
 /**
- * The teardown survivor check exists because the shared server removed the
- * loud tripwire a leaked pool used to produce: a suite that skips closeSql()
- * now hands the next file a pool still pointed at the previous suite's
- * database, and the gate scores green. The verdict function is the decision;
- * teardown() is its only caller, so these pin the decision itself.
+ * The survivor audit exists because the shared server removed the loud
+ * tripwire a leaked pool used to produce: a suite that skips closeSql() now
+ * hands the next file a pool still pointed at the previous suite's database,
+ * and the gate scores green. The audit runs in each file's afterAll
+ * (vitest.setup.ts) while this worker is still alive — globalSetup teardown
+ * cannot see worker-held sockets, because vitest reaps the workers before it.
+ * This file pins the audit itself against a real server.
  */
-describe("the teardown survivor verdict", () => {
-  it("passes a clean activity table", () => {
-    expect(survivorVerdict([])).toBeUndefined();
-  });
+describe("the shared-provision survivor audit", () => {
+  it("throws while this file's provisioned role still holds a client, and passes once it is closed", async () => {
+    const started = await startPostgresContainer({ database: "shared_audit", user: "shared_audit", password: "shared_audit" });
 
-  it("names every surviving holder, its database and its count", () => {
-    const rows: SurvivorRow[] = [
-      { usename: "leaky_suite_ab12cd34", datname: "leaky_suite_ab12cd34", count: 2 },
-      { usename: "other_suite_ef901234", datname: null, count: 1 },
-    ];
-    const verdict = survivorVerdict(rows);
+    // Managed locally, not through client(): afterEach would end it before
+    // the second half of this case can observe the clean audit.
+    const open = postgres(started.databaseUrl, { max: 1 });
+    await open`select 1 as held`;
 
-    expect(verdict).toBeDefined();
-    expect(verdict).toContain("3 survivor connection(s)");
-    expect(verdict).toContain("leaky_suite_ab12cd34/leaky_suite_ab12cd34 x2");
-    expect(verdict).toContain("other_suite_ef901234/(no database) x1");
-    expect(verdict).toContain("closeSql()");
-  });
+    await expect(assertNoSharedProvisionSurvivors()).rejects.toThrow(/survivor audit/);
+
+    await open.end({ timeout: 5 });
+    await expect(assertNoSharedProvisionSurvivors()).resolves.toBeUndefined();
+  }, 30_000);
 });

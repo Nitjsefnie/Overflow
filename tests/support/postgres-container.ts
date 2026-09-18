@@ -52,6 +52,61 @@ declare module "vitest" {
 const SHARED_POSTGRES_KEY = "sharedPostgres";
 
 /**
+ * What the shared path has provisioned in THIS worker since the last reset:
+ * one entry per startPostgresContainer call. vitest.setup.ts clears it at
+ * each file's start (workers are reused across files under isolate:false)
+ * and audits it in the file's afterAll — worker processes are reaped before
+ * globalSetup teardown runs, so a worker-held leaked socket is only ever
+ * visible to a probe that runs while the file's worker is alive.
+ */
+const provisionedShared: { role: string; database: string }[] = [];
+
+/** The roles provisioned since the last reset, in provision order. */
+export function provisionedSharedRoles(): readonly string[] {
+  return provisionedShared.map((provision) => provision.role);
+}
+
+/** Forgets everything provisioned so far; the next file must audit only its own. */
+export function resetSharedProvisions(): void {
+  provisionedShared.splice(0);
+}
+
+/**
+ * Throws when any role provisioned since the last reset still holds a client
+ * backend on the shared server. vitest.setup.ts runs this in every file's
+ * afterAll, so a suite that skipped closeSql() or client end() fails its own
+ * file, loudly, in a real run. The audit's own connection is the admin's and
+ * drops out of every query on the usename filter.
+ */
+export async function assertNoSharedProvisionSurvivors(): Promise<void> {
+  const roles = provisionedSharedRoles();
+  if (roles.length === 0) {
+    return;
+  }
+  const facts = sharedPostgresFacts();
+  const admin = postgres(
+    `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${facts.host}:${facts.port}/postgres`,
+    { max: 1 },
+  );
+  try {
+    const survivors: { usename: string; datname: string | null }[] = [];
+    for (const role of roles) {
+      survivors.push(...await admin<{ usename: string; datname: string | null }[]>`
+        select usename, datname
+        from pg_stat_activity
+        where backend_type = 'client backend' and usename = ${role}
+      `);
+    }
+    if (survivors.length > 0) {
+      const summary = survivors.map((row) => `${row.usename}/${row.datname ?? "(no database)"}`).join(", ");
+      throw new Error(`postgres survivor audit found ${survivors.length} connection(s) still held by this file's shared-postgres role(s) (${summary}): the suite skipped closeSql() or client end(), and its pool would hand the next file the previous suite's database`);
+    }
+  } finally {
+    await admin.end();
+  }
+}
+
+/**
  * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes.
  * The tag stays for readability; the digest is what Docker actually pulls.
  */
@@ -141,6 +196,10 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
     await admin.end();
   }
 
+  // Registered only after the DDL succeeded, so the audit never probes for a
+  // role that was never created.
+  provisionedShared.push({ role, database: databaseName });
+
   return {
     container: sharedServerFacade(shared),
     databaseUrl: `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${shared.host}:${shared.port}/${databaseName}?client_min_messages=warning`,
@@ -149,10 +208,11 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
 
 /**
  * The provided facts, or the parked failure global setup left in their place.
+ * Exported as the pure decision so the parked-error pin does not have to mock
+ * "vitest" — a mock that stopped working once vitest.setup.ts imported this
+ * module into every worker ahead of any per-file mock registration.
  */
-function sharedPostgresFacts(): SharedPostgresFacts {
-  const provided = inject(SHARED_POSTGRES_KEY);
-
+export function resolveSharedPostgresFacts(provided: SharedPostgresFacts | ParkedSharedPostgresFailure | undefined): SharedPostgresFacts {
   if (provided === undefined) {
     throw new Error("no shared postgres was provided for this run; is tests/support/global-setup.ts registered as the vitest globalSetup?");
   }
@@ -160,6 +220,10 @@ function sharedPostgresFacts(): SharedPostgresFacts {
     throw new Error(provided.error);
   }
   return provided;
+}
+
+function sharedPostgresFacts(): SharedPostgresFacts {
+  return resolveSharedPostgresFacts(inject(SHARED_POSTGRES_KEY));
 }
 
 /**
