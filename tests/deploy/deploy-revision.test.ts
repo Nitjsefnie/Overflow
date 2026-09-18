@@ -264,6 +264,10 @@ exit 0
 for a in "$@"; do
   if [ "$a" = "-exec" ]; then exit 0; fi
 done
+if [ -n "\${FIND_SHIM_LISTING_REPEAT:-}" ]; then
+  seq "\${FIND_SHIM_LISTING_REPEAT}" | sed "s/.*/\${FIND_SHIM_LISTING_REPEAT_NAME}/"
+  exit 0
+fi
 exec /usr/bin/find "$@"
 `,
   },
@@ -448,6 +452,26 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain("Webhook upgrade exit status: 0");
     const upgradeLog = path.join(fixture.logDir, `webhook-upgrade-${release}.jsonl`);
     await expect(readFile(upgradeLog, "utf8")).resolves.toContain('{"upgradeFixture":true}');
+  });
+
+  it("prunes even when the retention listing exceeds the pipe buffer", async () => {
+    const fixture = await makeFixture();
+    const previous = path.basename(fixture.prevDir);
+    // The find shim prints one line per release name; repeating the previous
+    // release's own name past the 64 KiB pipe buffer forces the guard's
+    // early-exit consumers to outlive their producer under pipefail. The
+    // repeat count must stay small enough that the script's own stdout (it
+    // prints the whole listing for the deploy record) stays under
+    // spawnSync's 1 MiB default maxBuffer, or Node kills the script before
+    // the guard is reached (observed: SIGTERM/ENOBUFS at 200000 lines).
+    const result = await runDeploy(fixture, {
+      FIND_SHIM_LISTING_REPEAT: "6000",
+      FIND_SHIM_LISTING_REPEAT_NAME: previous,
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.map(describeEntry)).toContain(`pnpm release:prune ${fixture.tree} --keep 3`);
   });
 
   it("aborts when the serving release has no cache directory, before touching ownership", async () => {

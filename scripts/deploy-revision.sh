@@ -181,7 +181,13 @@ printf '%s\n' "$retained"
 # above. Otherwise print a warning naming the previous release and the exact
 # manual release:prune command with a raised --keep suggestion, and run nothing.
 previous_release_name="${previous_release##*/}"
-if printf '%s\n' "$retained" | head -n 3 | grep -Fxq -- "$previous_release_name"; then
+# Capture-then-match, not a printf|head|grep pipeline: grep -q exits after its
+# first match, so on a long listing the consumers can exit while printf is
+# still writing, the producer dies by SIGPIPE (status 141) and pipefail turns
+# the guard false — silently skipping the prune (issue 624). The herestring's
+# producer has already finished before head reads it.
+newest_three=$(head -n 3 <<<"$retained")
+if grep -Fxq -- "$previous_release_name" <<<"$newest_three"; then
   pnpm release:prune "$tree" --keep 3
 else
   printf 'Not pruning: previous release %s is not among the newest 3 names in the retention listing above. Refusing to prune automatically. If retention is wanted, read the listing and run, by hand and only after confirming, pnpm release:prune %s --keep 4 (raise --keep above 3 enough to include %s), or skip pruning.\n' \
