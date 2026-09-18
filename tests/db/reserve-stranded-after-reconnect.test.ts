@@ -135,7 +135,13 @@ describe("a reservation the pool cannot serve straight away", () => {
 
   it("rejects when its connection cannot be opened, and the next one is served once it can", async () => {
     const port = await takeFreePort();
-    const sql = postgres(`postgresql://${database}:${database}@127.0.0.1:${port}/${database}`, { max: 1 });
+    // The real credentials (on the shared server the suite's role is suffixed,
+    // not the logical `database` name) pointed at the controlled port the
+    // forwarder will put a listener on.
+    const connectingUrl = new URL(databaseUrl);
+    connectingUrl.hostname = "127.0.0.1";
+    connectingUrl.port = String(port);
+    const sql = postgres(connectingUrl.toString(), { max: 1 });
     let forwarder: net.Server | undefined;
 
     try {

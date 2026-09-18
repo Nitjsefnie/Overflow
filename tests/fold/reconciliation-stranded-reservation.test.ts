@@ -82,8 +82,13 @@ describe("a coordination connection that dies while reconciliations are queued b
         .catch((error: Error): QueuedOutcome => ({ id, ran, outcome: `rejected: ${error.message}` }));
     });
 
+    // Scoped to this suite's database: pg_locks is cluster-wide, and on the
+    // shared server another suite's advisory locks would otherwise match.
     const [victim] = await observer!<{ pid: number }[]>`
-      select pid::integer as pid from pg_locks where locktype = 'advisory' and granted limit 1
+      select pid::integer as pid from pg_locks
+      where locktype = 'advisory' and granted
+        and database = (select oid from pg_database where datname = current_database())
+      limit 1
     `;
     expect(victim?.pid).toEqual(expect.any(Number));
     await observer!`select pg_terminate_backend(${victim!.pid})`;

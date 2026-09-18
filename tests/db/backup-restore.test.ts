@@ -30,6 +30,10 @@ const backupScript = resolve("scripts/db-backup.sh");
 const restoreScript = resolve("scripts/db-restore.sh");
 
 let container: StartedTestContainer | undefined;
+/** The databaseUrl startPostgresContainer returned; every tool URL derives from it. */
+let sourceDatabaseUrl: string | undefined;
+/** The database that URL names: the logical name plus the shared server's per-suite suffix. */
+let sourceDatabaseName: string | undefined;
 let sql: Sql;
 let drill: Sql | undefined;
 let backupDir: string;
@@ -53,14 +57,25 @@ const comparedTables: ReadonlyArray<{ table: string; orderBy: string; columns: s
 
 const seedRows: Map<string, Record<string, unknown>[]> = new Map();
 
-/** A connection string the tools inside the container can reach: the server is in there. */
+/**
+ * A connection string the tools inside the container can reach: the server is
+ * in there, so the suite's own databaseUrl re-hosted onto 127.0.0.1:5432 —
+ * credentials and all, whatever server (shared or private) this run got.
+ */
 function containerInternalUrl(database: string): string {
-  return `postgresql://${DATABASE}:${DATABASE}@127.0.0.1:5432/${database}`;
+  const url = new URL(sourceDatabaseUrl!);
+  url.hostname = "127.0.0.1";
+  url.port = "5432";
+  url.pathname = `/${database}`;
+  url.search = "";
+  return url.toString();
 }
 
 /** A connection string a host-side client can reach: the mapped port. */
 function hostUrl(database: string): string {
-  return `postgresql://${DATABASE}:${DATABASE}@${container!.getHost()}:${container!.getMappedPort(5432)}/${database}?client_min_messages=warning`;
+  const url = new URL(sourceDatabaseUrl!);
+  url.pathname = `/${database}`;
+  return url.toString();
 }
 
 function runScript(script: string, args: string[], env: NodeJS.ProcessEnv): SpawnSyncReturns<string> {
@@ -75,6 +90,8 @@ describe("the backup and restore procedure", () => {
       password: DATABASE,
     });
     container = started.container;
+    sourceDatabaseUrl = started.databaseUrl;
+    sourceDatabaseName = new URL(started.databaseUrl).pathname.slice(1);
     process.env.DATABASE_URL = started.databaseUrl;
     sql = getSql();
     await runMigrations();
@@ -142,7 +159,7 @@ describe("the backup and restore procedure", () => {
     const [before] = await sql`select count(*)::int as count from issues`;
     const result = runScript(
       restoreScript,
-      [DATABASE, dump],
+      [sourceDatabaseName!, dump],
       scriptEnv(),
     );
 
@@ -214,7 +231,7 @@ function scriptEnv(): NodeJS.ProcessEnv {
   const exec = (tool: string) => `docker exec -i ${container!.getId()} ${tool}`;
   return {
     ...process.env,
-    DATABASE_URL: containerInternalUrl(DATABASE),
+    DATABASE_URL: containerInternalUrl(sourceDatabaseName!),
     OVERFLOW_PG_DUMP: exec("pg_dump"),
     OVERFLOW_PG_RESTORE: exec("pg_restore"),
   };
