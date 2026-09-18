@@ -17,6 +17,11 @@ export default defineConfig({
     // per-file worker isolation.
     isolate: false,
     environment: "node",
+    // ONE postgres container per run (issue 626): global setup starts it and
+    // provides its facts; suites get per-suite databases on it through
+    // startPostgresContainer, and tests/support/global-setup.ts stops it at
+    // teardown.
+    globalSetup: ["./tests/support/global-setup.ts"],
     setupFiles: ["./vitest.setup.ts"],
     // next-auth is ESM that imports "next/server" without an extension, which
     // only a bundler resolves (next ships no exports map). Inlining it lets
