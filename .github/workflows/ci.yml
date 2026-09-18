@@ -85,7 +85,7 @@ jobs:
 
       - name: Test suite
         if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
-        run: pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.include='src/**'
+        run: pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=cobertura --coverage.include='src/**'
 
       - name: Test suite (docs-only)
         if: ${{ steps.detect-docs.outputs.docs_only == 'true' }}
@@ -94,6 +94,23 @@ jobs:
       - name: Coverage floor
         if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
         run: node scripts/check-coverage-floor.ts
+
+      # Informational, never a gate. The diff base is the checked-out
+      # commit's first parent — a pull_request run tests the merge commit,
+      # whose first parent is the pull request's head — never the event's
+      # base SHA, which can trail the merge ref the run actually tests.
+      - name: Patch coverage report
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        run: git diff HEAD^1 HEAD | node scripts/patch-coverage.ts coverage/cobertura-coverage.xml
+
+      - name: Upload patch coverage report
+        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: patch-coverage
+          path: coverage/patch-coverage.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload coverage summary
         if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
