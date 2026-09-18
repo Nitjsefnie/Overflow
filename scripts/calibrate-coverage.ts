@@ -12,7 +12,7 @@
 // rewritten with the new measurement and floor = measurement minus gap.
 // Any other comparison writes nothing at all.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
