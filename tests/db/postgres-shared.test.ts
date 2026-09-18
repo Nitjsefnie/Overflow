@@ -1,5 +1,6 @@
 import postgres, { type Sql } from "postgres";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { survivorVerdict, type SurvivorRow } from "../support/global-setup";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
@@ -148,5 +149,32 @@ describe("suites share one postgres server through startPostgresContainer", () =
     } finally {
       injectOverride.inject = undefined;
     }
+  });
+});
+
+/**
+ * The teardown survivor check exists because the shared server removed the
+ * loud tripwire a leaked pool used to produce: a suite that skips closeSql()
+ * now hands the next file a pool still pointed at the previous suite's
+ * database, and the gate scores green. The verdict function is the decision;
+ * teardown() is its only caller, so these pin the decision itself.
+ */
+describe("the teardown survivor verdict", () => {
+  it("passes a clean activity table", () => {
+    expect(survivorVerdict([])).toBeUndefined();
+  });
+
+  it("names every surviving holder, its database and its count", () => {
+    const rows: SurvivorRow[] = [
+      { usename: "leaky_suite_ab12cd34", datname: "leaky_suite_ab12cd34", count: 2 },
+      { usename: "other_suite_ef901234", datname: null, count: 1 },
+    ];
+    const verdict = survivorVerdict(rows);
+
+    expect(verdict).toBeDefined();
+    expect(verdict).toContain("3 survivor connection(s)");
+    expect(verdict).toContain("leaky_suite_ab12cd34/leaky_suite_ab12cd34 x2");
+    expect(verdict).toContain("other_suite_ef901234/(no database) x1");
+    expect(verdict).toContain("closeSql()");
   });
 });
