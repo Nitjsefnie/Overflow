@@ -1,0 +1,206 @@
+name: coverage comment
+
+# Issue 592 mechanism 3: the patch coverage report, commented onto the pull
+# request. The ci workflow measures but holds no PR-writing token; this
+# workflow_run job holds one and therefore touches nothing from the pull
+# request:
+#
+#   - it checks out NOTHING — the workspace stays empty, run blocks reference
+#     env names only, and the artifact is parsed as data only;
+#   - the destination pull request is resolved from the triggering event's
+#     head branch only — zero open PRs exits silently, more than one fails
+#     loudly, and a claim inside the artifact that mismatches the
+#     event-resolved PR fails loudly;
+#   - one marker-identified comment is posted or updated in place, never
+#     duplicated;
+#   - a red or cancelled run, a missing artifact, and an unmeasurable report
+#     all substitute a "not measured" body, so a stale percentage never looks
+#     current;
+#   - a body over the API's 65536-character limit is refused (exit 1), never
+#     truncated;
+#   - the outcome is published as a "coverage comment" check run on the
+#     triggering run's head SHA: success when a comment was posted or updated
+#     (either body variant), failure on any loud failure.
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, and the destination PR is resolved from the event only; the pinning suite holds that shape
+    workflows: [ci]
+    types: [completed]
+
+# pull-requests: write to upsert the comment, checks: write to publish the
+# check run, actions: read to download the triggering run's artifact.
+permissions:
+  pull-requests: "write"
+  checks: "write"
+  actions: "read"
+
+# Serializes runs for one head branch so concurrent runs cannot each post a
+# fresh comment and duplicate it; older runs still complete so a cancelled
+# successor does not silently drop the update. The group safely holds the
+# attacker-controlled branch name: it is an opaque string key, never executed.
+concurrency:
+  group: coverage-comment-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # The destination comes from the triggering event only. The head branch
+      # is attacker-controlled, so it travels through env and is used only as
+      # a quoted gh argument — never interpolated into the run block.
+      - name: Resolve the destination pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # Zero open PRs with this head branch — a merged or closed PR, or a
+          # main push — is the one silent exit: nothing to report, exit 0.
+          # More than one is ambiguous: refuse loudly rather than guess.
+          prs=$(gh pr list --repo "$REPO_SLUG" --state open --head "$HEAD_BRANCH" --json number)
+          count=$(printf '%s' "$prs" | jq 'length')
+          case "$count" in
+            0)
+              echo "no open pull request carries this head branch; nothing to comment on"
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            1)
+              pr_number=$(printf '%s' "$prs" | jq -r '.[0].number')
+              echo "found=true" >> "$GITHUB_OUTPUT"
+              echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::found ${count} open pull requests carrying this head branch; refusing to guess the destination"
+              exit 1
+              ;;
+          esac
+
+      # Cross-run artifact download: run-id scopes it to the triggering run,
+      # and github-token is required for cross-run downloads. The
+      # continue-on-error is the missing-artifact path — docs-only runs upload
+      # nothing, and a missing artifact must reach the not-measured body, not
+      # fail the job.
+      - name: Download the patch coverage artifact
+        id: artifact
+        if: steps.pr.outputs.found == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: patch-coverage
+          path: patch-coverage
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # JSON parsed as data only (jq), never executed. The body is the
+      # pre-rendered markdown field verbatim — this job never renders or
+      # transforms anything itself.
+      - name: Determine the comment body
+        id: body
+        if: steps.pr.outputs.found == 'true'
+        shell: bash
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          marker="<!-- overflow:coverage-comment -->"
+          body_file="comment-body.md"
+          stale="a percentage carried over from an earlier run is stale, not current"
+
+          if [[ "$CONCLUSION" != "success" ]]; then
+            printf '%s\n\nThe ci run concluded %s, so patch coverage was not measured for it; %s.\n' "$marker" "$CONCLUSION" "$stale" > "$body_file"
+          elif [[ ! -f patch-coverage/patch-coverage.json ]]; then
+            printf '%s\n\nThe ci run produced no patch-coverage artifact, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
+          elif [[ "$(jq -r '.measured // false' patch-coverage/patch-coverage.json)" != "true" ]]; then
+            printf '%s\n\nThe patch-coverage artifact from this run is not measurable, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
+          else
+            # Any claim inside the artifact must match the event-resolved PR
+            # and the event's head branch; today's artifact carries neither
+            # field, so this is the loud failure for a future shape that does.
+            claimed_pr=$(jq -r '.pr // .pr_number // empty' patch-coverage/patch-coverage.json)
+            if [[ -n "$claimed_pr" && "$claimed_pr" != "$PR_NUMBER" ]]; then
+              echo "::error::the artifact claims pull request ${claimed_pr} but the triggering event resolves to pull request ${PR_NUMBER}; refusing to comment"
+              exit 1
+            fi
+            claimed_branch=$(jq -r '.head_branch // .branch // empty' patch-coverage/patch-coverage.json)
+            if [[ -n "$claimed_branch" && "$claimed_branch" != "$HEAD_BRANCH" ]]; then
+              echo "::error::the artifact claims branch ${claimed_branch} but the triggering event carries branch ${HEAD_BRANCH}; refusing to comment"
+              exit 1
+            fi
+            {
+              printf '%s\n\n' "$marker"
+              jq -r '.markdown // empty' patch-coverage/patch-coverage.json
+            } > "$body_file"
+          fi
+
+          # Refuse, never truncate: an oversized body is a loud failure.
+          chars=$(wc -m < "$body_file")
+          if (( chars > 65536 )); then
+            echo "::error::the assembled comment body is ${chars} characters, over the 65536-character comment limit; refusing to truncate"
+            exit 1
+          fi
+
+      # One comment per pull request: found by the marker, updated in place,
+      # never duplicated. The body rides in as a file through -F body=@file —
+      # never interpolated into the command line.
+      - name: Post or update the marker-identified comment
+        id: comment
+        if: steps.pr.outputs.found == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api --paginate "repos/$REPO_SLUG/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- overflow:coverage-comment -->")) | .id')
+          nl=$'\n'
+          comment_id=${ids%%"$nl"*}
+          if [[ -n "$comment_id" ]]; then
+            gh api -X PATCH "repos/$REPO_SLUG/issues/comments/$comment_id" -F body=@"comment-body.md"
+            echo "updated comment ${comment_id} in place"
+          else
+            gh api -X POST "repos/$REPO_SLUG/issues/$PR_NUMBER/comments" -F body=@"comment-body.md"
+            echo "posted a new comment"
+          fi
+
+      # Success when a comment was posted or updated (either body variant),
+      # failure on any loud failure — and the one silent exit (no open PR
+      # with this head branch) publishes nothing at all.
+      - name: Publish the coverage comment check run
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_SLUG: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_FOUND: ${{ steps.pr.outputs.found }}
+          PR_OUTCOME: ${{ steps.pr.outcome }}
+          COMMENT_OUTCOME: ${{ steps.comment.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$PR_FOUND" != "true" && "$PR_OUTCOME" == "success" ]]; then
+            echo "no destination pull request; nothing to report"
+            exit 0
+          fi
+          conclusion=success
+          summary="posted or updated the patch coverage comment"
+          if [[ "$PR_FOUND" != "true" || "$COMMENT_OUTCOME" != "success" ]]; then
+            conclusion=failure
+            summary="the coverage comment job failed before it could post or update the comment; see the job log"
+          fi
+          gh api -X POST "repos/$REPO_SLUG/check-runs" \
+            -F name="coverage comment" \
+            -F head_sha="$HEAD_SHA" \
+            -F status=completed \
+            -F conclusion="$conclusion" \
+            -F output.title="patch coverage" \
+            -F output.summary="$summary"
