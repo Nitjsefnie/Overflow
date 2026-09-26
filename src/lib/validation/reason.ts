@@ -3,8 +3,9 @@ import { z } from "zod";
 /**
  * The longest free-text reason the settlement-override and moderation APIs
  * accept, counted after trimming. The database CHECKs added by migration 049
- * enforce the same bound on every stored reason column, so a route's cap and
- * the stored row can never drift apart.
+ * put the same length bound on every stored reason column, so the database
+ * refuses any reason longer than the API accepts. Only the length bound is
+ * shared: trimming and blank rejection stay with the routes and services.
  */
 export const MAX_REASON_LENGTH = 2000;
 

@@ -7,6 +7,7 @@ import {
   RecalibrationCreditAdjustmentControl,
   RecalibrationPlanControl,
 } from "@/components/moderation-controls";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -24,6 +25,14 @@ afterEach(() => {
 });
 
 describe("moderation audit controls", () => {
+  it("caps the audit decision reason and the recalibration plan at the length the API accepts", () => {
+    render(<ModerationControls auditId={auditId} targetLogin="mira" />);
+    render(<RecalibrationPlanControl targetAccountId="account-7" targetLogin="nils" />);
+
+    expect(screen.getByLabelText("Reason for audit decision")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+    expect(screen.getByLabelText("Recalibration plan for nils")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+  });
+
   it("requires a nonblank reason before a moderator decision is sent", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -256,6 +265,19 @@ function previewResponse(preview: unknown, status = 200) {
 }
 
 describe("recalibration credit adjustment controls", () => {
+  it("caps the apply and reversal reasons at the length the API accepts", async () => {
+    const applied = { ...actionablePreview, adjustments: [adjustmentRecord()] };
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(previewResponse(applied))));
+    render(<RecalibrationCreditAdjustmentControl targetAccountId={accountId} targetLogin="mira" />);
+
+    const reversalLabel = "Reason for reversing adjustment 00000000-0000-4000-8000-0000000000c9";
+    await waitFor(() => {
+      expect(screen.getByLabelText(reversalLabel)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Reason for crediting mira")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+    expect(screen.getByLabelText(reversalLabel)).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+  });
+
   it("renders the stored figure: both cohort counts, the gap, the proposed total and the per-creditor preview", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(previewResponse(actionablePreview)));
     vi.stubGlobal("fetch", fetchMock);

@@ -6,6 +6,7 @@ import ModerationPage from "@/app/moderation/page";
 import { OpenAuditForm } from "@/components/open-audit-form";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE } from "@/lib/calibration/statistics";
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 // Bind the page/route graph to this file's mocks and release it afterward.
 vi.hoisted(() => { vi.resetModules(); });
@@ -243,6 +244,12 @@ describe("open audit form", () => {
       expect(screen.getByText("Self-work sample · 12 pairs · mean delta +1,300")).toBeInTheDocument();
     });
     expect(screen.queryByText("Self-work sample · 12 pairs · mean delta +1300")).not.toBeInTheDocument();
+  });
+
+  it("caps the audit reason at the length the API accepts", () => {
+    render(<OpenAuditForm candidates={candidates} repositories={repositories} />);
+
+    expect(screen.getByLabelText("Reason for opening the audit")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
   });
 
   it("refuses a blank reason before any request is sent", () => {

@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -11,8 +12,12 @@ let sql: Sql;
 let externalId = 5_900_000;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
-const maxReason = "x".repeat(2000);
-const overReason = `${maxReason}!`;
+// Built from the shared constant, not a restated literal: if the API cap moves
+// ahead of the migration, these boundary rows fail instead of passing quietly.
+const maxReason = "x".repeat(MAX_REASON_LENGTH);
+const overReason = "x".repeat(MAX_REASON_LENGTH + 1);
+// MAX_REASON_LENGTH code points whose UTF-16 length is twice that.
+const astralMaxReason = "😀".repeat(MAX_REASON_LENGTH);
 
 function nextExternalId(): number {
   externalId += 1;
@@ -49,7 +54,7 @@ describe("reason length limits (migration 049)", () => {
     }
   });
 
-  it("caps settlement_override_requests.reason at 2000 characters", async () => {
+  it("caps settlement_override_requests.reason at the shared reason cap", async () => {
     const requesterId = await insertUser(sql);
 
     await expect(sql`
@@ -63,7 +68,7 @@ describe("reason length limits (migration 049)", () => {
     `;
   });
 
-  it("caps settlement_override_requests.decision_reason at 2000 characters", async () => {
+  it("caps settlement_override_requests.decision_reason at the shared reason cap", async () => {
     const deciderId = await insertUser(sql);
 
     const rejected = await insertOpenRequest();
@@ -83,7 +88,7 @@ describe("reason length limits (migration 049)", () => {
     `;
   });
 
-  it("caps calibration_audits.rationale at 2000 characters", async () => {
+  it("caps calibration_audits.rationale at the shared reason cap", async () => {
     await expect(insertAudit(overReason)).rejects.toMatchObject(
       overTheCap("calibration_audits_rationale_length_check"),
     );
@@ -91,7 +96,7 @@ describe("reason length limits (migration 049)", () => {
     await insertAudit(maxReason);
   });
 
-  it("caps calibration_audits.decision at 2000 characters", async () => {
+  it("caps calibration_audits.decision at the shared reason cap", async () => {
     const rejectedAudit = await insertAudit("A rationale under the cap.");
     await expect(sql`
       update calibration_audits set decision = ${overReason} where id = ${rejectedAudit}
@@ -103,14 +108,19 @@ describe("reason length limits (migration 049)", () => {
     `;
   });
 
-  it("caps moderation_events.reason at 2000 characters", async () => {
+  it("caps moderation_events.reason at the shared reason cap", async () => {
     await expect(insertEvent(overReason)).rejects.toMatchObject(
       overTheCap("moderation_events_reason_length_check"),
     );
     await insertEvent(maxReason);
   });
 
-  it("caps moderation_events.recalibration_plan at 2000 characters and keeps null allowed", async () => {
+  it("counts characters, not UTF-16 code units, against the cap", async () => {
+    expect(astralMaxReason).toHaveLength(2 * MAX_REASON_LENGTH);
+    await insertEvent(astralMaxReason);
+  });
+
+  it("caps moderation_events.recalibration_plan at the shared reason cap and keeps null allowed", async () => {
     await expect(sql`
       insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason, recalibration_plan)
       values (${await insertUser(sql)}, ${await insertUser(sql)}, ${"RECALIBRATING"}, ${"ACTIVE"}, ${"Closed."}, ${overReason})
@@ -128,7 +138,7 @@ describe("reason length limits (migration 049)", () => {
     `;
   });
 
-  it("caps moderation_credit_adjustments.reason at 2000 characters", async () => {
+  it("caps moderation_credit_adjustments.reason at the shared reason cap", async () => {
     const fixture = await insertAdjustmentReferences();
 
     await expect(sql`

@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { SettlementOverrideRequestForm } from "@/components/settlement-override-request";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -24,6 +25,12 @@ afterEach(() => {
 });
 
 describe("settlement correction request form", () => {
+  it("caps the reason at the length the API accepts", () => {
+    render(<SettlementOverrideRequestForm target={settlementTarget} />);
+
+    expect(screen.getByLabelText("Why is this settlement wrong?")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+  });
+
   it("asks for a reason before letting a member report a settlement", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

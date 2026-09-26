@@ -5,8 +5,11 @@
 -- shared reason schema (src/lib/validation/reason.ts), and every writer of
 -- every column below takes its value from one of those routes: no fold,
 -- rederivation or reconciliation path composes any of them. The CHECKs make
--- the same bound a property of the stored row, so no future writer — and no
--- manual write — can persist a reason the API contract refuses.
+-- the same length bound a property of the stored row, so the database refuses
+-- any reason longer than the API accepts, from a future writer or a manual
+-- write alike. Only the length is enforced here: trimming and blank rejection
+-- happen in the routes and services; these constraints accept blank or
+-- untrimmed text.
 --
 -- Nullable columns keep their nullability: the guard is written so NULL
 -- passes, and a missing reason stays exactly as representable as before.
