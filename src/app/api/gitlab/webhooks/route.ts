@@ -70,7 +70,10 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     // Both payload kinds the hook subscribes to — issue and merge request —
     // are accepted for processing, so the parser answers only ok or invalid;
     // there is no deliberately-ignored (204) class on this receiver.
-    const result = parseGitLabWebhookDeliveryDetailed(event, deliveryUuid, payload);
+    const result = parseGitLabWebhookDeliveryDetailed(event, deliveryUuid, payload, {
+      idempotencyKey: request.headers.get("idempotency-key"),
+      webhookId: request.headers.get("webhook-id"),
+    });
     if (result.status !== "ok") {
       return new Response(null, { status: 400 });
     }

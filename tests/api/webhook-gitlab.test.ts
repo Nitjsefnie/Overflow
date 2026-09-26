@@ -1,4 +1,3 @@
-import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { webhookCredential } from "../support/webhook-credential";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as database from "@/lib/db/client";
@@ -17,8 +16,8 @@ afterAll(() => { vi.resetModules(); });
  * accepted-for-processing, 413 over the body cap. Both payload kinds the hook
  * subscribes to — issue and merge request — are accepted for processing; the
  * receiver has no deliberately-ignored (204) class. The token check replaces
- * the HMAC; the delivery uuid header is required (the namespaced dedup key is
- * built from it, issue 547).
+ * the HMAC; the delivery uuid header is required for execution diagnostics
+ * and is the fallback receipt key when stable message headers are absent.
  */
 
 const secret = "webhook-secret";
@@ -96,10 +95,20 @@ function gitlabHeadersBase(): Record<string, string> {
 }
 
 describe("GitLab webhook route", () => {
-  it.each([["issue", issuePayload], ["merge request", mergeRequestPayload]])("trims the execution header at the 255-character limit for %s", (_kind, body) => {
-    const header = "x".repeat(255);
-    expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", ` ${header} `, JSON.parse(body)))
-      .toMatchObject({ status: "ok", delivery: { deliveryId: `gitlab:${header}`, executionId: header } });
+  it.each<{ name: string; headers: Record<string, string>; key: string }>([
+    { name: "Idempotency-Key", headers: { "Idempotency-Key": " stable-message " }, key: "stable-message" },
+    { name: "webhook-id", headers: { "webhook-id": " stable-message " }, key: "stable-message" },
+    { name: "conflicting stable headers", headers: { "Idempotency-Key": "winner", "webhook-id": "other" }, key: "winner" },
+    { name: "ignored event UUID", headers: { "X-Gitlab-Event-UUID": "event-id" }, key: "uuid-1" },
+  ])("dispatches the message identity from $name", async ({ headers, key }) => {
+    const deliveries: unknown[] = [];
+    const route = createGitLabWebhookPostHandler({
+      lookupCredential: async () => webhookCredential("gitlab", secret),
+      processWebhook: async (delivery) => { deliveries.push(delivery); },
+    });
+    const response = await route(request(issuePayload, gitlabHeaders(headers)));
+    expect(response.status).toBe(202);
+    expect(deliveries).toEqual([expect.objectContaining({ deliveryId: key, executionId: "uuid-1" })]);
   });
 
   it("rejects a 256-character execution header before processing", async () => {
@@ -129,7 +138,7 @@ describe("GitLab webhook route", () => {
     expect(deliveries).toEqual([]);
   });
 
-  it("dispatches a verified issue delivery with the namespaced delivery id", async () => {
+  it("dispatches a verified issue delivery with the fallback delivery id", async () => {
     const processWebhookMock = vi.fn().mockResolvedValue({ status: "PROCESSED" });
     const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
 
@@ -137,7 +146,7 @@ describe("GitLab webhook route", () => {
 
     expect(response.status).toBe(202);
     expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({
-      deliveryId: "gitlab:uuid-1",
+      deliveryId: "uuid-1",
       executionId: "uuid-1",
       event: "issues",
       action: "closed",
@@ -148,8 +157,8 @@ describe("GitLab webhook route", () => {
     }), { provider: "gitlab", registrationId: "test-registration" });
   });
 
-  // The delivery uuid header is load-bearing beyond the 400: the namespaced
-  // dedup key is built from it, so a request without it can never be claimed.
+  // The execution UUID is required even when a stable message header is sent;
+  // it records which execution claimed the scoped receipt.
   it.each([
     { name: "no event header", headers: gitlabHeadersWithout("event") },
     { name: "no delivery uuid", headers: gitlabHeadersWithout("uuid") },
@@ -214,7 +223,7 @@ describe("GitLab webhook route", () => {
     const response = await route(request(mergeRequestPayload, gitlabHeaders({ "x-gitlab-event": "Merge Request Hook" })));
     expect(response.status).toBe(202);
     expect(processWebhookMock).toHaveBeenCalledExactlyOnceWith({
-      deliveryId: "gitlab:uuid-1",
+      deliveryId: "uuid-1",
       executionId: "uuid-1",
       event: "pull_request",
       action: "closed",

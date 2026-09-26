@@ -123,6 +123,17 @@ describe("scoped webhook receipts", () => {
       values ('other', ${randomUUID()}, 'key', 'execution', 'issues', 'PROCESSED')`)
       .rejects.toMatchObject({ code: "23514", constraint_name: "webhook_deliveries_receipt_shape_check" });
   });
+
+  it.each([
+    { name: "null registration", registrationId: null, deliveryKey: "key", executionId: "execution" },
+    { name: "blank delivery key", registrationId: randomUUID(), deliveryKey: "   ", executionId: "execution" },
+    { name: "blank execution id", registrationId: randomUUID(), deliveryKey: "key", executionId: "   " },
+  ])("rejects a scoped receipt with $name", async ({ registrationId, deliveryKey, executionId }) => {
+    await expect(sql`insert into webhook_deliveries
+      (provider, registration_id, delivery_key, execution_id, event_name, processing_state)
+      values ('gitlab', ${registrationId}, ${deliveryKey}, ${executionId}, 'issues', 'PROCESSED')`)
+      .rejects.toMatchObject({ code: "23514", constraint_name: "webhook_deliveries_receipt_shape_check" });
+  });
 });
 
 async function deliveryFor(fixture: Awaited<ReturnType<typeof materializeRepositoryFixture>>, deliveryId: string): Promise<GitHubWebhookDelivery> {

@@ -5,11 +5,10 @@ import type { GitHubWebhookDelivery, SupportedGitHubWebhookEvent } from "@/lib/g
 /**
  * The GitLab webhook payload maps into the delivery vocabulary the shared
  * processor already speaks: a GitLab issue event becomes an `issues` delivery
- * with an ISSUE subject, the raw issue view, and a delivery id namespaced
- * `gitlab:` over the `X-Gitlab-Webhook-UUID` header. The namespacing is the
- * dedup: GitHub deliveries carry guid strings, so the prefix guarantees the
- * two forges can never collide on `webhook_deliveries.github_delivery_id` —
- * no migration, no provider column on the deliveries table.
+ * with an ISSUE subject, the raw issue view, and a stable message identity.
+ * The processor scopes that receipt key to the authenticated provider and
+ * registration. The webhook UUID identifies an execution; older senders
+ * without stable message headers also use it as the fallback receipt key.
  *
  * The delivery carries the payload's forge identity (provider + the instance
  * base normalized from `project.web_url`), and the processor resolves the
@@ -30,6 +29,8 @@ import type { GitHubWebhookDelivery, SupportedGitHubWebhookEvent } from "@/lib/g
 export type GitLabWebhookParseResult =
   | { status: "ok"; delivery: GitHubWebhookDelivery }
   | { status: "invalid" };
+
+type GitLabMessageHeaders = { idempotencyKey?: string | null; webhookId?: string | null };
 
 /** The GitLab issue actions Overflow materializes, in the GitHub vocabulary. */
 const issueActions: Record<string, string> = {
@@ -107,18 +108,25 @@ export function parseGitLabWebhookDeliveryDetailed(
   eventName: string | null,
   deliveryUuid: string | null,
   payload: unknown,
+  messageHeaders: GitLabMessageHeaders = {},
 ): GitLabWebhookParseResult {
   if (eventName === null || eventName.trim().length === 0 || deliveryUuid === null || deliveryUuid.trim().length === 0
     || deliveryUuid.trim().length > 255) {
     return { status: "invalid" };
   }
+  const executionId = deliveryUuid.trim();
+  const idempotencyKey = messageHeaders.idempotencyKey?.trim() ?? "";
+  const webhookId = messageHeaders.webhookId?.trim() ?? "";
+  if (idempotencyKey.length > 255 || webhookId.length > 255) return { status: "invalid" };
+  // Idempotency-Key wins even when the sender supplies conflicting stable ids.
+  const deliveryId = idempotencyKey || webhookId || executionId;
 
   // The kind decides which payload shape is read: an issue and a merge
   // request carry different attribute sets, and any other kind is invalid.
   const kind = gitlabKindSchema.safeParse(payload);
   if (!kind.success) return { status: "invalid" };
   if (kind.data.object_kind === "merge_request") {
-    return parseMergeRequestPayload(deliveryUuid, payload);
+    return parseMergeRequestPayload(deliveryId, executionId, payload);
   }
   if (kind.data.object_kind !== "issue") {
     return { status: "invalid" };
@@ -138,8 +146,8 @@ export function parseGitLabWebhookDeliveryDetailed(
   return {
     status: "ok",
     delivery: {
-      deliveryId: namespacedDeliveryId(deliveryUuid),
-      executionId: deliveryUuid.trim(),
+      deliveryId,
+      executionId,
       event: "issues",
       action,
       repositoryGitHubId: parsed.data.project.id,
@@ -161,7 +169,7 @@ export function parseGitLabWebhookDeliveryDetailed(
   };
 }
 
-function parseMergeRequestPayload(deliveryUuid: string, payload: unknown): GitLabWebhookParseResult {
+function parseMergeRequestPayload(deliveryId: string, executionId: string, payload: unknown): GitLabWebhookParseResult {
   const parsed = gitlabMergeRequestPayloadSchema.safeParse(payload);
   if (!parsed.success) return { status: "invalid" };
 
@@ -176,8 +184,8 @@ function parseMergeRequestPayload(deliveryUuid: string, payload: unknown): GitLa
   return {
     status: "ok",
     delivery: {
-      deliveryId: namespacedDeliveryId(deliveryUuid),
-      executionId: deliveryUuid.trim(),
+      deliveryId,
+      executionId,
       event: mapped.event,
       action: mapped.action,
       repositoryGitHubId: parsed.data.project.id,
@@ -199,12 +207,6 @@ function parseMergeRequestPayload(deliveryUuid: string, payload: unknown): GitLa
   };
 }
 
-// The namespaced delivery id: the dedup key is forge-safe by construction,
-// since GitHub guids carry no such prefix.
-function namespacedDeliveryId(deliveryUuid: string): string {
-  return `gitlab:${deliveryUuid.trim()}`;
-}
-
 // The same normalization the identity link stores under, so the stored
 // instance_url and the delivery's instance compare exactly; null when the
 // project's web_url cannot name an instance.
@@ -220,7 +222,8 @@ export function parseGitLabWebhookDelivery(
   eventName: string | null,
   deliveryUuid: string | null,
   payload: unknown,
+  messageHeaders: GitLabMessageHeaders = {},
 ): GitHubWebhookDelivery | null {
-  const result = parseGitLabWebhookDeliveryDetailed(eventName, deliveryUuid, payload);
+  const result = parseGitLabWebhookDeliveryDetailed(eventName, deliveryUuid, payload, messageHeaders);
   return result.status === "ok" ? result.delivery : null;
 }
