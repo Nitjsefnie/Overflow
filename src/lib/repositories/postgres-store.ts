@@ -23,6 +23,7 @@ import {
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { getCoordinationSql, getSql } from "@/lib/db/client";
+import { scrubRepositoryFreeText } from "@/lib/repositories/unregister-scrub";
 import { credentialBinding, decryptToken, encryptToken, tokenKeySetFrom, type TokenKeySet } from "@/lib/security/token-cipher";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { generateWebhookCredential, type WebhookCredentialRecord, type WebhookCredentialTarget } from "@/lib/webhooks/credentials";
@@ -368,6 +369,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       if (updated === undefined) {
         return { kind: "NOT_REGISTERED" };
       }
+      // The unregistered repository's free text leaves in the same transaction
+      // (issue 681): the materialized body columns unconditionally, the
+      // evidence cache only when no fold can still run — see
+      // scrubRepositoryFreeText for the gate.
+      await scrubRepositoryFreeText(transaction, updated.id);
       return { kind: "UNREGISTERED", repository: toRegisteredRepository(updated) };
     });
   }
