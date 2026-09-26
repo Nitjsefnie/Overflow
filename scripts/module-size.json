@@ -1,9 +1,14 @@
 {
   "ceilings": {
     "src": 800,
-    "tests": 2500
+    "tests": 2500,
+    "tooling": 800,
+    "stylesheets": 800,
+    "migrations": 400
   },
   "module_size_baseline": {
+    "scripts/check-page-geometry.mjs": 1394,
+    "src/app/globals.css": 1234,
     "src/components/repository-form.tsx": 836,
     "src/lib/dashboard/queries.ts": 1736,
     "src/lib/fold/postgres-store.ts": 2782,
