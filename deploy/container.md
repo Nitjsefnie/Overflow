@@ -76,7 +76,15 @@ reaches the app.
 
 By default both services bind to loopback — the app on `127.0.0.1:3000`, the
 database on `127.0.0.1:5432` — and `APP_HOST_BIND` / `POSTGRES_HOST_BIND`
-move or widen those binds deliberately. `APP_URL` must name the real browsable host: with a placeholder such as `127.0.0.2`, Auth.js logs `[auth][error] UntrustedHost` and refuses every sign-in (observed in this repository's container smoke).
+move or widen those binds deliberately. `APP_URL` must name the real browsable
+host, because it is what the Auth.js configuration trusts for sign-in: Auth.js
+itself never reads `APP_URL` — its own derivation trusts a host only from
+`AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES` — so the configuration
+in `src/auth.ts` derives its trust from `APP_URL`, the same origin the origin
+guard enforces. `[auth][error] UntrustedHost` on every sign-in route therefore
+indicates a missing or malformed `APP_URL`, or an operator `AUTH_URL` mis-set
+to a blank value; a parseable but wrong `APP_URL` passes the sign-in routes
+and fails later, at GitHub's OAuth redirect.
 
 ## Decisions
 
