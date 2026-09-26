@@ -29,6 +29,13 @@ release_name_re='\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'
 # next-env.d.ts and node_modules. Nothing else, and nothing nested: a leftover
 # .next-switch-* link is a crash artefact the operator should see.
 operational_ignored_re="^(\.next/?|${release_name_re}/|${release_name_re}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)\$"
+# Matched byte-wise under LC_ALL=C, as the retention listing below is, so the
+# operator's locale cannot change what the allowlist admits; the function-local
+# assignment restores the locale on return.
+is_operational_ignored() {
+  local LC_ALL=C
+  [[ "$1" =~ $operational_ignored_re ]]
+}
 
 # The CI gate: refuse to ship a SHA that main's required checks have not
 # blessed. Runs against the fetched SHA before the fast-forward, so every
@@ -251,8 +258,9 @@ if [ -n "$tree_status" ]; then
 fi
 # NUL-delimited, so a name containing a newline is judged whole; the process
 # substitution's status is read back through wait, so a failed listing refuses
-# even when it printed something first.
-mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory)
+# even when it printed something first. An ignored empty directory is left out:
+# nothing in it can be compiled.
+mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory)
 ignored_status=0
 wait "$!" || ignored_status=$?
 if [ "$ignored_status" -ne 0 ]; then
@@ -261,7 +269,7 @@ if [ "$ignored_status" -ne 0 ]; then
 fi
 stray_ignored=()
 for entry in "${ignored_entries[@]}"; do
-  [[ "$entry" =~ $operational_ignored_re ]] || stray_ignored+=("$entry")
+  is_operational_ignored "$entry" || stray_ignored+=("$entry")
 done
 if [ "${#stray_ignored[@]}" -gt 0 ]; then
   printf '  %q\n' "${stray_ignored[@]}" >&2

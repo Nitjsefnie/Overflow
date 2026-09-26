@@ -39,8 +39,9 @@ The script builds from an export of that commit (`git archive`), streamed to
 `docker build` as its context, not from the working directory. So untracked
 and ignored files never enter the context — including ones `git status` cannot
 see because the repository's `.gitignore` denies by default — and the image
-holds exactly the source its revision label names. Docker does not apply
-`.dockerignore` to a context on stdin; the export is the only filter.
+holds exactly the source its revision label names. The export is the filter
+on this path; `.dockerignore` is not relied on (observed not to apply to a
+stdin context with docker 26.1.5).
 
 Or let compose build it and bring up the database and app together:
 
@@ -49,8 +50,8 @@ SOURCE_SHA="$(git rev-parse HEAD)" docker compose --profile app up --build
 ```
 
 Compose builds from the working tree, filtered only by `.dockerignore`, so its
-image can carry ignored untracked files while its label names HEAD. Use the
-script whenever the image's revision label must be attested.
+image can carry ignored untracked files while its label names HEAD (issue
+718). Use the script whenever the image's revision label must be attested.
 
 Both paths build from digest-pinned bases —
 `node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532` for the application image and
