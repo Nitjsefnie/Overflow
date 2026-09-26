@@ -92,12 +92,12 @@ function mergeRequestDelivery(options: { projectId: number; instanceUrl: string;
   })!;
 }
 
-async function deliver(delivery: ReturnType<typeof issueDelivery>) {
+async function deliver(repositoryId: string, delivery: ReturnType<typeof issueDelivery>) {
   const store = new PostgresFoldStore();
   return processWebhook({
     store,
     enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
-  }, delivery);
+  }, delivery, { provider: "gitlab", registrationId: repositoryId });
 }
 
 async function issueRow(repositoryId: string) {
@@ -134,7 +134,7 @@ describe("GitLab webhook delivery materialization", () => {
     const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
     await insertIssue(repositoryId, issueId);
 
-    await deliver(issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-nul", issueId,
+    await deliver(repositoryId, issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-nul", issueId,
       title: "Webhook\u0000title", body: "Webhook\u0000body" }));
     const [row] = await sql`select title, body from issues where repository_id = ${repositoryId}`;
     expect(row).toMatchObject({ title: "Webhook\uFFFDtitle", body: "Webhook\uFFFDbody" });
@@ -147,7 +147,7 @@ describe("GitLab webhook delivery materialization", () => {
     const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
     await insertIssue(repositoryId, issueId);
 
-    await expect(deliver(issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-1", issueId }))).resolves.toEqual({
+    await expect(deliver(repositoryId, issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-1", issueId }))).resolves.toEqual({
       status: "PROCESSED",
     });
 
@@ -162,9 +162,9 @@ describe("GitLab webhook delivery materialization", () => {
       select kind::text as kind, github_subject_id::text as github_subject_id, subject_number
       from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}
     `).toEqual([{ kind: "ISSUE", github_subject_id: String(issueId), subject_number: 23 }]);
-    // The dedup key is namespaced: it can never collide with a GitHub guid.
-    expect(await sql`select github_delivery_id, processing_state::text as processing_state from webhook_deliveries where github_delivery_id = 'gitlab:db-uuid-1'`)
-      .toEqual([{ github_delivery_id: "gitlab:db-uuid-1", processing_state: "PROCESSED" }]);
+    // Receipts are scoped to the authenticated registration.
+    expect(await sql`select delivery_key, processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'gitlab:db-uuid-1'`)
+      .toEqual([{ delivery_key: "gitlab:db-uuid-1", processing_state: "PROCESSED" }]);
   });
 
   it("marks a merge request delivery's own PULL_REQUEST subject dirty and queues the fold", async () => {
@@ -173,7 +173,7 @@ describe("GitLab webhook delivery materialization", () => {
     const mergeRequestId = externalId++;
     const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
 
-    await expect(deliver(mergeRequestDelivery({ projectId, instanceUrl, uuid: "db-uuid-mr-1", mergeRequestId })))
+    await expect(deliver(repositoryId, mergeRequestDelivery({ projectId, instanceUrl, uuid: "db-uuid-mr-1", mergeRequestId })))
       .resolves.toEqual({ status: "PROCESSED" });
 
     // The MR's own subject, not an issue's: an approval that moves no issue
@@ -186,7 +186,7 @@ describe("GitLab webhook delivery materialization", () => {
       .toEqual([{ state: "PENDING", reason: "WEBHOOK" }]);
     // No issue view rides on an MR delivery, so no issue row is written.
     expect(await sql`select github_issue_id from issues where repository_id = ${repositoryId}`).toEqual([]);
-    expect(await sql`select processing_state::text as processing_state from webhook_deliveries where github_delivery_id = 'gitlab:db-uuid-mr-1'`)
+    expect(await sql`select processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'gitlab:db-uuid-mr-1'`)
       .toEqual([{ processing_state: "PROCESSED" }]);
   });
 
@@ -197,12 +197,12 @@ describe("GitLab webhook delivery materialization", () => {
     const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
     await insertIssue(repositoryId, issueId);
 
-    await deliver(issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-2", issueId }));
+    await deliver(repositoryId, issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-2", issueId }));
     const [before] = await sql`
       select generation::text as generation from repository_reconciliation_dirty_subjects
       where repository_id = ${repositoryId}
     `;
-    await expect(deliver(issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-2", issueId }))).resolves.toEqual({
+    await expect(deliver(repositoryId, issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-2", issueId }))).resolves.toEqual({
       status: "DUPLICATE",
     });
 
@@ -222,7 +222,7 @@ describe("GitLab webhook delivery materialization", () => {
 
     // Same project id, another instance: the triple resolves to nothing, so
     // no fold is queued and no row moves.
-    await expect(deliver(issueDelivery({
+    await expect(deliver(repositoryId, issueDelivery({
       projectId, instanceUrl: "https://other.example.com", uuid: "db-uuid-3", issueId,
     }))).resolves.toEqual({ status: "PROCESSED" });
 

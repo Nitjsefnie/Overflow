@@ -46,6 +46,16 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
     expect(deliveries).toMatchObject([{ repositoryFullName: "renamed/project" }]);
   });
 
+  it("passes the authenticated registration scope to processing", async () => {
+    const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
+    const response = await factory({ lookupCredential: async () => credential, processWebhook })(request());
+    expect(response.status).toBe(202);
+    expect(processWebhook).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ repositoryFullName: "renamed/project" }),
+      { provider: credential.provider, registrationId: credential.repositoryId },
+    );
+  });
+
   it.each(["", "?hook=", "?hook=not-a-uuid", `?hook=${webhookSelector}&hook=${webhookSelector}`])(
     "rejects malformed selector %s before lookup or processing", async (query) => {
       const accesses: string[] = [];

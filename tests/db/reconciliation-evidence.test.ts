@@ -209,7 +209,7 @@ async function dirty(repositoryId: string, id: number): Promise<number> {
 
 async function delivery(repositoryId: string, kind: "ISSUE" | "PULL_REQUEST"): Promise<GitHubWebhookDelivery> {
   const [repository] = await sql`select github_repository_id, owner_name from registered_repositories where id = ${repositoryId}`;
-  return { deliveryId: `delivery-${repositoryId}-${kind}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
+  return { deliveryId: `delivery-${repositoryId}-${kind}`, executionId: `delivery-${repositoryId}-${kind}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
     action: kind === "ISSUE" ? "edited" : "dismissed", repositoryGitHubId: Number(repository.github_repository_id),
     repositoryFullName: repository.owner_name, subject: { kind, id: kind === "ISSUE" ? 101 : 201, number: 1 } };
 }

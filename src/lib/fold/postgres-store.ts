@@ -51,7 +51,7 @@ import {
   applyGrantedSelfWorkCalibrationOverride,
   applyGrantedSettlementOverride,
 } from "@/lib/overrides/apply";
-import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
+import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 type RepositoryFoldRevisionCountsRow = {
@@ -161,6 +161,7 @@ type IdentityClaimSettlementRow = Pick<
 >;
 
 type WebhookDeliveryLeaseRow = {
+  id: string;
   processing_lease_token: string;
 };
 
@@ -1185,32 +1186,32 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         and github_subject_id = ${input.githubSubjectId} and generation = ${input.generation}`;
   }
 
-  public async claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim> {
+  public async claimDelivery(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookDeliveryClaim> {
     const leaseToken = randomUUID();
-    const rows = await this.sql<WebhookDeliveryLeaseRow[]>`
+    const [row] = await this.sql<WebhookDeliveryLeaseRow[]>`
       insert into webhook_deliveries (
-        github_delivery_id, event_name, processing_state, processing_lease_token, lease_expires_at, attempt_count
+        provider, registration_id, delivery_key, execution_id, event_name,
+        processing_state, processing_lease_token, lease_expires_at, attempt_count
       )
-      values (${delivery.deliveryId}, ${delivery.event}, ${"PENDING"}, ${leaseToken}, now() + interval '5 minutes', 1)
-      on conflict (github_delivery_id) do update
-      set event_name = excluded.event_name,
+      values (${scope.provider}, ${scope.registrationId}, ${delivery.deliveryId}, ${delivery.executionId},
+        ${delivery.event}, ${"PENDING"}, ${leaseToken}, now() + interval '5 minutes', 1)
+      on conflict (provider, registration_id, delivery_key) where registration_id is not null do update
+      set event_name = excluded.event_name, execution_id = excluded.execution_id,
           processing_state = ${"PENDING"},
           processing_lease_token = excluded.processing_lease_token,
           lease_expires_at = excluded.lease_expires_at,
           attempt_count = webhook_deliveries.attempt_count + 1,
-          error_message = null,
-          processed_at = null
+          error_message = null, processed_at = null
       where webhook_deliveries.processing_state = ${"FAILED"}
         or (
           webhook_deliveries.processing_state = ${"PENDING"}
           and coalesce(webhook_deliveries.lease_expires_at, webhook_deliveries.received_at) <= now()
         )
-      returning processing_lease_token::text
+      returning id::text, processing_lease_token::text
     `;
-    const [row] = rows;
     return row === undefined
       ? { status: "DUPLICATE" }
-      : { status: "CLAIMED", leaseToken: row.processing_lease_token };
+      : { status: "CLAIMED", receiptId: row.id, leaseToken: row.processing_lease_token };
   }
 
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null> {
@@ -1249,15 +1250,14 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     `;
   }
 
-  public async markProcessed(deliveryId: string, leaseToken: string): Promise<boolean> {
+  public async markProcessed(receiptId: string, leaseToken: string): Promise<boolean> {
     const rows = await this.sql<{ id: string }[]>`
       update webhook_deliveries
       set processing_state = ${"PROCESSED"},
           processed_at = now(),
           error_message = null,
-          processing_lease_token = null,
-          lease_expires_at = null
-      where github_delivery_id = ${deliveryId}
+          processing_lease_token = null, lease_expires_at = null
+      where id = ${receiptId}
         and processing_state = ${"PENDING"}
         and processing_lease_token = ${leaseToken}
       returning id
@@ -1265,7 +1265,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return rows.length === 1;
   }
 
-  public async markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean> {
+  public async markFailed(receiptId: string, leaseToken: string, errorMessage: string): Promise<boolean> {
     void errorMessage;
     const rows = await this.sql<{ id: string }[]>`
       update webhook_deliveries
@@ -1274,7 +1274,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
           processed_at = now(),
           processing_lease_token = null,
           lease_expires_at = null
-      where github_delivery_id = ${deliveryId}
+      where id = ${receiptId}
         and processing_state = ${"PENDING"}
         and processing_lease_token = ${leaseToken}
       returning id

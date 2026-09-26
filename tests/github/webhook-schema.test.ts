@@ -46,6 +46,19 @@ describe("webhook issue views", () => {
 });
 
 describe("webhook delivery classification", () => {
+  it("trims a 255-character delivery header for both receipt and execution identity", () => {
+    const header = "x".repeat(255);
+    expect(parseGitHubWebhookDelivery("issues", ` ${header} `, {
+      action: "edited", repository: { id: 42, full_name: "octo/example" }, issue,
+    })).toMatchObject({ deliveryId: header, executionId: header });
+  });
+
+  it("rejects a 256-character delivery header", () => {
+    expect(parseGitHubWebhookDeliveryDetailed("issues", "x".repeat(256), {
+      action: "edited", repository: { id: 42, full_name: "octo/example" }, issue,
+    })).toEqual({ status: "invalid" });
+  });
+
   it.each(["issues", "issue_comment"])("classifies a PR-carrying %s envelope as ignored, not invalid", (event) => {
     // The pull_request field is a deliberate drop, not a malformed payload:
     // the route must answer 2xx so GitHub's delivery log does not turn red on

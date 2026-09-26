@@ -1,3 +1,4 @@
+import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { webhookCredential } from "../support/webhook-credential";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import * as database from "@/lib/db/client";
@@ -95,6 +96,20 @@ function gitlabHeadersBase(): Record<string, string> {
 }
 
 describe("GitLab webhook route", () => {
+  it.each([["issue", issuePayload], ["merge request", mergeRequestPayload]])("trims the execution header at the 255-character limit for %s", (_kind, body) => {
+    const header = "x".repeat(255);
+    expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", ` ${header} `, JSON.parse(body)))
+      .toMatchObject({ status: "ok", delivery: { deliveryId: `gitlab:${header}`, executionId: header } });
+  });
+
+  it("rejects a 256-character execution header before processing", async () => {
+    const processWebhook = vi.fn();
+    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
+    const response = await route(request(issuePayload, gitlabHeaders({ "x-gitlab-webhook-uuid": "x".repeat(256) })));
+    expect(response.status).toBe(400);
+    expect(processWebhook).not.toHaveBeenCalled();
+  });
+
   it.each([
     { provider: "gitlab" as const, instanceUrl: "https://gitlab.com", projectId: 42 },
     { provider: "gitlab" as const, instanceUrl: "https://another.example", projectId: 278964 },
@@ -123,13 +138,14 @@ describe("GitLab webhook route", () => {
     expect(response.status).toBe(202);
     expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({
       deliveryId: "gitlab:uuid-1",
+      executionId: "uuid-1",
       event: "issues",
       action: "closed",
       repositoryGitHubId: 278964,
       repositoryFullName: "gitlab-org/gitlab",
       subject: { kind: "ISSUE", id: 301, number: 23 },
       forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
-    }));
+    }), { provider: "gitlab", registrationId: "test-registration" });
   });
 
   // The delivery uuid header is load-bearing beyond the 400: the namespaced
@@ -199,13 +215,14 @@ describe("GitLab webhook route", () => {
     expect(response.status).toBe(202);
     expect(processWebhookMock).toHaveBeenCalledExactlyOnceWith({
       deliveryId: "gitlab:uuid-1",
+      executionId: "uuid-1",
       event: "pull_request",
       action: "closed",
       repositoryGitHubId: 278964,
       repositoryFullName: "gitlab-org/gitlab",
       subject: { kind: "PULL_REQUEST", id: 401, number: 7 },
       forge: { provider: "gitlab", instanceUrl: "https://gitlab.com" },
-    });
+    }, { provider: "gitlab", registrationId: "test-registration" });
   });
 
   it("answers 400 for an unrecognised object kind", async () => {
@@ -249,7 +266,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
     } = {
       store: {
         applyIssueView: async () => {},
-        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId,
         findRepositoryByForgeIdentity,
         markProcessed: async () => true,
@@ -264,7 +281,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
     };
     const route = createGitLabWebhookPostHandler({
       lookupCredential: async () => webhookCredential("gitlab", secret),
-      processWebhook: (delivery) => processWebhook(dependencies, delivery),
+      processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
 
     const response = await route(request(issuePayload, gitlabHeaders()));

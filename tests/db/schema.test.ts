@@ -3894,84 +3894,83 @@ describe("initial PostgreSQL materialization", () => {
 
   it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
     const store = new PostgresFoldStore(sql);
+    const scope = { provider: "github" as const, registrationId: randomUUID() };
     const delivery = {
-      deliveryId: "delivery-stale-reclaim",
+      executionId: "execution-1", deliveryId: "delivery-stale-reclaim",
       subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
       repositoryFullName: "octo/example",
     };
-
-    const first = expectClaimedLease(await store.claimDelivery(delivery));
-    await expect(store.claimDelivery(delivery)).resolves.toEqual({ status: "DUPLICATE" });
-
+    const first = expectClaimedLease(await store.claimDelivery(delivery, scope));
+    await expect(store.claimDelivery(delivery, scope)).resolves.toEqual({ status: "DUPLICATE" });
     await sql`
       update webhook_deliveries
       set lease_expires_at = now() - interval '1 second'
-      where github_delivery_id = ${delivery.deliveryId}
+      where id = ${first.receiptId}
     `;
-    const reclaimed = expectClaimedLease(await store.claimDelivery(delivery));
+    const reclaimed = expectClaimedLease(await store.claimDelivery(delivery, scope));
     expect(reclaimed.leaseToken).not.toBe(first.leaseToken);
-
-    const [record] = await sql<{ processing_state: string; attempt_count: number }[]>`
+    expect(reclaimed.receiptId).toBe(first.receiptId);
+    const [record] = await sql`
       select processing_state, attempt_count from webhook_deliveries
-      where github_delivery_id = ${delivery.deliveryId}
+      where id = ${first.receiptId}
     `;
     expect(record).toEqual({ processing_state: "PENDING", attempt_count: 2 });
   });
-
   it("allows only the current delivery lease owner to complete a webhook", async () => {
     const store = new PostgresFoldStore(sql);
+    const scope = { provider: "github" as const, registrationId: randomUUID() };
     const delivery = {
-      deliveryId: "delivery-owner-check",
+      executionId: "execution-1", deliveryId: "delivery-owner-check",
       subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
       repositoryFullName: "octo/example",
     };
-
-    const first = expectClaimedLease(await store.claimDelivery(delivery));
+    const first = expectClaimedLease(await store.claimDelivery(delivery, scope));
     await sql`
       update webhook_deliveries
       set lease_expires_at = now() - interval '1 second'
-      where github_delivery_id = ${delivery.deliveryId}
+      where id = ${first.receiptId}
     `;
-    const replacement = expectClaimedLease(await store.claimDelivery(delivery));
-
-    await expect(store.markProcessed(delivery.deliveryId, first.leaseToken)).resolves.toBe(false);
-    await expect(store.markProcessed(delivery.deliveryId, replacement.leaseToken)).resolves.toBe(true);
-
-    const [record] = await sql<{ processing_state: string }[]>`
+    const replacement = expectClaimedLease(await store.claimDelivery(delivery, scope));
+    await expect(store.markFailed(first.receiptId, first.leaseToken, "stale")).resolves.toBe(false);
+    await expect(store.markProcessed(first.receiptId, first.leaseToken)).resolves.toBe(false);
+    await expect(store.markProcessed(replacement.receiptId, replacement.leaseToken)).resolves.toBe(true);
+    const [record] = await sql`
       select processing_state from webhook_deliveries
-      where github_delivery_id = ${delivery.deliveryId}
+      where id = ${first.receiptId}
     `;
     expect(record).toEqual({ processing_state: "PROCESSED" });
   });
-
   it("reclaims a failed delivery only through a new lease and persists a sanitized failure", async () => {
     const store = new PostgresFoldStore(sql);
+    const scope = { provider: "github" as const, registrationId: randomUUID() };
     const delivery = {
-      deliveryId: "delivery-retryable",
+      executionId: "execution-1", deliveryId: "delivery-retryable",
       subject: { kind: "PULL_REQUEST" as const, id: 201, number: 11 },
       event: "pull_request" as const,
       action: "closed",
       repositoryGitHubId: nextExternalId(),
       repositoryFullName: "octo/example",
     };
-
-    const first = expectClaimedLease(await store.claimDelivery(delivery));
+    const first = expectClaimedLease(await store.claimDelivery(delivery, scope));
     await expect(
-      store.markFailed(delivery.deliveryId, first.leaseToken, "connection string must never be saved"),
+      store.markFailed(first.receiptId, first.leaseToken, "connection string must never be saved"),
     ).resolves.toBe(true);
-    const retry = expectClaimedLease(await store.claimDelivery(delivery));
-    await expect(store.markProcessed(delivery.deliveryId, retry.leaseToken)).resolves.toBe(true);
-    await expect(store.claimDelivery(delivery)).resolves.toEqual({ status: "DUPLICATE" });
-
-    const [record] = await sql<{ processing_state: string; error_message: string | null }[]>`
+    const retry = expectClaimedLease(await store.claimDelivery({ ...delivery, executionId: "execution-2" }, scope));
+    expect(retry.receiptId).toBe(first.receiptId);
+    expect(retry.leaseToken).not.toBe(first.leaseToken);
+    expect(await sql`select attempt_count, execution_id from webhook_deliveries where id = ${retry.receiptId}`)
+      .toEqual([{ attempt_count: 2, execution_id: "execution-2" }]);
+    await expect(store.markProcessed(retry.receiptId, retry.leaseToken)).resolves.toBe(true);
+    await expect(store.claimDelivery(delivery, scope)).resolves.toEqual({ status: "DUPLICATE" });
+    const [record] = await sql`
       select processing_state, error_message from webhook_deliveries
-      where github_delivery_id = ${delivery.deliveryId}
+      where id = ${first.receiptId}
     `;
     expect(record).toEqual({ processing_state: "PROCESSED", error_message: null });
   });
@@ -4231,8 +4230,8 @@ async function conditionWithin(
 
 function expectClaimedLease(
   claim: Awaited<ReturnType<PostgresFoldStore["claimDelivery"]>>,
-): { status: "CLAIMED"; leaseToken: string } {
-  expect(claim).toEqual({ status: "CLAIMED", leaseToken: expect.any(String) });
+): { status: "CLAIMED"; receiptId: string; leaseToken: string } {
+  expect(claim).toEqual({ status: "CLAIMED", receiptId: expect.any(String), leaseToken: expect.any(String) });
   if (claim.status !== "CLAIMED") {
     throw new Error("Expected a claimed webhook delivery lease.");
   }

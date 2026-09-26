@@ -1,7 +1,7 @@
 import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { processWebhook } from "@/lib/webhooks/processor";
+import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
@@ -9,7 +9,7 @@ import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/cr
 
 export type GitLabWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
-  processWebhook(delivery: GitHubWebhookDelivery): Promise<unknown>;
+  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<unknown>;
 };
 
 // GitLab documents no webhook payload ceiling the way GitHub does; the
@@ -82,7 +82,7 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     }
 
     try {
-      await dependencies.processWebhook(delivery);
+      await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
       return new Response(null, { status: 202 });
     } catch (error) {
       // The GitLab twin of the GitHub receiver's diagnostic: the instance sees
@@ -133,12 +133,12 @@ async function readBodyWithinLimit(request: Request): Promise<Buffer | null> {
 export async function POST(request: Request): Promise<Response> {
   return createGitLabWebhookPostHandler({
     lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
-    processWebhook: async (delivery) => {
+    processWebhook: async (delivery, scope) => {
       const store = new PostgresFoldStore();
       return processWebhook({
         store,
         enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
-      }, delivery);
+      }, delivery, scope);
     },
   })(request);
 }

@@ -185,11 +185,12 @@ describe("GitHub webhook route", () => {
     expect(processWebhookMock).toHaveBeenCalledWith({
       action: "closed",
       deliveryId: "delivery-1",
+      executionId: "delivery-1",
       event: "pull_request",
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
       subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
-    });
+    }, { provider: "github", registrationId: "test-registration" });
   });
 
   it("answers a tracked repository's delivery with a scheduled fold and none of the fold", async () => {
@@ -203,7 +204,7 @@ describe("GitHub webhook route", () => {
     } = {
       store: {
         applyIssueView: async () => {},
-        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
         findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
@@ -218,7 +219,7 @@ describe("GitHub webhook route", () => {
     };
     const route = createGitHubWebhookPostHandler({
       lookupCredential: async () => webhookCredential("github", secret),
-      processWebhook: (delivery) => processWebhook(dependencies, delivery),
+      processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
 
     const response = await route(
@@ -237,16 +238,16 @@ describe("GitHub webhook route", () => {
     // because what matters is what GitHub sees. A delivery Overflow did not
     // record must come back as an error, or GitHub never redelivers it and the
     // repository is left unreconciled with nothing queued to repair it.
-    const markedFailed: { deliveryId: string; leaseToken: string }[] = [];
+    const markedFailed: { receiptId: string; leaseToken: string }[] = [];
     const dependencies: WebhookProcessorDependencies = {
       store: {
         applyIssueView: async () => {},
-        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
         findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
-        markFailed: async (deliveryId, leaseToken) => {
-          markedFailed.push({ deliveryId, leaseToken });
+        markFailed: async (receiptId, leaseToken) => {
+          markedFailed.push({ receiptId, leaseToken });
           return true;
         },
       },
@@ -256,7 +257,7 @@ describe("GitHub webhook route", () => {
     };
     const route = createGitHubWebhookPostHandler({
       lookupCredential: async () => webhookCredential("github", secret),
-      processWebhook: (delivery) => processWebhook(dependencies, delivery),
+      processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
     });
     // The diagnostic the route logs for this failure is pinned separately; here
     // it is only expected noise.
@@ -270,7 +271,7 @@ describe("GitHub webhook route", () => {
       );
 
       expect(response.status).toBe(503);
-      expect(markedFailed).toEqual([{ deliveryId: "delivery-unqueued", leaseToken: "lease-1" }]);
+      expect(markedFailed).toEqual([{ receiptId: "receipt-1", leaseToken: "lease-1" }]);
     } finally {
       logged.mockRestore();
     }
@@ -375,7 +376,7 @@ describe("GitHub webhook route", () => {
     const dependencies: WebhookProcessorDependencies = {
       store: {
         applyIssueView: async () => {},
-        claimDelivery: async () => ({ status: "CLAIMED", leaseToken: "lease-1" }),
+        claimDelivery: async () => ({ status: "CLAIMED", receiptId: "receipt-1", leaseToken: "lease-1" }),
         findRepositoryByGitHubId: async () => ({ id: "repository-1", active: true }),
         findRepositoryByForgeIdentity: async () => null,
         markProcessed: async () => true,
@@ -392,7 +393,7 @@ describe("GitHub webhook route", () => {
     try {
       const route = createGitHubWebhookPostHandler({
         lookupCredential: async () => webhookCredential("github", secret),
-        processWebhook: (delivery) => processWebhook(dependencies, delivery),
+        processWebhook: (delivery, scope) => processWebhook(dependencies, delivery, scope),
       });
 
       const response = await route(
@@ -464,11 +465,12 @@ describe("GitHub webhook route", () => {
     expect(processWebhookMock).toHaveBeenCalledWith({
       action: "closed",
       deliveryId: "delivery-at-ceiling",
+      executionId: "delivery-at-ceiling",
       event: "pull_request",
       repositoryGitHubId: 42,
       repositoryFullName: "octo/example",
       subject: { kind: "PULL_REQUEST", id: 201, number: 11 },
-    });
+    }, { provider: "github", registrationId: "test-registration" });
   });
 
   // Mutants: DRAIN_UNCONDITIONALLY (and any fix that only reads Content-Length).
