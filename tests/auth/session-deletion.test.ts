@@ -121,6 +121,22 @@ describe("jwt callback wiring", () => {
     await expect(jwt({ token } as never)).resolves.toBe(token);
   });
 
+  it("applies the deletion check to a token that already carries authenticatedAt", async () => {
+    // The integration pin: main's sign-in instant rides in every token, and
+    // this branch's deleted-session check must still see it. A token holding
+    // both userId and authenticatedAt is signed out when its account is
+    // DELETED, and carried through untouched — instant included — when LIVE.
+    const jwt = await jwtCallback();
+    const token = { userId: "u1", role: "MEMBER", authenticatedAt: signedInAtSeconds };
+
+    mocks.findSessionAccountState.mockResolvedValue("DELETED");
+    await expect(jwt({ token } as never)).resolves.toBeNull();
+
+    mocks.findSessionAccountState.mockResolvedValue("LIVE");
+    await expect(jwt({ token } as never)).resolves.toBe(token);
+    expect(token.authenticatedAt).toBe(signedInAtSeconds);
+  });
+
   it("resolves the account inline on the sign-in branch and never consults the session state", async () => {
     const jwt = await jwtCallback();
     // The mock's role differs from the token's input role, so a result still
