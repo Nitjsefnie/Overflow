@@ -17,7 +17,8 @@ const clearedFields = ["github_login", "avatar_url", "encrypted_oauth_token"] as
 
 export type ClearedIdentityField = (typeof clearedFields)[number];
 
-export type DeletedAccountRepositories = {
+/** One live registration that blocks deletion, named by the refusal. */
+export type BlockingRegistrations = {
   ownerName: string;
   provider: string;
   instanceUrl: string | null;
@@ -25,7 +26,7 @@ export type DeletedAccountRepositories = {
 
 export type AccountDeletionOutcome =
   | { kind: "UNKNOWN_ACCOUNT"; githubUserId: number }
-  | { kind: "SPONSOR_BLOCKED"; githubUserId: number; repositories: DeletedAccountRepositories }
+  | { kind: "SPONSOR_BLOCKED"; githubUserId: number; repositories: BlockingRegistrations }
   | {
       kind: "PLANNED";
       githubUserId: number;
@@ -33,7 +34,7 @@ export type AccountDeletionOutcome =
       alreadyDeleted: boolean;
       wouldRemoveApiToken: boolean;
       wouldScrubForgeIdentities: number;
-      wouldClear: readonly ClearedIdentityField[];
+      wouldClear: typeof clearedFields;
     }
   | {
       kind: "DELETED";
