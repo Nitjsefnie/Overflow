@@ -41,6 +41,8 @@ vi.mock("next-auth/providers/github", () => ({ default: mocks.github }));
 
 useTrustedOrigin();
 
+const REFUSAL_MESSAGE = "The request origin is not allowed.";
+
 function givenRequestHeaders(headers: Record<string, string>): void {
   headerState.current = new Headers(headers);
 }
@@ -69,26 +71,36 @@ describe("the server-action origin guard", () => {
       "x-forwarded-host": "attacker.example",
     });
 
-    await expect(guard()).rejects.toThrow("The request origin is not allowed.");
+    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+  });
+
+  it.each([
+    ["a hostname with the trusted origin as a prefix", "https://overflow.example.attacker.example"],
+    ["the trusted hostname over HTTP", "http://overflow.example"],
+    ["the trusted hostname on another port", "https://overflow.example:8443"],
+  ])("refuses %s", async (_case, origin) => {
+    givenRequestHeaders({ origin, host: "overflow.internal" });
+
+    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
   });
 
   it("refuses a request carrying no origin header", async () => {
     givenRequestHeaders({ host: "overflow.internal" });
 
-    await expect(guard()).rejects.toThrow("The request origin is not allowed.");
+    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
   });
 
   it("refuses the literal null origin", async () => {
     givenRequestHeaders({ origin: "null", host: "overflow.internal" });
 
-    await expect(guard()).rejects.toThrow("The request origin is not allowed.");
+    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
   });
 
   it("refuses when APP_URL is unset even when Origin is what APP_URL would have been", async () => {
     givenRequestHeaders({ origin: trustedOrigin, host: "overflow.internal" });
     vi.stubEnv("APP_URL", undefined);
 
-    await expect(guard()).rejects.toThrow("The request origin is not allowed.");
+    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
   });
 
   it("resolves the production proxy shape", async () => {
@@ -109,6 +121,7 @@ describe("the server-action origin guard", () => {
  * exported action to the guard — a foreign origin must be refused before any
  * next-auth call. A future server-action file that forgets the guard fails
  * here; a broken discovery fails on the two known files.
+ * Inline function-level "use server" actions are not discovered; none exist today.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -174,7 +187,10 @@ describe("coverage of the guard across every server action", () => {
       const exportedFunctions = Object.entries(module).filter(([, value]) => typeof value === "function");
       expect(exportedFunctions.length, `${file} exports no functions`).toBeGreaterThan(0);
 
-      for (const [name, value] of exportedFunctions) {
+      for (const [name] of exportedFunctions) {
+        vi.resetModules();
+        vi.clearAllMocks();
+        const freshModule = (await import(pathToFileURL(join(repositoryRoot, file)).href)) as Record<string, unknown>;
         givenRequestHeaders({
           origin: foreignOrigin,
           host: "attacker.example",
@@ -182,9 +198,10 @@ describe("coverage of the guard across every server action", () => {
         });
 
         await expect(
-          (value as () => Promise<unknown>)(),
+          (freshModule[name] as () => Promise<unknown>)(),
           `${file}: export ${name} did not refuse a foreign origin`,
-        ).rejects.toThrow("The request origin is not allowed.");
+        ).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+        expect(mocks.nextAuth, `${file}: export ${name} loaded @/auth`).not.toHaveBeenCalled();
         expect(mocks.signIn, `${file}: export ${name} reached next-auth`).not.toHaveBeenCalled();
         expect(mocks.signOut, `${file}: export ${name} reached next-auth`).not.toHaveBeenCalled();
       }
