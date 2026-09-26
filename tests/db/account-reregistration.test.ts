@@ -78,15 +78,20 @@ describe("account re-registration after deletion", () => {
     }, sql);
 
     expect(await getCurrentUserRole(seeded.id, sql)).toBe("MEMBER");
-    expect(await findSessionAccountState(seeded.id, sql)).toBe("LIVE");
+    // The snapshot the jwt refresh reads: the liveness state and, for a LIVE
+    // row, the login the refreshed token must carry as its name.
+    expect(await findSessionAccountState(seeded.id, sql)).toEqual({
+      state: "LIVE",
+      githubLogin: "seeded-user",
+    });
 
     const outcome = await deleteAccount(sql, 9_900_001, { confirm: true });
     expect(outcome.kind).toBe("DELETED");
 
     expect(await getCurrentUserRole(seeded.id, sql)).toBeNull();
-    expect(await findSessionAccountState(seeded.id, sql)).toBe("DELETED");
+    expect(await findSessionAccountState(seeded.id, sql)).toEqual({ state: "DELETED", githubLogin: null });
     // An absent row keeps today's MISSING answer.
-    expect(await findSessionAccountState(randomUUID(), sql)).toBe("MISSING");
+    expect(await findSessionAccountState(randomUUID(), sql)).toEqual({ state: "MISSING", githubLogin: null });
 
     const restored = await upsertGitHubAccount({
       githubUserId: 9_900_001,
@@ -126,7 +131,10 @@ describe("account re-registration after deletion", () => {
     }, sql);
 
     expect((await settlementCreditor(fixture.repositoryId)).creditorId).toBe(creditorId);
-    expect(await findSessionAccountState(creditorId, sql)).toBe("LIVE");
+    expect(await findSessionAccountState(creditorId, sql)).toEqual({
+      state: "LIVE",
+      githubLogin: "octocat",
+    });
     // The settlement row itself is untouched by both writes.
     const [settlement] = await sql<{ creditor_id: string }[]>`
       select creditor_id from settlements where id = ${settlementId}

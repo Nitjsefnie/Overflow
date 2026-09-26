@@ -57,6 +57,11 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       });
     },
     async jwt({ token, profile, account }) {
+      // The cookie holds only what the account-data page states (issue 678):
+      // the public GitHub identity and Overflow's hints. The e-mail a token
+      // minted before this change still carries leaves here, on every
+      // invocation, so one refresh strips it.
+      delete token.email;
       // The scopes GitHub reports granting arrive once, on the initial OAuth
       // callback (account.scope). Reduced to one boolean hint: it decides
       // whether the registration page shows its form or the widening
@@ -85,6 +90,12 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
         );
       }
 
+      // The sign-in path names the token with the login from the profile —
+      // the display name never enters the token, and the provider's default
+      // profile() mapping (name: profile.name ?? profile.login) already
+      // carries the login after the userinfo projection; this makes it
+      // explicit and independent of that mapping.
+      token.name = identity.login;
       try {
         const user = await findGitHubAccount(identity.githubUserId);
         if (user !== null) {
