@@ -317,6 +317,28 @@ describe("migration 038: forge identities and provider columns", () => {
   });
 });
 
+describe("migration 051: https-only forge identity instances", () => {
+  it("rejects an http instance_url on the instance CHECK and accepts the https form of it", async () => {
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login) values (910051, 'forge-cleartext') returning id
+    `;
+    // A forge user id no other case stores, so only the CHECK can refuse
+    // these inserts; the named constraint in the match pins which one did.
+    const forgeUserId = 5151;
+    await expect(insertIdentity(user.id, { instanceUrl: "http://gitlab.example.com", forgeUserId })).rejects.toThrow(
+      /user_forge_identities_instance_url_check/,
+    );
+    await expect(insertIdentity(user.id, { instanceUrl: "HTTP://gitlab.example.com", forgeUserId })).rejects.toThrow(
+      /user_forge_identities_instance_url_check/,
+    );
+    await insertIdentity(user.id, { instanceUrl: "https://gitlab.example.com", forgeUserId });
+    const stored = await sql<{ instance_url: string }[]>`
+      select instance_url from user_forge_identities where user_id = ${user.id}
+    `;
+    expect(stored).toEqual([{ instance_url: "https://gitlab.example.com" }]);
+  });
+});
+
 describe("migration 041: token re-verification marking", () => {
   it("normalizes credential lookup and stamps only the supplied identity", async () => {
     const store = new PostgresForgeIdentityStore(sql, TEST_ENCRYPTION_KEY);
