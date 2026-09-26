@@ -92,12 +92,17 @@ describe("account CLI grammar", () => {
 
   it("resolves no database client for a usage error, even with no DATABASE_URL", async () => {
     // No sql supplied, so the only way to a client is the default getSql()
-    // path — and with no DATABASE_URL that throws. Exit 2 with the bare
-    // usage line therefore proves parsing happened before any client was
-    // resolved, whatever the host environment configures.
+    // path — and with no DATABASE_URL that throws. closeSql() first empties
+    // the module-level client cache, which earlier files in the same worker
+    // (isolate: false) may have filled under their own DATABASE_URL: without
+    // it, an eager getSql() before parsing would ride that cached client
+    // instead of re-reading the deleted variable and throwing. Exit 2 with
+    // the bare usage line therefore proves parsing happened before any
+    // client was resolved.
     const lines: string[] = [];
     const writeOnlyDependencies = { write: (line: string) => lines.push(line) } as unknown as AccountCliDependencies;
     const previousDatabaseUrl = process.env.DATABASE_URL;
+    await closeSql();
     delete process.env.DATABASE_URL;
     try {
       expect(await runAccountCli(["export", "--github-user-id", "0"], writeOnlyDependencies)).toBe(2);
