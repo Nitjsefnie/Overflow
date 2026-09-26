@@ -633,6 +633,11 @@ immediately, and a check whose latest run is queued, in progress or has not
 been created yet makes the script wait, polling every 15 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
 the still-pending checks named, an absent run reported as `<check> (absent)`.
+Every required check must therefore report on a push to main: a check that
+runs only on pull requests never runs on the SHA a rebase merge lands, so the
+gate would wait it out as `<check> (absent)` and refuse. `ratchet-guard`
+reports on both — `pull_request_target` for pull requests and `push` for
+every commit main lands.
 A refused gate leaves `HEAD`, the index and the working tree untouched, so the
 tree stays on the commit it was on; only the refs the fetch wrote
 (`FETCH_HEAD`, `origin/main`) have moved.
