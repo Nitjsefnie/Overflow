@@ -30,8 +30,10 @@ export class ForgeIdentityError extends Error {
  * The instance URL is stored normalized — lowercase scheme and host, no path,
  * no trailing slash — so the identity triple compares instances exactly, and
  * gitlab.com and a self-hosted instance can never alias. The normalization is
- * the flow's normalization: the 038/051 CHECK is a typo guard, and the gate
- * that makes a URL storable is this function.
+ * the flow's normalization, and this function is the gate that makes a URL
+ * storable. Migration 051's CHECK makes the stored row carry the same https
+ * rule and the scheme-and-host shape as a constraint, so a writer that
+ * bypassed this function still could not store an http instance.
  *
  * Only `https:` is accepted. Every request to an instance carries the
  * member's token in its Authorization header, so a plain `http:` instance

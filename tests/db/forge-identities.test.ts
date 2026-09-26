@@ -337,6 +337,15 @@ describe("migration 051: https-only forge identity instances", () => {
     `;
     expect(stored).toEqual([{ instance_url: "https://gitlab.example.com" }]);
   });
+
+  it("validates the https CHECK against existing rows rather than adding it NOT VALID", async () => {
+    const constraints = await sql<{ convalidated: boolean }[]>`
+      select convalidated from pg_constraint
+      where conrelid = 'user_forge_identities'::regclass
+        and conname = 'user_forge_identities_instance_url_check'
+    `;
+    expect(constraints).toEqual([{ convalidated: true }]);
+  });
 });
 
 describe("migration 041: token re-verification marking", () => {

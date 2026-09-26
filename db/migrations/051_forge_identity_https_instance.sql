@@ -9,8 +9,13 @@
 -- no path, no trailing slash.
 --
 -- 038 declared the CHECK inline and unnamed, so it carries Postgres's
--- generated name; the replacement keeps that name. Production holds no
--- user_forge_identities rows, so validating the constraint rewrites nothing.
+-- generated name; the replacement keeps that name.
+--
+-- Precondition: no stored row has an http instance_url. The constraint is
+-- added validated, so Postgres checks every existing row against it; a stored
+-- http instance makes this migration fail, and its transaction roll back,
+-- rather than being rewritten. Such a row has to be deleted before this
+-- migration can apply; its owner then re-links the instance over https.
 
 alter table user_forge_identities
   drop constraint user_forge_identities_instance_url_check,
