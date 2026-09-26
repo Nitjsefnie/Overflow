@@ -429,6 +429,9 @@ describe("GitHub webhook route", () => {
       expect((message as string).length).toBeLessThan(1_024);
       expect(message).toContain("delivery \"delivery\\u001b[1mz\" (");
       expect(message).toContain(`repository "octo\\u000a\\u001b[2J${"a".repeat(247)}"… (+4753 more),`);
+      // A fixed template over the identifiers: the error rides only as the
+      // second argument and is never flattened into the message.
+      expect(message).not.toContain(rootCause.message);
       expect(loggedError).toBe(rootCause);
     } finally {
       logged.mockRestore();

@@ -341,6 +341,9 @@ describe("GitLab webhook route", () => {
       expect(message).toContain("delivery \"key\\u001b[1mz\" (");
       expect(message).toContain("(execution \"uuid\\u001b[2Kz\",");
       expect(message).toContain(`repository "gitlab-org\\u000a\\u001b[2J${"a".repeat(241)}"… (+4759 more),`);
+      // A fixed template over the identifiers: the error rides only as the
+      // second argument and is never flattened into the message.
+      expect(message).not.toContain(rootCause.message);
       expect(loggedError).toBe(rootCause);
     } finally {
       logged.mockRestore();
