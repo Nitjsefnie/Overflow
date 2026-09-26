@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { plural } from "@/lib/plural";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 type Decision = "grant" | "decline";
 type Feedback = { kind: "error" | "success"; message: string } | null;
@@ -123,6 +124,7 @@ export function SettlementOverrideDecision({ requestId, issueNumber }: Settlemen
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           rows={3}
+          maxLength={MAX_REASON_LENGTH}
           required
         />
       </label>

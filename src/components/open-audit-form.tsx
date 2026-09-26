@@ -6,6 +6,7 @@ import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/
 import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
 import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 type PendingRequest = "preview" | "open";
@@ -281,6 +282,7 @@ export function OpenAuditForm({ candidates, repositories }: OpenAuditFormProps) 
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           rows={3}
+          maxLength={MAX_REASON_LENGTH}
           required
         />
       </label>

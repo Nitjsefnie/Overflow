@@ -61,10 +61,13 @@ function memberPostHandler(): {
   };
 }
 
-async function expectInvalidRequest(response: Response): Promise<void> {
+async function expectInvalidRequest(
+  response: Response,
+  message = "Invalid settlement correction request.",
+): Promise<void> {
   expect(response.status).toBe(422);
   await expect(response.json()).resolves.toEqual({
-    error: { code: "INVALID_REQUEST", message: "Invalid settlement correction request." },
+    error: { code: "INVALID_REQUEST", message },
   });
 }
 
@@ -542,8 +545,8 @@ describe("reason length caps", () => {
       params: Promise.resolve({ id: requestId }),
     });
 
-    expect(grant.status).toBe(422);
-    expect(decline.status).toBe(422);
+    await expectInvalidRequest(grant, "Invalid settlement correction decision.");
+    await expectInvalidRequest(decline, "Invalid settlement correction decision.");
     expect(decideRequest).not.toHaveBeenCalled();
   });
 });

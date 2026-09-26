@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { SettlementOverrideTarget } from "@/lib/overrides/service";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 
@@ -86,6 +87,7 @@ export function SettlementOverrideRequestForm({ target }: SettlementOverrideRequ
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           rows={3}
+          maxLength={MAX_REASON_LENGTH}
           required
         />
       </label>

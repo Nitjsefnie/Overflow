@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { SettlementOverrideDecision } from "@/components/settlement-override-decision";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -27,6 +28,12 @@ afterEach(() => {
 });
 
 describe("settlement correction decision controls", () => {
+  it("caps the decision reason at the length the API accepts", () => {
+    render(<SettlementOverrideDecision requestId={requestId} issueNumber={44} />);
+
+    expect(screen.getByLabelText("Reason for the decision")).toHaveProperty("maxLength", MAX_REASON_LENGTH);
+  });
+
   it("grants a correction with the corrected points and the reason", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal("fetch", fetchMock);

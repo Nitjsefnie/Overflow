@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { formatSigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 type AuditAction = "dismiss" | "substantiate";
 type Feedback = { kind: "error" | "success"; message: string } | null;
@@ -74,6 +75,7 @@ export function ModerationControls({ auditId, targetLogin }: ModerationControlsP
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           rows={3}
+          maxLength={MAX_REASON_LENGTH}
           required
         />
       </label>
@@ -150,7 +152,12 @@ export function RecalibrationPlanControl({
     <section className="moderation-controls" aria-label={`Reactivation controls for ${targetLogin}`}>
       <label className="field">
         <span>Recalibration plan for {targetLogin}</span>
-        <textarea value={plan} onChange={(event) => setPlan(event.target.value)} rows={3} />
+        <textarea
+          value={plan}
+          onChange={(event) => setPlan(event.target.value)}
+          rows={3}
+          maxLength={MAX_REASON_LENGTH}
+        />
       </label>
       <button className="action-button" type="button" disabled={pending} onClick={() => void reactivate()}>
         Reactivate account
@@ -427,7 +434,12 @@ export function RecalibrationCreditAdjustmentControl({
       )}
       <label className="field">
         <span>Reason for crediting {targetLogin}</span>
-        <textarea value={applyReason} onChange={(event) => setApplyReason(event.target.value)} rows={3} />
+        <textarea
+          value={applyReason}
+          onChange={(event) => setApplyReason(event.target.value)}
+          rows={3}
+          maxLength={MAX_REASON_LENGTH}
+        />
       </label>
       <button
         className="action-button"
@@ -460,6 +472,7 @@ export function RecalibrationCreditAdjustmentControl({
                         setReverseReasons((current) => ({ ...current, [adjustment.id]: event.target.value }))
                       }
                       rows={2}
+                      maxLength={MAX_REASON_LENGTH}
                     />
                   </label>
                   <button

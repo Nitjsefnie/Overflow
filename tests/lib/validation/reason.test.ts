@@ -12,6 +12,12 @@ describe("reasonText", () => {
     expect(() => schema.parse("x".repeat(MAX_REASON_LENGTH + 1))).toThrow();
   });
 
+  it("counts characters, not UTF-16 code units, against the cap", () => {
+    const astral = "😀".repeat(MAX_REASON_LENGTH);
+    expect(astral).toHaveLength(2 * MAX_REASON_LENGTH);
+    expect(reasonText().parse(astral)).toBe(astral);
+  });
+
   it("measures length after trimming", () => {
     expect(reasonText().parse(`  ${"x".repeat(MAX_REASON_LENGTH)}\n`)).toBe("x".repeat(MAX_REASON_LENGTH));
   });
