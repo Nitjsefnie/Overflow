@@ -155,7 +155,7 @@ rejected.
 | Field | Type and requirements |
 | --- | --- |
 | `provider` | The string `gitlab`. |
-| `instanceUrl` | String: an absolute `http` or `https` URL naming the instance's host, such as `https://gitlab.com`. Only the scheme and host are used, lowercased; a path is ignored. It must match the instance of a linked identity. |
+| `instanceUrl` | String: an absolute `https` URL naming the instance's host, such as `https://gitlab.com`. Plain `http` and every other scheme are refused, because the linked identity's token travels with every request to the instance. Only the scheme and host are used, lowercased; a path is ignored. It must match the instance of a linked identity. |
 | `project` | String: the project's numeric id (a positive integer), or its path with namespace, such as `group/project` or `group/subgroup/project`. |
 | `repositoryUrl` | String: still required by the request schema, and not read for a GitLab submission. |
 
@@ -205,7 +205,7 @@ angle-bracketed text is substituted at runtime:
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
 | 400 | `INVALID_INPUT` | `The instance URL must be an absolute URL.` | `instanceUrl` is missing or does not parse as a URL. |
-| 400 | `INVALID_INPUT` | `The instance URL must use http or https.` | Correct the scheme. |
+| 400 | `INVALID_INPUT` | `The instance URL must use https.` | `instanceUrl` uses `http` or another scheme. Submit the instance's `https` URL. |
 | 400 | `INVALID_INPUT` | `A GitLab registration requires the instance URL and the project id or path.` | `project` is missing or empty. |
 | 400 | `INVALID_INPUT` | `The GitLab project id must be a positive integer.` | `project` is all digits but not a positive safe integer. |
 | 400 | `INVALID_INPUT` | `Submit the GitLab project as a positive numeric id or a path with namespace.` | `project` is neither digits nor a path containing `/`. |

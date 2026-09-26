@@ -30,8 +30,14 @@ export class ForgeIdentityError extends Error {
  * The instance URL is stored normalized — lowercase scheme and host, no path,
  * no trailing slash — so the identity triple compares instances exactly, and
  * gitlab.com and a self-hosted instance can never alias. The normalization is
- * the flow's normalization: the 040/038 CHECK is a typo guard, and the gate
+ * the flow's normalization: the 038/051 CHECK is a typo guard, and the gate
  * that makes a URL storable is this function.
+ *
+ * Only `https:` is accepted. Every request to an instance carries the
+ * member's token in its Authorization header, so a plain `http:` instance
+ * would receive that credential in cleartext; refusing it here, before any
+ * request is built, keeps it off the wire on every path that takes an
+ * instance URL.
  */
 export function normalizeInstanceUrl(value: string): string {
   let parsed: URL;
@@ -40,8 +46,8 @@ export function normalizeInstanceUrl(value: string): string {
   } catch {
     throw new ForgeIdentityError("INVALID_INPUT", "The instance URL must be an absolute URL.");
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new ForgeIdentityError("INVALID_INPUT", "The instance URL must use http or https.");
+  if (parsed.protocol !== "https:") {
+    throw new ForgeIdentityError("INVALID_INPUT", "The instance URL must use https.");
   }
   if (parsed.hostname === "") {
     throw new ForgeIdentityError("INVALID_INPUT", "The instance URL must name a host.");

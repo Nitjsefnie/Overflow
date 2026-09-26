@@ -122,6 +122,20 @@ describe("forge identities API", () => {
     }))).status).toBe(400);
   });
 
+  it("refuses an http instance as 400 INVALID_INPUT before any request leaves, storing nothing", async () => {
+    const f = fixture();
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
+      instanceUrl: "http://gitlab.example.com",
+      token: "glpat-x",
+    }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_INPUT" } });
+    // The token never travels: not one outbound request was made.
+    expect(f.dependencies.fetch).not.toHaveBeenCalled();
+    expect(f.dependencies.claimPastWork).not.toHaveBeenCalled();
+    expect(f.calls.filter((call) => call.op === "upsertIdentity")).toEqual([]);
+  });
+
   it("maps the service's UNVERIFIED refusal to 401 without a row", async () => {
     const f = fixture({ upsertResult: null });
     // upsertResult null is the cross-account refusal; the UNVERIFIED path is

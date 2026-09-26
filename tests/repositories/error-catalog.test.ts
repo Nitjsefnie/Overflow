@@ -621,7 +621,14 @@ const gitlabFailures: RegistrationFailure[] = [
     publishes: (surfaced) => (cell) => cell === surfaced,
   },
   {
-    what: "a GitLab submission whose instance URL is not http or https",
+    what: "a GitLab submission whose instance URL uses plain http",
+    status: invalidInputStatus,
+    raise: linkGitLab,
+    submit: (input) => ({ ...gitlabSubmission(input), instanceUrl: "http://gitlab.com" }),
+    publishes: (surfaced) => (cell) => cell === surfaced,
+  },
+  {
+    what: "a GitLab submission whose instance URL uses a scheme other than http or https",
     status: invalidInputStatus,
     raise: linkGitLab,
     submit: (input) => ({ ...gitlabSubmission(input), instanceUrl: "ftp://gitlab.example" }),

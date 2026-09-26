@@ -20,7 +20,15 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 // The member-supplied instance URL is the destination of every request here,
 // and none of these tests inject a transport into the code under test: what
 // runs is the production default. The listeners answer like a GitLab that
-// accepts the token, so a request that reaches one links an identity.
+// accepts the token.
+//
+// The link route accepts only https instances, so the link cases submit https
+// URLs: they pass the scheme gate and reach the destination refusal this file
+// is about. The listeners speak plain http, so a request that got through
+// would fail its TLS handshake and read as unreachable too; the witness for
+// "refused before connecting" is therefore the listener's accepted-connection
+// count (a handshake attempt is still a connection) and, for a literal no
+// test can listen on, the recorded connect attempts.
 
 useTrustedOrigin();
 useLoopbackListeners();
@@ -107,13 +115,13 @@ type Destination = { instanceUrl: string; host: string; listeners: LoopbackListe
 const destinations: Array<[string, () => Promise<Destination>]> = [
   ["the IPv4 loopback literal", async () => {
     const listener = await listen("127.0.0.1", answerAsGitLab);
-    return { instanceUrl: `http://127.0.0.1:${listener.port}`, host: "127.0.0.1", listeners: [listener] };
+    return { instanceUrl: `https://127.0.0.1:${listener.port}`, host: "127.0.0.1", listeners: [listener] };
   }],
   ["localhost, on whichever loopback family it resolves to", async () => {
     const ipv4 = await listen("127.0.0.1", answerAsGitLab);
     const ipv6 = await listenOrNull("::1", answerAsGitLab, ipv4.port);
     return {
-      instanceUrl: `http://localhost:${ipv4.port}`,
+      instanceUrl: `https://localhost:${ipv4.port}`,
       host: "localhost",
       listeners: ipv6 === null ? [ipv4] : [ipv4, ipv6],
     };
@@ -122,12 +130,12 @@ const destinations: Array<[string, () => Promise<Destination>]> = [
     const listener = await listenOrNull("::1", answerAsGitLab);
     return listener === null
       ? null
-      : { instanceUrl: `http://[::1]:${listener.port}`, host: "::1", listeners: [listener] };
+      : { instanceUrl: `https://[::1]:${listener.port}`, host: "::1", listeners: [listener] };
   }],
   // Nothing can listen on the metadata address here; the witness is that no
   // socket ever tried to connect to it.
   ["the link-local metadata address", async () => ({
-    instanceUrl: "http://169.254.169.254",
+    instanceUrl: "https://169.254.169.254",
     host: "169.254.169.254",
     listeners: [],
   })],

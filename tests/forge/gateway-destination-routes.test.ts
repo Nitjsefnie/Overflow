@@ -11,6 +11,12 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 // run through the production transport, which none of these tests replace:
 // the refused side is a loopback listener that must never be reached, the
 // failing side a name under `.invalid`, which never resolves.
+//
+// Both sides use https URLs, the only scheme the routes accept, so each
+// request passes the scheme gate and reaches the gateway. The listener speaks
+// plain http: a request that got through would fail its TLS handshake rather
+// than read the listener's answer, so the witness that it was never reached is
+// its accepted-connection count, which a handshake attempt still increments.
 
 // Release modules evaluated with this file's mocked session and stores.
 vi.hoisted(() => { vi.resetModules(); });
@@ -31,7 +37,7 @@ vi.mock("@/lib/forge/postgres-identities-store", () => ({
 useTrustedOrigin();
 useLoopbackListeners();
 
-const unresolvableInstance = "http://gitlab.invalid";
+const unresolvableInstance = "https://gitlab.invalid";
 
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue({ user: { id: "sponsor-id", role: "MEMBER" } });
@@ -44,7 +50,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-/** Answers like a GitLab that hides every project, so a reached listener changes the answer. */
+/** Answers like a GitLab that hides every project. */
 function answerNotFound(_request: unknown, response: ServerResponse): void {
   response.writeHead(404, { "content-type": "application/json" });
   response.end(JSON.stringify({ message: "404 Project Not Found" }));
@@ -108,7 +114,7 @@ describe("a gateway error at the repository registration route", () => {
     const listener = await listen("127.0.0.1", answerNotFound);
     const unreachable = await register(unresolvableInstance);
 
-    const refused = await register(`http://127.0.0.1:${listener.port}`);
+    const refused = await register(`https://127.0.0.1:${listener.port}`);
 
     expect(listener.connections).toBe(0);
     expect(refused).toEqual(unreachable);
@@ -126,7 +132,7 @@ describe("a gateway error at the repository labels route", () => {
     const listener = await listen("127.0.0.1", answerNotFound);
     const unreachable = await readLabels(unresolvableInstance);
 
-    const refused = await readLabels(`http://127.0.0.1:${listener.port}`);
+    const refused = await readLabels(`https://127.0.0.1:${listener.port}`);
 
     expect(listener.connections).toBe(0);
     expect(refused).toEqual(unreachable);
