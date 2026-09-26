@@ -183,5 +183,6 @@ function triggerDownload(blob: Blob): void {
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  // Revoking in the click's own tick can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

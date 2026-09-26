@@ -127,6 +127,12 @@ describe("account controls panel", () => {
   });
 
   it("downloads the export under its documented file name when the export succeeds", async () => {
+    // A microtask queued by the click runs after the rest of the click's own
+    // tick and before any timer, so it sees whether revocation was deferred.
+    let revokedInClickTick: boolean | undefined;
+    click.mockImplementation(() => {
+      queueMicrotask(() => { revokedInClickTick = revokeObjectURL.mock.calls.length > 0; });
+    });
     const fetchMock = vi.fn().mockResolvedValue(exportDocument());
     vi.stubGlobal("fetch", fetchMock);
     render(<AccountControlsPanel reauthenticateAction={vi.fn(async () => {})} />);
@@ -140,7 +146,11 @@ describe("account controls panel", () => {
     const anchor = click.mock.instances[0] as HTMLAnchorElement;
     expect(anchor.download).toBe("overflow-account-export.json");
     expect(anchor.href).toContain("blob:account-export-test");
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:account-export-test");
+    // Revoking in the same tick as the click can cancel the download in some
+    // browsers, so the object URL outlives the click by at least one tick.
+    expect(click).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:account-export-test"));
+    expect(revokedInClickTick).toBe(false);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(assign).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/account/export", {
