@@ -391,6 +391,9 @@ describe("PostgreSQL account moderation transitions", () => {
     const targetId = await insertUser("MEMBER");
     const moderatedRepositoryId = await insertRepository(targetId);
     const unregisteredRepositoryId = await insertRepository(targetId);
+    // Closing a recalibration does not re-mint, so the webhook credential must survive both steps.
+    const credential = await storeWebhookCredential(moderatedRepositoryId);
+    const storedCredential = await credentialState(moderatedRepositoryId);
     const pairs = await insertCalibrationPairs({ targetId, repositoryId: moderatedRepositoryId, count: 10 });
     const store = new PostgresModerationStore(sql);
     const input = auditInput({
@@ -414,6 +417,7 @@ describe("PostgreSQL account moderation transitions", () => {
       { id: moderatedRepositoryId, active: false },
       { id: unregisteredRepositoryId, active: false },
     ]));
+    expect(await credentialState(moderatedRepositoryId)).toEqual(storedCredential);
 
     // The sponsor unregisters one of the two while the account is recalibrating; the row stays
     // inactive, so closing the recalibration must not hand it back.
@@ -440,6 +444,9 @@ describe("PostgreSQL account moderation transitions", () => {
       select unregistered_at from registered_repositories where id = ${unregisteredRepositoryId}
     `;
     expect(toIso(unregisteredRow.unregistered_at)).toBe(unregisteredAt);
+    expect(await credentialState(moderatedRepositoryId)).toEqual(storedCredential);
+    const restored = await webhookStore().findWebhookCredential(credential.credentialId, "github");
+    expect(restored?.secret === credential.secret).toBe(true);
   });
 
   // Moderation owns `active` and unregistration owns `unregistered_at`: the deactivation
@@ -900,6 +907,32 @@ function sortCalibrationPairs(pairs: readonly CalibrationPair[]): CalibrationPai
     || left.githubIssueId - right.githubIssueId
     || left.githubPullRequestId - right.githubPullRequestId
   ));
+}
+
+function webhookStore(): PostgresRepositoryStore {
+  return new PostgresRepositoryStore(sql, Buffer.alloc(32, 23).toString("base64url"));
+}
+
+/** Mints and confirms a webhook credential through the registration store's own upgrade path. */
+async function storeWebhookCredential(repositoryId: string) {
+  const [row] = await sql<{ github_repository_id: string; github_webhook_id: string }[]>`
+    select github_repository_id, github_webhook_id from registered_repositories where id = ${repositoryId}
+  `;
+  const staged = await webhookStore().stageWebhookCredential({ repositoryId, provider: "github", instanceUrl: null,
+    projectId: Number(row.github_repository_id), webhookId: Number(row.github_webhook_id) });
+  expect(staged === null ? false : await webhookStore().finalizeWebhookCredential(staged)).toBe(true);
+  return staged!;
+}
+
+/** The credential columns, with the ciphertext reduced to a digest so a failure prints none of it. */
+async function credentialState(repositoryId: string) {
+  const [row] = await sql<{ credential_id: string | null; secret_digest: string | null; configured_at: Date | null }[]>`
+    select webhook_credential_id as credential_id, encode(sha256(encrypted_webhook_secret), 'hex') as secret_digest,
+      webhook_configured_at as configured_at
+    from registered_repositories where id = ${repositoryId}
+  `;
+  expect(row.credential_id).not.toBeNull();
+  return row;
 }
 
 async function githubRepositoryIdFor(repositoryId: string): Promise<number> {
