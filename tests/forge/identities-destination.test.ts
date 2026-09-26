@@ -1,5 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { isIP } from "node:net";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createForgeIdentitiesPostHandler,
@@ -179,4 +180,43 @@ describe("a GitLab gateway built with no transport, as the worker and the labels
     expect(outcome.value).toBeInstanceOf(GitLabApiError);
     expect((outcome.value as GitLabApiError).status).toBe(0);
   });
+
+  it("reports a refused destination and a genuine transport failure as the same error", async () => {
+    const listener = await listen("127.0.0.1", answerAsGitLab);
+    const refused = await rejectionOf(
+      new GitLabGateway({ instanceUrl: `http://127.0.0.1:${listener.port}`, token: "glpat-x" }).getRepositoryById(1),
+    );
+    const failed = await rejectionOf(
+      new GitLabGateway({
+        instanceUrl: "https://gitlab.example.com",
+        token: "glpat-x",
+        fetch: async () => {
+          throw Object.assign(new Error("connect ECONNREFUSED 203.0.113.9:443"), { code: "ECONNREFUSED" });
+        },
+      }).getRepositoryById(1),
+    );
+
+    expect(listener.connections).toBe(0);
+    expect(refused).toBeInstanceOf(GitLabApiError);
+    expect(failed).toBeInstanceOf(GitLabApiError);
+    // Everything the error carries except its stack, whose frames are code
+    // positions: a caller that echoed any of it could not tell the two apart.
+    expect(exposedFields(refused as GitLabApiError)).toEqual(exposedFields(failed as GitLabApiError));
+    expect(exposedFields(failed as GitLabApiError)).not.toContain("203.0.113.9");
+  });
 });
+
+async function rejectionOf(pending: Promise<unknown>): Promise<unknown> {
+  return pending.then(
+    () => {
+      throw new Error("expected a rejection");
+    },
+    (error: unknown) => error,
+  );
+}
+
+function exposedFields(error: GitLabApiError): string {
+  const properties = Object.getOwnPropertyDescriptors(error);
+  Reflect.deleteProperty(properties, "stack");
+  return `${JSON.stringify(error)} ${inspect(Object.defineProperties({}, properties), { showHidden: true, depth: null })}`;
+}

@@ -604,9 +604,9 @@ export class GitLabGateway {
       status = response.status;
       headers = response.headers;
       body = await response.text();
-    } catch (error) {
-      // Transport failure or refused destination: status 0, never an HTTP status.
-      throw new GitLabApiError(0, error instanceof Error ? error.message : "transport failure");
+    } catch {
+      // Transport failure or refused destination: status 0 and one fixed body, never the cause.
+      throw new GitLabApiError(0, "The instance could not be reached.");
     } finally {
       clearTimeout(timeout);
     }
