@@ -104,6 +104,7 @@ async function link(instanceUrl: string, fetch?: typeof globalThis.fetch) {
   };
   const dependencies: ForgeIdentitiesRouteDependencies = {
     getSession: async () => ({ user: { id: "user-1", role: "MEMBER" } }),
+    getCurrentRole: async () => "MEMBER",
     createIdentityStore: () => store,
     tokenEncryptionKey: TEST_KEY,
     ...(fetch === undefined ? {} : { fetch }),

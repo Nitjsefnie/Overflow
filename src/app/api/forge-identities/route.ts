@@ -10,6 +10,7 @@ import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-stor
 import type { ForgeIdentityStore } from "@/lib/forge/identities";
 import type { UserRole } from "@/lib/db/types";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 export type ForgeIdentitiesRouteSession = {
   user: { id: string; role: UserRole };
@@ -17,6 +18,13 @@ export type ForgeIdentitiesRouteSession = {
 
 export type ForgeIdentitiesRouteDependencies = {
   getSession: () => Promise<ForgeIdentitiesRouteSession | null>;
+  /**
+   * The account's role read live at request time. A session JWT outlives the
+   * account it was issued for (issue 733), so the write verbs re-read the row
+   * rather than trusting the session: a null here is a deleted (or missing)
+   * account.
+   */
+  getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createIdentityStore: () => ForgeIdentityStore;
   tokenEncryptionKey?: string;
   /** Injectable transport for the verification probe; production refuses non-public instances. */
@@ -36,6 +44,7 @@ const unlinkSchema = z.object({ id: z.string() }).strict();
 
 export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDependencies {
   return {
+    getCurrentRole: getCurrentUserRole,
     async getSession() {
       const { auth } = await import("@/auth");
       const session = await auth();
@@ -86,6 +95,10 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+    const liveAccountRefusal = await refuseDeletedAccount(dependencies, session.user.id);
+    if (liveAccountRefusal !== null) {
+      return liveAccountRefusal;
+    }
     const input = await parseBody(request, linkSchema);
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid forge identity link request.");
@@ -118,6 +131,10 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+    const liveAccountRefusal = await refuseDeletedAccount(dependencies, session.user.id);
+    if (liveAccountRefusal !== null) {
+      return liveAccountRefusal;
+    }
     const input = await parseBody(request, unlinkSchema);
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid forge identity unlink request.");
@@ -148,6 +165,31 @@ async function parseBody<T extends z.ZodTypeAny>(
   } catch {
     return null;
   }
+}
+
+/**
+ * The live-account gate the write verbs run after the session check (issue
+ * 733): the session JWT outlives the account it was issued for, so the route
+ * re-reads the account's role the member gate reads before acting on the
+ * session's account id. A null role is a deleted (or missing) account and
+ * answers the member gate's 403 envelope; a lookup failure answers the same
+ * 502 this route's own failures answer, with a fixed message naming no
+ * request data. GET stays ungated — it reads the caller's own, already
+ * scrubbed rows.
+ */
+async function refuseDeletedAccount(
+  dependencies: ForgeIdentitiesRouteDependencies,
+  userId: string,
+): Promise<Response | null> {
+  let role: UserRole | null;
+  try {
+    role = await dependencies.getCurrentRole(userId);
+  } catch {
+    return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
+  }
+  return role === null
+    ? errorResponse(403, "FORBIDDEN", "A member account is required.")
+    : null;
 }
 
 function identityErrorResponse(error: unknown): Response {

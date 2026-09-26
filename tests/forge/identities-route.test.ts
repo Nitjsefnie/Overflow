@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import postgres, { type Sql } from "postgres";
+import type { StartedTestContainer } from "testcontainers";
 import {
   createForgeIdentitiesDeleteHandler,
   createForgeIdentitiesGetHandler,
@@ -6,6 +8,11 @@ import {
   type ForgeIdentitiesRouteDependencies,
 } from "@/app/api/forge-identities/route";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
+import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
+import { closeSql } from "@/lib/db/client";
+import { deleteAccount } from "@/lib/accounts/deletion";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { foreignOrigin, guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 
 useTrustedOrigin();
@@ -29,6 +36,8 @@ function identityView(overrides: Partial<ForgeIdentityView> = {}): ForgeIdentity
 
 function fixture(options: {
   session?: { user: { id: string; role: "MEMBER" | "MODERATOR" } } | null;
+  /** What the live role read answers (issue 733); "fails" makes it throw. */
+  liveRole?: "MEMBER" | "MODERATOR" | null | "fails";
   list?: ForgeIdentityView[];
   deleted?: boolean;
   upsertResult?: ForgeIdentityView | null;
@@ -53,6 +62,12 @@ function fixture(options: {
   };
   const dependencies: ForgeIdentitiesRouteDependencies = {
     getSession: vi.fn(async () => options.session === undefined ? SESSION : options.session),
+    getCurrentRole: vi.fn(async () => {
+      if (options.liveRole === "fails") {
+        throw new Error("role lookup unavailable");
+      }
+      return options.liveRole === undefined ? "MEMBER" : options.liveRole;
+    }),
     createIdentityStore: vi.fn(() => store),
     tokenEncryptionKey: TEST_KEY,
     fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -77,6 +92,73 @@ describe("forge identities API", () => {
       token: "glpat-x",
     }))).status).toBe(401);
     expect((await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest({ id: "identity-1" }, "DELETE"))).status).toBe(401);
+  });
+
+  it("refuses a link for a deleted account with the exact member-gate envelope, before the body or the store", async () => {
+    const f = fixture({ liveRole: null });
+    const request = mutationRequest({
+      instanceUrl: "https://gitlab.example.com",
+      token: "glpat-x",
+    });
+    const parseBody = vi.spyOn(request, "json");
+
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(request);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(f.dependencies.getSession).toHaveBeenCalledExactlyOnceWith();
+    expect(f.dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith("user-1");
+    expect(parseBody).not.toHaveBeenCalled();
+    expect(request.bodyUsed).toBe(false);
+    expect(f.dependencies.createIdentityStore).not.toHaveBeenCalled();
+    expect(f.dependencies.fetch).not.toHaveBeenCalled();
+    expect(f.dependencies.claimPastWork).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+  });
+
+  it("refuses an unlink for a deleted account with the exact member-gate envelope", async () => {
+    const f = fixture({ liveRole: null });
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest(
+      { id: "identity-1" },
+      "DELETE",
+    ));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(f.dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith("user-1");
+    expect(f.calls).toEqual([]);
+  });
+
+  it("answers 502 without touching the store when the role read fails", async () => {
+    const f = fixture({ liveRole: "fails" });
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
+      instanceUrl: "https://gitlab.example.com",
+      token: "glpat-x",
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "The forge identity operation could not complete." },
+    });
+    expect(f.calls).toEqual([]);
+  });
+
+  it("consults the live role read for the writes but never for the GET", async () => {
+    const f = fixture({ list: [identityView()] });
+    expect((await createForgeIdentitiesGetHandler(f.dependencies)()).status).toBe(200);
+    expect(f.dependencies.getCurrentRole).not.toHaveBeenCalled();
+
+    expect((await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
+      instanceUrl: "sugar",
+      token: "glpat-x",
+    }))).status).toBe(400);
+    // The gate ran ahead of the body validation: the lookup happened even
+    // though the malformed body refused afterward.
+    expect(f.dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith("user-1");
   });
 
   it("lists the caller's identities and never a token", async () => {
@@ -230,5 +312,86 @@ describe.each([
 
     expect(response.status).toBe(successStatus);
     expect(f.calls).toContainEqual({ op: storeOperation, args: expect.objectContaining({ userId: "user-1" }) });
+  });
+});
+
+/**
+ * Issue 733: the session JWT outlives the account it was issued for, so the
+ * write verbs re-read the account's role live before acting on the session's
+ * account id. The deleted row here is real: the suite runs the migrations and
+ * the account deletion against a disposable database, and the refusal is
+ * asserted through the real getCurrentUserRole. GET is deliberately absent —
+ * it reads the caller's own, already scrubbed rows, so a deleted account's
+ * list answers empty without a gate.
+ */
+describe("forge identity writes for a deleted account (issue 733)", () => {
+  let sql: Sql;
+  let container: StartedTestContainer | undefined;
+  let deletedAccountId = "";
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "forge_deleted_account_test",
+      user: "forge_deleted_account_test",
+      password: "forge_deleted_account_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = postgres(started.databaseUrl, { max: 1 });
+    await runMigrations();
+    const githubUserId = 7_330_002;
+    const [row] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${githubUserId}, 'deleted-gate-forge')
+      returning id
+    `;
+    deletedAccountId = row!.id;
+    await deleteAccount(sql, githubUserId, { confirm: true });
+  });
+
+  afterAll(async () => {
+    // Two pools: runMigrations ran on the module client, the fixtures on this one.
+    await closeSql();
+    await sql.end();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("refuses a link with the member-gate envelope when the account row is deleted", async () => {
+    // The lookup is the real one against the container: the row is provably
+    // deleted, not merely unknown to a stub.
+    expect(await getCurrentUserRole(deletedAccountId, sql)).toBeNull();
+
+    const f = fixture({ session: { user: { id: deletedAccountId, role: "MEMBER" } } });
+    f.dependencies.getCurrentRole = (userId) => getCurrentUserRole(userId, sql);
+    const response = await createForgeIdentitiesPostHandler(f.dependencies)(mutationRequest({
+      instanceUrl: "https://gitlab.example.com",
+      token: "glpat-x",
+    }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(f.calls).toEqual([]);
+    expect(f.dependencies.fetch).not.toHaveBeenCalled();
+    expect(f.dependencies.claimPastWork).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unlink with the member-gate envelope when the account row is deleted", async () => {
+    const f = fixture({ session: { user: { id: deletedAccountId, role: "MEMBER" } } });
+    f.dependencies.getCurrentRole = (userId) => getCurrentUserRole(userId, sql);
+    const response = await createForgeIdentitiesDeleteHandler(f.dependencies)(mutationRequest(
+      { id: "identity-1" },
+      "DELETE",
+    ));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(f.calls).toEqual([]);
   });
 });
