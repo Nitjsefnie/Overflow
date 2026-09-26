@@ -1,8 +1,14 @@
 import net from "node:net";
 import type { StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { closeSql } from "@/lib/db/client";
-import { GET, createReadinessGetHandler, type Readiness } from "@/app/api/readiness/route";
+import { closeSql, getSql } from "@/lib/db/client";
+import {
+  GET,
+  createReadinessGetHandler,
+  type Readiness,
+} from "@/app/api/readiness/route";
+import { bundledMigrationNames } from "@/lib/db/migration-manifest";
+import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 
 describe("readiness endpoint", () => {
@@ -132,9 +138,9 @@ describe("readiness endpoint", () => {
 });
 
 /**
- * The production route against a real PostgreSQL and against a socket that
- * accepts connections and never answers — the two shapes a broken deployment
- * actually produces.
+ * The production route against a real PostgreSQL — migrated, behind and ahead
+ * of the build — and against a socket that accepts connections and never
+ * answers: the shapes a broken deployment actually produces.
  */
 describe("readiness endpoint against real databases", () => {
   const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -149,6 +155,9 @@ describe("readiness endpoint against real databases", () => {
     container = started.container;
     process.env.DATABASE_URL = started.databaseUrl;
     await closeSql();
+    // The probe reads schema_migrations, so the empty per-suite database has
+    // to be brought up to the build before any case can expect a 200.
+    await runMigrations();
   });
 
   afterAll(async () => {
@@ -164,6 +173,44 @@ describe("readiness endpoint against real databases", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ready" });
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("answers 503 when the schema is behind the build and 200 when equal or ahead", async () => {
+    const sql = getSql();
+    const newestBundled = bundledMigrationNames[bundledMigrationNames.length - 1];
+    const appliedNames = async (): Promise<string[]> =>
+      (await sql<{ name: string }[]>`select name from schema_migrations`).map((row) => row.name);
+    // A fresh production handler per case: the shared GET export's closure
+    // keeps its cached outcome (and its single-flight) across tests, so a
+    // fresh construction is what makes each case run its own probe — the
+    // same reset path the black-hole test below spells out.
+    const probeStatus = async (): Promise<number> => createReadinessGetHandler()().then(
+      (response) => response.status,
+    );
+
+    // Behind: the newest bundled migration is no longer recorded applied,
+    // which is the state a deploy's migrate step has not yet run against.
+    await sql`delete from schema_migrations where name = ${newestBundled}`;
+    expect(await appliedNames()).not.toContain(newestBundled);
+    expect(await probeStatus()).toBe(503);
+
+    // Equal: restoring the ledger row returns the schema to the migrated
+    // state — the migration's objects were never dropped, only its record.
+    await sql`insert into schema_migrations (name) values (${newestBundled})`;
+    expect(await appliedNames()).toContain(newestBundled);
+    expect(await probeStatus()).toBe(200);
+
+    // Ahead: a row this build has never bundled is not staleness — this is
+    // the state a rollback to an older release runs against.
+    const futureName = "9999_ahead_of_this_build.sql";
+    await sql`insert into schema_migrations (name) values (${futureName})`;
+    expect(await appliedNames()).toContain(futureName);
+    expect(await probeStatus()).toBe(200);
+
+    // Clean up the bogus row: this suite's database ends in the state the
+    // equal case proved, not one row ahead of it.
+    await sql`delete from schema_migrations where name = ${futureName}`;
+    expect(await appliedNames()).not.toContain(futureName);
   });
 
   it("answers 503 against a black-holed socket and bounds concurrent probes to one connection", async () => {

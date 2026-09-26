@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/db/client";
+import { isSchemaUpToDate } from "@/lib/db/migration-manifest";
 
 /**
  * Deployment readiness probe — issue 439.
@@ -7,10 +8,17 @@ import { getSql } from "@/lib/db/client";
  * with PostgreSQL unreachable. This endpoint answers from the database
  * instead, and every failure mode means NOT ready:
  *
- * - A rejection, a thrown error, or an empty result from the probe answers
- *   503. A timeout is not ready too: the probe query is raced onto a
+ * - A rejection or a thrown error from the probe answers 503. A timeout is
+ *   not ready too: the probe query is raced onto a
  *   READINESS_QUERY_TIMEOUT_MS budget, so a database that accepts the
  *   connection and never answers still fails the probe in time.
+ * - The probe reads the applied migration names out of `schema_migrations`
+ *   and answers 200 only when every migration this build bundles is recorded
+ *   applied (issue 692). A schema behind the build — an empty ledger, or one
+ *   missing a migration this build carries — is not ready. A schema AHEAD of
+ *   the build is ready: it holds every name this build needs plus rows from
+ *   a newer migration set, which is exactly the state a rollback to an older
+ *   release runs against, so the check is one-sided on purpose.
  * - Beneath the per-query timeout sits a structural hard cap
  *   (READINESS_HARD_CAP_MS) raced against the probe, so even a probe that
  *   never settles cannot hold a response open past the cap. The race's loser
@@ -50,7 +58,16 @@ export type ReadinessRouteDependencies = {
 };
 
 /**
- * The real probe: one trivial query, not ready if it fails or returns nothing.
+ * The real probe: read the applied migration names and refuse a schema this
+ * build is ahead of.
+ *
+ * Readiness is one-sided (issue 692): ready iff every migration the bundled
+ * manifest names is recorded applied. A missing table or a failed query
+ * rejects, landing in the existing error mapping as 503; an empty
+ * `schema_migrations` is behind, and answers 503 through the same predicate.
+ * An ahead schema carries the bundled names plus rows this build does not
+ * know, and stays ready — the state a rollback to an older release runs
+ * against.
  *
  * The 2000 ms budget is raced onto the query by hand: the pinned postgres
  * client (3.4.9, the `_patch_hash` build) exposes no per-query `.timeout()`,
@@ -60,11 +77,12 @@ export type ReadinessRouteDependencies = {
  * attached here, never the process's unhandled-rejection path.
  */
 async function probeDatabase(): Promise<Readiness> {
-  const rows = await raceTimeout(
-    getSql()`select 1`,
+  const sql = getSql();
+  const appliedRows = await raceTimeout(
+    sql<{ name: string }[]>`select name from schema_migrations`,
     READINESS_QUERY_TIMEOUT_MS,
   );
-  return rows.length > 0 ? "ready" : "unavailable";
+  return isSchemaUpToDate(appliedRows.map((row) => row.name)) ? "ready" : "unavailable";
 }
 
 /** Rejects if the query has not settled within `budgetMs`. */
