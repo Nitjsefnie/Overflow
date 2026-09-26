@@ -32,6 +32,12 @@ vi.mock("@/lib/fold/sweep", async (importActual) => ({
   sweepReconciliations: sweep,
 }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+// The GitLab gateway's default transport refuses a non-public instance and
+// cannot be injected through register(); route it to this file's stubbed
+// global fetch so the planted 401 still reaches the real gateway.
+vi.mock("@/lib/security/gitlab-api-fetch", () => ({
+  gitlabApiFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
 vi.mock("@/lib/forge/postgres-identities-store", () => ({
   PostgresForgeIdentityStore: class {
     getForgeToken = resolveToken;

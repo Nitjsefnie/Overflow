@@ -13,6 +13,7 @@ import type {
   GitHubWebhook,
   GitHubWebhookConfiguration,
 } from "@/lib/github/types";
+import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
 
 const defaultTimeoutMs = 10_000;
 
@@ -165,7 +166,7 @@ export class GitLabGateway {
   public constructor(options: GitLabGatewayOptions) {
     this.instanceUrl = options.instanceUrl.replace(/\/$/, "");
     this.token = options.token;
-    this.fetchImplementation = options.fetch ?? fetch;
+    this.fetchImplementation = options.fetch ?? gitlabApiFetch;
     this.timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   }
 
@@ -604,8 +605,7 @@ export class GitLabGateway {
       headers = response.headers;
       body = await response.text();
     } catch (error) {
-      // Transport failure — timeout abort or connection error. A status of 0
-      // names it without impersonating any HTTP status.
+      // Transport failure or refused destination: status 0, never an HTTP status.
       throw new GitLabApiError(0, error instanceof Error ? error.message : "transport failure");
     } finally {
       clearTimeout(timeout);

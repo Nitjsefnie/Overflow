@@ -249,7 +249,7 @@ export type RepositoryRegistrationDependencies = {
    * forge-first hook deletion reads the sponsor's credential through it.
    */
   getForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>;
-  /** Injectable transport for the GitLab gateway; production uses global fetch. */
+  /** Injectable transport for the GitLab gateway; production refuses non-public instances. */
   forgeFetch?: typeof fetch;
 };
 

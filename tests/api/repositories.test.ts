@@ -46,6 +46,12 @@ afterAll(() => { vi.resetModules(); });
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+// The production wiring builds its GitLab gateway on the default transport,
+// which refuses a non-public instance and has no injection seam there; route
+// it to the global fetch the GitLab wiring tests stub.
+vi.mock("@/lib/security/gitlab-api-fetch", () => ({
+  gitlabApiFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
 
 useTrustedOrigin();
 

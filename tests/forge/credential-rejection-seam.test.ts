@@ -1,9 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sponsorGateway } from "@/lib/fold/reconcile-as-sponsor";
 import { GitLabApiError } from "@/lib/gitlab/client";
 import type { ReconciliationGateway, ReconciliationRepository } from "@/lib/fold/reconcile";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
+
+// Release modules evaluated with this file's transport double.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
+
+// The sponsor gateway builds its GitLabGateway on the default transport, which
+// refuses a non-public instance and has no injection seam here; route it to
+// the global fetch each test stubs.
+vi.mock("@/lib/security/gitlab-api-fetch", () => ({
+  gitlabApiFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
 
 afterEach(() => { vi.unstubAllGlobals(); });
 

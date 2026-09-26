@@ -19,7 +19,7 @@ export type ForgeIdentitiesRouteDependencies = {
   getSession: () => Promise<ForgeIdentitiesRouteSession | null>;
   createIdentityStore: () => ForgeIdentityStore;
   tokenEncryptionKey?: string;
-  /** Injectable transport for the verification probe; production uses global fetch. */
+  /** Injectable transport for the verification probe; production refuses non-public instances. */
   fetch?: typeof fetch;
   /** Claims past GitLab work for the freshly verified triple (fold store). */
   claimPastWork?: (input: { userId: string; instanceUrl: string; forgeUserId: number }) => Promise<void>;
