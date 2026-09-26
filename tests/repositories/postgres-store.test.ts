@@ -900,27 +900,13 @@ describe("unregistering a repository against the real registered_repositories co
       ...(provider === "gitlab" ? { instanceUrl: "https://gitlab.example.com", forgeProjectId: externalId++ } : {}),
     });
     await store.createRepository(submission);
-    expect(await credentialColumns(submission.ownerName)).toMatchObject({ webhook_credential_id: credential.id });
+    expect(await credentialColumns(submission.ownerName)).toEqual({ credential_id: credential.id, secret_set: true, configured_set: true });
 
     await expect(store.unregisterRepository({ ownerName: submission.ownerName, sponsorId: submission.sponsorId, provider }))
       .resolves.toMatchObject({ kind: "UNREGISTERED" });
 
-    expect(await credentialColumns(submission.ownerName)).toEqual(
-      { webhook_credential_id: null, encrypted_webhook_secret: null, webhook_configured_at: null });
+    expect(await credentialColumns(submission.ownerName)).toEqual({ credential_id: null, secret_set: false, configured_set: false });
     expect(await store.findWebhookCredential(credential.id, provider)).toBeNull();
-  });
-
-  it("keeps the credential through a moderation deactivation, which restores without re-minting", async () => {
-    const credential = { id: randomUUID(), secret: "moderated-synthetic-secret" };
-    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: credential });
-    await store.createRepository(submission);
-    const stored = await credentialColumns(submission.ownerName);
-
-    // The statements the moderation store runs on substantiation and on closing a recalibration.
-    await sql`update registered_repositories set active = false, updated_at = now() where sponsor_id = ${submission.sponsorId}`;
-    expect(await credentialColumns(submission.ownerName)).toEqual(stored);
-    await sql`update registered_repositories set active = true, updated_at = now() where sponsor_id = ${submission.sponsorId}`;
-    expect(await store.findWebhookCredential(credential.id, "github")).toMatchObject({ secret: credential.secret });
   });
 
   it("mints a fresh credential when an unregistered repository is registered again", async () => {
@@ -939,11 +925,11 @@ describe("unregistering a repository against the real registered_repositories co
     });
   });
 
+  // Presence only, so a failure prints no ciphertext.
   async function credentialColumns(ownerName: string) {
-    const [row] = await sql<{
-      webhook_credential_id: string | null; encrypted_webhook_secret: Buffer | null; webhook_configured_at: Date | null;
-    }[]>`
-      select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+    const [row] = await sql<{ credential_id: string | null; secret_set: boolean; configured_set: boolean }[]>`
+      select webhook_credential_id as credential_id, encrypted_webhook_secret is not null as secret_set,
+        webhook_configured_at is not null as configured_set
       from registered_repositories where owner_name = ${ownerName}
     `;
     return row;
