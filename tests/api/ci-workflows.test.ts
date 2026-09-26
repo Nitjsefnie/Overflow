@@ -209,7 +209,8 @@ describe("GitHub Actions release gates", () => {
   it("groups the React family so dependabot bumps it in lockstep", async () => {
     const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
       updates: Array<{
-        groups?: Record<string, { patterns?: string[]; "exclude-patterns"?: string[] }>;
+        "package-ecosystem": string;
+        groups?: Record<string, Record<string, unknown> & { patterns?: string[] }>;
       }>;
     };
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
@@ -222,21 +223,30 @@ describe("GitHub Actions release gates", () => {
     ];
     // Dependabot group patterns are globs where `*` matches any run of
     // characters; resolve them against the real manifest so an over-broad
-    // pattern is caught by what it sweeps in, not by its spelling.
+    // pattern is caught by what it sweeps in today.
     const globMatches = (pattern: string, name: string) =>
       new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, "\\$&")).join(".*")}$`)
         .test(name);
 
-    const groups = Object.values(config.updates[0]!.groups ?? {});
+    const npm = config.updates.find((update) => update["package-ecosystem"] === "npm");
+    expect(npm).toBeDefined();
+    const groups = Object.values(npm!.groups ?? {});
     expect(groups).toHaveLength(1);
     const [group] = groups;
+    // Any other group key (applies-to, update-types, dependency-type, ...)
+    // narrows which bumps the group collects, so a narrowed group would let
+    // a React bump arrive split again.
+    expect(Object.keys(group!)).toEqual(["patterns"]);
+    const patterns = group!.patterns ?? [];
     const members = dependencyNames.filter((name) =>
-      (group!.patterns ?? []).some((pattern) => globMatches(pattern, name))
-      && !(group!["exclude-patterns"] ?? []).some((pattern) => globMatches(pattern, name)));
+      patterns.some((pattern) => globMatches(pattern, name)));
 
     // react-dom refuses to load beside any other react version, so a bump
     // that moves one member alone breaks every test file.
     expect(members.sort()).toEqual(["@types/react", "@types/react-dom", "react", "react-dom"]);
+    // Exact names, not wildcards: `react*` + `@types/react*` resolves to the
+    // four today but would also collect a future react-is.
+    expect([...patterns].sort()).toEqual(["@types/react", "@types/react-dom", "react", "react-dom"]);
   });
 
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
