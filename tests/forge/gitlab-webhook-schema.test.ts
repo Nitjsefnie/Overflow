@@ -223,14 +223,14 @@ describe("GitLab webhook delivery classification", () => {
 
 describe("GitLab webhook message identity", () => {
   it.each([
-    { name: "Idempotency-Key wins conflicting headers", ids: { idempotencyKey: " message-1 ", webhookId: "other" }, key: "message-1" },
-    { name: "webhook-id alone", ids: { webhookId: " message-2 " }, key: "message-2" },
-    { name: "blank Idempotency-Key falls through", ids: { idempotencyKey: "   ", webhookId: " message-2 " }, key: "message-2" },
-    { name: "blank stable headers fall back", ids: { idempotencyKey: " ", webhookId: " " }, key: "execution-1" },
-    { name: "absent stable headers fall back", ids: {}, key: "execution-1" },
-    { name: "Idempotency-Key at the limit", ids: { idempotencyKey: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
-    { name: "webhook-id at the limit", ids: { webhookId: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
-  ])("uses $name for issues and merge requests", ({ ids, key }) => {
+    { name: "uses Idempotency-Key when stable headers conflict", ids: { idempotencyKey: " message-1 ", webhookId: "other" }, key: "message-1" },
+    { name: "uses webhook-id when it is the only stable header", ids: { webhookId: " message-2 " }, key: "message-2" },
+    { name: "uses webhook-id when Idempotency-Key is blank", ids: { idempotencyKey: "   ", webhookId: " message-2 " }, key: "message-2" },
+    { name: "uses the execution UUID when stable headers are blank", ids: { idempotencyKey: " ", webhookId: " " }, key: "execution-1" },
+    { name: "uses the execution UUID when stable headers are absent", ids: {}, key: "execution-1" },
+    { name: "accepts a 255-character Idempotency-Key after trimming", ids: { idempotencyKey: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
+    { name: "accepts a 255-character webhook-id after trimming", ids: { webhookId: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
+  ])("$name for issues and merge requests", ({ ids, key }) => {
     for (const body of [payload(), mergeRequestPayload()]) {
       expect(parseGitLabWebhookDelivery("Issue Hook", " execution-1 ", body, ids))
         .toMatchObject({ deliveryId: key, executionId: "execution-1" });
@@ -238,17 +238,17 @@ describe("GitLab webhook message identity", () => {
   });
 
   it.each([
-    { idempotencyKey: "x".repeat(256) },
-    { webhookId: "x".repeat(256) },
-    { idempotencyKey: "valid", webhookId: "x".repeat(256) },
-  ])("rejects an oversized stable header %j", (ids) => {
+    { name: "rejects a 256-character Idempotency-Key", ids: { idempotencyKey: "x".repeat(256) } },
+    { name: "rejects a 256-character webhook-id", ids: { webhookId: "x".repeat(256) } },
+    { name: "rejects a 256-character webhook-id even with a valid Idempotency-Key", ids: { idempotencyKey: "valid", webhookId: "x".repeat(256) } },
+  ])("$name for issues and merge requests", ({ ids }) => {
     for (const body of [payload(), mergeRequestPayload()]) {
       expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", "execution-1", body, ids))
         .toEqual({ status: "invalid" });
     }
   });
 
-  it.each([["issue", payload()], ["merge request", mergeRequestPayload()]])("trims the execution header at the 255-character limit for %s", (_kind, body) => {
+  it.each([["an issue", payload()], ["a merge request", mergeRequestPayload()]])("trims the 255-character execution header for %s", (_kind, body) => {
     const header = "x".repeat(255);
     expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", ` ${header} `, body))
       .toMatchObject({ status: "ok", delivery: { deliveryId: header, executionId: header } });

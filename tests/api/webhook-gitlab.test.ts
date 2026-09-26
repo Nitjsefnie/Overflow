@@ -119,6 +119,22 @@ describe("GitLab webhook route", () => {
     expect(processWebhook).not.toHaveBeenCalled();
   });
 
+  it("rejects a 256-character Idempotency-Key and accepts a 255-character one", async () => {
+    const processWebhook = vi.fn();
+    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
+
+    const oversized = await route(request(issuePayload, gitlabHeaders({ "idempotency-key": "x".repeat(256) })));
+    expect(oversized.status).toBe(400);
+    expect(processWebhook).not.toHaveBeenCalled();
+
+    const accepted = await route(request(issuePayload, gitlabHeaders({ "idempotency-key": "x".repeat(255) })));
+    expect(accepted.status).toBe(202);
+    expect(processWebhook).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ deliveryId: "x".repeat(255), executionId: "uuid-1" }),
+      { provider: "gitlab", registrationId: "test-registration" },
+    );
+  });
+
   it.each([
     { provider: "gitlab" as const, instanceUrl: "https://gitlab.com", projectId: 42 },
     { provider: "gitlab" as const, instanceUrl: "https://another.example", projectId: 278964 },
@@ -157,13 +173,17 @@ describe("GitLab webhook route", () => {
     }), { provider: "gitlab", registrationId: "test-registration" });
   });
 
-  // The execution UUID is required even when a stable message header is sent;
-  // it records which execution claimed the scoped receipt.
+  // The missing execution UUID case sends both a stable message key and an
+  // event UUID; neither can replace the execution UUID required for the receipt.
   it.each([
-    { name: "no event header", headers: gitlabHeadersWithout("event") },
-    { name: "no delivery uuid", headers: gitlabHeadersWithout("uuid") },
-    { name: "no token header", headers: gitlabHeadersWithout("token") },
-  ])("answers 400 when $name is missing", async ({ headers }) => {
+    { name: "a missing event header", headers: gitlabHeadersWithout("event") },
+    { name: "a missing delivery UUID", headers: {
+      ...gitlabHeadersWithout("uuid"),
+      "idempotency-key": "stable-message",
+      "x-gitlab-event-uuid": "event-execution-1",
+    } },
+    { name: "a missing token header", headers: gitlabHeadersWithout("token") },
+  ])("answers 400 for $name", async ({ headers }) => {
     const processWebhookMock = vi.fn();
     const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const response = await route(request(issuePayload, headers));
