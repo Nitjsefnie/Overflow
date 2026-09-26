@@ -2,8 +2,10 @@ import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/web
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
+export type WebhookReceiptScope = { provider: "github" | "gitlab"; registrationId: string };
+
 export type WebhookDeliveryStore = {
-  claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
+  claimDelivery(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookDeliveryClaim>;
   findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
   /**
    * Resolves the registration holding this forge identity — provider,
@@ -17,8 +19,8 @@ export type WebhookDeliveryStore = {
     forgeProjectId: number,
   ): Promise<{ id: string; active: boolean } | null>;
   applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void>;
-  markProcessed(deliveryId: string, leaseToken: string): Promise<boolean>;
-  markFailed(deliveryId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
+  markProcessed(receiptId: string, leaseToken: string): Promise<boolean>;
+  markFailed(receiptId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
 };
 
 export type WebhookProcessorDependencies = {
@@ -29,7 +31,7 @@ export type WebhookProcessorDependencies = {
 export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" };
 
 export type WebhookDeliveryClaim =
-  | { status: "CLAIMED"; leaseToken: string }
+  | { status: "CLAIMED"; receiptId: string; leaseToken: string }
   | { status: "DUPLICATE" };
 
 /**
@@ -42,8 +44,9 @@ export type WebhookDeliveryClaim =
 export async function processWebhook(
   dependencies: WebhookProcessorDependencies,
   delivery: GitHubWebhookDelivery,
+  scope: WebhookReceiptScope,
 ): Promise<WebhookProcessingResult> {
-  const claim = await dependencies.store.claimDelivery(delivery);
+  const claim = await dependencies.store.claimDelivery(delivery, scope);
   if (claim.status === "DUPLICATE") {
     return { status: "DUPLICATE" };
   }
@@ -64,11 +67,11 @@ export async function processWebhook(
       }
       await dependencies.enqueueReconciliation(repository.id, delivery);
     }
-    const markedProcessed = await dependencies.store.markProcessed(delivery.deliveryId, claim.leaseToken);
+    const markedProcessed = await dependencies.store.markProcessed(claim.receiptId, claim.leaseToken);
     return { status: markedProcessed ? "PROCESSED" : "DUPLICATE" };
   } catch (error) {
     try {
-      await dependencies.store.markFailed(delivery.deliveryId, claim.leaseToken, "Webhook processing failed.");
+      await dependencies.store.markFailed(claim.receiptId, claim.leaseToken, "Webhook processing failed.");
     } catch {
       // A stale pending lease remains reclaimable if recording its failure also fails.
     }

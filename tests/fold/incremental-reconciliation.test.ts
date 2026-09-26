@@ -490,7 +490,7 @@ async function fixture() {
     measuredReviewCost: null as number | null,
     afterList: async () => {},
     async dirty(kind: "ISSUE" | "PULL_REQUEST", subject: GitHubSubject) {
-      await f.store.enqueueWebhookReconciliation(f.id, { deliveryId: `event-${f.id}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
+      await f.store.enqueueWebhookReconciliation(f.id, { deliveryId: `event-${f.id}`, executionId: `event-${f.id}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
         action: kind === "ISSUE" ? "edited" : "dismissed", repositoryGitHubId: githubRepositoryId,
         repositoryFullName: `octo/repo-${githubRepositoryId}`, subject: { kind, id: subject.id, number: subject.number } });
     },

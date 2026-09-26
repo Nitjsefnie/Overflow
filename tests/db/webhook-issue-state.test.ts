@@ -161,7 +161,7 @@ async function deliver(fixture: Fixture, options: {
       if (options.failEnqueue) throw new Error("Injected queue failure");
       return fixture.store.enqueueWebhookReconciliation(repositoryId, incoming);
     },
-  }, delivery);
+  }, delivery, { provider: "github", registrationId: fixture.repositoryId });
 }
 
 async function materialize(fixture: Fixture) {

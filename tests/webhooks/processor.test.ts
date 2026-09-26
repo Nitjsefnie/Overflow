@@ -3,22 +3,25 @@ import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhook
 import { inspect } from "node:util";
 import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
+const scope = { provider: "github" as const, registrationId: "authenticated-registration" };
+
 describe("processWebhook", () => {
   it("records a reconciliation job and finishes the delivery with the lease it claimed", async () => {
     const dependencies = processorDependencies({ claimDelivery: claimedLease("lease-1") });
 
-    const result = await processWebhook(dependencies, delivery());
+    const result = await processWebhook(dependencies, delivery(), scope);
 
     expect(result).toEqual({ status: "PROCESSED" });
+    expect(dependencies.store.claimDelivery).toHaveBeenCalledWith(delivery(), scope);
     // Mutant: DROP_SUBJECT_ID at the processor/enqueue boundary.
     expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("repository", delivery());
-    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("delivery-1", "lease-1");
+    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("receipt-1", "lease-1");
   });
 
   it("does not schedule a fold for a delivery still leased by an interrupted worker", async () => {
     const dependencies = processorDependencies({ claimDelivery: { status: "DUPLICATE" } });
 
-    const result = await processWebhook(dependencies, delivery());
+    const result = await processWebhook(dependencies, delivery(), scope);
 
     expect(result).toEqual({ status: "DUPLICATE" });
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
@@ -33,7 +36,7 @@ describe("processWebhook", () => {
       findRepositoryByGitHubId: vi.fn().mockResolvedValue(repository),
     });
 
-    await expect(processWebhook(dependencies, delivery())).resolves.toEqual({ status: "PROCESSED" });
+    await expect(processWebhook(dependencies, delivery(), scope)).resolves.toEqual({ status: "PROCESSED" });
 
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
   });
@@ -44,10 +47,10 @@ describe("processWebhook", () => {
       enqueueReconciliation: vi.fn().mockRejectedValue(new Error("databaseUrl=postgres://secret")),
     });
 
-    await expect(processWebhook(dependencies, delivery())).rejects.toThrow("Webhook processing failed.");
+    await expect(processWebhook(dependencies, delivery(), scope)).rejects.toThrow("Webhook processing failed.");
 
     expect(dependencies.store.markFailed).toHaveBeenCalledWith(
-      "delivery-1",
+      "receipt-1",
       "lease-1",
       "Webhook processing failed.",
     );
@@ -58,14 +61,14 @@ describe("processWebhook", () => {
       enqueueReconciliation: vi.fn().mockRejectedValue(new Error("probe enqueue root cause")),
     });
 
-    const error = await processWebhook(dependencies, delivery()).catch((caught: unknown) => caught);
+    const error = await processWebhook(dependencies, delivery(), scope).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Webhook processing failed.");
     expect((error as Error).cause).toBeInstanceOf(Error);
     expect(((error as Error).cause as Error).message).toBe("probe enqueue root cause");
     expect(dependencies.store.markFailed).toHaveBeenCalledWith(
-      "delivery-1",
+      "receipt-1",
       "lease-1",
       "Webhook processing failed.",
     );
@@ -81,7 +84,7 @@ describe("processWebhook", () => {
         issue: { state: "OPEN" as const, updatedAt: "2026-09-08T10:00:00Z", title: "title", body: "body", url: "https://example.test/issue" },
       };
 
-      const failure = await processWebhook(dependencies, issueDelivery).catch((caught: unknown) => caught);
+      const failure = await processWebhook(dependencies, issueDelivery, scope).catch((caught: unknown) => caught);
       const upstream = originalError();
       expect(upstream.detail).toContain(RECORD_MARKER);
       expect(upstream.where).toContain(RECORD_MARKER);
@@ -89,7 +92,7 @@ describe("processWebhook", () => {
       expect(inspect(failure, { depth: null })).not.toContain(RECORD_MARKER);
       expect(inspect(failure, { depth: null })).toContain(upstream.code);
       expect(Object.keys((failure as Error).cause as Error).sort()).toEqual(["code", "name", "routine", "severity"]);
-      expect(dependencies.store.markFailed).toHaveBeenCalledWith("delivery-1", "lease-1", "Webhook processing failed.");
+      expect(dependencies.store.markFailed).toHaveBeenCalledWith("receipt-1", "lease-1", "Webhook processing failed.");
     });
   });
 
@@ -100,7 +103,7 @@ describe("processWebhook", () => {
       markFailed: vi.fn().mockRejectedValue(new Error("write failed with token=secret")),
     });
 
-    await expect(processWebhook(dependencies, delivery())).rejects.toThrow("Webhook processing failed.");
+    await expect(processWebhook(dependencies, delivery(), scope)).rejects.toThrow("Webhook processing failed.");
   });
 
   it("does not report a delivery as processed when its lease ownership was lost", async () => {
@@ -109,7 +112,7 @@ describe("processWebhook", () => {
       markProcessed: vi.fn().mockResolvedValue(false),
     });
 
-    await expect(processWebhook(dependencies, delivery())).resolves.toEqual({ status: "DUPLICATE" });
+    await expect(processWebhook(dependencies, delivery(), scope)).resolves.toEqual({ status: "DUPLICATE" });
   });
 
   // A GitLab delivery (issue 547) resolves through the forge identity it
@@ -125,13 +128,13 @@ describe("processWebhook", () => {
     };
     dependencies.store.findRepositoryByForgeIdentity = vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true });
 
-    const result = await processWebhook(dependencies, forgeDelivery);
+    const result = await processWebhook(dependencies, forgeDelivery, { ...scope, provider: "gitlab" });
 
     expect(result).toEqual({ status: "PROCESSED" });
     expect(dependencies.store.findRepositoryByForgeIdentity).toHaveBeenCalledWith("gitlab", "https://gitlab.example.com", 278964);
     expect(dependencies.store.findRepositoryByGitHubId).not.toHaveBeenCalled();
     expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("gitlab-repository", forgeDelivery);
-    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("delivery-1", "lease-1");
+    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("receipt-1", "lease-1");
   });
 
   it("does not schedule a fold for a forge delivery whose identity resolves to nothing", async () => {
@@ -142,7 +145,7 @@ describe("processWebhook", () => {
     await expect(processWebhook(dependencies, {
       ...delivery(),
       forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
-    })).resolves.toEqual({ status: "PROCESSED" });
+    }, { ...scope, provider: "gitlab" })).resolves.toEqual({ status: "PROCESSED" });
 
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
     expect(dependencies.store.markProcessed).toHaveBeenCalled();
@@ -160,7 +163,7 @@ describe("processWebhook", () => {
       forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
     };
 
-    await processWebhook(dependencies, forgeDelivery);
+    await processWebhook(dependencies, forgeDelivery, { ...scope, provider: "gitlab" });
 
     expect(dependencies.store.applyIssueView).toHaveBeenCalledWith("gitlab-repository", 301, forgeDelivery.issue);
     expect(dependencies.enqueueReconciliation).toHaveBeenCalledWith("gitlab-repository", forgeDelivery);
@@ -170,6 +173,7 @@ describe("processWebhook", () => {
 function delivery() {
   return {
     deliveryId: "delivery-1",
+    executionId: "execution-1",
     event: "pull_request" as const,
     action: "closed",
     repositoryGitHubId: 42,
@@ -216,9 +220,9 @@ function processorDependencies(
 }
 
 type DeliveryClaim =
-  | { status: "CLAIMED"; leaseToken: string }
+  | { status: "CLAIMED"; receiptId: string; leaseToken: string }
   | { status: "DUPLICATE" };
 
 function claimedLease(leaseToken: string): DeliveryClaim {
-  return { status: "CLAIMED", leaseToken };
+  return { status: "CLAIMED", receiptId: "receipt-1", leaseToken };
 }

@@ -30,7 +30,7 @@ vi.mock("@/lib/fold/postgres-store", () => ({
   PostgresFoldStore: class {
     async applyIssueView() {}
     async claimDelivery() {
-      return { status: "CLAIMED" as const, leaseToken: "lease-1" };
+      return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "lease-1" };
     }
     async findRepositoryByGitHubId() {
       return { id: "repository-from-webhook", active: true };
@@ -150,14 +150,14 @@ describe("production reconciliation wiring", () => {
     const folded: string[] = [];
     const route = createGitHubWebhookPostHandler({
       lookupCredential: async () => webhookCredential("github", secret),
-      processWebhook: (delivery) =>
+      processWebhook: (delivery, scope) =>
         processWebhook(
           {
             store,
             enqueueReconciliation: (repositoryId) =>
               store.enqueueReconciliationJob(repositoryId, "WEBHOOK"),
           },
-          delivery,
+          delivery, scope,
         ),
     });
 
@@ -228,7 +228,7 @@ function createQueueingStore() {
     async applyIssueView() {},
     outstanding: () => pending.map((job) => job.repositoryId),
     async claimDelivery() {
-      return { status: "CLAIMED" as const, leaseToken: "delivery-lease" };
+      return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "delivery-lease" };
     },
     async findRepositoryByGitHubId() {
       return { id: "repository-from-webhook", active: true };

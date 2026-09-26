@@ -16,7 +16,7 @@
     "src/lib/github/client.ts": 1518,
     "src/lib/moderation/credit-adjustment-store.ts": 946,
     "src/lib/repositories/register.ts": 2046,
-    "tests/db/schema.test.ts": 5077,
+    "tests/db/schema.test.ts": 5076,
     "tests/github/graphql.test.ts": 3018
   }
 }

@@ -13,6 +13,7 @@ export type SupportedGitHubWebhookEvent = keyof typeof supportedActions;
 
 export type GitHubWebhookDelivery = {
   deliveryId: string;
+  executionId: string;
   event: SupportedGitHubWebhookEvent;
   action: string;
   repositoryGitHubId: number;
@@ -81,6 +82,7 @@ export function parseGitHubWebhookDeliveryDetailed(
     eventName === null ||
     deliveryId === null ||
     deliveryId.trim().length === 0 ||
+    deliveryId.trim().length > 255 ||
     !isSupportedEvent(eventName)
   ) {
     return { status: "invalid" };
@@ -122,7 +124,8 @@ export function parseGitHubWebhookDeliveryDetailed(
   return {
     status: "ok",
     delivery: {
-      deliveryId,
+      deliveryId: deliveryId.trim(),
+      executionId: deliveryId.trim(),
       event: eventName,
       action: parsed.data.action,
       repositoryGitHubId: parsed.data.repository.id,

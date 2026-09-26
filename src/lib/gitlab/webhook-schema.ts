@@ -108,7 +108,8 @@ export function parseGitLabWebhookDeliveryDetailed(
   deliveryUuid: string | null,
   payload: unknown,
 ): GitLabWebhookParseResult {
-  if (eventName === null || eventName.trim().length === 0 || deliveryUuid === null || deliveryUuid.trim().length === 0) {
+  if (eventName === null || eventName.trim().length === 0 || deliveryUuid === null || deliveryUuid.trim().length === 0
+    || deliveryUuid.trim().length > 255) {
     return { status: "invalid" };
   }
 
@@ -138,6 +139,7 @@ export function parseGitLabWebhookDeliveryDetailed(
     status: "ok",
     delivery: {
       deliveryId: namespacedDeliveryId(deliveryUuid),
+      executionId: deliveryUuid.trim(),
       event: "issues",
       action,
       repositoryGitHubId: parsed.data.project.id,
@@ -175,6 +177,7 @@ function parseMergeRequestPayload(deliveryUuid: string, payload: unknown): GitLa
     status: "ok",
     delivery: {
       deliveryId: namespacedDeliveryId(deliveryUuid),
+      executionId: deliveryUuid.trim(),
       event: mapped.event,
       action: mapped.action,
       repositoryGitHubId: parsed.data.project.id,

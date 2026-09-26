@@ -4,13 +4,13 @@ import {
 } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { processWebhook } from "@/lib/webhooks/processor";
+import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 
 export type GitHubWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
-  processWebhook(delivery: GitHubWebhookDelivery): Promise<unknown>;
+  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<unknown>;
 };
 
 // GitHub documents webhook payloads as capped at 25 MB. 25 MiB (26,214,400)
@@ -83,7 +83,7 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     const delivery = result.delivery;
 
     try {
-      await dependencies.processWebhook(delivery);
+      await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
       return new Response(null, { status: 202 });
     } catch (error) {
       // GitHub sees only an empty 503 and the store persists the sanitized
@@ -133,12 +133,12 @@ async function readBodyWithinLimit(request: Request): Promise<Buffer | null> {
 export async function POST(request: Request): Promise<Response> {
   return createGitHubWebhookPostHandler({
     lookupCredential: (selector, provider) => new PostgresRepositoryStore().findWebhookCredential(selector, provider),
-    processWebhook: async (delivery) => {
+    processWebhook: async (delivery, scope) => {
       const store = new PostgresFoldStore();
       return processWebhook({
         store,
         enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
-      }, delivery);
+      }, delivery, scope);
     },
   })(request);
 }
