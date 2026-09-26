@@ -1753,17 +1753,22 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
       values
         ('repayment-unavailable', 'repo-repayment-unavailable', 11, 'Closed bay work',
           'https://github.com/co-op/closed-bay/issues/11', 'OPEN', 'delta', 3, 2, null, null, '2026-08-31T00:00:00Z'),
+        ('repayment-unavailable-claimed', 'repo-repayment-unavailable', 13, 'Closed bay outsider work',
+          'https://github.com/co-op/closed-bay/issues/13', 'OPEN', 'delta', 3, 2, 'outsider', 203, '2026-08-30T00:00:00Z'),
         ('repayment-available', 'repo-repayment-available', 12, 'Open bay work',
           'https://github.com/co-op/open-bay/issues/12', 'OPEN', 'delta', 3, 5, null, null, '2026-09-01T00:00:00Z')
     `);
 
     const board = await listEligibleIssues("member", {}, { sql: sql as unknown as DashboardSql });
 
-    // The available repository's issue takes the repayment slot (reserve 5
-    // beats nothing else nominated); the unavailable repository's issue stays
-    // off the board outright.
-    expect(board.map((row) => row.id)).toContain("repayment-available");
-    expect(board.map((row) => row.id)).not.toContain("repayment-unavailable");
+    // The available repository's issue takes the repayment slot; the
+    // unavailable repository's unclaimed opening stays off the open board,
+    // and its claimed issue stays off the claimed board — the unavailability
+    // filter holds in both claim states, not only through the repayment
+    // nomination.
+    expect(board.map((row) => row.id)).toEqual(["open", "unavailable-open", "repayment-available"]);
+    const claimedBoard = await listEligibleIssues("member", { claimState: "CLAIMED" }, { sql: sql as unknown as DashboardSql });
+    expect(claimedBoard.map((row) => row.id)).toEqual(["ambiguous", "claimed"]);
   });
 });
 
