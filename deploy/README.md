@@ -1030,11 +1030,15 @@ ownership and mode. It refuses, changing nothing, unless:
 - step 2's file holds a 43-character key;
 - the environment file ends with a newline, so the appended line cannot be
   glued onto the last one;
-- the file holds exactly one `TOKEN_ENCRYPTION_KEY` line, with the bare value
-  and nothing else: no quotes, spaces or comment. Rewrite a quoted line as
+- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`. `.env.example` ships an empty
+  `TOKEN_ENCRYPTION_KEY_PREVIOUS=` line; delete such a line before running the
+  block;
+- exactly one line names `TOKEN_ENCRYPTION_KEY` at all, comments included (the
+  pre-restart rollback counts the same way, so a file this block accepts is one
+  the rollback accepts), and that line holds the bare value and nothing else: no
+  quotes, spaces or comment. Rewrite a quoted line as
   `TOKEN_ENCRYPTION_KEY=<value>` first; systemd and the shell read the bare
   form identically;
-- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`;
 - no `token-encryption-key.old` from an earlier rotation is in the way. Such a
   file belongs with that rotation's dump, so rename it rather than removing it.
 
@@ -1043,9 +1047,9 @@ ownership and mode. It refuses, changing nothing, unless:
 set -e
 grep -Eqx '[A-Za-z0-9_-]{43}' /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new does not hold a 43-character key." >&2; exit 1; }
 test -z "$(tail -c 1 /etc/overflow/overflow.env)" || { echo "Refusing: overflow.env does not end with a newline." >&2; exit 1; }
-test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env needs exactly one TOKEN_ENCRYPTION_KEY line." >&2; exit 1; }
-grep -Eqx 'TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
 test "$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
+test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env must name TOKEN_ENCRYPTION_KEY on exactly one line." >&2; exit 1; }
+grep -Eqx 'TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
 test ! -e /etc/overflow/token-encryption-key.old || { echo "Refusing: token-encryption-key.old already exists." >&2; exit 1; }
 install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
 sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
@@ -1260,10 +1264,17 @@ application and inspect its journal as in section 7. Keep
 
 - **While both keys are configured**, from step 3's restart until step 6: swap
   them, so the old key is current and the new one previous, and restart with
-  step 3's restart block:
+  step 3's restart block. The block refuses unless the file holds exactly one
+  current and one previous key line and names the key nowhere else; after
+  step 6 there is no previous key to swap in, and swapping a lone key would
+  leave the service with no current key:
 
   ```bash
+  (
+  set -e
+  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly one current and one previous key line." >&2; exit 1; }
   sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+  )
   ```
 
   Every row stays readable whichever key sealed it, and new writes go back
