@@ -19,6 +19,8 @@ vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: production
 import {
   createModerationClosePatchHandler,
   createModerationPostHandler,
+  type ModerationCreditRouteDependencies,
+  type ModerationRouteDependencies,
 } from "@/app/api/moderation/route";
 import {
   PATCH as productionAuditPatch,
@@ -953,7 +955,12 @@ describe("reason length caps", () => {
   const maxReason = "x".repeat(MAX_REASON_LENGTH);
   const overReason = `${maxReason}!`;
 
-  function moderatorDependencies(service: unknown) {
+  // The intersection serves every handler factory this describe drives: each
+  // takes its own dependencies slice, and a value of the intersection is
+  // assignable to every one of them.
+  function moderatorDependencies(
+    service: unknown,
+  ): ModerationRouteDependencies & ModerationCreditRouteDependencies {
     return {
       getSession: async () => moderatorSession,
       findAccountByTokenHash: async () => null,
