@@ -25,7 +25,8 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
     let session: Session | null;
     try {
       session = await dependencies.getSession();
-    } catch {
+    } catch (error) {
+      console.error("Account delete session failed.", error);
       return upstreamFailure();
     }
     if (session === null) return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
@@ -45,32 +46,43 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
     }
     const confirmLogin = (body as { confirmLogin: string }).confirmLogin;
 
+    let sql: SqlClient;
+    let identity: Identity | null;
     try {
-      const sql = dependencies.getSql();
-      const identity = await (dependencies.findIdentity ?? findLiveAccountIdentity)(sql, session.user.id);
-      if (identity === null) return errorResponse(403, "FORBIDDEN", "Account deletion is unavailable.");
-      if (confirmLogin.trim().toLowerCase() !== identity.githubLogin.trim().toLowerCase()) {
-        return errorResponse(400, "CONFIRMATION_MISMATCH", "The confirmation login does not match your account.");
-      }
-      const outcome = await (dependencies.deleteAccount ?? deleteAccount)(sql, identity.githubUserId, { confirm: true });
-      switch (outcome.kind) {
-        case "SPONSOR_BLOCKED":
-          return Response.json({ error: { code: "SPONSOR_BLOCKED", message: "Unregister your sponsored repositories before deleting your account.", repositories: outcome.repositories } }, { status: 409 });
-        case "UNKNOWN_ACCOUNT":
-          return errorResponse(403, "FORBIDDEN", "Account deletion is unavailable.");
-        case "PLANNED":
-          return upstreamFailure();
-        case "DELETED":
-          try {
-            await dependencies.endSession();
-            return Response.json({ deleted: true });
-          } catch {
-            console.error("Account deleted, but ending the browser session failed.");
-            return Response.json({ deleted: true, sessionEnded: false });
-          }
-      }
-    } catch {
+      sql = dependencies.getSql();
+      identity = await (dependencies.findIdentity ?? findLiveAccountIdentity)(sql, session.user.id);
+    } catch (error) {
+      console.error("Account delete lookup failed.", error);
       return upstreamFailure();
+    }
+    if (identity === null) return errorResponse(403, "FORBIDDEN", "A member account is required.");
+    if (confirmLogin.trim().toLowerCase() !== identity.githubLogin.trim().toLowerCase()) {
+      return errorResponse(400, "CONFIRMATION_MISMATCH", "The confirmation login does not match your account.");
+    }
+
+    let outcome: AccountDeletionOutcome;
+    try {
+      outcome = await (dependencies.deleteAccount ?? deleteAccount)(sql, identity.githubUserId, { confirm: true });
+    } catch (error) {
+      console.error("Account delete operation failed.", error);
+      return upstreamFailure();
+    }
+    switch (outcome.kind) {
+      case "SPONSOR_BLOCKED":
+        return Response.json({ error: { code: "SPONSOR_BLOCKED", message: "Unregister your sponsored repositories before deleting your account.", repositories: outcome.repositories } }, { status: 409 });
+      case "UNKNOWN_ACCOUNT":
+        return errorResponse(403, "FORBIDDEN", "A member account is required.");
+      case "PLANNED":
+        console.error("Account delete outcome failed.", new Error("Unexpected planned account deletion outcome."));
+        return upstreamFailure();
+      case "DELETED":
+        try {
+          await dependencies.endSession();
+          return Response.json({ deleted: true });
+        } catch {
+          console.error("Account deleted, but ending the browser session failed.");
+          return Response.json({ deleted: true, sessionEnded: false });
+        }
     }
   };
 }

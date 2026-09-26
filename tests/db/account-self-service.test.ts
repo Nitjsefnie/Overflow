@@ -45,18 +45,26 @@ async function insertUser(login: string) {
 }
 
 describe("self-service account data on Postgres", () => {
-  it("finds only a live user's internal UUID, and treats malformed and unknown ids as absent", async () => {
+  it("finds only a live user's internal UUID, rejects malformed ids, and returns null for unknown ids", async () => {
     const live = await insertUser("lookup-live");
     const removed = await insertUser("lookup-removed");
     await deleteAccount(sql, removed.githubUserId, { confirm: true });
     expect(await findLiveAccountIdentity(sql, live.id)).toEqual({ githubUserId: live.githubUserId, githubLogin: "lookup-live" });
     expect(await findLiveAccountIdentity(sql, removed.id)).toBeNull();
     expect(await findLiveAccountIdentity(sql, randomUUID())).toBeNull();
-    await expect(findLiveAccountIdentity(sql, "not-a-uuid")).rejects.toThrow();
+    await expect(findLiveAccountIdentity(sql, "not-a-uuid")).rejects.toMatchObject({ code: "22P02" });
   });
 
   it("exports through the real handler and deletes to the CLI's pseudonymised row state", async () => {
     const account = await insertUser("route-owner");
+    await sql`
+      update users set encrypted_oauth_token = ${Buffer.from("fixture-oauth-token")}
+      where id = ${account.id}
+    `;
+    const [beforeDeletion] = await sql<{ encrypted_oauth_token: Buffer | null }[]>`
+      select encrypted_oauth_token from users where id = ${account.id}
+    `;
+    expect(beforeDeletion!.encrypted_oauth_token).toEqual(Buffer.from("fixture-oauth-token"));
     const getSession = async () => ({ user: { id: account.id, authenticatedAt: Date.now() / 1000 } });
     const exportResponse = await createAccountExportPostHandler({ getSession, getSql: () => sql })(exportRequests.json({}));
     const directDocument = await exportAccount(sql, account.githubUserId);
