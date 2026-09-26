@@ -8,10 +8,13 @@ import { useTrustedOrigin } from "../support/trusted-origin";
 // (`src/lib/security/server-action-origin.ts`) imports `headers` statically,
 // so whichever file first loads the landing/actions graph in a worker freezes
 // the binding the guard keeps for the worker's whole lifetime: a file that
-// loads the graph with no next/headers mock in its own registry (the landing
-// page is imported by three files; two of them registered no mock) binds the
-// REAL `headers`, and a later file's own mock can never rebind it. When the
-// landing tests then ran after such a file in the same worker, the guard read
+// loads the graph with no next/headers mock in its own registry binds the
+// REAL `headers`, and a later file's own mock can never rebind it. Four test
+// files import the landing page; three register no next/headers mock of their
+// own, and two of those three self-clean with a vi.resetModules() reset pair,
+// leaving one file (tests/components/account-data-page.test.tsx) that loads
+// the graph real-bound and leaves it cached. When the
+// landing tests then ran after that file in the same worker, the guard read
 // the real `headers` outside a request scope, threw, and the action never
 // reached `signIn` — the 1-in-4 leg failure.
 //
