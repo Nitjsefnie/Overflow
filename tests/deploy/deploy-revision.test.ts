@@ -971,7 +971,9 @@ describe("scripts/deploy-revision.sh", () => {
       { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
       { id: 400, path: ".github/workflows/claim.yml", jobs: [{ id: 4001, name: "verify", status: "completed", conclusion: "success" }] },
     ]);
-    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+    // A deadline so a regression toward waiting fails the assertions below
+    // rather than spawnSync's kill; a correct gate refuses on the first poll.
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("verify");
@@ -1026,7 +1028,14 @@ describe("scripts/deploy-revision.sh", () => {
         label === "disappears"
           ? await writeGateState(fixture, "gate-unattributed-gone", [olderVerify, deployGate])
           : await writeGateState(fixture, "gate-unattributed-attributed", [newerVerify, olderVerify, deployGate]);
-      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: `${first}:${second}` });
+      // Short enough that a regression toward waiting refuses before
+      // spawnSync's kill, long enough that the second poll always runs: a
+      // one-second deadline can expire inside the first poll, since bash's
+      // SECONDS ticks on whole wall-clock seconds.
+      const result = await runDeploy(fixture, {
+        GH_SHIM_GATE_SEQUENCE: `${first}:${second}`,
+        OVERFLOW_DEPLOY_CI_TIMEOUT: "30",
+      });
 
       expect(result.status, `${label}: ${result.stderr}`).toBe(0);
       const entries = await readLog(fixture.shimLog);
