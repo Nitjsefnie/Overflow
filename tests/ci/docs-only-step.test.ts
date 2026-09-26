@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
 
 type WorkflowStep = {
   id?: string;
@@ -63,15 +64,6 @@ describe("the verify workflow's docs-only detection step", () => {
   });
 
   describe("run in a shallow checkout", () => {
-    const gitEnv = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "docs-only step test",
-      GIT_AUTHOR_EMAIL: "docs-only-step@example.invalid",
-      GIT_COMMITTER_NAME: "docs-only step test",
-      GIT_COMMITTER_EMAIL: "docs-only-step@example.invalid",
-    };
     const zeroSha = "0000000000000000000000000000000000000000";
     let root = "";
     let counter = 0;
@@ -84,24 +76,6 @@ describe("the verify workflow's docs-only detection step", () => {
       await rm(root, { recursive: true, force: true });
     });
 
-    function git(repo: string, ...args: string[]): string {
-      const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: gitEnv });
-      if (result.status !== 0) {
-        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-      }
-      return result.stdout.trim();
-    }
-
-    async function commit(repo: string, files: Record<string, string>, message: string): Promise<string> {
-      for (const [path, content] of Object.entries(files)) {
-        await mkdir(dirname(join(repo, path)), { recursive: true });
-        await writeFile(join(repo, path), content);
-      }
-      git(repo, "add", "--all");
-      git(repo, "commit", "--quiet", "--message", message);
-      return git(repo, "rev-parse", "HEAD");
-    }
-
     /**
      * The origin repository. Its root commit carries the real
      * scripts/docs-only.ts, so the step runs the module under test, plus one
@@ -112,10 +86,9 @@ describe("the verify workflow's docs-only detection step", () => {
       const repo = join(root, `upstream-${counter}`);
       await mkdir(repo);
       git(repo, "init", "--quiet", "--initial-branch=main");
-      git(repo, "config", "uploadpack.allowReachableSHA1InWant", "true");
       await mkdir(join(repo, "scripts"));
       await copyFile(resolve("scripts/docs-only.ts"), join(repo, "scripts/docs-only.ts"));
-      await commit(
+      await commitFiles(
         repo,
         { "src/lib/format-signed.ts": "export const formatSigned = 0;\n", "README.md": "# scratch\n" },
         "root",
@@ -144,7 +117,7 @@ describe("the verify workflow's docs-only detection step", () => {
         cwd: checkout,
         encoding: "utf8",
         env: {
-          ...gitEnv,
+          ...scratchGitEnv,
           ...env,
           GITHUB_SHA: sha,
           GITHUB_OUTPUT: outputPath,
@@ -162,8 +135,8 @@ describe("the verify workflow's docs-only detection step", () => {
     it("judges a push by every commit since its before SHA", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
-      await commit(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
-      const head = await commit(origin, { "README.md": "# scratch, edited\n" }, "docs");
+      await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
+      const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
       const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
@@ -176,7 +149,7 @@ describe("the verify workflow's docs-only detection step", () => {
     it("judges a single-commit push, whose before SHA is the first parent", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
-      const head = await commit(origin, { "README.md": "# scratch, edited\n" }, "docs");
+      const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
       const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
@@ -186,8 +159,8 @@ describe("the verify workflow's docs-only detection step", () => {
     it("still finds a docs-only push docs-only", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
-      await commit(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
-      const head = await commit(origin, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
+      await commitFiles(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
+      const head = await commitFiles(origin, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
 
       const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
@@ -196,9 +169,10 @@ describe("the verify workflow's docs-only detection step", () => {
 
     it("measures a push whose before SHA is empty, all zeros or unfetchable", async () => {
       const origin = await upstream();
-      await commit(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
-      const head = await commit(origin, { "README.md": "# scratch, second edit\n" }, "docs two");
+      await commitFiles(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
+      const head = await commitFiles(origin, { "README.md": "# scratch, second edit\n" }, "docs two");
 
+      // The unfetchable case is a SHA that exists in no repository.
       for (const before of ["", zeroSha, "1234567890abcdef1234567890abcdef12345678"]) {
         const result = await runStep(origin, head, { EVENT_NAME: "push", PUSH_BEFORE: before });
         expect(result.status, `before ${JSON.stringify(before)}: ${result.stderr}`).toBe(0);
@@ -211,7 +185,7 @@ describe("the verify workflow's docs-only detection step", () => {
       git(origin, "checkout", "--quiet", "-b", "feature");
       await headChange(origin);
       git(origin, "checkout", "--quiet", "main");
-      await commit(origin, { "CHANGELOG.md": "# changes\n" }, "base advance");
+      await commitFiles(origin, { "CHANGELOG.md": "# changes\n" }, "base advance");
       git(origin, "merge", "--quiet", "--no-ff", "--no-edit", "feature");
       return git(origin, "rev-parse", "HEAD");
     }
@@ -231,9 +205,9 @@ describe("the verify workflow's docs-only detection step", () => {
     it("diffs a pull request against its first parent, ignoring the event's before SHA", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
-      await commit(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code on main");
+      await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code on main");
       const merge = await mergeRef(origin, async (repo) => {
-        await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+        await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
       });
 
       const result = await runStep(origin, merge, { EVENT_NAME: "pull_request", PUSH_BEFORE: before });
@@ -243,8 +217,8 @@ describe("the verify workflow's docs-only detection step", () => {
 
     it("diffs a workflow_dispatch run against its first parent", async () => {
       const origin = await upstream();
-      await commit(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
-      const head = await commit(origin, { "README.md": "# scratch, edited\n" }, "docs");
+      await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
+      const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
       const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "" });
       expect(result.status, result.stderr).toBe(0);
