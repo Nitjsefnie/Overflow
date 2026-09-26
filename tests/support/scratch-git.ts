@@ -2,15 +2,27 @@ import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+function withoutGitVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  for (const key of Object.keys(copy)) {
+    if (key.startsWith("GIT_")) delete copy[key];
+  }
+  return copy;
+}
+
 /**
  * Helpers for suites that build throwaway git repositories in a temp
- * directory. The environment ignores the machine's global and system git
- * config, so a signing key, a hook path or a rename setting on the box cannot
- * change what the scratch repository records, and it fixes the author and
- * committer so `git commit` needs no configured identity.
+ * directory. The environment is the process environment with every inherited
+ * `GIT_*` variable removed — so config passed through GIT_CONFIG_PARAMETERS
+ * or GIT_CONFIG_COUNT (which `git -c k=v rebase -x` exports to its command)
+ * and repository selectors such as GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE
+ * cannot reach the scratch repository — plus overrides that ignore the global
+ * and system config files and fix the author and committer, so `git commit`
+ * needs no configured identity. Repository-level config the test itself
+ * writes still applies.
  */
 export const scratchGitEnv: NodeJS.ProcessEnv = {
-  ...process.env,
+  ...withoutGitVariables(process.env),
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_AUTHOR_NAME: "scratch repository",
