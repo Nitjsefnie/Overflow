@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
@@ -14,6 +14,13 @@ import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 // the server component directly, so the router is stubbed here.
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn(), useRouter: () => ({ refresh }) }));
+
+// The account controls' re-authentication form submits whatever sign-in the
+// dashboard wires in; the mock observes that it is the deletion sign-in.
+const { confirmSignInForAccountDeletion } = vi.hoisted(() => ({
+  confirmSignInForAccountDeletion: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/auth/account-deletion-sign-in-action", () => ({ confirmSignInForAccountDeletion }));
 
 describe("member dashboard", () => {
   it("shows independently calculated ledger totals and reserved headroom", () => {
@@ -1055,6 +1062,48 @@ describe("member dashboard", () => {
     expect(
       within(controls as HTMLElement).getByRole("button", { name: "Delete account" }),
     ).toBeVisible();
+  });
+
+  it("wires the deletion sign-in into the account controls' re-authentication form", async () => {
+    // Only the delete request answers; every other request stays pending so
+    // no unrelated state lands during the case.
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/account" && init?.method === "DELETE"
+        ? Promise.resolve(Response.json({ error: {
+          code: "REAUTHENTICATION_REQUIRED", message: "route-message-sentinel",
+        } }, { status: 403 }))
+        : new Promise<Response>(() => {})));
+    try {
+      render(
+        <DashboardContent
+          memberName="Ada Lovelace"
+          isModerator={false}
+          dashboard={{
+            settledBalance: 0,
+            earnedTotal: 0,
+            givenTotal: 0,
+            reservedPoints: 0,
+            availableHeadroom: 0,
+            recentSettlements: [],
+            openClaims: [],
+            registeredRepositories: [],
+            enforcementNotices: [],
+            openAudit: null,
+          }}
+        />,
+      );
+      const controls = sectionFor("account-controls-heading");
+      fireEvent.change(within(controls).getByLabelText("Type your GitHub login to confirm"), {
+        target: { value: "Ada" },
+      });
+
+      fireEvent.click(within(controls).getByRole("button", { name: "Delete account" }));
+      fireEvent.click(await within(controls).findByRole("button", { name: "Confirm GitHub sign-in" }));
+
+      await vi.waitFor(() => expect(confirmSignInForAccountDeletion).toHaveBeenCalledTimes(1));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

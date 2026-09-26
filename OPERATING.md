@@ -149,9 +149,9 @@ lets anyone act as the person survives with it.
 ### Requests
 
 Members signed in to Overflow delete their account and download its export
-themselves, from the account controls on their dashboard; no request to the
-operator is needed. The tracker route below stays for people who cannot sign
-in to Overflow. Their requests arrive as an issue on the public tracker (the
+themselves, from the "Your account data" section of their dashboard; no
+request to the operator is needed. The tracker route below stays for people
+who cannot sign in to Overflow. Their requests arrive as an issue on the public tracker (the
 Code of Conduct's [Reporting](CODE_OF_CONDUCT.md#reporting) section); there
 is no private channel. Act only for the account that opened the issue, and
 resolve that account's numeric id before touching anything with
@@ -170,8 +170,9 @@ reason text written about other people, which the requester's consent cannot
 cover. The confirmation matters on its own too: the export
 also includes the account's own enforcement state and the reasons recorded on
 moderation events targeting it. If either condition fails, do not post the
-export: point the requester to the self-service export in their dashboard's
-account controls, which they download themselves.
+export. The requester can sign in with the same GitHub account and download it
+from the "Your account data" section of their dashboard; otherwise the export
+is held.
 
 ### Running the commands
 
@@ -228,10 +229,12 @@ moderator: if removing the moderator role is intended, revoke it first.
 
 ### After deletion
 
-Sessions end at their next request, and API tokens stop at once. A later
-GitHub sign-in re-registers the account and re-links its history. Deletion
-does not revoke the OAuth grant on GitHub; the person revokes that at
-<https://github.com/settings/applications>.
+A deletion from the dashboard signs that browser out at once. Other signed-in
+sessions end at their next request whose account lookup succeeds; until then
+every member page and member API refuses the deleted account. API tokens stop
+at once. A later GitHub sign-in re-registers the account and re-links its
+history. Deletion does not revoke the OAuth grant on GitHub; the person
+revokes that at <https://github.com/settings/applications>.
 
 ### Backups
 
