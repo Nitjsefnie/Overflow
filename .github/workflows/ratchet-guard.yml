@@ -1,0 +1,52 @@
+name: ratchet guard
+
+# pull_request_target so the gate survives a malicious PR that disables the
+# pull_request workflow: the workflow definition, the checkout and the script
+# that executes all come from main, never from the pull request. The head is
+# fetched only as git objects (refs/pull/<N>/head) and read as data with
+# `git show` inside scripts/check-ratchets.ts — no head code is checked out,
+# installed, built or executed.
+on:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per pull request; the newest supersedes the queued rest.
+  group: ratchet-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ratchet-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The checkout ref is pinned to main deliberately: under
+      # pull_request_target an unpinned checkout would take the event ref
+      # (refs/pull/<N>/merge — pull request content), and this job must
+      # never materialize the head. main provides scripts/check-ratchets.ts;
+      # the pull request contributes no byte of the executed code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      # Head content enters only as git objects in refs/remotes/pr/head.
+      # Values from the event reach the shell through env:, never through
+      # ${{ }} interpolation in the script.
+      - name: Fetch the pull request head
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+
+      - name: Ratchet documents
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-ratchets.ts "$BASE_SHA" refs/remotes/pr/head
