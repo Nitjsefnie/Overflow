@@ -46,8 +46,11 @@ describe("the server action origin guard's request-headers stub", () => {
     // Clear the shared graph so this file is the guard's first evaluator in
     // the worker regardless of what its worker-mates ran before it: the
     // re-evaluated guard must bind a request-headers stub, not the real
-    // module, or every action below refuses with the misconfigured/foreign
-    // origin error instead of exercising the sign-in path.
+    // module — the real `headers()` throws Next's "`headers` was called
+    // outside a request scope" at server-action-origin.ts before any origin
+    // decision, so the action dies before the sign-in path. The
+    // misconfigured/foreign-origin refusals are the bound stub's mismatch
+    // paths and never fire here.
     vi.resetModules();
     const { signInAsContributor } = await import("@/lib/auth/sign-in-actions");
 
