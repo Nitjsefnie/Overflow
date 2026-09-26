@@ -188,6 +188,46 @@ async function writeCheckRuns(
 
 const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 const LISTING_REGEX = String.raw`.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}`;
+/** The ignored-files gate's read, as the shim log records it. */
+const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-standard --directory";
+/**
+ * Every ignored untracked entry production's tree legitimately holds, in the
+ * shape `git ls-files --others --ignored --directory` prints it: directories
+ * carry a trailing slash, the .next symlink does not.
+ */
+const OPERATIONAL_IGNORED = [
+  ".next",
+  ".next/",
+  ".next-release-20260908T000000Z-abc1234/",
+  ".next-release-20260908T000000Z-0123456789abcdef0123456789abcdef01234567/",
+  ".next-release-20260908T000000Z-abc1234.tsconfig.json",
+  ".next-release-notes/",
+  "next-env.d.ts",
+  "node_modules/",
+];
+/**
+ * Names one edit away from an allowlisted entry, each of which must refuse:
+ * together they pin that every allowlist entry matches the whole path, from
+ * the tree root, with the release grammar exactly.
+ */
+const NEAR_MISS_IGNORED = [
+  ".next-release-bogus/",
+  ".next-switch-abc1234",
+  ".next-release-20260908T000000Z-abc1234",
+  ".next-release-20260908T000000Z-ABC1234/",
+  ".next-release-20260908T000000Z-abc123/",
+  ".next-release-2026090T000000Z-abc1234/",
+  ".next-release-20260908T000000Z-abc1234/x",
+  ".next-release-20260908T000000Z-abc1234.tsconfig.json.bak",
+  "x.next-release-notes/",
+  "src/node_modules/",
+  "node_modules",
+  "src/next-env.d.ts",
+  "next-env.d.tsx",
+  "src/.next",
+  ".nextx",
+  "src/app/zz-probe/",
+];
 
 async function makeRelease(tree: string, name: string): Promise<string> {
   const directory = path.join(tree, name);
@@ -282,6 +322,12 @@ fi
 if [ "$1" = status ]; then
   printf '%s' "\${GIT_SHIM_STATUS:-}"
   exit "\${GIT_SHIM_STATUS_RC:-0}"
+fi
+if [ "$1" = ls-files ]; then
+  # %b turns a literal \\0 in the test's value into the NUL -z emits, so a
+  # test can hand the script names that themselves contain a newline.
+  printf '%b' "\${GIT_SHIM_IGNORED:-}"
+  exit "\${GIT_SHIM_IGNORED_RC:-0}"
 fi
 if [ "$1" = rev-parse ]; then
   if [ "$2" = "--short=7" ]; then
@@ -538,6 +584,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git rev-parse --verify FETCH_HEAD^{commit}`,
       `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
+      IGNORED_LISTING,
       `git config --get remote.origin.url`,
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
@@ -1429,6 +1476,84 @@ describe("scripts/deploy-revision.sh", () => {
     expectNoDeployStepRan(await readLog(fixture.shimLog), "unreadable status");
   });
 
+  /** The shim's GIT_SHIM_IGNORED value for these entries: each NUL-terminated, as -z prints them. */
+  function ignoredListing(entries: readonly string[]): string {
+    return entries.map((entry) => `${entry}\\0`).join("");
+  }
+
+  /** The offending paths the ignored-files refusal lists, one per indented stderr line. */
+  function listedOffenders(stderr: string): string[] {
+    return stderr
+      .split("\n")
+      .filter((line) => line.startsWith("  "))
+      .map((line) => line.slice(2));
+  }
+
+  function expectIgnoredRefusal(stderr: string, tree: string, label: string): void {
+    expect(stderr, label).toContain(`The tree in ${tree} holds the ignored untracked files above`);
+    expect(stderr, label).toContain("ignored untracked files that git status does not show");
+    expect(stderr, label).toContain(`a release named for ${FIXTURE_HASH}, a commit that does not contain them`);
+    expect(stderr, label).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
+    expect(stderr, label).toContain("Remove them, then re-run the deploy");
+  }
+
+  it("refuses before the CI gate when an ignored untracked entry lies outside the operational allowlist", async () => {
+    // One fixture for every case; each run starts from an empty log.
+    const fixture = await makeFixture();
+    for (const offender of NEAR_MISS_IGNORED) {
+      await writeFile(fixture.shimLog, "");
+      const result = await runDeploy(fixture, {
+        GIT_SHIM_IGNORED: ignoredListing([...OPERATIONAL_IGNORED, offender]),
+      });
+
+      expect(result.status, `${offender}: ${result.stderr}`).toBe(1);
+      expectIgnoredRefusal(result.stderr, fixture.tree, offender);
+      // Only the offender is listed: the operational entries beside it pass.
+      expect(listedOffenders(result.stderr), offender).toEqual([offender]);
+      expectNoDeployStepRan(await readLog(fixture.shimLog), offender);
+    }
+  });
+
+  it("deploys when every ignored untracked entry is operational", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GIT_SHIM_IGNORED: ignoredListing(OPERATIONAL_IGNORED) });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "git" && entry.args[0] === "merge")).toBe(true);
+  });
+
+  it("reads the listing NUL-delimited, so a name containing a newline is judged whole", async () => {
+    // Split on newlines, this one name would read as two allowlisted entries.
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GIT_SHIM_IGNORED: ignoredListing(["next-env.d.ts\\nnode_modules/"]) });
+
+    expect(result.status, result.stderr).toBe(1);
+    expectIgnoredRefusal(result.stderr, fixture.tree, "newline name");
+    expectNoDeployStepRan(await readLog(fixture.shimLog), "newline name");
+  });
+
+  it("refuses fail-closed when the ignored untracked files cannot be listed, even after partial output", async () => {
+    for (const [label, listing] of [
+      ["no output", ""],
+      ["partial output", ignoredListing(["node_modules/"])],
+    ] as const) {
+      const fixture = await makeFixture();
+      const result = await runDeploy(fixture, { GIT_SHIM_IGNORED: listing, GIT_SHIM_IGNORED_RC: "128" });
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, label).toContain(
+        `Could not list the ignored untracked files in ${fixture.tree} (git ls-files exited 128)`,
+      );
+      expect(result.stderr, label).toContain("refusing to build a release whose source identity cannot be attested");
+      expect(result.stderr, label).toContain(
+        "HEAD, the index and the working tree are untouched; only the fetched refs moved",
+      );
+      expectNoDeployStepRan(await readLog(fixture.shimLog), label);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses as undetermined, not as a non-ancestor, when the ancestry check itself errors", async () => {
     // merge-base --is-ancestor answers "no" with exit 1; anything else is git
     // failing to answer (128 for an unreadable object or repository), which
@@ -1498,6 +1623,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git rev-parse --verify FETCH_HEAD^{commit}`,
       `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
+      IGNORED_LISTING,
       `git config --get remote.origin.url`,
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
@@ -1575,7 +1701,18 @@ describe("scripts/deploy-revision.sh", () => {
       await writeFile(path.join(repo, "node_modules", "x", "y"), "y");
       await writeFile(path.join(repo, "next-env.d.ts"), "regenerated\n");
       await writeFile(path.join(repo, `${releaseDir}.tsconfig.json`), "{}\n");
+      await mkdir(path.join(repo, ".next-release-notes"));
+      await writeFile(path.join(repo, ".next-release-notes", "note.txt"), "note\n");
       expect(status()).toBe("");
+      // Invisible to status, yet all present: the ignored-files gate's listing
+      // yields each in exactly the shape its allowlist names.
+      const ignored = git("ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+        .split("\0")
+        .filter((entry) => entry !== "");
+      expect(ignored.sort()).toEqual(
+        [".next", `${releaseDir}/`, `${releaseDir}.tsconfig.json`, ".next-release-notes/", "next-env.d.ts", "node_modules/"].sort(),
+      );
+      for (const entry of ignored) expect(OPERATIONAL_IGNORED, entry).toContain(entry);
 
       // README.md is a path the ignore file names back, as every tracked file
       // in the repo must be, so the mutation is the natural tracked shape.
@@ -1602,6 +1739,7 @@ describe("scripts/deploy-revision.sh", () => {
     const atSha = source.indexOf("full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')");
     const atAncestry = source.indexOf('git merge-base --is-ancestor HEAD "$full_sha"');
     const atGate = source.indexOf("git status --porcelain=v1 -uall");
+    const atIgnoredGate = source.indexOf("git ls-files -z --others --ignored --exclude-standard --directory");
     const atCiGate = source.indexOf('case "${OVERFLOW_DEPLOY_CI_GATE:-}"');
     const atMerge = source.indexOf('git merge --ff-only "$full_sha"');
     const atEsac = source.lastIndexOf("esac", atMerge);
@@ -1611,7 +1749,8 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atSha, "full_sha from the fetched commit, after the fetch").toBeGreaterThan(atFetch);
     expect(atAncestry, "the ancestry check after full_sha").toBeGreaterThan(atSha);
     expect(atGate, "the cleanliness gate after the ancestry check").toBeGreaterThan(atAncestry);
-    expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
+    expect(atIgnoredGate, "the ignored-files gate after the cleanliness gate").toBeGreaterThan(atGate);
+    expect(atCiGate, "the CI gate after the ignored-files gate").toBeGreaterThan(atIgnoredGate);
     expect(atEsac, "the CI gate's esac after its case").toBeGreaterThan(atCiGate);
     expect(atMerge, "the fast-forward after the CI gate").toBeGreaterThan(atEsac);
     expect(atSkip, "the redundant-deploy skip after the fast-forward").toBeGreaterThan(atMerge);
@@ -1796,6 +1935,86 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
     expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
+  });
+
+  /**
+   * Gives the fixture tree the repository's own deny-by-default ignore rules
+   * without a tracked change: info/exclude feeds both git status and
+   * ls-files --exclude-standard, and the tree's HEAD stays exactly the base.
+   */
+  async function denyByDefault(tree: string, git: (...args: string[]) => string): Promise<void> {
+    await writeFile(path.join(tree, ".git", "info", "exclude"), await readFile(repoGitignore, "utf8"));
+    expect(git("status", "--porcelain=v1", "-uall"), "the deny-by-default tree starts clean").toBe("");
+  }
+
+  it("refuses an ignored untracked source file before the CI gate, leaving HEAD and the file where they were", async () => {
+    const { fixture, behind, git } = await makeGitFixture();
+    await denyByDefault(fixture.tree, git);
+    const probe = path.join(fixture.tree, "src", "app", "zz-probe", "page.tsx");
+    await mkdir(path.dirname(probe), { recursive: true });
+    await writeFile(probe, "export default function Probe() { return null; }\n");
+    // The premise: git status cannot see it, so only the new gate can.
+    expect(git("status", "--porcelain=v1", "-uall")).toBe("");
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("src/app/zz-probe/");
+    expect(result.stderr).toContain(`The tree in ${fixture.tree} holds the ignored untracked files above`);
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
+    expect(git("rev-parse", "HEAD")).toBe(behind);
+    await expect(readFile(probe, "utf8")).resolves.toContain("Probe");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "gh"), "the CI gate never ran").toBe(false);
+    expect(entries.some((entry) => entry.cmd === "pnpm"), "nothing after the gates ran").toBe(false);
+  });
+
+  it("deploys a tree holding exactly production's ignored operational layout", async () => {
+    const { fixture, tip, git } = await makeGitFixture();
+    await denyByDefault(fixture.tree, git);
+    // makeFixture already holds grammar-named release directories and the
+    // .next symlink; add the rest of what production's tree holds.
+    const serving = path.basename(fixture.prevDir);
+    await writeFile(path.join(fixture.tree, `${serving}.tsconfig.json`), "{}\n");
+    await mkdir(path.join(fixture.tree, ".next-release-notes"));
+    await writeFile(path.join(fixture.tree, ".next-release-notes", "note.txt"), "note\n");
+    await mkdir(path.join(fixture.tree, "node_modules", "x"), { recursive: true });
+    await writeFile(path.join(fixture.tree, "node_modules", "x", "y"), "y");
+    await writeFile(path.join(fixture.tree, "next-env.d.ts"), "regenerated\n");
+    // The premise: every allowlist shape is really present in the listing.
+    const listed = git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory").split("\n");
+    expect(listed.sort()).toEqual(
+      [
+        ".next",
+        ".next-release-20260801T000000Z-def5678/",
+        ".next-release-20260906T000000Z-abc1234/",
+        ".next-release-20260907T000000Z-def5678/",
+        ".next-release-20260908T000000Z-abc1234.tsconfig.json",
+        ".next-release-20260908T000000Z-abc1234/",
+        ".next-release-notes/",
+        "next-env.d.ts",
+        "node_modules/",
+      ].sort(),
+    );
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
+  });
+
+  it("refuses a near-miss of an allowlisted name, so the allowlist is anchored at the tree root", async () => {
+    for (const nearMiss of [".next-release-bogus", path.join("src", "node_modules")]) {
+      const { fixture, behind, git } = await makeGitFixture();
+      await denyByDefault(fixture.tree, git);
+      await mkdir(path.join(fixture.tree, nearMiss), { recursive: true });
+      await writeFile(path.join(fixture.tree, nearMiss, "f"), "f\n");
+      const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+      expect(result.status, `${nearMiss}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, nearMiss).toContain(`  ${nearMiss}/\n`);
+      expect(git("rev-parse", "HEAD"), nearMiss).toBe(behind);
+      expect((await readLog(fixture.shimLog)).some((entry) => entry.cmd === "gh"), nearMiss).toBe(false);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
   });
 });
 

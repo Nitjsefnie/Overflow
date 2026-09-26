@@ -17,6 +17,18 @@ lock="${OVERFLOW_DEPLOY_LOCK:-/run/overflow-deploy.lock}"
 unit="${OVERFLOW_DEPLOY_UNIT:-overflow.service}"
 url="${OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/api/readiness}"
 log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
+# A release directory's name, unanchored: the grammar the build names each
+# release with and the retention listing below enumerates. Defined once so the
+# ignored-files gate's allowlist cannot drift from the listing.
+release_name_re='\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'
+# The ignored untracked entries a production tree legitimately holds, as
+# git ls-files --others --ignored --directory prints them, each matched as a
+# whole path from the tree root: the .next anchor (a symlink, or a directory
+# before the release migration), release directories and the tsconfig sidecar
+# release.ts writes beside each, the release-notes directory, the generated
+# next-env.d.ts and node_modules. Nothing else, and nothing nested: a leftover
+# .next-switch-* link is a crash artefact the operator should see.
+operational_ignored_re="^(\.next/?|${release_name_re}/|${release_name_re}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)\$"
 
 # The CI gate: refuse to ship a SHA that main's required checks have not
 # blessed. Runs against the fetched SHA before the fast-forward, so every
@@ -221,11 +233,13 @@ elif [ "$ancestry_status" -ne 0 ]; then
   exit 1
 fi
 # Tree-cleanliness gate: a release is named for the commit it was built from,
-# so the tree must BE that commit. It reads the pre-merge tree: tracked
+# so the tree must BE that commit. It reads the pre-merge tree in two parts,
+# both before the CI gate and the fast-forward. First git status: tracked
 # modifications, staged changes and untracked non-ignored files all survive a
-# fast-forward; ignored files (.next, releases, node_modules, generated files)
-# are operational state and do not block. Refuses before the CI gate and the
-# fast-forward.
+# fast-forward. Then the ignored untracked files, which git status never shows
+# (the .gitignore denies by default, so a new source file nobody named back is
+# ignored) and the build still compiles: only the operational allowlist above
+# passes, and any other entry refuses.
 tree_status=$(git status --porcelain=v1 -uall) || {
   printf 'Could not read the working-tree state in %s; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' "$tree" >&2
   exit 1
@@ -233,6 +247,25 @@ tree_status=$(git status --porcelain=v1 -uall) || {
 if [ -n "$tree_status" ]; then
   printf '%s\n' "$tree_status"
   printf 'The working tree in %s deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
+  exit 1
+fi
+# NUL-delimited, so a name containing a newline is judged whole; the process
+# substitution's status is read back through wait, so a failed listing refuses
+# even when it printed something first.
+mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory)
+ignored_status=0
+wait "$!" || ignored_status=$?
+if [ "$ignored_status" -ne 0 ]; then
+  printf 'Could not list the ignored untracked files in %s (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\n' "$tree" "$ignored_status" >&2
+  exit 1
+fi
+stray_ignored=()
+for entry in "${ignored_entries[@]}"; do
+  [[ "$entry" =~ $operational_ignored_re ]] || stray_ignored+=("$entry")
+done
+if [ "${#stray_ignored[@]}" -gt 0 ]; then
+  printf '  %q\n' "${stray_ignored[@]}" >&2
+  printf 'The tree in %s holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "$tree" "$full_sha" >&2
   exit 1
 fi
 case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
@@ -302,7 +335,7 @@ printf 'Source revision: %s\n' "$full_sha"
 # Retention listing, exactly as the README prints it, captured for the prune
 # guard below and then printed for the deploy record.
 retained=$(LC_ALL=C find "$tree" -regextype posix-extended -mindepth 1 -maxdepth 1 \
-  -type d -regex '.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}' \
+  -type d -regex ".*/$release_name_re" \
   -printf '%f\n' | LC_ALL=C sort -r)
 printf '%s\n' "$retained"
 

@@ -590,8 +590,15 @@ tree is ahead of or diverged from main), the tree-cleanliness gate that refuses
 the deploy when the working tree deviates from `HEAD` — tracked modifications,
 staged changes and untracked non-ignored files all survive a fast-forward, and
 a release is named for the commit it was built from, so the tree must be that
-commit; ignored operational files (`.next`, releases, `node_modules`,
-generated files) do not block — the required-checks gate that must bless the
+commit; it also refuses the deploy when the tree holds an ignored
+untracked file outside the operational allowlist, since `git status` never
+shows such a file (the `.gitignore` denies by default) and the build would
+compile it into a release named for a commit that does not contain it; the
+allowlist is exactly, and only at the tree root, the `.next` anchor, the
+release directories and their `.tsconfig.json` sidecars,
+`.next-release-notes/`, `next-env.d.ts` and `node_modules/`, and anything
+else ignored anywhere in the tree must be removed before re-running — the
+required-checks gate that must bless the
 exact fetched SHA (below), and only after both gates pass the
 `git merge --ff-only` that moves the tree to that SHA; then the redundant-deploy
 skip that compares the resolved SHA against the serving release's `REVISION`
