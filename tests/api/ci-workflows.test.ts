@@ -111,21 +111,25 @@ describe("GitHub Actions release gates", () => {
     // has no ref input at all — actions/checkout's default, main's last
     // commit, the checkout its fork guard exempts; under push its ref is
     // github.event.before, the previous main tip, whose copy of
-    // scripts/check-ratchets.ts executes. Gating the steps instead of
-    // resolving ref through the `&& ||` idiom leaves no empty-string
-    // fallback that would silently check out the pushed commit and run its
-    // script. No step installs or builds
-    // anything: untrusted content enters only as git objects (refs/remotes/
-    // pr/head under pull_request_target, FETCH_HEAD under push), and the
-    // only script that runs is a main-side scripts/check-ratchets.ts reading
-    // those objects with `git show`. The base of the comparison is the
+    // scripts/check-ratchets.ts executes. Splitting the steps on the event
+    // name keeps each checkout's ref visible without evaluating an
+    // expression: the pull_request_target step has no ref input at all, so
+    // it is visibly the default checkout (main's tip, exempt from
+    // checkout's fork guard), and the push step visibly pins the previous
+    // main tip. On a push GitHub always sets `before` to a 40-hex SHA. No
+    // step installs or builds anything: untrusted content enters only as
+    // git objects (refs/remotes/pr/head under pull_request_target,
+    // FETCH_HEAD under push), and the only script that runs is a main-side
+    // scripts/check-ratchets.ts reading those objects with `git show`. The
+    // base of the comparison is the
     // checked-out commit itself (HEAD) under both events, never the event's
     // base.sha: under pull_request_target that value is recorded when the
     // pull request opens and can trail main, and after a rebase onto a newer
     // main the merge base of the stale base and the head sits below the real
     // fork point, so a real relaxation would pass against the looser
-    // document there. Under push the checked-out previous tip is a direct
-    // ancestor of the pushed SHA, so the merge base is the previous tip
+    // document there. Under push the checked-out previous tip is, for a
+    // non-forced push, a direct ancestor of the pushed SHA, so the merge
+    // base is the previous tip
     // itself and the comparison is exactly "did this push relax a ratchet
     // document relative to the main it replaced". Every event value travels
     // through env, never ${{ }} in run:.
