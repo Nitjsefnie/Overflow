@@ -456,8 +456,10 @@ describe("ratchet check against a real git repository", () => {
   });
 
   it("exits 1 when the head has a non-regular document and the merge base had none", () => {
-    // Valid JSON as the link text, so a blob read would parse and compare:
-    // only the head-kind check stands between this and an unjudged document.
+    // Valid JSON as the link text, so a blob read would parse and compare.
+    // What this pins is the classification: a non-regular head document is
+    // a finding (exit 1) even when the merge base has no document — not the
+    // exit-2 error readDocument would raise for the same entry.
     git("init", "-q", "-b", "main");
     git("config", "user.email", "ratchets@example.test");
     git("config", "user.name", "Ratchets Test");
