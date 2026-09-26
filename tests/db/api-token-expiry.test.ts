@@ -76,11 +76,16 @@ describe("API token expiry in the store", () => {
     const userId = await insertUser(sql);
     const store = new PostgresApiTokenStore(sql);
     const { tokenHash } = mintApiToken();
-    await store.issueToken(userId, tokenHash);
+    const issued = await store.issueToken(userId, tokenHash);
 
-    await expireTokenOf(sql, userId);
+    const [lapsed] = await expireTokenOf(sql, userId);
 
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toBeNull();
+    // The panel's expired state reads this summary, so it must survive expiry.
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({
+      createdAt: issued.createdAt,
+      expiresAt: lapsed.expires_at,
+    });
   });
 
   it("resolves no account for a token expiring at exactly the current instant", async () => {
