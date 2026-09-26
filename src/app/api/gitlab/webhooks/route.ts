@@ -94,10 +94,13 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       // The message is a fixed template over the delivery's identifiers, and
       // the error object itself rides as the second argument — Node renders
       // its type, stack and Error.cause chain natively, and nothing
-      // user-controlled beyond those identifiers is concatenated.
+      // user-controlled beyond those identifiers is concatenated. The delivery
+      // id is the receipt key, often the Idempotency-Key; the execution is the
+      // X-Gitlab-Webhook-UUID an operator finds in GitLab's delivery log.
       console.error(
         `Webhook processing failed for delivery ${delivery.deliveryId}`
-          + ` (event ${delivery.event}, repository ${delivery.repositoryFullName},`
+          + ` (execution ${delivery.executionId},`
+          + ` event ${delivery.event}, repository ${delivery.repositoryFullName},`
           + ` forge id ${delivery.repositoryGitHubId}).`,
         error,
       );

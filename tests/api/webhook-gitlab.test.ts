@@ -269,8 +269,13 @@ describe("GitLab webhook route", () => {
     });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const response = await route(request(issuePayload, gitlabHeaders()));
+      const response = await route(request(issuePayload, gitlabHeaders({ "Idempotency-Key": "stable-message" })));
       expect(response.status).toBe(503);
+      // The receipt key and the execution UUID an operator looks up in
+      // GitLab's delivery log differ here, so the line must carry both.
+      const [message] = logged.mock.calls[0] ?? [];
+      expect(message).toEqual(expect.stringContaining("stable-message"));
+      expect(message).toEqual(expect.stringContaining("uuid-1"));
     } finally {
       logged.mockRestore();
     }

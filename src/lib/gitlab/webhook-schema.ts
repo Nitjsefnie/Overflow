@@ -6,8 +6,9 @@ import type { GitHubWebhookDelivery, SupportedGitHubWebhookEvent } from "@/lib/g
  * The GitLab webhook payload maps into the delivery vocabulary the shared
  * processor already speaks: a GitLab issue event becomes an `issues` delivery
  * with an ISSUE subject, the raw issue view, and a stable message identity.
- * The processor scopes that receipt key to the authenticated provider and
- * registration. The webhook UUID identifies an execution; older senders
+ * The route scopes that receipt key to the authenticated credential's provider
+ * and registration, and the processor forwards that scope unchanged to the
+ * receipt store. The webhook UUID identifies an execution; older senders
  * without stable message headers also use it as the fallback receipt key.
  *
  * The delivery carries the payload's forge identity (provider + the instance
