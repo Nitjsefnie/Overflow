@@ -81,9 +81,10 @@ describe("the coverage comment workflow", () => {
     });
   });
 
-  it("serializes runs per head branch so one comment is never duplicated", () => {
+  it("serializes runs per head repository and branch so one comment is never duplicated", () => {
     expect(workflow.concurrency).toEqual({
-      group: "coverage-comment-${{ github.event.workflow_run.head_branch }}",
+      group:
+        "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
       "cancel-in-progress": false,
     });
   });
