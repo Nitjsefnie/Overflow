@@ -12,7 +12,7 @@
 set -euo pipefail
 
 # Resolve the repository root from the script's own location, not the
-# caller's cwd: the Dockerfile at the repo root is the build context.
+# caller's cwd: the build context is exported from this repository.
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
@@ -28,7 +28,15 @@ source_sha="$(git rev-parse HEAD)"
 image="${1:-overflow-app}"
 
 echo "Building $image from revision $source_sha ..."
-docker build --build-arg SOURCE_SHA="$source_sha" -t "$image" .
+# The build context is an export of the commit, streamed as a tar on stdin,
+# never the working directory (issue 648). The repository's .gitignore denies
+# by default, so an untracked file under an ignored path is invisible to the
+# git status check above, yet a `.` context would copy it into an image
+# labelled with this SHA. `git archive` holds exactly the commit's tracked
+# files; .dockerignore still applies to a tar context. pipefail makes a
+# failed export fail the script instead of building whatever arrived.
+git archive --format=tar "$source_sha" \
+  | docker build --build-arg SOURCE_SHA="$source_sha" -t "$image" -
 
 # Prove the label landed: a build that skipped it would reproduce the
 # unlabelled image the issue reports, only silently. The comparison is

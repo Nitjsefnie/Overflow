@@ -35,6 +35,12 @@ the revision label actually landed on the image, and prints the immutable
 provenance record — revision, image ID, RepoDigests, created timestamp. Keep
 that record with the deployment notes: it is what rollback selects.
 
+The image is built from an export of that commit (`git archive`), streamed to
+`docker build` as its context, never from the working directory. So untracked
+and ignored files never enter the context — including ones `git status` cannot
+see because the repository's `.gitignore` denies by default — and the image
+holds exactly the source its revision label names.
+
 Or let compose build it and bring up the database and app together:
 
 ```console
