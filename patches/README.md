@@ -777,7 +777,10 @@ The cause, by line in stock 3.4.9 `src/`:
   `errorResponse` (`connection.js:815`) until that query's `ReadyForQuery`,
   which calls `errored()` (`connection.js:542`). `errored()` rejects the types
   query and then the waiting query, `initial`, with the same error
-  (`connection.js:390-393`), and clears `initial`.
+  (`connection.js:390-393`), and clears `initial`. It is the same error object,
+  so its `query` property names the `pg_type` select rather than the caller's
+  SQL: `queryError()` sets those properties only on an error that lacks them
+  (`connection.js:402`).
 - With `initial` cleared, the same `ReadyForQuery` goes on to `onopen()`
   (`connection.js:587`) and hands the connection to the pool, with `needsTypes`
   false and no array types applied.
@@ -789,7 +792,8 @@ The repair settles a failure on the connection, synchronously, as the array-type
 repair above settles a success. `fetchArrayTypes()` wraps the query's own
 `reject`: the wrapper sets `needsTypes` again and rejects a waiting reserve with
 the server's error, then rejects the query. `errored()` still rejects the
-waiting query with the server's error, unchanged. `ReadyForQuery` then finds
+waiting query with the server's error, unchanged, including the `query`
+property that names the `pg_type` select. `ReadyForQuery` then finds
 `needsTypes` set where it would have opened the connection, and closes it with
 `terminate()` instead. The next query dispatched to the client opens a new
 connection, which fetches its types afresh. `fetchArrayTypes()` awaits the query
@@ -803,12 +807,15 @@ the rejection removed and `pg_type` unreadable, one reserve produced 96 failed
 fetches in a five-second run. The reserve's own `reject` removes it from the pool's
 queue, as it does on every other route that refuses it.
 
-The closing check reads `needsTypes`, so it also closes a connection that
-reaches the end of its startup with no types fetched by any other route, rather
-than opening it without them. The one such route found by reading, not
-reproduced, is a failed `target_session_attrs` state query: `errored()` rejects
-the waiting query the same way, and stock then opens the connection with no
-types fetched.
+The closing check reads `needsTypes`, so it would also close a connection that
+reached the end of its startup with no types fetched by another route. The one
+such route is a failed `target_session_attrs` state query, and this patch does
+not repair it: `fetchState()` (`connection.js:800-810`) wraps only `resolve`, so
+a failing state query still rejects a query nobody awaits, and that unhandled
+rejection still terminates the process. It is reachable only against a server
+that does not report `in_hot_standby` and `default_transaction_read_only` at
+startup — PostgreSQL 13 does not, PostgreSQL 17 reports both — and Overflow does
+not set `target_session_attrs`.
 
 Rejected alternatives. Upstream's suggested fix, a bare `.catch()` at the call
 site, stops the crash and keeps the connection open with no array types, which
@@ -826,12 +833,18 @@ leave the typeless connection in the pool.
 `pg_catalog.pg_type` from `PUBLIC` in its own database and runs
 `tests/db/types-fetch-failure-child.ts` in a child Node process, as a role that
 is not a superuser, so the fetch fails with `42501` every time. The child
-registers an `unhandledRejection` listener that records each rejection, waits on
-a plain query in one case and on `sql.reserve()` in the other, grants the read
-back, then sends `sql.array([1, 2])::bigint[]` on the same client. The test
-asserts that the child exits 0, that nothing was recorded, that the waiting
-query or reserve was rejected with `42501`, and that the later query returned
-`["1", "2"]`. Reverting the repair in the installed module fails both cases.
+registers an `unhandledRejection` listener that records each rejection. It waits
+on a plain query in one case, on `sql.reserve()` in another, and in the third on
+two queries queued on a `max: 1` client, the second carrying an `sql.array()`
+parameter; then it grants the read back and sends `sql.array([1, 2])::bigint[]`
+on the same client. The test asserts that the child exits 0, that nothing was
+recorded, that every waiting query or reserve was rejected with `42501`, and
+that the later query returned `["1", "2"]`. The queued case is the one that pins
+the close as synchronous: closing the connection from the fetch's `.catch()`
+instead leaves the `sql.array()` query rejected with `CONNECTION_DESTROYED`.
+Reverting the repair in the installed module fails every case. A child that
+hangs is killed after thirty seconds, so a regression fails on its assertions
+rather than on the suite's timeout.
 
 Like every repair above, it is deliberately absent from `cjs/`.
 
