@@ -4,7 +4,12 @@ import {
   CACHED_COMMENT_BODY_PLACEHOLDER,
   narrowCachedIssueBodies,
 } from "@/lib/fold/reconciliation-evidence";
-import { foldRepository, type RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
+import {
+  foldRepository,
+  type RepositoryFoldIssue,
+  type RepositoryFoldPullRequest,
+  type RepositoryFoldSnapshot,
+} from "@/lib/fold/repository-fold";
 
 const RAW_DIFF = "diff --git a/proof b/proof\n+the bytes the settlement proof hashes\n";
 const RATIONALE = "Settled as delivered/6 after reviewing the final diff.";
@@ -45,7 +50,7 @@ describe("cache body narrowing", () => {
 
   it("is idempotent over already-narrowed issues", () => {
     const once = narrowCachedIssueBodies([cachedIssue()]);
-    const twice = narrowCachedIssueBodies(once as unknown as Parameters<typeof narrowCachedIssueBodies>[0]);
+    const twice = narrowCachedIssueBodies(once);
 
     expect(twice).toEqual(once);
     expect("body" in twice[0]!).toBe(false);
@@ -82,17 +87,29 @@ describe("fold parity between wide and narrowed evidence", () => {
 });
 
 /**
+ * A snapshot whose cached issues still carry every body — the shape a
+ * pre-narrowing cache serialised. The fold's own input type claims no body
+ * (issue 681), so the wide shape is a local augmentation of it.
+ */
+type WideSnapshot = Omit<RepositoryFoldSnapshot, "issues"> & {
+  issues: Array<Omit<RepositoryFoldIssue, "closingPullRequests"> & {
+    body: string;
+    closingPullRequests: Array<RepositoryFoldPullRequest & { body: string }>;
+  }>;
+};
+
+/**
  * The snapshot with every cached body replaced exactly the way the store
  * serialises them, while the events (ids, actors, instants, diff) stay
- * identical. The cast is the seam under test: the fold's input type still
- * claims `body: string`, but the fold reads none of it, which is precisely the
- * property this comparison pins.
+ * identical. No cast is needed: narrowing a wide issue yields exactly the
+ * fold's bodyless issue shape, which is the property the parity comparison
+ * pins.
  */
 function narrowedFixture(rationaleBody: string): RepositoryFoldSnapshot {
   const snapshot = settlementFixture(rationaleBody);
   return {
     ...snapshot,
-    issues: narrowCachedIssueBodies(snapshot.issues) as unknown as RepositoryFoldSnapshot["issues"],
+    issues: narrowCachedIssueBodies(snapshot.issues),
   };
 }
 
@@ -107,7 +124,7 @@ function cachedIssue(): Parameters<typeof narrowCachedIssueBodies>[0][number] {
  * non-sponsor comments sit inside the window too, so only the body predicate
  * and the sponsor identity can separate them from the rationale.
  */
-function settlementFixture(rationaleBody: string): RepositoryFoldSnapshot {
+function settlementFixture(rationaleBody: string): WideSnapshot {
   return {
     repository: {
       id: "repository",

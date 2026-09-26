@@ -78,11 +78,11 @@ export type RepositoryFoldSnapshot = {
   issues: RepositoryFoldIssue[];
 };
 
+/** A cached issue as the fold reads it: no body text, which the fold never reads (issue 681). */
 export type RepositoryFoldIssue = {
   id: number;
   number: number;
   title: string;
-  body: string;
   url: string;
   state: IssueState;
   stateReason: GitHubIssue["stateReason"];
@@ -105,11 +105,11 @@ export type RepositoryFoldIssue = {
   closingPullRequests: RepositoryFoldPullRequest[];
 };
 
+/** A closing pull request, without the body text the fold never reads (issue 681). */
 export type RepositoryFoldPullRequest = {
   id: number;
   number: number;
   title: string;
-  body: string;
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
