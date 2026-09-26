@@ -51,6 +51,12 @@ src/app/.well-known/oauth-protected-resource/api/mcp/*
 !src/app/.well-known/oauth-protected-resource/api/mcp/*.ts
 !src/app/api/
 src/app/api/*
+!src/app/api/account/
+src/app/api/account/*
+!src/app/api/account/*.ts
+!src/app/api/account/export/
+src/app/api/account/export/*
+!src/app/api/account/export/*.ts
 !src/app/api/auth/
 src/app/api/auth/*
 !src/app/api/auth/[[]...nextauth[]]/

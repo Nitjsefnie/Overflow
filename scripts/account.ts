@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { closeSql, getSql } from "../src/lib/db/client.ts";
 import { deleteAccount } from "../src/lib/accounts/deletion.ts";
-import { exportAccount } from "../src/lib/accounts/export.ts";
+import { exportAccount, formatAccountExport } from "../src/lib/accounts/export.ts";
 import type { SqlClient } from "../src/lib/db/types.ts";
 
 export type AccountCliDependencies = { sql: SqlClient; write(line: string): void };
@@ -77,7 +77,7 @@ export async function runAccountCli(
         write(JSON.stringify({ failure: "UNKNOWN_ACCOUNT", githubUserId: parsed.githubUserId }));
         return 1;
       }
-      write(JSON.stringify(document, null, 2));
+      write(formatAccountExport(document));
       return 0;
     }
     const outcome = await deleteAccount(sql, parsed.githubUserId, { confirm: parsed.confirm });
