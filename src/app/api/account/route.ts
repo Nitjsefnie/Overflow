@@ -79,8 +79,8 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
         try {
           await dependencies.endSession();
           return Response.json({ deleted: true });
-        } catch {
-          console.error("Account deleted, but ending the browser session failed.");
+        } catch (error) {
+          console.error("Account deleted, but ending the browser session failed.", error);
           return Response.json({ deleted: true, sessionEnded: false });
         }
     }

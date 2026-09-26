@@ -185,13 +185,14 @@ describe("DELETE /api/account", () => {
   it("reports successful deletion even when ending the browser session fails", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const deps = dependencies();
-    deps.endSession.mockRejectedValueOnce(new Error("secret"));
+    const sessionError = new Error("secret session detail");
+    deps.endSession.mockRejectedValueOnce(sessionError);
     const response = await createAccountDeleteHandler(deps)(requests.json({ confirmLogin: "Alice" }, "DELETE"));
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ deleted: true, sessionEnded: false });
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError.mock.calls[0]).toHaveLength(1);
-    expect(consoleError.mock.calls[0]![0]).not.toContain("secret");
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({ deleted: true, sessionEnded: false });
+    expect(body).not.toContain("secret session detail");
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith("Account deleted, but ending the browser session failed.", sessionError);
   });
 
   it.each(["session", "sql", "lookup", "delete"])('returns 502 and logs when %s throws without ending session', async (failure) => {
