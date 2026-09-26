@@ -147,7 +147,11 @@ list can restore trusted access on sign-in if all moderators were demoted.
 Replace **`AUTH_SECRET`** in the root-only service environment file specified
 by [README.md](README.md), keeping its ownership and mode. Configure a fresh
 secret without retaining the compromised secret as a fallback. Do not include
-either value in commands saved as evidence. Restart to load the replacement:
+either value in commands saved as evidence. Configure the replacement secret
+while the service is stopped, and load it only at the approved recovery start
+(see [Recover](#recover)); restarting is what loads it, and as the
+[Contain](#contain) section requires, restart only after the recovery checks
+are done:
 
 ```bash
 systemctl restart overflow.service
