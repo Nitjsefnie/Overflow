@@ -1341,6 +1341,22 @@ describe("reconcileRepository", () => {
     expect(dependencies.store.markRepositoryUnavailable).not.toHaveBeenCalled();
   });
 
+  it("does not read the gateway dependency for a repository still inside its cooldown", async () => {
+    const dependencies = reconciliationDependencies();
+    const now = () => new Date("2030-01-02T03:04:05.678Z");
+    vi.mocked(dependencies.store.getReconciliationCooldown)
+      .mockResolvedValue(new Date(now().getTime() + 1));
+    const githubReads = vi.fn(() => dependencies.github);
+    const lazyDependencies = Object.defineProperty({ ...dependencies, now }, "github", {
+      get: githubReads, enumerable: true,
+    });
+
+    const summary = await reconcileRepository(lazyDependencies, "repository");
+
+    expect(summary).toMatchObject({ skipped: true, runId: null });
+    expect(githubReads).not.toHaveBeenCalled();
+  });
+
   it.each(["BANNED", "RECALIBRATING"] as const)(
     "rebuilds work that was eligible when merged after the sponsor becomes %s",
     async (enforcementState) => {

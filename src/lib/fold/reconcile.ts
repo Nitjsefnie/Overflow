@@ -141,21 +141,29 @@ export async function reconcileRepository(
   repositoryId: string,
   options?: { rederive?: boolean },
 ): Promise<ReconciliationSummary> {
-  const sanitizedDependencies = { ...dependencies, github: sanitizeReconciliationGateway(dependencies.github) };
+  // Forward every dependency lazily: a spread would read each property (the
+  // budget getter included) before the coordinated run reads it, and a getter
+  // that throws there escapes the admission path that tolerates it.
+  const sanitizedGateway = sanitizeReconciliationGateway(() => dependencies.github);
+  const sanitizedDependencies = new Proxy(dependencies, {
+    get: (target, property, receiver) => property === "github"
+      ? sanitizedGateway
+      : Reflect.get(target, property, receiver),
+  });
   return dependencies.store.withRepositoryReconciliation(
     repositoryId,
     () => reconcileRepositoryWhileCoordinated(sanitizedDependencies, repositoryId, options),
   );
 }
 
-function sanitizeReconciliationGateway(gateway: ReconciliationGateway): ReconciliationGateway {
+function sanitizeReconciliationGateway(current: () => ReconciliationGateway): ReconciliationGateway {
   return {
-    getRepositoryById: async (...args) => sanitizeForgeStrings(await gateway.getRepositoryById(...args)),
-    listIssues: async (...args) => sanitizeForgeStrings(await gateway.listIssues(...args)),
-    getIssue: async (...args) => sanitizeForgeStrings(await gateway.getIssue(...args)),
-    getPullRequestClosingIssues: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestClosingIssues(...args)),
-    getPullRequestReviews: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestReviews(...args)),
-    getPullRequestDiff: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestDiff(...args)),
+    getRepositoryById: async (...args) => sanitizeForgeStrings(await current().getRepositoryById(...args)),
+    listIssues: async (...args) => sanitizeForgeStrings(await current().listIssues(...args)),
+    getIssue: async (...args) => sanitizeForgeStrings(await current().getIssue(...args)),
+    getPullRequestClosingIssues: async (...args) => sanitizeForgeStrings(await current().getPullRequestClosingIssues(...args)),
+    getPullRequestReviews: async (...args) => sanitizeForgeStrings(await current().getPullRequestReviews(...args)),
+    getPullRequestDiff: async (...args) => sanitizeForgeStrings(await current().getPullRequestDiff(...args)),
   };
 }
 
