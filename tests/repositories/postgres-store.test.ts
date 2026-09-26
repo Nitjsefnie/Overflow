@@ -894,6 +894,61 @@ describe("unregistering a repository against the real registered_repositories co
     await expectStillActive(submission.ownerName);
   });
 
+  it.each(["github", "gitlab"] as const)("drops the stored %s webhook credential on unregistration", async (provider) => {
+    const credential = { id: randomUUID(), secret: "unregistered-synthetic-secret" };
+    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: credential, provider,
+      ...(provider === "gitlab" ? { instanceUrl: "https://gitlab.example.com", forgeProjectId: externalId++ } : {}),
+    });
+    await store.createRepository(submission);
+    expect(await credentialColumns(submission.ownerName)).toMatchObject({ webhook_credential_id: credential.id });
+
+    await expect(store.unregisterRepository({ ownerName: submission.ownerName, sponsorId: submission.sponsorId, provider }))
+      .resolves.toMatchObject({ kind: "UNREGISTERED" });
+
+    expect(await credentialColumns(submission.ownerName)).toEqual(
+      { webhook_credential_id: null, encrypted_webhook_secret: null, webhook_configured_at: null });
+    expect(await store.findWebhookCredential(credential.id, provider)).toBeNull();
+  });
+
+  it("keeps the credential through a moderation deactivation, which restores without re-minting", async () => {
+    const credential = { id: randomUUID(), secret: "moderated-synthetic-secret" };
+    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: credential });
+    await store.createRepository(submission);
+    const stored = await credentialColumns(submission.ownerName);
+
+    // The statements the moderation store runs on substantiation and on closing a recalibration.
+    await sql`update registered_repositories set active = false, updated_at = now() where sponsor_id = ${submission.sponsorId}`;
+    expect(await credentialColumns(submission.ownerName)).toEqual(stored);
+    await sql`update registered_repositories set active = true, updated_at = now() where sponsor_id = ${submission.sponsorId}`;
+    expect(await store.findWebhookCredential(credential.id, "github")).toMatchObject({ secret: credential.secret });
+  });
+
+  it("mints a fresh credential when an unregistered repository is registered again", async () => {
+    const first = { id: randomUUID(), secret: "first-registration-secret" };
+    const second = { id: randomUUID(), secret: "second-registration-secret" };
+    const submission = newRepository({ sponsorId: await sponsor(), webhookCredential: first });
+    const created = (await store.createRepository(submission))!;
+    await store.unregisterRepository({ ownerName: submission.ownerName, sponsorId: submission.sponsorId, provider: "github" });
+
+    const resubmission = { ...submission, githubWebhookId: externalId++, webhookCredential: second };
+    await expect(store.createRepository(resubmission)).resolves.toMatchObject({ id: created.id });
+    expect(await store.findActiveRepositoryById(created.id)).toMatchObject({ githubWebhookId: resubmission.githubWebhookId });
+    expect(await store.findWebhookCredential(first.id, "github")).toBeNull();
+    expect(await store.findWebhookCredential(second.id, "github")).toMatchObject({
+      repositoryId: created.id, secret: second.secret, configuredAt: expect.any(Date),
+    });
+  });
+
+  async function credentialColumns(ownerName: string) {
+    const [row] = await sql<{
+      webhook_credential_id: string | null; encrypted_webhook_secret: Buffer | null; webhook_configured_at: Date | null;
+    }[]>`
+      select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+      from registered_repositories where owner_name = ${ownerName}
+    `;
+    return row;
+  }
+
   async function expectStillActive(ownerName: string): Promise<void> {
     const [row] = await sql<UnregistrationRow[]>`
       select active, unregistered_at

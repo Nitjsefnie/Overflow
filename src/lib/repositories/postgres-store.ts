@@ -347,10 +347,12 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
       // active and unregistered_at move in one statement so the check
       // constraint's invariant — an active row was never unregistered —
-      // holds in every committed state.
+      // holds in every committed state. The webhook credential goes with
+      // them; re-registration mints a fresh one.
       const [updated] = await transaction<RepositoryRow[]>`
         update registered_repositories
-        set active = false, unregistered_at = now(), updated_at = now()
+        set active = false, unregistered_at = now(), updated_at = now(),
+          webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null
         where id = ${row.id} and sponsor_id = ${input.sponsorId}
         returning
           id,
