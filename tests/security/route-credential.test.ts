@@ -106,7 +106,10 @@ describe("resolveRouteCredential", () => {
     });
 
     expect(findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(apiTokenHash);
-    expect(credential).toEqual({ user: { id: ownerId } });
+    expect(credential).toEqual({
+      user: { id: ownerId },
+      credential: { kind: "token", tokenId: "68200000-0000-4000-8000-000000000003" },
+    });
   });
 
   it("rejects a malformed bearer with the credential rejection and no lookup", async () => {
@@ -146,14 +149,14 @@ describe("resolveRouteCredential", () => {
     ).rejects.toThrow("token store outage");
   });
 
-  it("passes a session through untouched and never touches the token store", async () => {
+  it("passes a session through, naming the session credential, and never touches the token store", async () => {
     const session = { user: { id: memberId, role: "MEMBER" } };
     const getSession = vi.fn().mockResolvedValue(session);
     const findAccountByTokenHash = vi.fn();
 
     const credential = await resolveRouteCredential(tokenRequest(), { getSession, findAccountByTokenHash });
 
-    expect(credential).toBe(session);
+    expect(credential).toEqual({ ...session, credential: { kind: "session" } });
     expect(findAccountByTokenHash).not.toHaveBeenCalled();
   });
 
@@ -197,7 +200,8 @@ describe("resolveRouteCredential", () => {
 describe("the minted-token round trip", () => {
   it("resolves a freshly minted token to its owner by digest", async () => {
     const { token, tokenHash } = mintApiToken();
-    const findAccountByTokenHash = vi.fn().mockResolvedValue({ id: ownerId });
+    const mintedTokenId = "68200000-0000-4000-8000-000000000004";
+    const findAccountByTokenHash = vi.fn().mockResolvedValue({ id: ownerId, tokenId: mintedTokenId });
 
     const credential = await resolveRouteCredential(tokenRequest({ authorization: `Bearer ${token}` }), {
       getSession: vi.fn(),
@@ -205,6 +209,6 @@ describe("the minted-token round trip", () => {
     });
 
     expect(findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(tokenHash);
-    expect(credential).toEqual({ user: { id: ownerId } });
+    expect(credential).toEqual({ user: { id: ownerId }, credential: { kind: "token", tokenId: mintedTokenId } });
   });
 });
