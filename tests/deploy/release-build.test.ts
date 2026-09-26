@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,14 +40,18 @@ function prepare(release: string) {
 
 function build(release: string) {
   // Webpack supports the external node_modules link in this disposable fixture.
+  // No timeout here or on the cases that call this: a loaded box only slows the build, and a kill proves nothing.
   const result = spawnSync(process.execPath, [path.join(project, "node_modules/next/dist/bin/next"), "build", "--webpack"], {
     cwd: tree,
     env: { ...process.env, NEXT_DIST_DIR: release, NEXT_TELEMETRY_DISABLED: "1" },
     encoding: "utf8",
-    timeout: 120_000,
   });
   console.log(`Next build ${release}: exit ${result.status}`);
   return result;
+}
+
+function outcome(result: SpawnSyncReturns<string>) {
+  return `status ${result.status}, signal ${result.signal}, error ${result.error}\n${result.stdout}${result.stderr}`;
 }
 
 it("regenerates a deploy config with source includes and no previous release types", async () => {
@@ -73,7 +77,7 @@ it("builds a replacement after removing a route while its previous release is st
   const second = ".next-release-20260907T060100Z-918a0d4";
   prepare(first);
   const initial = build(first);
-  expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+  expect(initial.status, outcome(initial)).toBe(0);
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(trackedConfig);
   const switched = spawnSync(process.execPath, ["scripts/release.ts", "switch", tree, first], {
     cwd: tree,
@@ -86,7 +90,7 @@ it("builds a replacement after removing a route while its previous release is st
   prepare(second);
   const replacement = build(second);
 
-  expect(replacement.status, replacement.stdout + replacement.stderr).toBe(0);
+  expect(replacement.status, outcome(replacement)).toBe(0);
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(trackedConfig);
   expect(await readlink(path.join(tree, ".next"))).toBe(first);
   expect((await readFile(path.join(tree, second, "BUILD_ID"), "utf8")).trim()).not.toBe("");
@@ -97,7 +101,7 @@ it("builds a replacement after removing a route while its previous release is st
   const files: string[] = JSON.parse(program.stdout).files;
   expect(files).toContain(`./${second}/types/validator.ts`);
   expect(files.some((file) => file.startsWith("./.next/") || file.startsWith(`./${first}/`))).toBe(false);
-}, 240_000);
+}, 0);
 
 it("type-checks the new release's generated route validators", async () => {
   const release = ".next-release-20260907T060200Z-918a0d4";
@@ -109,12 +113,12 @@ it("type-checks the new release's generated route validators", async () => {
   prepare(release);
   const result = build(release);
 
-  expect(result.status).toBe(1);
+  expect(result.status, outcome(result)).toBe(1);
   expect(result.stdout + result.stderr).toContain(`${release}/types/`);
   expect(result.stdout + result.stderr).toContain("generateStaticParams");
   expect(result.stdout + result.stderr).toMatch(/TS\d+/);
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(trackedConfig);
-});
+}, 0);
 
 it("refuses an unprepared release before Next can create a weaker TypeScript config", async () => {
   const release = ".next-release-20260907T060300Z-918a0d4";
@@ -127,7 +131,7 @@ it("refuses an unprepared release before Next can create a weaker TypeScript con
 
   const result = build(release);
 
-  expect(result.status, result.stdout + result.stderr).toBe(1);
+  expect(result.status, outcome(result)).toBe(1);
   expect(result.stdout + result.stderr).toContain("scripts/release.ts prepare");
   expect(result.stdout + result.stderr).toContain(release);
   await expect(lstat(path.join(tree, release, "BUILD_ID"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -137,18 +141,18 @@ it("refuses an unprepared release before Next can create a weaker TypeScript con
 
   prepare(release);
   const preparedBuild = build(release);
-  expect(preparedBuild.status, preparedBuild.stdout + preparedBuild.stderr).toBe(1);
+  expect(preparedBuild.status, outcome(preparedBuild)).toBe(1);
   expect(preparedBuild.stdout + preparedBuild.stderr).toContain("TS7006");
   await expect(lstat(path.join(tree, release, "BUILD_ID"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(trackedConfig);
-});
+}, 0);
 
 it("refuses an unprepared replacement when only the previous release's config exists", async () => {
   const first = ".next-release-20260907T060400Z-918a0d4";
   const second = ".next-release-20260907T060500Z-918a0d4";
   const firstConfig = prepare(first);
   const initial = build(first);
-  expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+  expect(initial.status, outcome(initial)).toBe(0);
   const switched = spawnSync(process.execPath, ["scripts/release.ts", "switch", tree, first], {
     cwd: tree, encoding: "utf8",
   });
@@ -164,7 +168,7 @@ it("refuses an unprepared replacement when only the previous release's config ex
 
   const result = build(second);
 
-  expect(result.status, result.stdout + result.stderr).toBe(1);
+  expect(result.status, outcome(result)).toBe(1);
   expect(result.stdout + result.stderr).toContain("scripts/release.ts prepare");
   expect(result.stdout + result.stderr).toContain(second);
   await expect(lstat(path.join(tree, second, "BUILD_ID"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -175,7 +179,7 @@ it("refuses an unprepared replacement when only the previous release's config ex
 
   prepare(second);
   const replacement = build(second);
-  expect(replacement.status, replacement.stdout + replacement.stderr).toBe(0);
+  expect(replacement.status, outcome(replacement)).toBe(0);
   const program = spawnSync(process.execPath, [path.join(project, "node_modules/typescript/bin/tsc"), "--showConfig", "--project", `${second}.tsconfig.json`], {
     cwd: tree, encoding: "utf8",
   });
@@ -187,4 +191,4 @@ it("refuses an unprepared replacement when only the previous release's config ex
   expect(await readFile(firstConfig, "utf8")).toBe(previousConfig);
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(input);
   expect(await readlink(path.join(tree, ".next"))).toBe(first);
-}, 240_000);
+}, 0);
