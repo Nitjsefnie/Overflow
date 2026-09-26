@@ -32,7 +32,9 @@ export type ApiTokenStatus = ApiTokenSummary & { expired: boolean };
  *
  * Expiry is decided here, once, by the database clock: every bearer route
  * resolves its credential through `findAccountByTokenHash`, so an expired
- * token is refused everywhere exactly as a token that was never issued.
+ * token is refused everywhere exactly as a token that was never issued. So is
+ * a deleted account: resolution requires the account row to be live, and a
+ * token row that outlives its account authenticates nobody.
  *
  * Nothing here hands back token material. A hash only ever arrives as an
  * argument, and a resolved account carries just the fields an actor needs.
@@ -66,7 +68,7 @@ export class PostgresApiTokenStore {
       )
       select users.id, matched_token.id as token_id, users.role, users.enforcement_state
       from matched_token
-      join users on users.id = matched_token.user_id
+      join users on users.id = matched_token.user_id and users.deleted_at is null
     `;
     if (row === undefined) {
       return null;

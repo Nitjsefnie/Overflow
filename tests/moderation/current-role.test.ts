@@ -75,9 +75,14 @@ describe("the production route gates read the role from the database", () => {
     expect(admitted.status).toBe(200);
     expect(Array.isArray(await admitted.json())).toBe(true);
 
+    // Issue 733 layer 3: the token store refuses a deleted account outright,
+    // so the credential is not accepted — the same 401 as an unknown or
+    // expired token — and the role gate downstream of it is never reached on
+    // the bearer surface. The role gate's own refusal for a deleted account
+    // stays pinned on the session-auth surface (tests/api/tokens.test.ts).
     const refused = await productionIssuesGet(await bearerRequest("/api/issues", deletedId));
-    expect(refused.status).toBe(403);
-    expect((await refused.json()).error.code).toBe("FORBIDDEN");
+    expect(refused.status).toBe(401);
+    expect((await refused.json()).error.code).toBe("UNAUTHENTICATED");
   });
 
   it("refuses a member on a moderator route and admits a moderator", async () => {
