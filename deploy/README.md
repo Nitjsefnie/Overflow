@@ -759,10 +759,15 @@ script itself is what broke.** They run under the same fence, with the same
 `--expect-current` anchor and the same release grammar, but they are not the
 script's sequence: they pull first, fast-forwarding the tree before anything
 is checked, and carry neither the tree-cleanliness gate nor the
-required-checks gate. Before building, confirm by hand that `git status` in
-the tree is clean and that main's required checks passed on the pulled
-commit. Extract and run them only after diagnosing why the script could not,
-and keep every guard in this section in force.
+required-checks gate. So run the standing block in two parts, in one shell
+so the fd 9 fence and `expected_serving` carry over: stop right after its
+`git pull` line, before `pnpm install` and `pnpm db:migrate`, and confirm by
+hand that `git status` in the tree is clean and that main's
+required checks passed on the pulled commit; if either check fails, do not
+run the rest of the block, since `pnpm db:migrate` would otherwise apply that
+unverified commit's migrations to the production schema. Extract and run them
+only after diagnosing why the script could not, and keep every guard in this
+section in force.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
