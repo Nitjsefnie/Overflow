@@ -148,10 +148,13 @@ lets anyone act as the person survives with it.
 
 ### Requests
 
-Requests arrive only as an issue on the public tracker (the Code of Conduct's
-[Reporting](CODE_OF_CONDUCT.md#reporting) section); there is no private
-channel. Act only for the account that opened the issue, and resolve that
-account's numeric id before touching anything with
+Members signed in to Overflow delete their account and download its export
+themselves, from the account controls on their dashboard; no request to the
+operator is needed. The tracker route below stays for people who cannot sign
+in to Overflow. Their requests arrive as an issue on the public tracker (the
+Code of Conduct's [Reporting](CODE_OF_CONDUCT.md#reporting) section); there
+is no private channel. Act only for the account that opened the issue, and
+resolve that account's numeric id before touching anything with
 `gh api repos/Nitjsefnie/Overflow/issues/<number> --jq .user.id`. Pass that
 id to the commands below — never a login.
 
@@ -166,8 +169,9 @@ the reporter. The acting-on-others rows carry the rationale, decision and
 reason text written about other people, which the requester's consent cannot
 cover. The confirmation matters on its own too: the export
 also includes the account's own enforcement state and the reasons recorded on
-moderation events targeting it. If either condition fails, hold the export
-until self-service export ships (issue 664).
+moderation events targeting it. If either condition fails, do not post the
+export: point the requester to the self-service export in their dashboard's
+account controls, which they download themselves.
 
 ### Running the commands
 
