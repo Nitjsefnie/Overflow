@@ -1,3 +1,4 @@
+import { publicFetch } from "@/lib/security/public-destination";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 export type ForgeIdentityView = {
@@ -151,8 +152,9 @@ async function readUpstream(
     });
     return { status: response.status, bodyText: await response.text() };
   } catch {
-    // A transport failure — timeout or unreachable host — is a verification
-    // failure: nothing is stored, and no upstream detail escapes.
+    // A transport failure — timeout, unreachable host, or a destination the
+    // transport refuses — is a verification failure: nothing is stored, and
+    // no upstream detail escapes, so a refused instance reads as unreachable.
     throw transportRefusal();
   }
 }
@@ -238,7 +240,7 @@ export async function linkForgeIdentity(
   input: { userId: string; instanceUrl: string; token: string },
 ): Promise<ForgeIdentityView> {
   const instanceUrl = normalizeInstanceUrl(input.instanceUrl);
-  const fetchImplementation = dependencies.fetch ?? fetch;
+  const fetchImplementation = dependencies.fetch ?? publicFetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? defaultTimeoutMs);
   let forgeUser: { id: number; username: string };
