@@ -591,6 +591,20 @@ describe("GitLabGateway", () => {
     },
   );
 
+  it("propagates the unparsable-timestamp throw when a successful commit read carries one", async () => {
+    // A malformed timestamp is a failure of the evidence, not evidence of no
+    // timestamp: the normalization throw must leave `getPullRequest` as an
+    // error, never collapse into a null finalCommitAt. The mutant that
+    // neutralizes the throw (returning the raw value) fails here — the read
+    // then resolves with `finalCommitAt: "not-a-timestamp"`.
+    const client = gateway(jsonRouter([
+      ["/merge_requests/17/commits", [{ committed_date: "not-a-timestamp" }]],
+      ["/merge_requests/17", mergeRequest],
+    ]));
+    await expect(client.getPullRequest({ owner: "gitlab-org", name: "gitlab" }, 17))
+      .rejects.toThrow("GitLab returned an unparsable timestamp: not-a-timestamp");
+  });
+
   it("leaves finalCommitAt null when a successful commit read carries no commits", async () => {
     const client = gateway(jsonRouter([
       ["/merge_requests/17/commits", []],
