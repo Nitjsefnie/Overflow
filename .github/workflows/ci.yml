@@ -135,9 +135,11 @@ jobs:
       # baseline may only tighten. The merge ref merges the head into the
       # base, so HEAD^1 is the base tip and HEAD^2 the head, and the check
       # compares each document at their merge base with the head's copy. The
-      # checkout is depth-1, and a shallow history makes git merge-base fail
-      # — or worse, return a wrong base without erroring — so the step first
-      # completes the history of both sides before checking.
+      # history is still shallow by the time this step runs (the docs-only
+      # detection above fetched only to depth 2), and a shallow history makes
+      # git merge-base fail — or worse, return a wrong base without erroring
+      # — so the step first completes the history of both sides before
+      # checking.
       - name: Ratchet documents
         if: ${{ github.event_name == 'pull_request' }}
         env:

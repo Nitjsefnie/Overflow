@@ -17,7 +17,13 @@ type Workflow = {
     "timeout-minutes"?: number;
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
-    steps: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }>;
+    steps: Array<{
+      name?: string;
+      uses?: string;
+      run?: string;
+      with?: Record<string, unknown>;
+      env?: Record<string, string>;
+    }>;
   }>;
 };
 
@@ -67,6 +73,61 @@ describe("GitHub Actions release gates", () => {
             "pull-request-author": "${{ github.event.pull_request.user.login }}",
           },
         }],
+      },
+    });
+  });
+
+  it("judges the pull request head only as git data, executed entirely from main", async () => {
+    const workflow = await readWorkflow("ratchet-guard.yml");
+    // pull_request_target keeps the gate alive when a pull request disables
+    // the pull_request ci run: the workflow definition, the checkout and the
+    // script that executes all come from main. `branches: [main]` keeps a PR
+    // retargeted to main (an edited event, which gets no new run) from
+    // carrying its stale green over.
+    expect(workflow.on).toEqual({
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.concurrency).toEqual({
+      group: "ratchet-guard-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
+    });
+    // The whole job, exactly, in the dependency-audit style. The checkout's
+    // `with` carries no `ref` and no `repository` — under pull_request_target
+    // the default checkout is main's last commit, and actions/checkout's fork
+    // guard exempts exactly that — and no step installs or builds anything:
+    // the head enters only as git objects in refs/remotes/pr/head, and the
+    // only script that runs is main's scripts/check-ratchets.ts reading those
+    // objects with `git show`. The base of the comparison is the checked-out
+    // commit itself (HEAD), never the event's base.sha: that is recorded when
+    // the pull request opens and can trail main, and after a rebase onto a
+    // newer main the merge base of the stale base and the head sits below the
+    // real fork point, so a real relaxation would pass against the looser
+    // document there. The head SHA travels through env, never ${{ }} in run:.
+    expect(workflow.jobs).toEqual({
+      "ratchet-guard": {
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 10,
+        steps: [
+          {
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            with: { "persist-credentials": false, "fetch-depth": 0 },
+          },
+          {
+            uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+            with: { "node-version": "24.17.0" },
+          },
+          {
+            name: "Fetch the pull request head",
+            env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
+            run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+          },
+          {
+            name: "Ratchet documents",
+            env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$HEAD_SHA"',
+          },
+        ],
       },
     });
   });
@@ -262,6 +323,7 @@ describe("GitHub Actions release gates", () => {
     expect(checkIgnore(".github/workflows/ci.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/dependency-audit.yml")).toBe(1);
+    expect(checkIgnore(".github/workflows/ratchet-guard.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);

@@ -8,7 +8,9 @@ name: ratchet guard
 # installed, built or executed.
 on:
   pull_request_target:  # zizmor: ignore[dangerous-triggers]
-    # main only: a PR retargeted to main (an edited event) gets no new run, so without this filter its stale green would carry over — required contexts match by name on the head SHA
+    # main only: a PR retargeted to main (an edited event) gets no new run,
+    # so without this filter its stale green would carry over — required
+    # contexts match by name on the head SHA
     branches: [main]
     types: [opened, synchronize, reopened]
 
@@ -48,7 +50,19 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
 
+      # The base of the comparison is the checked-out commit itself — under
+      # pull_request_target that is main's latest commit (GITHUB_SHA) — never
+      # the event's base.sha: that value is recorded when the pull request
+      # opens and can trail main, and once the branch has rebased onto a
+      # newer main the merge base of the stale base and the head sits below
+      # the real fork point, so the guard would compare against the looser
+      # document at that older base and pass a real relaxation. Checking
+      # against main's latest commit cannot have that failure: a newer base
+      # only moves the merge base forward. The head SHA is the commit the
+      # event is about (passed through env, never ${{ }} in run:); if it was
+      # force-pushed away and is unreachable, the script exits 2 and the
+      # concurrency group has already cancelled the superseded run.
       - name: Ratchet documents
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-ratchets.ts "$BASE_SHA" refs/remotes/pr/head
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ratchets.ts HEAD "$HEAD_SHA"
