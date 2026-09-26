@@ -4221,14 +4221,14 @@ describe("initial PostgreSQL materialization", () => {
     expect(issued.createdAt).toBeInstanceOf(Date);
     const summary = await store.getTokenSummary(userId);
     expect(summary?.createdAt).toBeInstanceOf(Date);
-    expect(summary).toEqual(issued);
+    expect(summary).toEqual({ ...issued, expired: false });
 
     const [backdated] = await sql<{ created_at: Date }[]>`
       update api_tokens set created_at = now() - interval '1 hour' where user_id = ${userId}
       returning created_at
     `;
     const reissued = await store.issueToken(userId, apiTokenHash("summary-second"));
-    await expect(store.getTokenSummary(userId)).resolves.toEqual(reissued);
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...reissued, expired: false });
     expect(reissued.createdAt.getTime()).toBeGreaterThan(backdated.created_at.getTime());
   });
 });

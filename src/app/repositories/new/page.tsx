@@ -18,7 +18,11 @@ export default async function NewRepositoryPage() {
       <ApiTokenPanel
         reauthenticateAction={signInForRepositoryRegistration}
         summary={tokenSummary
-          ? { createdAt: tokenSummary.createdAt.toISOString(), expiresAt: tokenSummary.expiresAt.toISOString() }
+          ? {
+            createdAt: tokenSummary.createdAt.toISOString(),
+            expiresAt: tokenSummary.expiresAt.toISOString(),
+            expired: tokenSummary.expired,
+          }
           : null}
       />
     </AppShell>

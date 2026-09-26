@@ -6,11 +6,14 @@ import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 
 type ApiTokenSummary = { createdAt: string; expiresAt: string };
 
+/** `expired` is the database's verdict, decided when the page rendered. */
+type ApiTokenStatus = ApiTokenSummary & { expired: boolean };
+
 /** The route's refusal when the session's GitHub sign-in is too old to mint. */
 const REAUTHENTICATION_REQUIRED_CODE = "REAUTHENTICATION_REQUIRED";
 
 type ApiTokenPanelProps = {
-  summary: ApiTokenSummary | null;
+  summary: ApiTokenStatus | null;
   /**
    * The GitHub sign-in that makes the session fresh enough to mint, offered
    * beside a `REAUTHENTICATION_REQUIRED` refusal. The page passes the
@@ -26,9 +29,10 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const currentSummary = issued ?? summary;
-  // Display only: the server refuses an expired token by the database clock
-  // whatever this comparison says.
-  const expired = currentSummary !== null && Date.parse(currentSummary.expiresAt) <= Date.now();
+  // The database's verdict, never this browser's clock: reading the clock
+  // here could disagree with the refusal, and with the server render at the
+  // expiry instant. A token minted in this view has its full lifetime ahead.
+  const expired = issued === null && summary !== null && summary.expired;
 
   async function generateToken() {
     if (inFlight.current) return;

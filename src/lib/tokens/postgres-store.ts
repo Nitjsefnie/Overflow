@@ -14,6 +14,12 @@ export type ApiTokenSummary = {
 };
 
 /**
+ * A summary with the database's verdict on whether it has expired, decided by
+ * the same clock and predicate that refuse the token on a bearer route.
+ */
+export type ApiTokenStatus = ApiTokenSummary & { expired: boolean };
+
+/**
  * Issues and resolves the hashes of Overflow-issued API tokens.
  *
  * Issuing is one upsert on the `user_id` unique constraint, which is what makes
@@ -61,10 +67,14 @@ export class PostgresApiTokenStore {
     return { id: row.id, role: row.role, enforcementState: row.enforcement_state };
   }
 
-  public async getTokenSummary(userId: string): Promise<ApiTokenSummary | null> {
-    const [row] = await this.sql<{ created_at: Date; expires_at: Date }[]>`
-      select created_at, expires_at from api_tokens where user_id = ${userId} limit 1
+  public async getTokenSummary(userId: string): Promise<ApiTokenStatus | null> {
+    // `expired` is the negation of findAccountByTokenHash's `expires_at > now()`.
+    const [row] = await this.sql<{ created_at: Date; expires_at: Date; expired: boolean }[]>`
+      select created_at, expires_at, expires_at <= now() as expired
+      from api_tokens where user_id = ${userId} limit 1
     `;
-    return row === undefined ? null : { createdAt: row.created_at, expiresAt: row.expires_at };
+    return row === undefined
+      ? null
+      : { createdAt: row.created_at, expiresAt: row.expires_at, expired: row.expired };
   }
 }

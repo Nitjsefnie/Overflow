@@ -36,7 +36,7 @@ const token = `ovf_${"a".repeat(43)}`;
 const replacementToken = `ovf_${"b".repeat(43)}`;
 // Every test reads the clock at this instant, so "expired" never depends on the day the suite runs.
 const now = new Date("2026-09-10T00:00:00.000Z");
-const expiredSummary = { createdAt: "2026-05-01T08:00:00.000Z", expiresAt: "2026-07-30T08:00:00.000Z" };
+const expiredSummary = { createdAt: "2026-05-01T08:00:00.000Z", expiresAt: "2026-07-30T08:00:00.000Z", expired: true };
 
 function mintedToken(value = token, date = createdAt, expiry = expiresAt) {
   return Response.json({ token: value, createdAt: date, expiresAt: expiry }, { status: 201 });
@@ -78,7 +78,7 @@ describe("API token panel", () => {
   });
 
   it("shows the generation date and warns about immediate revocation before regeneration", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
 
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
     expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
@@ -87,7 +87,7 @@ describe("API token panel", () => {
   });
 
   it("shows the expiry as a time element and no expired state for a live token", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
 
     expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
     expect(document.getElementById("api-token-expired")).toBeNull();
@@ -105,9 +105,20 @@ describe("API token panel", () => {
     expect(document.getElementById("api-token-expired")).toBeVisible();
   });
 
-  it("treats a token expiring at exactly the current instant as expired", () => {
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt: now.toISOString() }} />);
+  // The expired state is the database's verdict, passed down by the page; the
+  // panel reading its own clock could disagree with it, and between the
+  // server render and hydration at the expiry instant.
+  it("shows no expired state for a live verdict even when the browser clock is past the expiry", () => {
+    render(<ApiTokenPanel summary={{ ...expiredSummary, expired: false }} />);
 
+    expect(Date.now()).toBeGreaterThan(Date.parse(expiredSummary.expiresAt));
+    expect(document.getElementById("api-token-expired")).toBeNull();
+  });
+
+  it("shows the expired state for an expired verdict even when the browser clock is before the expiry", () => {
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: true }} />);
+
+    expect(Date.now()).toBeLessThan(Date.parse(expiresAt));
     expect(document.getElementById("api-token-expired")).toBeVisible();
   });
 
@@ -151,10 +162,10 @@ describe("API token panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
     expect(await screen.findByText(token)).toBeVisible();
-    rerender(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+    rerender(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
     expect(screen.getByText(token)).toBeVisible();
     unmount();
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
 
     expect(screen.queryByText(token)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
@@ -200,7 +211,7 @@ describe("API token panel", () => {
   it("offers the supplied re-authentication action as its own form when minting needs a fresh sign-in", async () => {
     const reauthenticate = vi.fn(async () => {});
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reauthenticationRefusal()));
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} reauthenticateAction={reauthenticate} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} reauthenticateAction={reauthenticate} />);
     expect(reauthenticateForm()).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
@@ -272,7 +283,7 @@ describe("API token panel", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: {
       code: "UPSTREAM_FAILURE", message: "Unable to issue an API token.",
     } }, { status: 502 })));
-    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt, expired: false }} />);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to issue an API token.");
@@ -329,7 +340,7 @@ describe("API token panel", () => {
 
   it.each([
     ["generation", null],
-    ["regeneration", { createdAt, expiresAt }],
+    ["regeneration", { createdAt, expiresAt, expired: false }],
   ] as const)("allows only one in-flight request during %s", async (_name, summary) => {
     let resolveRequest!: (response: Response) => void;
     const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
@@ -388,7 +399,8 @@ describe("repository registration page token panel", () => {
 
   it.each([
     { memberId: "member-without-token", summary: null },
-    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt) } },
+    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), expired: false } },
+    { memberId: "member-with-expired-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt), expired: true } },
   ])("passes the member summary for $memberId to the panel below the form", async ({ memberId, summary }) => {
     requireMemberPageSession.mockReset().mockResolvedValue({
       user: { id: memberId, name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
@@ -404,6 +416,8 @@ describe("repository registration page token panel", () => {
     if (summary) {
       expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
       expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+      // The store's verdict, not the page's or the browser's clock.
+      expect(document.getElementById("api-token-expired") !== null).toBe(summary.expired);
     }
   });
 });
