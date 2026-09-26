@@ -308,6 +308,56 @@ describe("GitLab webhook route", () => {
       logged.mockRestore();
     }
   });
+
+  // path_with_namespace is trimmed but otherwise free text, so a hostile
+  // namespace reaches the failure line. The parser still accepts it — the
+  // defect is the log line, not the delivery — and the line must stay one
+  // bounded line with no terminal escape in it.
+  it("encodes and bounds a hostile repository namespace in the failure line", async () => {
+    const namespace = `gitlab-org\n\u001b[2J${"a".repeat(5_000)}`;
+    const payload = JSON.parse(issuePayload) as { project: Record<string, unknown> };
+    payload.project.path_with_namespace = namespace;
+    const rootCause = new Error("upstream connection refused");
+    const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
+    const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(request(JSON.stringify(payload), gitlabHeaders({ "Idempotency-Key": "stable-message" })));
+
+      expect(response.status).toBe(503);
+      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({ repositoryFullName: namespace }), expect.anything());
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = logged.mock.calls[0] ?? [];
+      expect(typeof message).toBe("string");
+      expect(message).not.toContain("\n");
+      expect(message).not.toContain("\u001b");
+      expect((message as string).length).toBeLessThan(1_024);
+      expect(message).toContain("\"gitlab-org\\u000a\\u001b[2J");
+      expect(message).toContain("stable-message");
+      expect(loggedError).toBe(rootCause);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("encodes a terminal escape in the receipt key of the still-in-progress line", async () => {
+    const route = createGitLabWebhookPostHandler({
+      lookupCredential: async () => webhookCredential("gitlab", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status: "IN_PROGRESS" }),
+    });
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await route(request(issuePayload, gitlabHeaders({ "Idempotency-Key": "key\u001b[2Jz" })));
+
+      expect(response.status).toBe(503);
+      expect(warned).toHaveBeenCalledTimes(1);
+      const [message] = warned.mock.calls[0] ?? [];
+      expect(message).not.toContain("\u001b");
+      expect(message).toContain("\"key\\u001b[2Jz\"");
+    } finally {
+      warned.mockRestore();
+    }
+  });
 });
 
 // The route's declared limit is 25 MiB; the oversize cases sit just above it.

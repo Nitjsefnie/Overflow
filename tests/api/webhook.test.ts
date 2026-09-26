@@ -401,6 +401,59 @@ describe("GitHub webhook route", () => {
     }
   });
 
+  // repository.full_name is trimmed but otherwise free text, so a hostile
+  // name reaches the failure line; the line must stay one bounded line with
+  // no terminal escape in it.
+  it("encodes and bounds a hostile repository name in the failure line", async () => {
+    const fullName = `octo\n\u001b[2J${"a".repeat(5_000)}`;
+    const rootCause = new Error("upstream connection refused");
+    const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
+    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(request(JSON.stringify({ ...JSON.parse(rawPayload), repository: { id: 42, full_name: fullName } }), {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-hostile",
+      }));
+
+      expect(response.status).toBe(503);
+      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({ repositoryFullName: fullName }), expect.anything());
+      expect(logged).toHaveBeenCalledTimes(1);
+      const [message, loggedError] = logged.mock.calls[0] ?? [];
+      expect(typeof message).toBe("string");
+      expect(message).not.toContain("\n");
+      expect(message).not.toContain("\u001b");
+      expect((message as string).length).toBeLessThan(1_024);
+      expect(message).toContain("\"octo\\u000a\\u001b[2J");
+      expect(message).toContain("delivery-hostile");
+      expect(loggedError).toBe(rootCause);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("encodes a terminal escape in the delivery id of the still-in-progress line", async () => {
+    const route = createGitHubWebhookPostHandler({
+      lookupCredential: async () => webhookCredential("github", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status: "IN_PROGRESS" }),
+    });
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await route(request(rawPayload, {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery\u001b[2Jz",
+      }));
+
+      expect(response.status).toBe(503);
+      expect(warned).toHaveBeenCalledTimes(1);
+      const [message] = warned.mock.calls[0] ?? [];
+      expect(message).not.toContain("\u001b");
+      expect(message).toContain("\"delivery\\u001b[2Jz\"");
+    } finally {
+      warned.mockRestore();
+    }
+  });
+
   it("keeps the processor's cause chain intact through the route's diagnostic", async () => {
     const rootCause = new Error("probe enqueue root cause");
     const dependencies: WebhookProcessorDependencies = {

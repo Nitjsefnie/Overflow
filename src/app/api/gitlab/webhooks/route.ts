@@ -6,6 +6,7 @@ import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
+import { logField } from "@/lib/webhooks/log-field";
 
 export type GitLabWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
@@ -92,9 +93,10 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
         // execution as failed on GitLab's side, so a later retry or resend of
         // the message processes it. Not a processing failure, so one
         // fixed-template line naming only the receipt key and this
-        // execution's UUID.
+        // execution's UUID, each header-derived and so each encoded by
+        // logField into one quoted, escaped, length-bounded token.
         console.warn(
-          `Webhook delivery ${delivery.deliveryId} (execution ${delivery.executionId})`
+          `Webhook delivery ${logField(delivery.deliveryId)} (execution ${logField(delivery.executionId)})`
             + " is still being processed by an earlier attempt; answered 503 so it is retried.",
         );
         return new Response(null, { status: 503 });
@@ -106,14 +108,19 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       // this console line is the operators' one view of why a delivery failed.
       // The message is a fixed template over the delivery's identifiers, and
       // the error object itself rides as the second argument — Node renders
-      // its type, stack and Error.cause chain natively, and nothing
-      // user-controlled beyond those identifiers is concatenated. The delivery
-      // id is the receipt key, often the Idempotency-Key; the execution is the
-      // X-Gitlab-Webhook-UUID an operator finds in GitLab's delivery log.
+      // its type, stack and Error.cause chain natively. The request-derived
+      // identifiers (receipt key, execution UUID, and the project's
+      // path_with_namespace, which the parser accepts with internal control
+      // characters and at any length) each go through logField, so each is
+      // one quoted token with its controls escaped and its length bounded;
+      // the event is the parser's constant and the forge id a number. The
+      // delivery id is the receipt key, often the Idempotency-Key; the
+      // execution is the X-Gitlab-Webhook-UUID an operator finds in GitLab's
+      // delivery log.
       console.error(
-        `Webhook processing failed for delivery ${delivery.deliveryId}`
-          + ` (execution ${delivery.executionId},`
-          + ` event ${delivery.event}, repository ${delivery.repositoryFullName},`
+        `Webhook processing failed for delivery ${logField(delivery.deliveryId)}`
+          + ` (execution ${logField(delivery.executionId)},`
+          + ` event ${delivery.event}, repository ${logField(delivery.repositoryFullName)},`
           + ` forge id ${delivery.repositoryGitHubId}).`,
         error,
       );

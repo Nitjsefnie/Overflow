@@ -7,6 +7,7 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
+import { logField } from "@/lib/webhooks/log-field";
 
 export type GitHubWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
@@ -89,8 +90,9 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
         // fail, so the redelivery is not acknowledged: an empty 503 leaves it
         // marked failed in GitHub's delivery log, and a later redelivery
         // retries it. Not a processing failure, so one fixed-template line
-        // naming only the delivery id.
-        console.warn(`Webhook delivery ${delivery.deliveryId} is still being processed by an earlier attempt; answered 503 so it is retried.`);
+        // naming only the delivery id, header-derived and so encoded by
+        // logField into one quoted, escaped, length-bounded token.
+        console.warn(`Webhook delivery ${logField(delivery.deliveryId)} is still being processed by an earlier attempt; answered 503 so it is retried.`);
         return new Response(null, { status: 503 });
       }
       return new Response(null, { status: 202 });
@@ -99,11 +101,15 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
       // constant, so this console line is the operators' one view of why a
       // delivery failed. The message is a fixed template over the delivery's
       // identifiers, and the error object itself rides as the second argument
-      // — Node renders its type, stack and Error.cause chain natively, and
-      // nothing user-controlled beyond those identifiers is concatenated.
+      // — Node renders its type, stack and Error.cause chain natively. The
+      // request-derived identifiers (the delivery id, and the repository's
+      // full_name, which the parser accepts with internal control characters
+      // and at any length) each go through logField, so each is one quoted
+      // token with its controls escaped and its length bounded; the event is
+      // the parser's constant and the GitHub id a number.
       console.error(
-        `Webhook processing failed for delivery ${delivery.deliveryId}`
-          + ` (event ${delivery.event}, repository ${delivery.repositoryFullName},`
+        `Webhook processing failed for delivery ${logField(delivery.deliveryId)}`
+          + ` (event ${delivery.event}, repository ${logField(delivery.repositoryFullName)},`
           + ` GitHub id ${delivery.repositoryGitHubId}).`,
         error,
       );
