@@ -209,8 +209,11 @@ describe("GitLab webhook merge request delivery", () => {
 
 // Names every object inherits from Object.prototype. An action lookup that
 // consults the prototype chain finds a member for each of them, so each must
-// be proven invalid on both arms rather than assumed absent.
-const inheritedMemberNames = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"];
+// be proven invalid on both arms rather than assumed absent. The list is read
+// from Object.prototype itself, so a lookup that denies only a hand-picked few
+// is still caught; `__proto__` is named explicitly because a runtime started
+// with --disable-proto=delete omits it from Object.prototype.
+const inheritedMemberNames = [...new Set([...Object.getOwnPropertyNames(Object.prototype), "__proto__"])];
 
 // Built through JSON.parse so every name, `__proto__` included, arrives as an
 // own `action` property: an object literal `{ __proto__: ... }` would set the
