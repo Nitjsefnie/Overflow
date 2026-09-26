@@ -313,15 +313,16 @@ inside it.
 `node scripts/check-module-size.ts` enforces per-tree line ceilings — 800
 lines for `src/`, 2500 for `tests/` — against the committed baseline in
 `scripts/module-size.json`. The check fails when a baseline file grows past
-its recorded count, when an unlisted file crosses its ceiling, when a
-baseline file is deleted, when a baseline file shrinks below the ceiling
-and its entry has not been dropped, or when a baseline file shrinks below
-its recorded count while staying at or over its ceiling and the lower count
-has not been recorded. Run `node scripts/check-module-size.ts --tighten` to
-record shrinkage, in the same change that made it: it lowers counts and
-drops graduated or deleted entries, and it never writes an increase. There are exactly two remedies for an over-ceiling file: shrink
-it, or relocate code into a new module. Recorded counts are never raised by
-hand and entries are never added by hand.
+its recorded count, when an unlisted file crosses its ceiling, when a baseline
+file is deleted, when a baseline file shrinks below the ceiling and its entry
+has not been dropped, or when a baseline file shrinks below its recorded count
+while staying at or over its ceiling and the lower count has not been
+recorded. Run `node scripts/check-module-size.ts --tighten` to record
+shrinkage, in the same change that made it: it lowers counts and drops
+graduated or deleted entries, and it never writes an increase. There are
+exactly two remedies for an over-ceiling file: shrink it, or relocate code
+into a new module. Recorded counts are never raised by hand and entries are
+never added by hand.
 
 ### Coverage is floored
 
