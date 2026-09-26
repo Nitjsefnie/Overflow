@@ -1001,6 +1001,27 @@ describe("scripts/deploy-revision.sh", () => {
     expectNoDeployStepRan(await readLog(fixture.shimLog), "unreadable status");
   });
 
+  it("refuses as undetermined, not as a non-ancestor, when the ancestry check itself errors", async () => {
+    // merge-base --is-ancestor answers "no" with exit 1; anything else is git
+    // failing to answer (128 for an unreadable object or repository), which
+    // must not be reported as a verdict about the tree's history.
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GIT_SHIM_ANCESTOR_RC: "128" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(
+      `Could not determine whether HEAD in ${fixture.tree} is an ancestor of the fetched main (${FIXTURE_HASH}): git merge-base exited 128`,
+    );
+    expect(result.stderr).not.toContain("is not an ancestor");
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
+    expect((await readLog(fixture.shimLog)).map(describeEntry)).toEqual([
+      `flock -w 900 9`,
+      `git fetch origin main`,
+      `git rev-parse --verify FETCH_HEAD^{commit}`,
+      `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
+    ]);
+  });
+
   it("refuses before either gate when HEAD cannot fast-forward to the fetched commit", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { GIT_SHIM_ANCESTOR_RC: "1" });

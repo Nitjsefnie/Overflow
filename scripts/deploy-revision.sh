@@ -104,9 +104,16 @@ git fetch origin main
 full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
 # The refusal pull --ff-only used to make: HEAD must fast-forward to the
 # fetched commit. A tree ahead of or diverged from main is refused here,
-# before either gate.
-if ! git merge-base --is-ancestor HEAD "$full_sha"; then
+# before either gate. merge-base answers "no" with exit 1; any other nonzero
+# status is git failing to answer, refused as undetermined rather than
+# reported as a verdict about the tree's history.
+ancestry_status=0
+git merge-base --is-ancestor HEAD "$full_sha" || ancestry_status=$?
+if [ "$ancestry_status" -eq 1 ]; then
   printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
+  exit 1
+elif [ "$ancestry_status" -ne 0 ]; then
+  printf 'Could not determine whether HEAD in %s is an ancestor of the fetched main (%s): git merge-base exited %s; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate the repository state in the tree before re-running.\n' "$tree" "$full_sha" "$ancestry_status" >&2
   exit 1
 fi
 # Tree-cleanliness gate: a release is named for the commit it was built from,
