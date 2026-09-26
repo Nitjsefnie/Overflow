@@ -56,6 +56,23 @@ describe("processWebhook", () => {
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
   });
 
+  it("applies nothing for a delivery whose payload marks the repository private", async () => {
+    // The payload's own visibility word outranks the registration row: a
+    // repository that has gone private must not keep exposing issues through
+    // webhooks even while the row still reads active. The receipt is still
+    // marked PROCESSED, so the route answers 202 and the sender never retries.
+    const dependencies = processorDependencies({
+      findRepositoryByGitHubId: vi.fn().mockResolvedValue({ id: "repository", active: true }),
+    });
+
+    await expect(processWebhook(dependencies, { ...delivery(), repositoryPrivate: true }, scope))
+      .resolves.toEqual({ status: "PROCESSED" });
+
+    expect(dependencies.store.applyIssueView).not.toHaveBeenCalled();
+    expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
+    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("receipt-1", "lease-1");
+  });
+
   it("writes only a sanitized failure status before allowing GitHub to retry", async () => {
     const dependencies = processorDependencies({
       claimDelivery: claimedLease("lease-1"),

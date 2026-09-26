@@ -68,7 +68,13 @@ export async function processWebhook(
           delivery.forge.instanceUrl,
           delivery.repositoryGitHubId,
         );
-    if (repository !== null && repository.active) {
+    // A delivery whose own payload marks the repository non-public applies
+    // nothing and enqueues nothing, even while the registration row still
+    // reads active: the payload is the forge's own word about visibility, and
+    // acting on it would keep exposing a repository that has gone private.
+    // The receipt is still marked PROCESSED, so the route answers 202 and the
+    // sender never retries.
+    if (repository !== null && repository.active && delivery.repositoryPrivate !== true) {
       if (delivery.subject.kind === "ISSUE" && delivery.issue !== undefined) {
         await dependencies.store.applyIssueView(repository.id, delivery.subject.id, sanitizeForgeStrings(delivery.issue));
       }
