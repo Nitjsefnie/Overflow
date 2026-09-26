@@ -235,6 +235,9 @@ src/lib/security/*
 !src/lib/tokens/
 src/lib/tokens/*
 !src/lib/tokens/*.ts
+!src/lib/validation/
+src/lib/validation/*
+!src/lib/validation/*.ts
 !src/lib/webhooks/
 src/lib/webhooks/*
 !src/lib/webhooks/*.ts
@@ -338,6 +341,9 @@ tests/github/*
 !tests/lib/
 tests/lib/*
 !tests/lib/*.ts
+!tests/lib/validation/
+tests/lib/validation/*
+!tests/lib/validation/*.ts
 !tests/members/
 tests/members/*
 !tests/members/*.ts
