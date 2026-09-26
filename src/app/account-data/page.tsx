@@ -229,9 +229,9 @@ export function AccountDataNotice() {
             Signed-in state is an encrypted cookie — a JSON Web Encryption token, not a plain signed JWT — which
             expires after 30 days, and Overflow keeps no server-side session rows. The cookie records the identity
             the sign-in read from GitHub — your login and your avatar URL — together with Overflow&apos;s own
-            reference to your account and your role, plus whether the permissions GitHub granted at sign-in
-            include webhook administration, which decides whether the registration page shows its form. Signing
-            out clears that cookie and nothing else.
+            reference to your account and your role, when you last completed a GitHub sign-in, and whether the
+            permissions GitHub granted at sign-in include webhook administration, which decides whether the
+            registration page shows its form. Signing out clears that cookie and nothing else.
           </li>
           <li>
             Revoking the authorization on GitHub makes the stored token unusable at its next use. It does not delete
