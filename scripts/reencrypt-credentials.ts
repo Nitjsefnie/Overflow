@@ -142,6 +142,11 @@ export async function runCredentialReencryptionCli(
   argumentsList: readonly string[] = process.argv.slice(2),
   dependencies?: CredentialReencryptionCliDependencies,
 ): Promise<number> {
+  const batchSize = dependencies?.batchSize ?? defaultBatchSize;
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+    // Only an in-process caller can pass one; a non-positive size would never finish a column.
+    throw new RangeError("Batch size must be a positive integer.");
+  }
   const write = dependencies?.write ?? ((line: string) => process.stdout.write(`${line}\n`));
   const check = argumentsList.length === 1 && argumentsList[0] === "--check";
   if (argumentsList.length > 0 && !check) {
@@ -159,7 +164,7 @@ export async function runCredentialReencryptionCli(
     const resolved = {
       store: dependencies?.store ?? postgresCredentialStore(getSql()),
       keys,
-      batchSize: dependencies?.batchSize ?? defaultBatchSize,
+      batchSize,
       write,
     };
     let clean = true;

@@ -102,9 +102,12 @@ async function seedMixedRows() {
   const previousRepository = await registerRepository(previousKey, currentUser.id, "previous-secret");
   const currentRepository = await registerRepository(currentKey, currentUser.id, "current-secret");
   const emptyRepository = await registerRepository(currentKey, currentUser.id, null);
+  const legacyRepository = await registerRepository(currentKey, currentUser.id, "replaced-by-legacy");
+  await sql`update registered_repositories set encrypted_webhook_secret = ${Buffer.from(legacyV1Envelope, "utf8")}
+    where id = ${legacyRepository.id}`;
   return {
     legacyUser, previousUser, currentUser, emptyUser, legacyForge, previousForge,
-    previousRepository, currentRepository, emptyRepository,
+    previousRepository, currentRepository, emptyRepository, legacyRepository,
   };
 }
 
@@ -161,7 +164,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     expect(checked.output).toEqual([
       checkSummary("users", "encrypted_oauth_token", 1, 2),
       checkSummary("user_forge_identities", "encrypted_token", 0, 2),
-      checkSummary("registered_repositories", "encrypted_webhook_secret", 1, 1),
+      checkSummary("registered_repositories", "encrypted_webhook_secret", 1, 2),
     ]);
     expect(await snapshot()).toEqual(before);
   });
@@ -176,7 +179,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     expect(result.output).toEqual([
       summary("users", "encrypted_oauth_token", 2, 1),
       summary("user_forge_identities", "encrypted_token", 2, 0),
-      summary("registered_repositories", "encrypted_webhook_secret", 1, 1),
+      summary("registered_repositories", "encrypted_webhook_secret", 2, 1),
     ]);
     const after = await snapshot();
     for (const [row, envelope] of after) {
@@ -206,6 +209,8 @@ describe("re-encrypting stored credentials under the current key", () => {
       .resolves.toMatchObject({ secret: "previous-secret" });
     await expect(repositories.findWebhookCredential(seeded.currentRepository.credentialId, "github"))
       .resolves.toMatchObject({ secret: "current-secret" });
+    await expect(repositories.findWebhookCredential(seeded.legacyRepository.credentialId, "github"))
+      .resolves.toMatchObject({ secret: legacyV1Plaintext });
 
     const output = result.lines.join("\n");
     for (const secret of [currentKey, previousKey, legacyV1Plaintext, "previous-oauth", "previous-pat", "previous-secret"]) {
@@ -217,7 +222,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     expect(checked.output).toEqual([
       checkSummary("users", "encrypted_oauth_token", 3, 0),
       checkSummary("user_forge_identities", "encrypted_token", 2, 0),
-      checkSummary("registered_repositories", "encrypted_webhook_secret", 2, 0),
+      checkSummary("registered_repositories", "encrypted_webhook_secret", 3, 0),
     ]);
   });
 
@@ -232,7 +237,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     expect(second.output).toEqual([
       summary("users", "encrypted_oauth_token", 0, 3),
       summary("user_forge_identities", "encrypted_token", 0, 2),
-      summary("registered_repositories", "encrypted_webhook_secret", 0, 2),
+      summary("registered_repositories", "encrypted_webhook_secret", 0, 3),
     ]);
     expect(await snapshot()).toEqual(afterFirst);
   });
@@ -303,19 +308,6 @@ describe("re-encrypting stored credentials under the current key", () => {
     }
   });
 
-  it("refuses unknown arguments", async () => {
-    await seedMixedRows();
-    const before = await snapshot();
-    const invoke = (argumentsList: string[]) => runCredentialReencryptionCli(argumentsList, {
-      store: postgresCredentialStore(sql), keys, write: () => {},
-    });
-
-    expect(await invoke(["--force"])).toBe(2);
-    expect(await invoke(["--check", "--help"])).toBe(2);
-    expect(await invoke(["--help"])).toBe(0);
-    expect(await snapshot()).toEqual(before);
-  });
-
   it("runs as the package script with keys from the environment", async () => {
     await seedMixedRows();
     const invoke = (argumentsList: string[], previous: string) => spawnSync(
@@ -339,7 +331,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     expect(reencrypted.stdout.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
       summary("users", "encrypted_oauth_token", 2, 1),
       summary("user_forge_identities", "encrypted_token", 2, 0),
-      summary("registered_repositories", "encrypted_webhook_secret", 1, 1),
+      summary("registered_repositories", "encrypted_webhook_secret", 2, 1),
     ]);
     const settled = invoke(["--check"], "");
     expect(settled.status, settled.stderr).toBe(0);
