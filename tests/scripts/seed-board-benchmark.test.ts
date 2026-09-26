@@ -1,0 +1,215 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Sql } from "postgres";
+import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
+import { closeSql, getSql } from "@/lib/db/client";
+import {
+  DEFAULT_SEED_OPTIONS,
+  benchApiToken,
+  benchMemberLogin,
+  benchSessionCookieName,
+  expectedOpenBoardRows,
+  mintBenchSessionCookie,
+  parseSeedArgs,
+  planSeedWorld,
+  seedBoardBenchmark,
+  type SeedOptions,
+} from "../../scripts/seed-board-benchmark";
+
+const SMALL_WORLD: SeedOptions = {
+  repositories: 4,
+  openIssues: 40,
+  sponsors: 8,
+  settlementsPerSponsor: 6,
+  underwaterRepos: 2,
+};
+
+describe("seed world planning", () => {
+  it("plans the same world twice from the same options", () => {
+    expect(planSeedWorld(SMALL_WORLD)).toEqual(planSeedWorld(SMALL_WORLD));
+  });
+
+  it("plans every account, repository, issue, pull request and settlement the options name", () => {
+    const world = planSeedWorld(SMALL_WORLD);
+
+    expect(world.users).toHaveLength(SMALL_WORLD.sponsors + 1); // sponsors + the bench member
+    expect(world.repositories).toHaveLength(SMALL_WORLD.repositories);
+    expect(world.issues.filter((issue) => issue.state === "OPEN")).toHaveLength(SMALL_WORLD.openIssues);
+    expect(world.issues.filter((issue) => issue.state === "CLOSED")).toHaveLength(
+      SMALL_WORLD.sponsors * SMALL_WORLD.settlementsPerSponsor,
+    );
+    expect(world.pullRequests).toHaveLength(SMALL_WORLD.sponsors * SMALL_WORLD.settlementsPerSponsor);
+    expect(world.settlements).toHaveLength(SMALL_WORLD.sponsors * SMALL_WORLD.settlementsPerSponsor);
+  });
+
+  it("never settles between an account and itself", () => {
+    const world = planSeedWorld(SMALL_WORLD);
+    for (const settlement of world.settlements) {
+      expect(settlement.creditorId).not.toBe(settlement.debtorId);
+    }
+  });
+
+  it("expects one board row per open issue on a solvent sponsor's repository, plus one repayment issue per underwater sponsor", () => {
+    // 40 open issues over 4 repositories: 10 each. Sponsors 2 and 3 (the owners of the last
+    // two repositories) are underwater, so their repositories show exactly their one repayment
+    // opening each, while the two solvent sponsors' repositories show all 10 of their issues.
+    expect(expectedOpenBoardRows(SMALL_WORLD)).toBe(22);
+  });
+
+  it("expects the whole board when no sponsor is underwater", () => {
+    expect(expectedOpenBoardRows({ ...SMALL_WORLD, underwaterRepos: 0 })).toBe(40);
+  });
+
+  it("refuses underwater sponsors beyond the repositories or a sponsor set too small to spare a solvent creditor", () => {
+    expect(() => planSeedWorld({ ...SMALL_WORLD, underwaterRepos: 5 })).toThrow(RangeError);
+    expect(() => planSeedWorld({ ...SMALL_WORLD, sponsors: 3, underwaterRepos: 2 })).toThrow(RangeError);
+  });
+});
+
+describe("seed argument parsing", () => {
+  it("falls back to the benchmark scale when a flag is absent or malformed", () => {
+    expect(parseSeedArgs([])).toEqual(DEFAULT_SEED_OPTIONS);
+    expect(parseSeedArgs(["--open-issues", "0", "--sponsors", "not-a-number"])).toEqual(DEFAULT_SEED_OPTIONS);
+  });
+
+  it("reads every scale flag and the database url", () => {
+    const parsed = parseSeedArgs([
+      "--repositories", "3",
+      "--open-issues", "90",
+      "--sponsors", "12",
+      "--settlements-per-sponsor", "4",
+      "--underwater-repos", "1",
+      "--database-url", "postgresql://x",
+    ]);
+    expect(parsed).toEqual({
+      repositories: 3,
+      openIssues: 90,
+      sponsors: 12,
+      settlementsPerSponsor: 4,
+      underwaterRepos: 1,
+      databaseUrl: "postgresql://x",
+    });
+  });
+});
+
+describe("session cookie minting", () => {
+  it("mints the cookie value the app's AUTH_SECRET decrypts, naming the bench member", async () => {
+    const cookie = await mintBenchSessionCookie("bench-secret", "00000000-0000-0000-0000-1000000000c9");
+    const decoded = await decodeBenchCookie(cookie, "bench-secret");
+    expect(decoded?.userId).toBe("00000000-0000-0000-0000-1000000000c9");
+    expect(decoded?.sub).toBe("00000000-0000-0000-0000-1000000000c9");
+    expect(decoded?.name).toBe(benchMemberLogin());
+    expect(decoded?.role).toBe("MEMBER");
+  });
+
+  it("names the cookie the production session strategy reads", () => {
+    expect(benchSessionCookieName()).toBe("authjs.session-token");
+  });
+});
+
+describe("seeding against PostgreSQL", () => {
+  let sql: Sql;
+  let container: Awaited<ReturnType<typeof startPostgresContainer>>["container"] | undefined;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "seed_board_benchmark", user: "seed_board_benchmark", password: "seed_board_benchmark",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = getSql();
+    await runMigrations();
+    await seedBoardBenchmark(SMALL_WORLD);
+  });
+
+  afterAll(async () => {
+    await closeSql();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("inserts every row the plan names", async () => {
+    const [counts] = await sql<{ users: number; repositories: number; open_issues: number; settled_issues: number; settlements: number; tokens: number }[]>`
+      select
+        (select count(*) from users)::int as users,
+        (select count(*) from registered_repositories)::int as repositories,
+        (select count(*) from issues where state = 'OPEN')::int as open_issues,
+        (select count(*) from issues where state = 'CLOSED')::int as settled_issues,
+        (select count(*) from settlements where status = 'SETTLED')::int as settlements,
+        (select count(*) from api_tokens)::int as tokens
+    `;
+    expect(counts).toEqual({
+      users: SMALL_WORLD.sponsors + 1,
+      repositories: SMALL_WORLD.repositories,
+      open_issues: SMALL_WORLD.openIssues,
+      settled_issues: SMALL_WORLD.sponsors * SMALL_WORLD.settlementsPerSponsor,
+      settlements: SMALL_WORLD.sponsors * SMALL_WORLD.settlementsPerSponsor,
+      tokens: 1,
+    });
+  });
+
+  it("reseeds to the identical world, ids included", async () => {
+    const fingerprint = () =>
+      sql<{ digest: string }[]>`select md5(string_agg(id::text, ',' order by id)) as digest from issues`;
+    const before = await fingerprint();
+    await seedBoardBenchmark(SMALL_WORLD);
+    expect(await fingerprint()).toEqual(before);
+
+    const [counts] = await sql<{ issues: number; settlements: number }[]>`
+      select (select count(*) from issues)::int as issues, (select count(*) from settlements)::int as settlements
+    `;
+    expect(counts).toEqual({ issues: 88, settlements: 48 });
+  });
+
+  it("mints exactly the deterministic bearer token", async () => {
+    const [row] = await sql<{ token_hash: Buffer }[]>`
+      select token_hash from api_tokens
+    `;
+    expect(Buffer.from(row.token_hash).equals(benchApiToken().tokenHash)).toBe(true);
+  });
+
+  it("leaves the board at the planned row count for the bench member", async () => {
+    const { listEligibleIssues } = await import("@/lib/dashboard/queries");
+    const [member] = await sql<{ id: string }[]>`
+      select id from users where github_login = ${benchMemberLogin()}
+    `;
+    const board = await listEligibleIssues(member.id);
+    expect(board).toHaveLength(expectedOpenBoardRows(SMALL_WORLD));
+  });
+
+  it("lists every sponsor with a ledger entry and never the bench member", async () => {
+    const { listMemberStandings } = await import("@/lib/members/queries");
+    const standings = await listMemberStandings();
+    expect(standings).toHaveLength(SMALL_WORLD.sponsors);
+    expect(standings.map((standing) => standing.githubLogin)).not.toContain(benchMemberLogin());
+  });
+
+  it("pushes the underwater repo owners under a credit limit of 10 while solvent repayers earn a higher one", async () => {
+    const world = planSeedWorld(SMALL_WORLD);
+    const underwater = await sql<{ credit_limit: number }[]>`
+      select credit_limit from account_credit_limits
+      where account_id = any(${world.users
+        .filter((user) => user.underwater)
+        .map((user) => user.id)}::uuid[])
+    `;
+    expect(underwater).toHaveLength(2);
+    expect(underwater.map((row) => Number(row.credit_limit)).sort((a, b) => a - b)).toEqual([10, 10]);
+
+    const [solvent] = await sql<{ credit_limit: number }[]>`
+      select credit_limit from account_credit_limits
+      where account_id = ${world.users.find((user) => !user.underwater)!.id}
+    `;
+    expect(Number(solvent.credit_limit)).toBeGreaterThan(10);
+  });
+});
+
+async function decodeBenchCookie(cookie: string, secret: string) {
+  const { decode } = await import("next-auth/jwt");
+  return await decode({
+    token: cookie.replace(/^authjs\.session-token=/, ""),
+    secret,
+    salt: benchSessionCookieName(),
+  });
+}
