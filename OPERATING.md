@@ -154,11 +154,17 @@ account's numeric id before touching anything with
 `gh api repos/Nitjsefnie/Overflow/issues/<number> --jq .user.id`. Pass that
 id to the commands below — never a login.
 
-Send the export by posting it in the requester's issue only after the
-requester has confirmed in that issue that a public reply is acceptable: the
-export includes the account's enforcement state and the reasons recorded on
-moderation events. Otherwise hold the export until self-service export ships
-(issue 664).
+Post the export in the requester's issue only when BOTH hold: the requester
+has confirmed in that issue that they accept a public reply, and every export
+section that records the account acting on other accounts is empty —
+`moderationEvents.asActor`, `calibrationAudits.asReporter`,
+`calibrationAudits.asModerator`, `moderatorRoleChanges.asActor`, and
+`settlementOverrideRequests.asDecider`. Those rows carry the rationale,
+decision and reason text written about other people, which the requester's
+consent cannot cover. The confirmation matters on its own too: the export
+also includes the account's own enforcement state and the reasons recorded on
+moderation events targeting it. If either condition fails, hold the export
+until self-service export ships (issue 664).
 
 ### Running the commands
 
@@ -174,8 +180,10 @@ node --experimental-transform-types --import ./scripts/register-path-aliases.ts 
 
 Each command writes its JSON document to standard output and reports its
 outcome through an exit code. The export covers every table with a foreign
-key to the account, with secrets reduced to presence flags — API-token
-metadata is `createdAt` and `expiresAt`, never the token hash. The first
+key to the account: encrypted tokens appear only as presence booleans
+(`hasStoredGitHubToken`, `hasStoredToken`), while the API-token hash and the
+webhook secrets are omitted entirely; API-token metadata is `createdAt` and
+`expiresAt`, never the hash. The first
 `delete` is a dry run; `--confirm` performs it. Exit codes: `0` the command
 succeeded (an export, or a confirmed deletion); `1` it failed — an unknown
 account, a sponsor refusal, or a command error reported as
@@ -189,8 +197,9 @@ dry run completed without deleting.
 - The account's API token is deleted, so its hash stops authenticating at
   once.
 - GitLab identities keep their instance URL and numeric id — the fold
-  attributes authorship by them — but their token is cleared and their login
-  is tombstoned.
+  attributes authorship by them — but their token is cleared, their login is
+  tombstoned, and `token_failed_at` is stamped, so the dashboard asks for a
+  re-link if the person signs in again.
 - The account is stamped with `deleted_at`.
 
 ### What deletion keeps

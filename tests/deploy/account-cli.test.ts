@@ -90,6 +90,23 @@ describe("account CLI grammar", () => {
     expect(lines).toEqual(['{"failure":"ACCOUNT_COMMAND_FAILED"}']);
   });
 
+  it("resolves no database client for a usage error, even with no DATABASE_URL", async () => {
+    // No sql supplied, so the only way to a client is the default getSql()
+    // path — and with no DATABASE_URL that throws. Exit 2 with the bare
+    // usage line therefore proves parsing happened before any client was
+    // resolved, whatever the host environment configures.
+    const lines: string[] = [];
+    const writeOnlyDependencies = { write: (line: string) => lines.push(line) } as unknown as AccountCliDependencies;
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    try {
+      expect(await runAccountCli(["export", "--github-user-id", "0"], writeOnlyDependencies)).toBe(2);
+    } finally {
+      if (previousDatabaseUrl !== undefined) process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+    expect(lines).toEqual([usageLine]);
+  });
+
   it.each([
     { command: "export", arguments: ["export", "--github-user-id", "1"] },
     { command: "delete", arguments: ["delete", "--github-user-id", "1", "--confirm"] },
@@ -285,11 +302,16 @@ describe("account CLI with PostgreSQL", () => {
     try {
       const environment: Record<string, string> = { PATH: process.env.PATH!, HOME: home, DATABASE_URL: started.databaseUrl };
       const statuses: (number | null)[] = [];
+      const results: ReturnType<typeof spawnDocumented>[] = [];
       for (const command of documentedCommands) {
         const words = documentedArgumentWords(command, githubUserId);
-        statuses.push(spawnDocumented(words, environment).status);
+        const result = spawnDocumented(words, environment);
+        results.push(result);
+        statuses.push(result.status);
       }
       expect(statuses, "The documented commands must export (0), dry-run (3) and delete (0)").toEqual([0, 3, 0]);
+      const exported = JSON.parse(results[0]!.stdout);
+      expect(exported.account.githubUserId).toBe(githubUserId);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
