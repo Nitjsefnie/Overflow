@@ -15,7 +15,7 @@ index f09c61c7e998f411560b95c9a8e1ed6a97972c11..93fae6d0b0c111c7e4e8d8f2fe2f0a3b
  const fs = require('fs')
  
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..59c571e85725ee9caa957a7ed81161f1c9de5fa8 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..00d89afbab6f120e9af06e1e99fb70a35b15b69b 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -96,6 +96,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -199,6 +199,32 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..59c571e85725ee9caa957a7ed81161f1
        return
      }
  
+@@ -767,7 +859,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+ 
+   async function fetchArrayTypes() {
+     needsTypes = false
+-    const types = await new Query([`
++    const query = new Query([`
+       select b.oid, b.typarray
+       from pg_catalog.pg_type a
+       left join pg_catalog.pg_type b on b.oid = a.typelem
+@@ -775,7 +867,15 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+       group by b.oid, b.typarray
+       order by b.oid
+     `], [], execute)
+-    types.forEach(({ oid, typarray }) => addArrayType(oid, typarray))
++    // The types are applied inside resolve(), synchronously, not after an await. This query's
++    // ReadyForQuery resolves it and then, in the same call and with `initial` still set, builds
++    // and executes the query the connection was opened for. An await's continuation only runs
++    // after that, so the opening query was built against an empty typeArrayMap and every
++    // sql.array() parameter in it bound as its scalar element type. fetchState() applies its
++    // result synchronously in resolve() for the same reason.
++    const resolve = query.resolve
++    query.resolve = types => (types.forEach(({ oid, typarray }) => addArrayType(oid, typarray)), resolve(types))
++    await query
+   }
+ 
+   function addArrayType(oid, typarray) {
 diff --git a/src/index.js b/src/index.js
 index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e21511d4c 100644
 --- a/src/index.js
