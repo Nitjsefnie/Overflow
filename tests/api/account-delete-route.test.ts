@@ -4,6 +4,9 @@ import type { AccountDeletionOutcome } from "@/lib/accounts/deletion";
 import type { SqlClient } from "@/lib/db/types";
 import { guardedRequests, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+
 const {
   productionAuth,
   productionSignOut,
