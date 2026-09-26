@@ -90,7 +90,7 @@ const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
 const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
 const JQ_CHECKRUNS = `.check_runs[] | [.id, .name] | @tsv`;
 const JQ_RUNS = `.workflow_runs[] | [.id, .path] | @tsv`;
-const JQ_JOBS = `.jobs[] | [.id, .name, .run_attempt, .status, (.conclusion // "")] | @tsv`;
+const JQ_JOBS = `.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv`;
 const MAP_PATH = ".github/required-checks.json";
 /** The fixture's pin map: protection requires verify and deploy-gate. */
 const FIXTURE_PINS: Record<string, string> = {
@@ -1083,6 +1083,10 @@ describe("scripts/deploy-revision.sh", () => {
       ["a nested workflow path", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/x/ci.yml" }) }],
       ["a non-YAML file", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/ci.json" }) }],
       ["a trailing newline in a value", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/ci.yml\n" }) }],
+      [
+        "two concatenated documents",
+        { map: JSON.stringify(FIXTURE_PINS) + JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/other.yml" }) },
+      ],
     ];
     for (const [label, { map, ...env }] of cases) {
       const fixture = await makeFixture();
