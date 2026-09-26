@@ -318,12 +318,20 @@ describe("account deletion as pseudonymisation", () => {
     await expect(store.getForgeToken(seed.contributor.id, seed.instanceUrl)).resolves.toBeNull();
   });
 
-  it("case 4: is idempotent — a second deletion keeps the original deleted_at", async () => {
+  it("case 4: is idempotent — a second deletion keeps the original stamps", async () => {
     const seed = await seedDeletionCandidate();
     const first = await deleteAccount(sql, seed.contributor.githubUserId, { confirm: true });
     expect(first.kind).toBe("DELETED");
-    const firstDeletedAt = first.kind === "DELETED" ? first.deletedAt : null;
-    expect(firstDeletedAt).toEqual(expect.any(String));
+
+    // Replace both kept stamps with fixed past timestamps, so the second run
+    // proves it preserves them rather than merely being later than them.
+    await sql`
+      update users set deleted_at = '2020-06-01T12:00:00+00:00' where id = ${seed.contributor.id}
+    `;
+    await sql`
+      update user_forge_identities set token_failed_at = '2021-01-01T00:00:00+00:00'
+      where user_id = ${seed.contributor.id}
+    `;
 
     const second = await deleteAccount(sql, seed.contributor.githubUserId, { confirm: true });
     expect(second).toStrictEqual({
@@ -331,10 +339,14 @@ describe("account deletion as pseudonymisation", () => {
       githubUserId: seed.contributor.githubUserId,
       accountId: seed.contributor.id,
       alreadyDeleted: true,
-      deletedAt: firstDeletedAt,
+      deletedAt: "2020-06-01T12:00:00.000Z",
       removedApiTokens: 0,
       scrubbedForgeIdentities: 1,
     });
+    const [identity] = await sql<{ token_failed_at: Date }[]>`
+      select token_failed_at from user_forge_identities where user_id = ${seed.contributor.id}
+    `;
+    expect(identity!.token_failed_at.toISOString()).toBe("2021-01-01T00:00:00.000Z");
   });
 
   it("case 5: a dry run returns PLANNED and writes nothing", async () => {
@@ -397,6 +409,12 @@ describe("account deletion as pseudonymisation", () => {
     // The refusal writes nothing to the sponsor's row or registration.
     expect(await usersRow(sponsor.id)).toEqual(sponsorBefore);
     expect(await rowJson("registered_repositories", blockedSeed.repositoryId)).toEqual(registrationBefore);
+
+    // The blocker check runs for a dry run too: a sponsor cannot even plan
+    // a deletion while a registration is live.
+    const dryRun = await deleteAccount(sql, sponsor.githubUserId, { confirm: false });
+    expect(dryRun.kind).toBe("SPONSOR_BLOCKED");
+    expect(await usersRow(sponsor.id)).toEqual(sponsorBefore);
 
     // A moderation-deactivated registration (active=false, unregistered_at
     // null) still blocks: it can be reactivated by moderation.
@@ -530,6 +548,34 @@ describe("account deletion as pseudonymisation", () => {
       returning id
     `;
     const settlementId = settlement!.id;
+    // A second settlement on its own pull request puts the export user on the
+    // DEBTOR side too, so the settlements.asDebtor section is seeded.
+    const [issue2] = await sql<{ id: string }[]>`
+      insert into issues (github_issue_id, repository_id, issue_number, title, body, url, state,
+                          opening_label, opening_comparison_points, opening_reserve_points)
+      values (${9_700_400 + nextSeedNumber()}, ${repositoryId}, 2, 'Export fixture two', '',
+              'https://example.test/issue-2', 'CLOSED', 'M', 5, 5)
+      returning id
+    `;
+    const issue2Id = issue2!.id;
+    const [pullRequest2] = await sql<{ id: string }[]>`
+      insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number,
+                                 url, title, body, author_id, state, merged_at)
+      values (${9_700_500 + nextSeedNumber()}, ${repositoryId}, ${issue2Id}, 2,
+              'https://example.test/pr-2', 'Export fixture two', '', ${other.id}, 'MERGED', now())
+      returning id
+    `;
+    await sql`
+      insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+      values (${pullRequest2!.id}, ${issue2Id}, ${repositoryId})
+    `;
+    await sql`
+      insert into settlements (pull_request_id, issue_id, creditor_id, debtor_id,
+                               opening_comparison_points, settled_points, review_rounds, credits,
+                               proof_sha256, status)
+      values (${pullRequest2!.id}, ${issue2Id}, ${other.id}, ${exporter.id}, 5, 6, 0, 6,
+              ${createHash("sha256").update(`proof-2-${seedCounter}`).digest("hex")}, 'SETTLED')
+    `;
     await sql`
       insert into self_work_calibrations (pull_request_id, issue_id, user_id, opening_comparison_points, actual_points)
       values (${pullRequestId}, ${issueId}, ${exporter.id}, 5, 6)
@@ -628,6 +674,9 @@ describe("account deletion as pseudonymisation", () => {
         ` order by ${entry.orderBy.map((column) => `"${column}"`).join(", ")}`,
         [exporter.id],
       );
+      // An empty seed could only ever match an empty expectation, so each
+      // section must hold at least the row this case planted.
+      expect(expected.length, `section ${entry.path} is seeded`).toBeGreaterThan(0);
       expect(sectionAt(exported, entry.path), `section ${entry.path}`).toEqual(
         expected.map((row) => row.row),
       );

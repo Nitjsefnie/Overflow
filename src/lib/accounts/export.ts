@@ -1,4 +1,4 @@
-import type { SqlClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 
 /**
  * The account data export: everything the database holds about one person,
@@ -77,36 +77,48 @@ export const ACCOUNT_EXPORT_FORMAT_VERSION = 1 as const;
 /**
  * The declared coverage of the export: one entry per foreign key to
  * `users`, naming the referencing table, the referencing column, the export
- * path the referenced person's rows appear under, how the section renders
- * rows, and the columns that order a section deterministically. The coverage
- * test reads the catalogue's foreign keys to `users` and pins this list to
- * them, so a new referencing table cannot ship unexported.
+ * path the referenced person's rows appear under, and, for jsonb sections,
+ * the columns that order a section deterministically. The coverage test reads
+ * the catalogue's foreign keys to `users` and pins this list to them, so a
+ * new referencing table cannot ship unexported.
+ *
+ * The two kinds discriminate how a section is rendered, and the loader is
+ * selected on that kind — never on the table name — so a future
+ * secret-bearing table declared `"explicit"` without a dedicated loader fails
+ * loudly instead of falling through to a full-row export.
  */
-export type UserForeignKeyExportEntry = {
-  table: string;
-  column: string;
-  path: string;
-  /** `"jsonb"` renders the full row; `"explicit"` is a hand-written projection. */
-  kind: "jsonb" | "explicit";
-  orderBy: readonly string[];
-};
+export type UserForeignKeyExportEntry =
+  | {
+      table: string;
+      column: string;
+      kind: "jsonb";
+      /** Dot path into the export document where the rows are placed. */
+      path: string;
+      /** The columns that order a section deterministically. */
+      orderBy: readonly string[];
+    }
+  | {
+      table: string;
+      column: string;
+      kind: "explicit";
+      /** The dedicated secret-free loader that renders this table's section. */
+      loader: "apiToken" | "sponsoredRepositories" | "forgeIdentities";
+    };
 
 export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   // Secret-bearing tables: explicit column lists, secrets as booleans.
-  { table: "api_tokens", column: "user_id", path: "apiToken", kind: "explicit", orderBy: [] },
+  { table: "api_tokens", column: "user_id", kind: "explicit", loader: "apiToken" },
   {
     table: "registered_repositories",
     column: "sponsor_id",
-    path: "sponsoredRepositories",
     kind: "explicit",
-    orderBy: ["owner_name"],
+    loader: "sponsoredRepositories",
   },
   {
     table: "user_forge_identities",
     column: "user_id",
-    path: "forgeIdentities",
     kind: "explicit",
-    orderBy: ["created_at", "id"],
+    loader: "forgeIdentities",
   },
   // Everything else: the full row as jsonb.
   { table: "settlements", column: "creditor_id", path: "settlements.asCreditor", kind: "jsonb", orderBy: ["created_at", "id"] },
@@ -145,14 +157,20 @@ function isoOrNull(value: Date | null): string | null {
 }
 
 /**
+ * Either the pooled client or the read-only transaction that snapshots one
+ * export: every loader runs inside that transaction, so each accepts both.
+ */
+type ExportClient = SqlClient | TransactionClient;
+
+/**
  * Full rows of one referencing table for one user. Identifiers are
  * interpolated from the module's own constant table above, never from input;
  * only the user id is a bound parameter.
  */
 async function loadJsonbRows(
-  sql: SqlClient,
+  sql: ExportClient,
   userId: string,
-  entry: UserForeignKeyExportEntry,
+  entry: Extract<UserForeignKeyExportEntry, { kind: "jsonb" }>,
 ): Promise<AccountExportRow[]> {
   const orderClause = entry.orderBy.map((column) => `"${column}"`).join(", ");
   const rows = await sql.unsafe<{ row: AccountExportRow }[]>(
@@ -164,7 +182,7 @@ async function loadJsonbRows(
 }
 
 async function loadSponsoredRepositories(
-  sql: SqlClient,
+  sql: ExportClient,
   userId: string,
 ): Promise<AccountExportSponsoredRepository[]> {
   return sql<readonly {
@@ -194,7 +212,7 @@ async function loadSponsoredRepositories(
 }
 
 async function loadForgeIdentities(
-  sql: SqlClient,
+  sql: ExportClient,
   userId: string,
 ): Promise<AccountExportForgeIdentity[]> {
   return sql<readonly {
@@ -228,7 +246,7 @@ async function loadForgeIdentities(
   );
 }
 
-async function loadApiToken(sql: SqlClient, userId: string): Promise<AccountExportApiToken | null> {
+async function loadApiToken(sql: ExportClient, userId: string): Promise<AccountExportApiToken | null> {
   const [row] = await sql<{ created_at: Date }[]>`
     select created_at from api_tokens where user_id = ${userId}
   `;
@@ -247,82 +265,100 @@ function setSection(document: AccountExport, path: string, rows: AccountExportRo
 
 /**
  * Everything the database holds about one person, or null for an unknown
- * GitHub user id. Read-only: no statement here writes. Works identically on a
+ * GitHub user id. The whole document is read inside ONE read-only
+ * repeatable-read transaction, so it is a single consistent snapshot and the
+ * database itself enforces that nothing writes. Works identically on a
  * deleted account — the row survives pseudonymisation, so its export does too.
  */
 export async function exportAccount(
   sql: SqlClient,
   githubUserId: number,
 ): Promise<AccountExport | null> {
-  const [account] = await sql<{
-    id: string;
-    github_user_id: string;
-    github_login: string;
-    avatar_url: string | null;
-    role: string;
-    enforcement_state: string;
-    confirmed_miscalibration_count: number;
-    created_at: Date;
-    updated_at: Date;
-    deleted_at: Date | null;
-    has_stored_github_token: boolean;
-  }[]>`
-    select id, github_user_id, github_login, avatar_url, role, enforcement_state,
-           confirmed_miscalibration_count, created_at, updated_at, deleted_at,
-           encrypted_oauth_token is not null as has_stored_github_token
-    from users
-    where github_user_id = ${githubUserId}
-  `;
-  if (account === undefined) {
-    return null;
-  }
+  return sql.begin(
+    "isolation level repeatable read read only",
+    async (tx): Promise<AccountExport | null> => {
+      const [account] = await tx<{
+        id: string;
+        github_user_id: string;
+        github_login: string;
+        avatar_url: string | null;
+        role: string;
+        enforcement_state: string;
+        confirmed_miscalibration_count: number;
+        created_at: Date;
+        updated_at: Date;
+        deleted_at: Date | null;
+        has_stored_github_token: boolean;
+      }[]>`
+        select id, github_user_id, github_login, avatar_url, role, enforcement_state,
+               confirmed_miscalibration_count, created_at, updated_at, deleted_at,
+               encrypted_oauth_token is not null as has_stored_github_token
+        from users
+        where github_user_id = ${githubUserId}
+      `;
+      if (account === undefined) {
+        return null;
+      }
 
-  const document: AccountExport = {
-    formatVersion: ACCOUNT_EXPORT_FORMAT_VERSION,
-    exportedAt: new Date().toISOString(),
-    account: {
-      id: account.id,
-      githubUserId: Number(account.github_user_id),
-      githubLogin: account.github_login,
-      avatarUrl: account.avatar_url,
-      role: account.role,
-      enforcementState: account.enforcement_state,
-      confirmedMiscalibrationCount: account.confirmed_miscalibration_count,
-      createdAt: iso(account.created_at),
-      updatedAt: iso(account.updated_at),
-      deletedAt: isoOrNull(account.deleted_at),
-      hasStoredGitHubToken: account.has_stored_github_token,
+      const document: AccountExport = {
+        formatVersion: ACCOUNT_EXPORT_FORMAT_VERSION,
+        exportedAt: new Date().toISOString(),
+        account: {
+          id: account.id,
+          githubUserId: Number(account.github_user_id),
+          githubLogin: account.github_login,
+          avatarUrl: account.avatar_url,
+          role: account.role,
+          enforcementState: account.enforcement_state,
+          confirmedMiscalibrationCount: account.confirmed_miscalibration_count,
+          createdAt: iso(account.created_at),
+          updatedAt: iso(account.updated_at),
+          deletedAt: isoOrNull(account.deleted_at),
+          hasStoredGitHubToken: account.has_stored_github_token,
+        },
+        apiToken: null,
+        forgeIdentities: [],
+        sponsoredRepositories: [],
+        settlements: { asCreditor: [], asDebtor: [] },
+        authoredPullRequests: [],
+        moderationEvents: { asTarget: [], asActor: [] },
+        calibrationAudits: { asAccount: [], asReporter: [], asModerator: [] },
+        selfWorkCalibrations: [],
+        moderatorRoleChanges: { asTarget: [], asActor: [] },
+        settlementOverrideRequests: { asRequester: [], asDecider: [] },
+        reconciliationRuns: { asRequester: [], asGraphqlCostSponsor: [] },
+        repositoryReconciliationUsage: [],
+        moderationCreditAdjustments: [],
+        moderationCreditAdjustmentLines: [],
+      };
+
+      // The loader is selected on the entry's declared kind. An explicit-kind
+      // entry whose dedicated loader is missing throws here instead of
+      // falling through to a full-row export of a secret-bearing table.
+      for (const entry of userForeignKeyExports) {
+        switch (entry.kind) {
+          case "explicit":
+            switch (entry.loader) {
+              case "apiToken":
+                document.apiToken = await loadApiToken(tx, account.id);
+                break;
+              case "sponsoredRepositories":
+                document.sponsoredRepositories = await loadSponsoredRepositories(tx, account.id);
+                break;
+              case "forgeIdentities":
+                document.forgeIdentities = await loadForgeIdentities(tx, account.id);
+                break;
+              default: {
+                throw new Error(`no dedicated export loader for ${entry.table}.${entry.column}`);
+              }
+            }
+            break;
+          case "jsonb":
+            setSection(document, entry.path, await loadJsonbRows(tx, account.id, entry));
+            break;
+        }
+      }
+      return document;
     },
-    apiToken: null,
-    forgeIdentities: [],
-    sponsoredRepositories: [],
-    settlements: { asCreditor: [], asDebtor: [] },
-    authoredPullRequests: [],
-    moderationEvents: { asTarget: [], asActor: [] },
-    calibrationAudits: { asAccount: [], asReporter: [], asModerator: [] },
-    selfWorkCalibrations: [],
-    moderatorRoleChanges: { asTarget: [], asActor: [] },
-    settlementOverrideRequests: { asRequester: [], asDecider: [] },
-    reconciliationRuns: { asRequester: [], asGraphqlCostSponsor: [] },
-    repositoryReconciliationUsage: [],
-    moderationCreditAdjustments: [],
-    moderationCreditAdjustmentLines: [],
-  };
-
-  for (const entry of userForeignKeyExports) {
-    switch (entry.table) {
-      case "api_tokens":
-        document.apiToken = await loadApiToken(sql, account.id);
-        break;
-      case "registered_repositories":
-        document.sponsoredRepositories = await loadSponsoredRepositories(sql, account.id);
-        break;
-      case "user_forge_identities":
-        document.forgeIdentities = await loadForgeIdentities(sql, account.id);
-        break;
-      default:
-        setSection(document, entry.path, await loadJsonbRows(sql, account.id, entry));
-    }
-  }
-  return document;
+  );
 }
