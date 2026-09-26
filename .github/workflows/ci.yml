@@ -73,14 +73,32 @@ jobs:
 
       # A change that touched only documentation cannot move coverage, so the
       # measurement below would compare the same tree against itself. Detect
-      # it instead of measuring it: fetch the checkout commit's parent, list
-      # the changed paths NUL-delimited, and let scripts/docs-only.ts decide.
-      # An empty diff counts as code, so an undecidable change is measured.
+      # it instead of measuring it: pick a base, and let scripts/docs-only.ts
+      # diff it against HEAD and decide (issue 646). A pull_request or
+      # workflow_dispatch run diffs the checkout commit's first parent, which
+      # on a pull request is already the whole change. A push diffs the push's
+      # before SHA instead, because a rebase merge lands several commits at
+      # once and the last one alone can be docs-only while earlier ones
+      # changed code. The script turns rename detection off, so a code file
+      # renamed to a doc is classified by its source path too. An empty diff,
+      # an empty or all-zero before SHA and a base that cannot be fetched all
+      # count as code, so an undecidable change is measured.
       - name: Detect docs-only change
         id: detect-docs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
-          changed=$(git diff --name-only -z HEAD^1 HEAD | node scripts/docs-only.ts)
+          base=HEAD^1
+          if [ "${EVENT_NAME}" = push ]; then
+            base="${PUSH_BEFORE}"
+            if [ -z "${base}" ] || [ -z "${base//0/}" ] \
+              || ! git fetch --depth=1 origin "${base}"; then
+              base=""
+            fi
+          fi
+          changed=$(node scripts/docs-only.ts "${base}")
           echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
 
       - name: Test suite
