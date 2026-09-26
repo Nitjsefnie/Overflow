@@ -369,6 +369,8 @@ set -e
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/auth/providers
 printf 'MainPID before the switch: %s\nMainPID now:               %s\n' \
   "$(cat /run/overflow-preswitch-mainpid)" \
   "$(systemctl show overflow.service -p MainPID --value)"
@@ -384,7 +386,11 @@ worst case), so a `200` here is a real dependency check, not a bare port probe.
 The schema half of the check is one-sided: a database ahead of the build —
 carrying rows from a newer migration set, the state a rollback to an older
 release runs against — still answers `200`; only a schema missing a migration
-the build bundles fails here. The two `MainPID` values differ and the current
+the build bundles fails here. The second `200` is the sign-in smoke: GET
+`/api/auth/providers` runs the Auth.js configuration, and answers `500`
+(`[auth][error] UntrustedHost` in the journal) when the deployment's
+environment cannot sign in — a failure class the readiness endpoint cannot
+see. The two `MainPID` values differ and the current
 one is not `0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
 `ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`.
 
@@ -623,8 +629,9 @@ generated-config preparation, the build, whose clean step wipes the release
 directory (everything outside `cache|dev|lock|trace`), the ownership reset
 excluding the serving cache, the new cache handover to the service account, the
 conditional
-switch, the restart, the `is-active` and readiness-endpoint verification, the webhook
-upgrade written to a retained JSONL log with a nonzero upgrade exiting the
+switch, the restart, the `is-active` verification, the readiness endpoint and
+the sign-in smoke (`GET /api/auth/providers`, which must answer 200), the
+webhook upgrade written to a retained JSONL log with a nonzero upgrade exiting the
 script nonzero, after which the exact source SHA is recorded in a `REVISION`
 file inside the release — attesting a fully deployed release (built after the
 wipe, switched, verified), so a redundant deploy may trust it — the retention
@@ -834,6 +841,8 @@ systemctl restart overflow.service
 systemctl is-active overflow.service
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/readiness
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/auth/providers
 install -d -m 0700 /var/log/overflow
 upgrade_log="/var/log/overflow/webhook-upgrade-$release.jsonl"
 upgrade_status=0
