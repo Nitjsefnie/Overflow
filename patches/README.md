@@ -6,7 +6,7 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Seven groups of defects. The first is a shutdown that stalls after a backend
+Eight groups of defects. The first is a shutdown that stalls after a backend
 loss, during reconnect backoff, or around a reservation; the second is a
 reconnect loop that retries with no delay at all; the third is a `reserve()`
 that never settles; the fourth answers a dead backend's error to the query that
@@ -14,14 +14,19 @@ replaces it; the fifth hands queued work to a connection the pool has already
 taken back; the sixth lets a shutdown report itself finished while work the
 pool accepted is neither run nor refused; the seventh builds a new connection's
 first query before the array types it fetched are applied, so an `sql.array()`
-parameter in that query binds as a scalar. The shutdown and reconnect repairs
-share the first section below; the remaining groups each have their own.
+parameter in that query binds as a scalar; the eighth leaves a failed
+array-type fetch rejected with no handler, which terminates the process, and
+opens the connection it failed on with no array types. The shutdown and
+reconnect repairs share the first section below; the remaining groups each have
+their own.
 
 `git` renders the patch as seventeen hunks: eleven in `src/connection.js`, four
 in `src/index.js`, one in `src/queue.js`, and one in `cjs/src/index.js` — the
 CJS load guard, which repairs nothing and has its own section below. The
 array-type repair is a single edit to one function that `git` renders as two of
-the `src/connection.js` hunks. Some `src/` hunks carry several repairs:
+the `src/connection.js` hunks; the array-type fetch failure repair shares both of
+them, and shares the startup handler's hunk in `ReadyForQuery` with the
+queued-reserve repair. Some `src/` hunks carry several repairs:
 `reserve()`'s refusal and rejection wrapper share a hunk with `release()`'s
 ownership guard and shutdown termination branch. The synchronous
 `endRequested` assignment shares a hunk with the backlog drain in `end()`;
@@ -718,8 +723,8 @@ which is why exactly one of the concurrent queries failed.
 The repair applies the fetched types inside the fetch query's `resolve()`,
 which `ReadyForQuery` calls synchronously before it reaches the opening query.
 It wraps the query's own `resolve` rather than replacing it, so the query still
-settles and `await query` still observes it. A failing type fetch rejects
-exactly as it does in stock. This is the mechanism `fetchState()`
+settles. A failing type fetch is settled on the connection by the repair in the
+next section. This is the mechanism `fetchState()`
 (`connection.js:800-810`) already uses to apply its result before the same
 `ReadyForQuery` reads it. The ordering invariant is local to the one function
 that produces the types, so the patched `ReadyForQuery` and its startup
@@ -741,6 +746,97 @@ throws at load (the next section), so the repair has no CJS copy to drift.
 This is Overflow issue 711. It reproduces identically on stock
 `postgres@3.4.9`, and is reported upstream as
 https://github.com/porsager/postgres/issues/789 (comment 5845365113).
+
+### A failed array-type fetch terminates the process
+
+One edit across `ReadyForQuery()` and `fetchArrayTypes()` in the package's own
+`src/connection.js`. `git` renders it inside three hunks it shares: the startup
+handler's hunk with the queued-reserve repair, and the two `fetchArrayTypes()`
+hunks with the array-type repair above.
+
+When the `pg_type` query a new connection sends before its first query failed,
+the query waiting on that connection was rejected with the server's error, and
+then the Node process exited with an unhandled promise rejection carrying the
+same error. Any failure of that query does it: a startup `statement_timeout`
+shorter than the query (`57014`), a role that cannot read `pg_catalog.pg_type`
+(`42501`), and by issue 719's account a cancellation or a backend termination.
+The connection it failed on was not closed either: it was handed to the pool
+with no array types, so the next `sql.array(...)::bigint[]` query on it failed
+with `malformed array literal` (`22P02`), the defect of the section above by
+another route. A waiting `reserve()` was granted that connection.
+
+The cause, by line in stock 3.4.9 `src/`:
+
+- `connection.js:562-564`: the first `ReadyForQuery` of a connection with
+  `initial` set, and `needsTypes` still true, returns `fetchArrayTypes()`, and
+  its caller, `handle()`, discards what `ReadyForQuery` returns
+  (`connection.js:461-489`). `fetchArrayTypes()`
+  (`connection.js:768-779`) is `async` and clears `needsTypes` at once
+  (`connection.js:769`).
+- The server answers the failing query with an `ErrorResponse`, held in
+  `errorResponse` (`connection.js:815`) until that query's `ReadyForQuery`,
+  which calls `errored()` (`connection.js:542`). `errored()` rejects the types
+  query and then the waiting query, `initial`, with the same error
+  (`connection.js:390-393`), and clears `initial`.
+- With `initial` cleared, the same `ReadyForQuery` goes on to `onopen()`
+  (`connection.js:587`) and hands the connection to the pool, with `needsTypes`
+  false and no array types applied.
+- The types query's rejection reaches `await` in `fetchArrayTypes()`
+  (`connection.js:770`), which rejects the promise `ReadyForQuery` discarded.
+  Nothing handles it.
+
+The repair settles a failure on the connection, synchronously, as the array-type
+repair above settles a success. `fetchArrayTypes()` wraps the query's own
+`reject`: the wrapper sets `needsTypes` again and rejects a waiting reserve with
+the server's error, then rejects the query. `errored()` still rejects the
+waiting query with the server's error, unchanged. `ReadyForQuery` then finds
+`needsTypes` set where it would have opened the connection, and closes it with
+`terminate()` instead. The next query dispatched to the client opens a new
+connection, which fetches its types afresh. `fetchArrayTypes()` awaits the query
+through `.catch()`, so its own promise can no longer reject.
+
+The reserve needs its own rejection. `ReadyForQuery` takes a reserve out of
+`initial` before the fetch, so `errored()` never reaches it, and closing the
+connection returns it to `onclose()`, which reconnects for it. Against a failure
+that persists, that is a reconnect loop that never settles the reserve: with
+the rejection removed and `pg_type` unreadable, one reserve produced 96 failed
+fetches in a five-second run. The reserve's own `reject` removes it from the pool's
+queue, as it does on every other route that refuses it.
+
+The closing check reads `needsTypes`, so it also closes a connection that
+reaches the end of its startup with no types fetched by any other route, rather
+than opening it without them. The one such route found by reading, not
+reproduced, is a failed `target_session_attrs` state query: `errored()` rejects
+the waiting query the same way, and stock then opens the connection with no
+types fetched.
+
+Rejected alternatives. Upstream's suggested fix, a bare `.catch()` at the call
+site, stops the crash and keeps the connection open with no array types, which
+reinstates the defect of the section above. Closing the connection from a
+`.catch()` continuation is too late: `ReadyForQuery` has already handed the
+connection to the pool synchronously, and `onopen()` executes queued work on it
+at once, so that work is built without array types and then destroyed by the
+close. A message of 1024 bytes or more is written to the socket immediately
+(`connection.js:248`), so it can reach the server before the close does. This is
+from reading the code, not from a run. An application-side
+`unhandledRejection` handler would hide every other unhandled rejection and
+leave the typeless connection in the pool.
+
+`tests/db/types-fetch-failure.test.ts` holds it. It revokes `SELECT` on
+`pg_catalog.pg_type` from `PUBLIC` in its own database and runs
+`tests/db/types-fetch-failure-child.ts` in a child Node process, as a role that
+is not a superuser, so the fetch fails with `42501` every time. The child
+registers an `unhandledRejection` listener that records each rejection, waits on
+a plain query in one case and on `sql.reserve()` in the other, grants the read
+back, then sends `sql.array([1, 2])::bigint[]` on the same client. The test
+asserts that the child exits 0, that nothing was recorded, that the waiting
+query or reserve was rejected with `42501`, and that the later query returned
+`["1", "2"]`. Reverting the repair in the installed module fails both cases.
+
+Like every repair above, it is deliberately absent from `cjs/`.
+
+This is Overflow issue 719. It reproduces on stock `postgres@3.4.9`, and is
+reported upstream as https://github.com/porsager/postgres/issues/1192.
 
 ### `require('postgres')` throws instead of silently running the stock client
 
@@ -802,8 +898,9 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   backlog neither run nor refused, still let `reserve()` queue into an ending
   pool, lack the synchronous `endRequested` admission flag, still return a
   released reservation to a pool that is ending, still build a new
-  connection's first query before its fetched array types are applied, and
-  carry no `peek` in their
+  connection's first query before its fetched array types are applied, still
+  discard the array-type fetch's promise and open the connection that fetch
+  failed on, and carry no `peek` in their
   `queue.js` — the same as on `main`, so this is a standing property of the
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
@@ -830,7 +927,8 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   `tests/db/reserve-contract.test.ts`,
   `tests/db/reserve-shutdown-race.test.ts`,
   `tests/db/postgres-queue.test.ts`,
-  `tests/db/sql-array-cold-client.test.ts` and
+  `tests/db/sql-array-cold-client.test.ts`,
+  `tests/db/types-fetch-failure.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
   whether the release really carries every fix without the regression. All of
   them: the shutdown suites cover different orderings, and a release that settles
