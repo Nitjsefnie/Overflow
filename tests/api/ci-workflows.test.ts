@@ -231,22 +231,31 @@ describe("GitHub Actions release gates", () => {
     const npm = config.updates.find((update) => update["package-ecosystem"] === "npm");
     expect(npm).toBeDefined();
     const groups = Object.values(npm!.groups ?? {});
-    expect(groups).toHaveLength(1);
-    const [group] = groups;
-    // Any other group key (applies-to, update-types, dependency-type, ...)
-    // narrows which bumps the group collects, so a narrowed group would let
-    // a React bump arrive split again.
-    expect(Object.keys(group!)).toEqual(["patterns"]);
-    const patterns = group!.patterns ?? [];
-    const members = dependencyNames.filter((name) =>
-      patterns.some((pattern) => globMatches(pattern, name)));
+    const reactFamily = ["@types/react", "@types/react-dom", "react", "react-dom"];
 
-    // react-dom refuses to load beside any other react version, so a bump
-    // that moves one member alone breaks every test file.
-    expect(members.sort()).toEqual(["@types/react", "@types/react-dom", "react", "react-dom"]);
-    // Exact names, not wildcards: `react*` + `@types/react*` resolves to the
-    // four today but would also collect a future react-is.
-    expect([...patterns].sort()).toEqual(["@types/react", "@types/react-dom", "react", "react-dom"]);
+    // A group without `applies-to` covers version updates only, and security
+    // updates are enabled on this repository, so a React advisory would still
+    // open a single-package pull request unless a second group covers that
+    // lane. Each lane needs exactly one React group.
+    for (const lane of ["version-updates", "security-updates"]) {
+      const laneGroups = groups.filter((group) => (group["applies-to"] ?? "version-updates") === lane);
+      expect(laneGroups, lane).toHaveLength(1);
+      const [group] = laneGroups;
+      // Any key beyond the lane (update-types, dependency-type,
+      // exclude-patterns, ...) narrows which bumps the group collects, so a
+      // React bump could arrive split again.
+      expect(Object.keys(group!).filter((key) => key !== "applies-to"), lane).toEqual(["patterns"]);
+      const patterns = group!.patterns ?? [];
+      const members = dependencyNames.filter((name) =>
+        patterns.some((pattern) => globMatches(pattern, name)));
+
+      // react-dom refuses to load beside any other react version, so a bump
+      // that moves one member alone breaks every test file.
+      expect(members.sort(), lane).toEqual(reactFamily);
+      // Exact names, not wildcards: `react*` + `@types/react*` resolves to the
+      // four today but would also collect a future react-is.
+      expect([...patterns].sort(), lane).toEqual(reactFamily);
+    }
   });
 
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
