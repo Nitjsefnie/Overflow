@@ -2,18 +2,24 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
+
+type ApiTokenSummary = { createdAt: string; expiresAt: string };
 
 type ApiTokenPanelProps = {
-  summary: { createdAt: string } | null;
+  summary: ApiTokenSummary | null;
 };
 
 export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
   const router = useRouter();
-  const [issued, setIssued] = useState<{ token: string; createdAt: string } | null>(null);
+  const [issued, setIssued] = useState<({ token: string } & ApiTokenSummary) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const currentSummary = issued ?? summary;
+  // Display only: the server refuses an expired token by the database clock
+  // whatever this comparison says.
+  const expired = currentSummary !== null && Date.parse(currentSummary.expiresAt) <= Date.now();
 
   async function generateToken() {
     if (inFlight.current) return;
@@ -27,8 +33,8 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
         setError(body?.error?.message ?? "Unable to issue an API token.");
         return;
       }
-      const body = await response.json() as { token: string; createdAt: string };
-      setIssued({ token: body.token, createdAt: body.createdAt });
+      const body = await response.json() as { token: string } & ApiTokenSummary;
+      setIssued({ token: body.token, createdAt: body.createdAt, expiresAt: body.expiresAt });
       router.refresh();
     } catch {
       setError("The request could not reach Overflow. Check your connection and try again.");
@@ -42,14 +48,24 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
     <section className="override-card surface shadow-offset" aria-labelledby="api-token-heading">
       <p className="eyebrow">Programmatic access</p>
       <h2 id="api-token-heading">Overflow API token</h2>
-      <p>Use an Overflow-issued API token to register repositories programmatically.</p>
+      <p>
+        An Overflow API token authenticates as your account. A script holding it can do anything
+        your role permits over the API, including moderation and override decisions if you are a
+        moderator. It expires {API_TOKEN_LIFETIME_DAYS} days after it is generated.
+      </p>
       {currentSummary ? (
         <>
           <p>
-            Generated <time dateTime={currentSummary.createdAt}>
-              {currentSummary.createdAt.replace("T", " ").replace(/\.\d{3}Z$/, " UTC")}
+            Generated <time dateTime={currentSummary.createdAt}>{formatUtc(currentSummary.createdAt)}</time>.
+            {" "}{expired ? "Expired" : "Expires"} <time dateTime={currentSummary.expiresAt}>
+              {formatUtc(currentSummary.expiresAt)}
             </time>.
           </p>
+          {expired ? (
+            <p id="api-token-expired" className="feedback error">
+              This token has expired and no longer authenticates. Regenerate it to keep using the API.
+            </p>
+          ) : null}
           <p id="api-token-revocation">Regenerating means your existing token stops working immediately.</p>
         </>
       ) : <p>You have no API token.</p>}
@@ -57,7 +73,9 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
         className="action-button"
         type="button"
         disabled={pending}
-        aria-describedby={currentSummary ? "api-token-revocation" : undefined}
+        aria-describedby={
+          currentSummary ? (expired ? "api-token-expired api-token-revocation" : "api-token-revocation") : undefined
+        }
         onClick={() => void generateToken()}
       >
         {currentSummary ? "Regenerate token" : "Generate token"}
@@ -71,4 +89,8 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
       ) : null}
     </section>
   );
+}
+
+function formatUtc(instant: string): string {
+  return instant.replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 }

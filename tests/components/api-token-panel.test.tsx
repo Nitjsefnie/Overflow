@@ -29,19 +29,29 @@ vi.mock("@/lib/dashboard/session", () => ({
 }));
 
 const createdAt = "2026-09-05T10:30:00.123Z";
+const expiresAt = "2026-12-04T10:30:00.123Z";
 const token = `ovf_${"a".repeat(43)}`;
 const replacementToken = `ovf_${"b".repeat(43)}`;
+// Every test reads the clock at this instant, so "expired" never depends on the day the suite runs.
+const now = new Date("2026-09-10T00:00:00.000Z");
+const expiredSummary = { createdAt: "2026-05-01T08:00:00.000Z", expiresAt: "2026-07-30T08:00:00.000Z" };
 
-function mintedToken(value = token, date = createdAt) {
-  return Response.json({ token: value, createdAt: date }, { status: 201 });
+function mintedToken(value = token, date = createdAt, expiry = expiresAt) {
+  return Response.json({ token: value, createdAt: date, expiresAt: expiry }, { status: 201 });
+}
+
+function describedBy(element: HTMLElement): string[] {
+  return (element.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
 }
 
 beforeEach(() => {
   spyOnConsoleOutput();
+  vi.useFakeTimers({ toFake: ["Date"], now });
 });
 
 afterEach(() => {
   refresh.mockClear();
+  vi.useRealTimers();
   try {
     expectNoConsoleOutput();
   } finally {
@@ -51,22 +61,57 @@ afterEach(() => {
 });
 
 describe("API token panel", () => {
-  it("explains programmatic registration and offers generation for a null summary", () => {
+  it("offers generation for a null summary", () => {
     render(<ApiTokenPanel summary={null} />);
 
     expect(screen.getByRole("button", { name: "Generate token" })).toBeEnabled();
-    expect(screen.getByText(/register repositories programmatically/i)).toBeVisible();
     expect(screen.getByText(/no API token/i)).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows the generation date and warns about immediate revocation before regeneration", () => {
-    render(<ApiTokenPanel summary={{ createdAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
 
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
     expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
     expect(screen.getByText(/existing token stops working immediately/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Generate token" })).not.toBeInTheDocument();
+  });
+
+  it("shows the expiry as a time element and no expired state for a live token", () => {
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
+
+    expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+    expect(document.getElementById("api-token-expired")).toBeNull();
+    expect(describedBy(screen.getByRole("button", { name: "Regenerate token" }))).toEqual(["api-token-revocation"]);
+  });
+
+  it("marks an expired token and ties the expired state to regeneration", () => {
+    render(<ApiTokenPanel summary={expiredSummary} />);
+
+    const expiry = screen.getByText("2026-07-30 08:00:00 UTC");
+    expect(expiry).toHaveAttribute("dateTime", expiredSummary.expiresAt);
+    const button = screen.getByRole("button", { name: "Regenerate token" });
+    expect(button).toBeEnabled();
+    expect(describedBy(button)).toContain("api-token-expired");
+    expect(document.getElementById("api-token-expired")).toBeVisible();
+  });
+
+  it("treats a token expiring at exactly the current instant as expired", () => {
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt: now.toISOString() }} />);
+
+    expect(document.getElementById("api-token-expired")).toBeVisible();
+  });
+
+  it("clears the expired state and shows the new expiry after regeneration", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mintedToken()));
+    render(<ApiTokenPanel summary={expiredSummary} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
+
+    expect(await screen.findByText(token)).toBeVisible();
+    expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
+    expect(document.getElementById("api-token-expired")).toBeNull();
   });
 
   it("posts with the member cookie and shows the selectable token with a shown-once warning without logging", async () => {
@@ -98,10 +143,10 @@ describe("API token panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
     expect(await screen.findByText(token)).toBeVisible();
-    rerender(<ApiTokenPanel summary={{ createdAt }} />);
+    rerender(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
     expect(screen.getByText(token)).toBeVisible();
     unmount();
-    render(<ApiTokenPanel summary={{ createdAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
 
     expect(screen.queryByText(token)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate token" })).toBeEnabled();
@@ -170,7 +215,7 @@ describe("API token panel", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: {
       code: "UPSTREAM_FAILURE", message: "Unable to issue an API token.",
     } }, { status: 502 })));
-    render(<ApiTokenPanel summary={{ createdAt }} />);
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} />);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to issue an API token.");
@@ -227,7 +272,7 @@ describe("API token panel", () => {
 
   it.each([
     ["generation", null],
-    ["regeneration", { createdAt }],
+    ["regeneration", { createdAt, expiresAt }],
   ] as const)("allows only one in-flight request during %s", async (_name, summary) => {
     let resolveRequest!: (response: Response) => void;
     const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
@@ -267,7 +312,7 @@ describe("repository registration page token panel", () => {
 
   it.each([
     { memberId: "member-without-token", summary: null },
-    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt) } },
+    { memberId: "member-with-token", summary: { createdAt: new Date(createdAt), expiresAt: new Date(expiresAt) } },
   ])("passes the member summary for $memberId to the panel below the form", async ({ memberId, summary }) => {
     requireMemberPageSession.mockReset().mockResolvedValue({
       user: { id: memberId, name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
@@ -282,6 +327,7 @@ describe("repository registration page token panel", () => {
     expect(screen.getByRole("button", { name: summary ? "Regenerate token" : "Generate token" })).toBeEnabled();
     if (summary) {
       expect(screen.getByText("2026-09-05 10:30:00 UTC")).toHaveAttribute("dateTime", createdAt);
+      expect(screen.getByText("2026-12-04 10:30:00 UTC")).toHaveAttribute("dateTime", expiresAt);
     }
   });
 });

@@ -15,7 +15,11 @@ export default async function NewRepositoryPage() {
         reauthorizeAction={signInForRepositoryRegistration}
       />
       <RepositoryForm variant="catalog-change" />
-      <ApiTokenPanel summary={tokenSummary ? { createdAt: tokenSummary.createdAt.toISOString() } : null} />
+      <ApiTokenPanel
+        summary={tokenSummary
+          ? { createdAt: tokenSummary.createdAt.toISOString(), expiresAt: tokenSummary.expiresAt.toISOString() }
+          : null}
+      />
     </AppShell>
   );
 }
