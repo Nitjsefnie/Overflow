@@ -32,17 +32,29 @@ describe("webhook issue materialization", () => {
   it("replaces NUL in a GitHub issue webhook before writing the issue view", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     await deliver(fixture, { title: "Webhook\u0000title", body: "Webhook\u0000body" });
-    expect(await row(fixture)).toMatchObject({ title: "Webhook\uFFFDtitle", body: "Webhook\uFFFDbody" });
+    expect(await row(fixture)).toMatchObject({ title: "Webhook\uFFFDtitle", body: null });
   });
 
   it.each(["issues", "issue_comment"])("applies %s raw fields before resolving without changing any derived field", async (event) => {
     const fixture = await materializeRepositoryFixture(sql);
     const before = await row(fixture);
     await deliver(fixture, { event });
-    expect(await row(fixture)).toEqual({ ...before, state: "OPEN", title: "Webhook title", body: "Webhook body",
+    expect(await row(fixture)).toEqual({ ...before, state: "OPEN", title: "Webhook title", body: null,
       url: "https://github.com/octo/example/issues/1", github_updated_at: new Date("2026-09-08T10:00:00Z") });
     expect(await sql`select state from repository_reconciliation_jobs where repository_id = ${fixture.repositoryId}`)
       .toEqual([{ state: "PENDING" }]);
+  });
+
+  it("keeps an existing row's body on a webhook issue view", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    // A value that predates the minimisation survives the view: the update
+    // stops naming the column entirely rather than writing null over it.
+    await sql`update issues set body = 'legacy body text' where repository_id = ${fixture.repositoryId}`;
+    await deliver(fixture, { body: "Fresh webhook body the store must not keep" });
+    expect(await row(fixture)).toMatchObject({
+      state: "OPEN", title: "Webhook title", body: "legacy body text",
+      github_updated_at: new Date("2026-09-08T10:00:00Z"),
+    });
   });
 
   it("rejects older replayed and retried views using GitHub time, while equal views may reapply", async () => {

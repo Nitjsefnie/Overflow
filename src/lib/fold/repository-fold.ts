@@ -132,7 +132,6 @@ export type FoldIssue = {
   openingReservePoints: number;
   number: number;
   title: string;
-  body: string;
   url: string;
   state: IssueState;
   updatedAt: string;
@@ -156,7 +155,6 @@ export type FoldPullRequest = {
   githubPullRequestId: number;
   number: number;
   title: string;
-  body: string;
   url: string;
   state: PullRequestState;
   mergedAt: string | null;
@@ -457,7 +455,6 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       githubIssueId: issue.id,
       number: issue.number,
       title: issue.title,
-      body: issue.body,
       url: issue.url,
       state: issue.state,
       updatedAt: issue.updatedAt,
@@ -1098,7 +1095,6 @@ function rememberPullRequest(
     githubPullRequestId: pullRequest.id,
     number: pullRequest.number,
     title: pullRequest.title,
-    body: pullRequest.body,
     url: pullRequest.url,
     state: pullRequest.state,
     mergedAt: pullRequest.mergedAt,

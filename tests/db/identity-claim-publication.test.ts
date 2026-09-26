@@ -395,7 +395,7 @@ async function createUnclaimedScenario(
   };
   const fold: FoldResult = {
     issues: [{
-      githubIssueId, number: 1, title: "Identity claim fixture", body: "", url: "https://example.test/issue",
+      githubIssueId, number: 1, title: "Identity claim fixture", url: "https://example.test/issue",
       state: "CLOSED", updatedAt: "2026-09-01T12:05:00.000Z", openingLabel: "M", openingComparisonPoints: 5,
       openingReservePoints: 5, ownerGitHubLogin: `sponsor-${sponsorGitHubId}`,
       openingSourceEventId: `opening-${githubIssueId}`, openingSourceActorLogin: `sponsor-${sponsorGitHubId}`,
@@ -403,7 +403,7 @@ async function createUnclaimedScenario(
       claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null, ...settledEvidence,
     }],
     pullRequests: [{
-      githubPullRequestId, number: 11, title: "Identity claim fixture", body: "", url: "https://example.test/pr",
+      githubPullRequestId, number: 11, title: "Identity claim fixture", url: "https://example.test/pr",
       state: "MERGED", mergedAt, mergeCommitOid, finalCommitAt: "2026-09-01T10:00:00.000Z",
       authorId: null, authorGitHubLogin: creditorLogin, authorGitHubUserId: creditorGitHubId,
       proofSha256, githubIssueIds: [githubIssueId], reviewRounds: [],
