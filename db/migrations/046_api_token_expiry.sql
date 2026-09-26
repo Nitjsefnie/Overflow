@@ -15,12 +15,18 @@
 -- its owner was never told about, breaking the scripts that hold them without
 -- warning. Measuring from now gives each owner a full lifetime to regenerate.
 --
--- The column has no default. The lifetime is decided in one place, the code
--- that issues a token, and a writer that forgets to state an expiry is refused
--- by `not null` instead of silently receiving one.
+-- The column defaults to the same ninety days. The store states the expiry
+-- itself on every write; the default exists for the release that does not.
+-- The deploy migrates before it builds and restarts, so the previous release
+-- keeps serving through the build, and a release-level rollback runs that same
+-- build against this schema. Its insert names no `expires_at`, and without a
+-- default `not null` would refuse it: every token generation would fail for
+-- the whole deploy window and after any rollback.
 
 alter table api_tokens add column expires_at timestamp with time zone;
 
 update api_tokens set expires_at = now() + interval '90 days';
+
+alter table api_tokens alter column expires_at set default now() + interval '90 days';
 
 alter table api_tokens alter column expires_at set not null;

@@ -118,6 +118,26 @@ describe("API token expiry in the store", () => {
   });
 });
 
+describe("API token expiry for a writer that states none", () => {
+  // The release still serving while a deploy builds, and a rollback target,
+  // issue tokens with this exact statement: it predates the expiry column.
+  it("accepts the previous release's insert and gives the token ninety days", async () => {
+    const sql = getSql();
+    const userId = await insertUser(sql);
+
+    const [before] = await sql<{ now: Date }[]>`select now()`;
+    const [row] = await sql<{ expires_at: Date }[]>`
+      insert into api_tokens (user_id, token_hash)
+      values (${userId}, ${mintApiToken().tokenHash})
+      returning expires_at
+    `;
+    const [after] = await sql<{ now: Date }[]>`select now()`;
+
+    expect(row.expires_at.getTime()).toBeGreaterThanOrEqual((await ninetyDaysAfter(sql, before.now)).getTime());
+    expect(row.expires_at.getTime()).toBeLessThanOrEqual((await ninetyDaysAfter(sql, after.now)).getTime());
+  });
+});
+
 describe("API token expiry on a bearer route", () => {
   it("refuses an expired token with the same 401 as an unknown token", async () => {
     const sql = getSql();
