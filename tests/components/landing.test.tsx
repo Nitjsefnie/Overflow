@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
+import { useTrustedOrigin } from "../support/trusted-origin";
 
 const signIn = vi.hoisted(() => vi.fn());
 
@@ -12,9 +12,7 @@ vi.mock("@/auth", () => ({ signIn }));
 // Issue 700: the forms submit through the real server actions, which now open
 // with the origin guard, so the request headers must name the trusted origin
 // (APP_URL is stubbed by useTrustedOrigin).
-vi.mock("next/headers", () => ({
-  headers: async () => new Headers({ origin: trustedOrigin, host: "overflow.internal" }),
-}));
+vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders());
 
 useTrustedOrigin();
 
