@@ -57,4 +57,5 @@ export const appliedMigrationNames: readonly string[] = [
   "048_unregistered_webhook_credentials.sql",
   "049_reason_length_limits.sql",
   "051_forge_identity_https_instance.sql",
+  "052_repository_policy_violations.sql",
 ];
