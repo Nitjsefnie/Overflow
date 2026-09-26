@@ -206,6 +206,39 @@ describe("GitHub Actions release gates", () => {
     expect(update.ignore).toEqual([{ "dependency-name": "postgres" }]);
   });
 
+  it("groups the React family so dependabot bumps it in lockstep", async () => {
+    const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
+      updates: Array<{
+        groups?: Record<string, { patterns?: string[]; "exclude-patterns"?: string[] }>;
+      }>;
+    };
+    const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    const dependencyNames = [
+      ...Object.keys(manifest.dependencies),
+      ...Object.keys(manifest.devDependencies),
+    ];
+    // Dependabot group patterns are globs where `*` matches any run of
+    // characters; resolve them against the real manifest so an over-broad
+    // pattern is caught by what it sweeps in, not by its spelling.
+    const globMatches = (pattern: string, name: string) =>
+      new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, "\\$&")).join(".*")}$`)
+        .test(name);
+
+    const groups = Object.values(config.updates[0]!.groups ?? {});
+    expect(groups).toHaveLength(1);
+    const [group] = groups;
+    const members = dependencyNames.filter((name) =>
+      (group!.patterns ?? []).some((pattern) => globMatches(pattern, name))
+      && !(group!["exclude-patterns"] ?? []).some((pattern) => globMatches(pattern, name)));
+
+    // react-dom refuses to load beside any other react version, so a bump
+    // that moves one member alone breaks every test file.
+    expect(members.sort()).toEqual(["@types/react", "@types/react-dom", "react", "react-dom"]);
+  });
+
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
     expect(checkIgnore(".github/workflows/ci.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
