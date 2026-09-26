@@ -639,6 +639,9 @@ gate would wait it out as `<check> (absent)` and refuse. `ratchet-guard`
 reports on both — `pull_request_target` for pull requests and `push` for
 the tip each push lands. The deploy gate checks only the fetched tip of
 main, which is always a pushed tip.
+Each required check is resolved to the job of the workflow file
+`.github/required-checks.json` pins it to, and a same-named check-run from
+any other producer refuses the deploy.
 A refused gate leaves `HEAD`, the index and the working tree untouched, so the
 tree stays on the commit it was on; only the refs the fetch wrote
 (`FETCH_HEAD`, `origin/main`) have moved.
