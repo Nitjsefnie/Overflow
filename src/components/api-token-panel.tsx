@@ -16,8 +16,8 @@ type ApiTokenPanelProps = {
   summary: ApiTokenStatus | null;
   /**
    * The GitHub sign-in that makes the session fresh enough to mint, offered
-   * beside a `REAUTHENTICATION_REQUIRED` refusal. The page passes the
-   * registration sign-in, which returns to this page.
+   * beside a `REAUTHENTICATION_REQUIRED` refusal. The page passes a sign-in
+   * that requests no scope and returns to this page.
    */
   reauthenticateAction?: () => Promise<void>;
 };

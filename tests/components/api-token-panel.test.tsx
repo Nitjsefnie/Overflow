@@ -11,12 +11,15 @@ import NewRepositoryPage from "@/app/repositories/new/page";
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
-const { getTokenSummary, requireMemberPageSession, redirect, refresh, signInForRepositoryRegistration } = vi.hoisted(() => ({
+const {
+  getTokenSummary, requireMemberPageSession, redirect, refresh, signInForRepositoryRegistration, confirmSignInForApiToken,
+} = vi.hoisted(() => ({
   getTokenSummary: vi.fn(),
   requireMemberPageSession: vi.fn(),
   redirect: vi.fn(),
   refresh: vi.fn(),
   signInForRepositoryRegistration: vi.fn(async () => {}),
+  confirmSignInForApiToken: vi.fn(async () => {}),
 }));
 
 vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
@@ -28,7 +31,7 @@ vi.mock("@/lib/dashboard/session", () => ({
   requireMemberPageSession,
   isModeratorSession: () => false,
 }));
-vi.mock("@/lib/auth/sign-in-actions", () => ({ signInForRepositoryRegistration }));
+vi.mock("@/lib/auth/sign-in-actions", () => ({ signInForRepositoryRegistration, confirmSignInForApiToken }));
 
 const createdAt = "2026-09-05T10:30:00.123Z";
 const expiresAt = "2026-12-04T10:30:00.123Z";
@@ -378,12 +381,14 @@ describe("repository registration page token panel", () => {
     }
   });
 
-  it("wires the registration sign-in as the panel's re-authentication action", async () => {
+  // The confirmation requests no scope; the registration sign-in would widen the grant.
+  it("wires the scope-free sign-in confirmation as the panel's re-authentication action", async () => {
     requireMemberPageSession.mockReset().mockResolvedValue({
       user: { id: "member-id", name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
     });
     getTokenSummary.mockReset().mockResolvedValue(null);
     signInForRepositoryRegistration.mockClear();
+    confirmSignInForApiToken.mockClear();
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
       String(input) === "/api/tokens" ? reauthenticationRefusal() : Response.json({ labels: [], identities: [] }),
     ));
@@ -394,7 +399,8 @@ describe("repository registration page token panel", () => {
     await within(panel).findByRole("alert");
     fireEvent.click(within(reauthenticateForm()!).getByRole("button"));
 
-    await waitFor(() => expect(signInForRepositoryRegistration).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(confirmSignInForApiToken).toHaveBeenCalledTimes(1));
+    expect(signInForRepositoryRegistration).not.toHaveBeenCalled();
   });
 
   it.each([
