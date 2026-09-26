@@ -51,6 +51,11 @@ export async function getProductionSession(): Promise<MemberRouteSession | null>
  * from the database rather than trusting the credential. A session outlives
  * the account it was issued for, and a token's account row is only as fresh
  * as the moment it was read.
+ *
+ * A backing-store failure in either lookup answers 502 UPSTREAM_FAILURE and
+ * writes one console line naming this gate and the phase that failed, with the
+ * error as its second argument. The message is a fixed string: no request,
+ * credential or user value is interpolated into it.
  */
 export async function requiredMemberSession(
   request: Request,
@@ -59,7 +64,8 @@ export async function requiredMemberSession(
   let credential: RouteCredentialSession | Response | null;
   try {
     credential = await resolveRouteCredential(request, dependencies);
-  } catch {
+  } catch (error) {
+    console.error("Member route gate: credential resolution failed.", error);
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the member request.");
   }
   if (credential instanceof Response) {
@@ -72,7 +78,8 @@ export async function requiredMemberSession(
   let role: UserRole | null;
   try {
     role = await dependencies.getCurrentRole(credential.user.id);
-  } catch {
+  } catch (error) {
+    console.error("Member route gate: role lookup failed.", error);
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the member request.");
   }
   if (role === null) {
