@@ -431,8 +431,9 @@ esac
   node: { envKeys: [], dispatch: "exit 0\n" },
   systemctl: { envKeys: [], dispatch: "exit 0\n" },
   curl: {
-    envKeys: [],
+    envKeys: ["CURL_FAIL_MATCH"],
     dispatch: `
+if [ -n "\${CURL_FAIL_MATCH:-}" ] && [[ "$*" == *"$CURL_FAIL_MATCH"* ]]; then exit 7; fi
 if [ -n "\${CURL_STATUS:-}" ] && [ "$CURL_STATUS" != 0 ]; then exit "$CURL_STATUS"; fi
 exit 0
 `,
@@ -561,6 +562,18 @@ describe("scripts/deploy-revision.sh", () => {
     expect(await section10()).toContain(`OVERFLOW_DEPLOY_URL\` (default \`${defaultUrl}\`)`);
   });
 
+  it("derives the sign-in smoke URL from the readiness URL knob and runs it after readiness", async () => {
+    const source = await readFile(script, "utf8");
+    // The derivation composes production's default into the smoke's URL:
+    // http://127.0.0.1:3000/api/readiness -> http://127.0.0.1:3000/api/auth/providers.
+    expect(source).toContain('providers_url="${url%/api/readiness}/api/auth/providers"');
+    const atReadiness = source.indexOf('--retry-connrefused -fsS -o /dev/null -w \'%{http_code}\\n\' "$url"');
+    const atSmoke = source.indexOf('"$providers_url"');
+    expect(atReadiness, "the readiness curl present").toBeGreaterThan(-1);
+    expect(atSmoke, "the sign-in smoke curl present").toBeGreaterThan(-1);
+    expect(atSmoke, "the smoke runs after readiness").toBeGreaterThan(atReadiness);
+  });
+
   it("refuses at the fence without invoking git, pnpm or node when the lock is taken", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { FLOCK_STATUS: "1" });
@@ -617,6 +630,7 @@ describe("scripts/deploy-revision.sh", () => {
       `systemctl restart ${fixture.unit}`,
       `systemctl is-active ${fixture.unit}`,
       `curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 --retry-connrefused -fsS -o /dev/null -w %{http_code}\\n ${fixture.url}`,
+      `curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 --retry-connrefused -fsS -o /dev/null -w %{http_code}\\n ${fixture.url}/api/auth/providers`,
       `pnpm --silent webhooks:upgrade`,
       `pnpm release:prune ${fixture.tree} --keep 3`,
     ]);
@@ -746,6 +760,28 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status).toBe(7);
     const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
+    expect(entries.some((entry) => entry.args[0] === "restart")).toBe(true);
+  });
+
+  it("aborts on a failed sign-in smoke after readiness passed, before the webhook upgrade and the prune", async () => {
+    // Issue 649: readiness certifies the database, not Auth.js trust, so the
+    // smoke check that follows it must refuse the deploy on its own. The
+    // providers URL is the only one that fails here, proving readiness ran
+    // first and the failure is the smoke's.
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { CURL_FAIL_MATCH: "/api/auth/providers" });
+
+    expect(result.status, result.stderr).toBe(7);
+    const entries = await readLog(fixture.shimLog);
+    const curlUrls = entries
+      .filter((entry) => entry.cmd === "curl")
+      .map((entry) => entry.args.at(-1));
+    expect(curlUrls).toEqual([
+      fixture.url,
+      `${fixture.url}/api/auth/providers`,
+    ]);
     expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "restart")).toBe(true);
@@ -2053,6 +2089,15 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
 describe("deploy/README.md section 10 pins the committed script as the procedure", () => {
   it("names scripts/deploy-revision.sh as the procedure to run", async () => {
     expect(await section10()).toContain("bash scripts/deploy-revision.sh");
+  });
+
+  it("names the sign-in smoke beside readiness in section 7 and section 10's verification", async () => {
+    const markdown = await readFile(readme, "utf8");
+    const section7 = markdown.split("## 7. Verify")[1]!.split("## 8. ")[0]!;
+    for (const section of [section7, await section10()]) {
+      expect(section).toContain("http://127.0.0.1:3000/api/auth/providers");
+      expect(section).toContain("sign-in smoke");
+    }
   });
 
   it("keeps the standing block's fence and --expect-current lines in the manual fallback", async () => {

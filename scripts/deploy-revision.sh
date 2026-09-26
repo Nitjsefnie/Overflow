@@ -329,6 +329,15 @@ systemctl restart "$unit"
 systemctl is-active "$unit"
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$url"
+# Sign-in smoke (issue 649): readiness certifies the database and the bundled
+# schema but cannot see Auth.js trust configuration, so a deployment whose
+# documented environment cannot sign in passed the check above. GET
+# /api/auth/providers runs the Auth.js configuration and answers 500
+# ([auth][error] UntrustedHost) on exactly that misconfiguration; refuse the
+# deploy unless it answers 200.
+providers_url="${url%/api/readiness}/api/auth/providers"
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$providers_url"
 install -d -m 0700 "$log_dir"
 upgrade_log="$log_dir/webhook-upgrade-$release.jsonl"
 upgrade_status=0
