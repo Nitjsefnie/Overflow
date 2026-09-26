@@ -9,6 +9,7 @@ import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
+import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import type { ReconciliationCostCharge, ReconciliationFairnessAssessment } from "@/lib/fold/reconciliation-fairness";
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
@@ -139,10 +140,22 @@ export async function reconcileRepository(
   repositoryId: string,
   options?: { rederive?: boolean },
 ): Promise<ReconciliationSummary> {
+  const sanitizedDependencies = { ...dependencies, github: sanitizeReconciliationGateway(dependencies.github) };
   return dependencies.store.withRepositoryReconciliation(
     repositoryId,
-    () => reconcileRepositoryWhileCoordinated(dependencies, repositoryId, options),
+    () => reconcileRepositoryWhileCoordinated(sanitizedDependencies, repositoryId, options),
   );
+}
+
+function sanitizeReconciliationGateway(gateway: ReconciliationGateway): ReconciliationGateway {
+  return {
+    getRepositoryById: async (...args) => sanitizeForgeStrings(await gateway.getRepositoryById(...args)),
+    listIssues: async (...args) => sanitizeForgeStrings(await gateway.listIssues(...args)),
+    getIssue: async (...args) => sanitizeForgeStrings(await gateway.getIssue(...args)),
+    getPullRequestClosingIssues: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestClosingIssues(...args)),
+    getPullRequestReviews: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestReviews(...args)),
+    getPullRequestDiff: async (...args) => sanitizeForgeStrings(await gateway.getPullRequestDiff(...args)),
+  };
 }
 
 async function reconcileRepositoryWhileCoordinated(

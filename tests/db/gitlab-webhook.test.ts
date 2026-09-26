@@ -46,7 +46,7 @@ async function insertIssue(repositoryId: string, githubIssueId: number) {
   `;
 }
 
-function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: string; issueId: number }) {
+function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: string; issueId: number; title?: string; body?: string }) {
   return parseGitLabWebhookDelivery("Issue Hook", options.uuid, {
     object_kind: "issue",
     event_type: "issue",
@@ -59,8 +59,8 @@ function issueDelivery(options: { projectId: number; instanceUrl: string; uuid: 
     object_attributes: {
       id: options.issueId,
       iid: 23,
-      title: "Webhook title",
-      description: "Webhook body",
+      title: options.title ?? "Webhook title",
+      description: options.body ?? "Webhook body",
       state: "closed",
       updated_at: "2026-09-08T10:00:00.000Z",
       url: `${options.instanceUrl}/gl-group/p/-/issues/23`,
@@ -125,6 +125,19 @@ describe("GitLab webhook delivery materialization", () => {
     await container?.stop();
     if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("replaces NUL in a GitLab issue webhook before writing the issue view", async () => {
+    const projectId = externalId++;
+    const instanceUrl = "https://gitlab.example.com";
+    const issueId = externalId++;
+    const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
+    await insertIssue(repositoryId, issueId);
+
+    await deliver(issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-nul", issueId,
+      title: "Webhook\u0000title", body: "Webhook\u0000body" }));
+    const [row] = await sql`select title, body from issues where repository_id = ${repositoryId}`;
+    expect(row).toMatchObject({ title: "Webhook\uFFFDtitle", body: "Webhook\uFFFDbody" });
   });
 
   it("resolves the registration by forge identity, applies the issue view, and queues the fold", async () => {

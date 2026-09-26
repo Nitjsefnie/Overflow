@@ -1,4 +1,5 @@
 import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
+import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 
 export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
@@ -58,7 +59,7 @@ export async function processWebhook(
         );
     if (repository !== null && repository.active) {
       if (delivery.subject.kind === "ISSUE" && delivery.issue !== undefined) {
-        await dependencies.store.applyIssueView(repository.id, delivery.subject.id, delivery.issue);
+        await dependencies.store.applyIssueView(repository.id, delivery.subject.id, sanitizeForgeStrings(delivery.issue));
       }
       await dependencies.enqueueReconciliation(repository.id, delivery);
     }

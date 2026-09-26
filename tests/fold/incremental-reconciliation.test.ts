@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -37,6 +38,39 @@ afterAll(async () => {
 });
 
 describe("incremental reconciliation", () => {
+  it("replaces NUL in forge evidence and derived rows before hashing, including a cached second run", async () => {
+    const f = await fixture();
+    const issue = f.issues[0]!;
+    issue.updatedAt = "2026-09-08T09:00:00Z";
+    issue.title = "Issue\u0000title";
+    issue.body = "Issue\u0000body";
+    issue.comments = [{ id: "comment-nul", databaseId: 90001, authorLogin: null, authorGitHubUserId: null,
+      body: "Comment\u0000body", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null }];
+    const pr = issue.closingPullRequests[0]!;
+    pr.title = "PR\u0000title";
+    pr.body = "PR\u0000body";
+    f.diff = "diff\u0000body";
+
+    await f.run();
+    const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
+    const [prRow] = await sql`select title, body, proof_sha256 from pull_requests where repository_id = ${f.id} and github_pull_request_id = ${pr.id}`;
+    expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: "Issue\uFFFDbody" });
+    expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: "PR\uFFFDbody",
+      proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
+    const [evidence] = await sql`select issues, pull_requests from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({
+      title: "Issue\uFFFDtitle", body: "Issue\uFFFDbody", comments: [{ body: "Comment\uFFFDbody" }],
+      closingPullRequests: [{ title: "PR\uFFFDtitle", body: "PR\uFFFDbody" }],
+    });
+    expect(evidence!.pull_requests.find(({ id }: { id: number }) => id === pr.id)).toMatchObject({ rawDiff: "diff\uFFFDbody" });
+
+    f.clock = new Date("2026-09-08T10:02:00Z");
+    await f.run();
+    const [secondPrRow] = await sql`select proof_sha256 from pull_requests where repository_id = ${f.id} and github_pull_request_id = ${pr.id}`;
+    expect(secondPrRow!.proof_sha256).toBe(prRow!.proof_sha256);
+    expect(f.diffReads.filter((number) => number === pr.number)).toHaveLength(1);
+  });
+
   it("charges quiet retained history only for current observations", async () => {
     const f = await fixture();
     f.issues[0]!.updatedAt = "2026-09-08T09:58:00Z";

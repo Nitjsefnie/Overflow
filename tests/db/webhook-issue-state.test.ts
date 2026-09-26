@@ -29,6 +29,12 @@ describe("webhook issue materialization", () => {
     else process.env.DATABASE_URL = originalDatabaseUrl;
   });
 
+  it("replaces NUL in a GitHub issue webhook before writing the issue view", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    await deliver(fixture, { title: "Webhook\u0000title", body: "Webhook\u0000body" });
+    expect(await row(fixture)).toMatchObject({ title: "Webhook\uFFFDtitle", body: "Webhook\uFFFDbody" });
+  });
+
   it.each(["issues", "issue_comment"])("applies %s raw fields before resolving without changing any derived field", async (event) => {
     const fixture = await materializeRepositoryFixture(sql);
     const before = await row(fixture);
@@ -137,6 +143,7 @@ async function row(fixture: Fixture) {
 async function deliver(fixture: Fixture, options: {
   event?: string; state?: string; updatedAt?: string; deliveryId?: string;
   issueId?: number; repositoryGitHubId?: number;
+  title?: string; body?: string;
   failEnqueue?: boolean;
 } = {}) {
   const [repository] = await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
@@ -146,7 +153,7 @@ async function deliver(fixture: Fixture, options: {
     repository: { id: options.repositoryGitHubId ?? Number(repository.github_repository_id), full_name: "octo/example" },
     issue: { id: options.issueId ?? fixture.fold.issues[0].githubIssueId, number: 1,
       state: options.state ?? "open", updated_at: options.updatedAt ?? "2026-09-08T10:00:00Z",
-      title: "Webhook title", body: "Webhook body", html_url: "https://github.com/octo/example/issues/1" },
+      title: options.title ?? "Webhook title", body: options.body ?? "Webhook body", html_url: "https://github.com/octo/example/issues/1" },
   });
   if (delivery === null) throw new Error("Invalid test delivery");
   return processWebhook({ store: fixture.store,

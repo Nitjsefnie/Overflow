@@ -1,0 +1,26 @@
+import { describe, expect, it } from "vitest";
+
+describe("sanitizeForgeStrings", () => {
+  it("replaces every NUL in nested strings without mutating the input", async () => {
+    const { sanitizeForgeStrings } = await import("@/lib/forge/sanitize-forge-strings");
+    const input = { title: "a\u0000b\u0000c", nested: [{ body: "x\u0000y" }, ["\u0000z"]] };
+
+    expect(sanitizeForgeStrings(input)).toEqual({ title: "a\uFFFDb\uFFFDc", nested: [{ body: "x\uFFFDy" }, ["\uFFFDz"]] });
+    expect(input).toEqual({ title: "a\u0000b\u0000c", nested: [{ body: "x\u0000y" }, ["\u0000z"]] });
+  });
+
+  it("preserves values outside plain objects and arrays by identity", async () => {
+    const { sanitizeForgeStrings } = await import("@/lib/forge/sanitize-forge-strings");
+    const date = new Date("2026-09-08T10:00:00Z");
+    class Named { constructor(readonly name: string) {} }
+    const instance = new Named("x\u0000y");
+    const unchanged = "plain text";
+    const input = { date, instance, unchanged, nil: null, missing: undefined, count: 3, flag: false };
+    const output = sanitizeForgeStrings(input);
+
+    expect(output).toEqual(input);
+    expect(output.date).toBe(date);
+    expect(output.instance).toBe(instance);
+    expect(sanitizeForgeStrings(unchanged)).toBe(unchanged);
+  });
+});
