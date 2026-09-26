@@ -1,6 +1,7 @@
 import type { lookup as dnsLookup, LookupAddress } from "node:dns";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { getDefaultAutoSelectFamily, isIP, setDefaultAutoSelectFamily } from "node:net";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPublicFetch,
@@ -131,7 +132,12 @@ async function expectRefusal(pending: Promise<unknown>, hidden: string[]): Promi
   expect(outcome.value).toBeInstanceOf(DestinationRefusedError);
   const error = outcome.value as Error;
   expect(error.message).toBe(refusalMessage);
-  const exposed = `${String(error)} ${JSON.stringify(error)}`;
+  // `inspect` with hidden properties reaches what the other two miss, such as
+  // a non-enumerable ES2022 `cause`. The stack is left out: its frames are code
+  // positions, whose line numbers could match a hidden port or status.
+  const { stack: _stack, ...properties } = Object.getOwnPropertyDescriptors(error);
+  const hiddenView = inspect(Object.defineProperties({}, properties), { showHidden: true, depth: null });
+  const exposed = `${String(error)} ${JSON.stringify(error)} ${hiddenView}`;
   for (const value of hidden) {
     expect(exposed).not.toContain(value);
   }
@@ -365,6 +371,9 @@ describe("judging the address the socket connects to", () => {
       expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: true }]);
       expect(listener.connections).toBe(0);
     },
+    // Without the guard an empty answer never settles; fail fast rather than
+    // at the suite's two-minute default.
+    5_000,
   );
 
   it.each([["http"], ["https"]])(
@@ -548,6 +557,34 @@ describe("reading the response", () => {
       String(bodyLimit),
       String(listener.port),
     ]);
+  });
+
+  it("bounds the body at a lower cap its creator sets", async () => {
+    const capped = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: 16 });
+    const exact = await listen("127.0.0.1", (_request, response) => {
+      response.end("a".repeat(16));
+    });
+    const over = await listen("127.0.0.1", (_request, response) => {
+      response.end("a".repeat(17));
+    });
+
+    expect(await (await capped(`http://127.0.0.1:${exact.port}/`)).text()).toBe("a".repeat(16));
+    await expectRefusal(capped(`http://127.0.0.1:${over.port}/`), ["16", String(over.port)]);
+  });
+
+  it("reads past 1 MiB up to a higher cap its creator sets", async () => {
+    const capped = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: 2 * bodyLimit });
+    const exact = await listen("127.0.0.1", (_request, response) => {
+      response.end(Buffer.alloc(2 * bodyLimit, 0x61));
+    });
+    const over = await listen("127.0.0.1", (_request, response) => {
+      response.end(Buffer.alloc(2 * bodyLimit + 1, 0x61));
+    });
+
+    const response = await capped(`http://127.0.0.1:${exact.port}/`);
+
+    expect((await response.arrayBuffer()).byteLength).toBe(2 * bodyLimit);
+    await expectRefusal(capped(`http://127.0.0.1:${over.port}/`), [String(2 * bodyLimit), String(over.port)]);
   });
 });
 
