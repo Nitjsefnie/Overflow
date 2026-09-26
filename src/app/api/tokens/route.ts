@@ -1,11 +1,14 @@
 import type { UserRole } from "@/lib/db/types";
 import { mintApiToken } from "@/lib/security/api-token";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
-import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgres-store";
 
 /**
- * Mints the Overflow-issued API token an account uses to register repositories
- * programmatically.
+ * Mints the Overflow-issued API token an account uses to drive Overflow from a
+ * script. The token authenticates as the account: every action the owner's
+ * role permits over the API, moderation and override decisions included for a
+ * moderator. It expires a fixed lifetime after it is minted, and the 201 body
+ * says when.
  *
  * The 201 body is the only place in the product where a plaintext token ever
  * appears: the store receives its hash, nothing logs it, and no error carries
@@ -21,7 +24,7 @@ export type ApiTokenRouteSession = {
 };
 
 export type ApiTokenIssuer = {
-  issueToken(userId: string, tokenHash: Buffer): Promise<{ createdAt: Date }>;
+  issueToken(userId: string, tokenHash: Buffer): Promise<ApiTokenSummary>;
 };
 
 export type ApiTokenRouteDependencies = {
@@ -55,14 +58,18 @@ export function createApiTokenPostHandler(
 
     const { token, tokenHash } = mintApiToken();
     let createdAt: Date;
+    let expiresAt: Date;
     try {
       const store = await dependencies.createTokenStore();
-      ({ createdAt } = await store.issueToken(session.user.id, tokenHash));
+      ({ createdAt, expiresAt } = await store.issueToken(session.user.id, tokenHash));
     } catch {
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to issue an API token.");
     }
 
-    return Response.json({ token, createdAt: createdAt.toISOString() }, { status: 201 });
+    return Response.json(
+      { token, createdAt: createdAt.toISOString(), expiresAt: expiresAt.toISOString() },
+      { status: 201 },
+    );
   };
 }
 
