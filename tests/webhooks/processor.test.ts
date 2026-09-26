@@ -83,9 +83,12 @@ describe("processWebhook", () => {
 
       const failure = await processWebhook(dependencies, issueDelivery).catch((caught: unknown) => caught);
       const upstream = originalError();
+      expect(upstream.detail).toContain(RECORD_MARKER);
+      expect(upstream.where).toContain(RECORD_MARKER);
       expect(inspect(upstream, { depth: null })).toContain(RECORD_MARKER);
       expect(inspect(failure, { depth: null })).not.toContain(RECORD_MARKER);
       expect(inspect(failure, { depth: null })).toContain(upstream.code);
+      expect(Object.keys((failure as Error).cause as Error).sort()).toEqual(["code", "name", "routine", "severity"]);
       expect(dependencies.store.markFailed).toHaveBeenCalledWith("delivery-1", "lease-1", "Webhook processing failed.");
     });
   });
