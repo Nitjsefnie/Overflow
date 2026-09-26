@@ -54,13 +54,22 @@ export const credentialColumns: readonly CredentialColumn[] = [
   },
 ];
 
-export type StoredCredential = { id: string; envelope: Buffer; binding: CredentialBinding };
+/** A stored ciphertext, the natural-key values its binding was built from as read, and that binding. */
+export type StoredCredential = {
+  id: string;
+  envelope: Buffer;
+  naturalKey: Readonly<KeyRow>;
+  binding: CredentialBinding;
+};
 
 export type CredentialStore = {
   /** Rows with a non-NULL ciphertext and an id after `afterId`, in id order. */
   readBatch(column: CredentialColumn, afterId: string | null, limit: number): Promise<StoredCredential[]>;
-  /** Replaces the ciphertext only if it still equals `previous`; false when a concurrent write got there first. */
-  replaceIfUnchanged(column: CredentialColumn, id: string, previous: Buffer, next: Buffer): Promise<boolean>;
+  /**
+   * Replaces the ciphertext only if the row still holds the ciphertext and natural key it was read with;
+   * false when a concurrent write got there first.
+   */
+  replaceIfUnchanged(column: CredentialColumn, credential: StoredCredential, next: Buffer): Promise<boolean>;
 };
 
 export function postgresCredentialStore(sql: SqlClient): CredentialStore {
@@ -73,12 +82,20 @@ export function postgresCredentialStore(sql: SqlClient): CredentialStore {
         order by id
         limit ${limit}
       `;
-      return rows.map((row) => ({ id: row.id, envelope: Buffer.from(row.envelope), binding: column.bind(row) }));
+      return rows.map((row) => {
+        const naturalKey = Object.fromEntries(column.keyColumns.map((name) => [name, row[name]!]));
+        return { id: row.id, envelope: Buffer.from(row.envelope), naturalKey, binding: column.bind(naturalKey) };
+      });
     },
-    async replaceIfUnchanged(column, id, previous, next) {
+    async replaceIfUnchanged(column, credential, next) {
+      // The new envelope is bound to the natural key as read, so a row whose key moved since is left alone.
+      const sameNaturalKey = column.keyColumns.reduce(
+        (fragment, name) => sql`${fragment} and ${sql(name)} = ${credential.naturalKey[name]!}`,
+        sql``,
+      );
       const result = await sql`
         update ${sql(column.table)} set ${sql(column.column)} = ${next}
-        where id = ${id} and ${sql(column.column)} = ${previous}
+        where id = ${credential.id} and ${sql(column.column)} = ${credential.envelope} ${sameNaturalKey}
       `;
       return result.count === 1;
     },
@@ -132,7 +149,7 @@ async function reencryptColumn(dependencies: Required<CredentialReencryptionCliD
       continue;
     }
     const next = Buffer.from(encryptToken(plaintext, keys.current, credential.binding), "utf8");
-    if (await store.replaceIfUnchanged(column, credential.id, credential.envelope, next)) counts.reencrypted++;
+    if (await store.replaceIfUnchanged(column, credential, next)) counts.reencrypted++;
     else counts.skipped++;
   }
   return { table: column.table, column: column.column, ...counts };
