@@ -276,6 +276,7 @@ describe("initial PostgreSQL materialization", () => {
       "042_gitlab_webhook_orphan_cleanup.sql",
       "043_repository_webhook_credentials.sql",
       "044_completed_work_credit_limits.sql",
+      "046_api_token_expiry.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
@@ -4084,6 +4085,7 @@ describe("initial PostgreSQL materialization", () => {
     `;
     expect(columns).toEqual([
       { column_name: "created_at", is_nullable: "NO" },
+      { column_name: "expires_at", is_nullable: "NO" },
       { column_name: "id", is_nullable: "NO" },
       { column_name: "token_hash", is_nullable: "NO" },
       { column_name: "user_id", is_nullable: "NO" },
@@ -4094,12 +4096,12 @@ describe("initial PostgreSQL materialization", () => {
     const userId = await insertUser(sql);
 
     await expect(sql`
-      insert into api_tokens (user_id, token_hash)
-      values (${userId}, ${Buffer.alloc(16)})
+      insert into api_tokens (user_id, token_hash, expires_at)
+      values (${userId}, ${Buffer.alloc(16)}, now() + interval '1 day')
     `).rejects.toMatchObject({ code: "23514" });
     await expect(sql`
-      insert into api_tokens (user_id, token_hash)
-      values (${userId}, ${Buffer.alloc(0)})
+      insert into api_tokens (user_id, token_hash, expires_at)
+      values (${userId}, ${Buffer.alloc(0)}, now() + interval '1 day')
     `).rejects.toMatchObject({ code: "23514" });
 
     const [record] = await sql<{ count: number }[]>`
@@ -4219,14 +4221,14 @@ describe("initial PostgreSQL materialization", () => {
     expect(issued.createdAt).toBeInstanceOf(Date);
     const summary = await store.getTokenSummary(userId);
     expect(summary?.createdAt).toBeInstanceOf(Date);
-    expect(summary).toEqual({ createdAt: issued.createdAt });
+    expect(summary).toEqual(issued);
 
     const [backdated] = await sql<{ created_at: Date }[]>`
       update api_tokens set created_at = now() - interval '1 hour' where user_id = ${userId}
       returning created_at
     `;
     const reissued = await store.issueToken(userId, apiTokenHash("summary-second"));
-    await expect(store.getTokenSummary(userId)).resolves.toEqual({ createdAt: reissued.createdAt });
+    await expect(store.getTokenSummary(userId)).resolves.toEqual(reissued);
     expect(reissued.createdAt.getTime()).toBeGreaterThan(backdated.created_at.getTime());
   });
 });
@@ -4302,8 +4304,8 @@ async function insertApiToken(
   label: string,
 ): Promise<void> {
   await client`
-    insert into api_tokens (user_id, token_hash)
-    values (${userId}, ${apiTokenHash(label)})
+    insert into api_tokens (user_id, token_hash, expires_at)
+    values (${userId}, ${apiTokenHash(label)}, now() + interval '1 day')
   `;
 }
 
