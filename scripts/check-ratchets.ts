@@ -14,7 +14,10 @@
 // merge-base value, head value), 2 on a usage error, an unknown revision, a
 // merge base that cannot be computed (unrelated histories or a shallow
 // clone) or a document that is not valid JSON. A document absent at the
-// merge base cannot be relaxed; the sibling checks judge its content.
+// merge base cannot be relaxed; the sibling checks judge its content. A
+// non-regular entry (anything but a 100644 blob) at the head is a finding
+// (exit 1) — it is the branch's own change; a non-regular entry at the merge
+// base is a git/parse error (exit 2).
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";

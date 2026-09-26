@@ -137,6 +137,20 @@ describe("coverage ratchet relaxations", () => {
     expect(coverageRelaxations(coverage(), coverage({ measured: 93.5, floor: 92.5 }))).toEqual([]);
   });
 
+  it("judges the measured invariant with the head's gap, not the merge base's", () => {
+    // Merge base: gap 1.0. Head: gap 0.5, measured 93.5, floor 92.5. The
+    // floor must carry round2(measured - the head's gap) = 93, so 92.5 is
+    // refused; a merge-base-gap implementation would compute 93.5 - 1.0
+    // = 92.5 and accept it.
+    const findings = coverageRelaxations(
+      coverage(),
+      coverage({ gap: 0.5, measured: 93.5, floor: 92.5 }),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toContain("languages.typescript.floor");
+    expect(findings[0]).toContain("measured 93.5 minus gap 0.5 = 93");
+  });
+
   it("accepts a genuine calibrate output from the current document", () => {
     const next = calibration({ total: { lines: { pct: 94.37 } } }, {
       gap: 1.0,
@@ -439,6 +453,26 @@ describe("ratchet check against a real git repository", () => {
     const result = run("main", "feature");
     expect(result.status).toBe(0);
     expect(checkRatchets(root, "main", "feature").findings).toEqual([]);
+  });
+
+  it("exits 1 when the head has a non-regular document and the merge base had none", () => {
+    // Valid JSON as the link text, so a blob read would parse and compare:
+    // only the head-kind check stands between this and an unjudged document.
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "ratchets@example.test");
+    git("config", "user.name", "Ratchets Test");
+    git("config", "commit.gpgsign", "false");
+    commit("empty base");
+    git("checkout", "-q", "-b", "feature");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    symlinkSync('{"floor":1}', join(root, COVERAGE_PATH));
+    commit("symlinked document with no merge-base document");
+    expect(git("ls-tree", "feature", "--", COVERAGE_PATH)).toMatch(/^120000 blob /);
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain("120000");
   });
 
   it("exits 2 when the two revisions share no merge base", () => {
