@@ -59,8 +59,9 @@ export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelPr
       <h2 id="api-token-heading">Overflow API token</h2>
       <p>
         An Overflow API token authenticates as your account. A script holding it can do anything
-        your role permits over the API, including moderation and override decisions if you are a
-        moderator. It expires {API_TOKEN_LIFETIME_DAYS} days after it is generated.
+        your role permits on the routes that accept an API token, including moderation and override
+        decisions if you are a moderator; it cannot generate tokens or manage linked forge
+        identities. It expires {API_TOKEN_LIFETIME_DAYS} days after it is generated.
       </p>
       {currentSummary ? (
         <>

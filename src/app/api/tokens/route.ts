@@ -5,9 +5,10 @@ import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgr
 
 /**
  * Mints the Overflow-issued API token an account uses to drive Overflow from a
- * script. The token authenticates as the account: every action the owner's
- * role permits over the API, moderation and override decisions included for a
- * moderator. It expires a fixed lifetime after it is minted, and the 201 body
+ * script. The token authenticates as the account on every route that accepts
+ * a bearer token, moderation and override decisions included for a moderator;
+ * the session-only routes (this one, forge identities, repository labels)
+ * refuse it. It expires a fixed lifetime after it is minted, and the 201 body
  * says when.
  *
  * The 201 body is the only place in the product where a plaintext token ever

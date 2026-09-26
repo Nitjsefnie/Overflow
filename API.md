@@ -11,10 +11,13 @@ remains unchanged and available — programmatic registration is an additional w
 to submit the same repository and catalogs.
 
 Registration is not the limit of what the token can do. It authenticates as the
-account that generated it and carries that account's full role authority: every
-action the owner's role permits over the API. That includes unregistering the
-repositories the account sponsors and, for a moderator, moderation and override
-decisions. Treat it as equivalent to the signed-in account.
+account that generated it and carries that account's role authority on every
+route that accepts a bearer token. That includes unregistering the repositories
+the account sponsors and, for a moderator, moderation and override decisions.
+Treat it as equivalent to the signed-in account. A few routes accept only the
+browser session and refuse the token: it cannot mint or regenerate a token,
+manage linked forge identities (`/api/forge-identities`), or read repository
+labels for the registration form (`/api/repositories/labels`).
 
 ### Get or replace a token
 
@@ -37,7 +40,10 @@ route that accepts a bearer token. Regenerate the token and replace it in your
 scripts.
 
 The panel calls `POST /api/tokens` with the signed-in browser session cookie and
-no request body. An API token alone cannot mint or regenerate a token. Because
+no request body. An API token alone cannot mint or regenerate a token, and the
+session must carry a GitHub sign-in completed within the last 10 minutes; when
+it does not, the panel offers the GitHub sign-in, and minting succeeds once it
+completes. Because
 the session cookie is the only credential, the endpoint is same-origin only: the
 request must carry an `Origin` header equal to the origin of `APP_URL` (its
 scheme, host and port; any path is ignored), and it must either send no body or
@@ -50,6 +56,7 @@ Failures use `{ "error": { "code": "...", "message": "..." } }`:
 | --- | --- | --- | --- |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | Sign in through GitHub in the browser. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | The request carried no `Origin` header or one that is not the origin of `APP_URL`. Mint the token from the Overflow page in the browser. |
+| 403 | `REAUTHENTICATION_REQUIRED` | `Confirm your GitHub sign-in to issue an API token.` | The session's last GitHub sign-in was more than 10 minutes ago, or the session predates this check. Sign in with GitHub again from the panel, then generate the token. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | The request declared a `Content-Type` that is not `application/json`. Send no `Content-Type` at all, or send `application/json`. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | The deployment's `APP_URL` is missing or malformed, so it cannot recognize its own origin. Fix the server configuration; nothing about the request will help. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to issue an API token.` | Session lookup or token storage failed; retry when the service recovers. |
