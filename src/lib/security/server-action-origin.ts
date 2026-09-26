@@ -1,6 +1,16 @@
 import { headers } from "next/headers";
 import { readTrustedOrigin } from "@/lib/security/request-origin";
 
+/** Thrown for a request whose Origin is not the `APP_URL` origin. */
+export const ORIGIN_REFUSED_MESSAGE = "The request origin is not allowed.";
+
+/**
+ * Thrown when `APP_URL` is missing or malformed, so an operator can tell a bad
+ * deploy from a foreign request. Neither message ever carries the received
+ * Origin.
+ */
+export const ORIGIN_MISCONFIGURED_MESSAGE = "The server is not configured to accept this request.";
+
 /**
  * Server actions are the one mutation surface `rejectUntrustedRequest` cannot
  * cover: they are dispatched by Next's action handler, which compares only the
@@ -13,8 +23,11 @@ import { readTrustedOrigin } from "@/lib/security/request-origin";
  */
 export async function assertTrustedServerActionOrigin(): Promise<void> {
   const trustedOrigin = readTrustedOrigin();
+  if (trustedOrigin === null) {
+    throw new Error(ORIGIN_MISCONFIGURED_MESSAGE);
+  }
   const requestOrigin = (await headers()).get("origin");
-  if (trustedOrigin === null || requestOrigin !== trustedOrigin) {
-    throw new Error("The request origin is not allowed.");
+  if (requestOrigin !== trustedOrigin) {
+    throw new Error(ORIGIN_REFUSED_MESSAGE);
   }
 }
