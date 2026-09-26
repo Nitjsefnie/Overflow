@@ -47,11 +47,13 @@ beforeAll(async () => {
         unresolvedNames.push(producer);
         continue;
       }
-      // Decision on matrix jobs: GitHub suffixes every matrix job's check-run
-      // name with its matrix values, ` (…)`, when the name carries no matrix
-      // expression (and one that does is caught above). Such a check-run can
-      // never be named exactly C, so a matrix job is not counted as a
-      // producer of its bare name.
+      // Decision on matrix jobs: they are not counted as producers of their
+      // bare name. This relies on GitHub naming a matrix job's check-runs
+      // with its matrix values appended, ` (…)`, which holds for the usual
+      // matrix but is not verified for every shape (an empty combination,
+      // say). A name carrying an expression is caught above. The backstop is
+      // the deploy gate: a check-run bearing a required name that is not one
+      // of the pinned workflow's jobs keeps it pending, so it never passes.
       if (job.strategy?.matrix !== undefined) continue;
       producersByName.set(checkName, [...(producersByName.get(checkName) ?? []), producer]);
     }
