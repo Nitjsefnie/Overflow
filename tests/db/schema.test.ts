@@ -3892,7 +3892,7 @@ describe("initial PostgreSQL materialization", () => {
     expect(closures.history).not.toEqual(expect.arrayContaining([expect.objectContaining(openClosure)]));
   });
 
-  it("keeps a fresh PENDING delivery deduplicated after interruption and reclaims it when its lease is stale", async () => {
+  it("answers a fresh PENDING delivery as in progress after interruption and reclaims it when its lease is stale", async () => {
     const store = new PostgresFoldStore(sql);
     const scope = { provider: "github" as const, registrationId: randomUUID() };
     const delivery = {
@@ -3904,7 +3904,7 @@ describe("initial PostgreSQL materialization", () => {
       repositoryFullName: "octo/example",
     };
     const first = expectClaimedLease(await store.claimDelivery(delivery, scope));
-    await expect(store.claimDelivery(delivery, scope)).resolves.toEqual({ status: "DUPLICATE" });
+    await expect(store.claimDelivery(delivery, scope)).resolves.toEqual({ status: "IN_PROGRESS" });
     await sql`
       update webhook_deliveries
       set lease_expires_at = now() - interval '1 second'

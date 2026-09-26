@@ -104,7 +104,7 @@ describe("GitLab webhook route", () => {
     const deliveries: unknown[] = [];
     const route = createGitLabWebhookPostHandler({
       lookupCredential: async () => webhookCredential("gitlab", secret),
-      processWebhook: async (delivery) => { deliveries.push(delivery); },
+      processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     });
     const response = await route(request(issuePayload, gitlabHeaders(headers)));
     expect(response.status).toBe(202);
@@ -120,7 +120,7 @@ describe("GitLab webhook route", () => {
   });
 
   it("rejects a 256-character Idempotency-Key and accepts a 255-character one", async () => {
-    const processWebhook = vi.fn();
+    const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
     const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook });
 
     const oversized = await route(request(issuePayload, gitlabHeaders({ "idempotency-key": "x".repeat(256) })));
@@ -147,7 +147,7 @@ describe("GitLab webhook route", () => {
         repositoryId: "test-registration", credentialId: "181a4fbb-64d1-44fd-82da-cd191613798c",
         secret, ...identity, webhookId: 4242, configuredAt: null,
       }),
-      processWebhook: async (delivery: unknown) => { deliveries.push(delivery); },
+      processWebhook: async (delivery: unknown) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     };
     const response = await createGitLabWebhookPostHandler(dependencies)(request(issuePayload, gitlabHeaders()));
     expect(response.status).toBe(401);
@@ -260,6 +260,37 @@ describe("GitLab webhook route", () => {
     const response = await route(request(JSON.stringify({ object_kind: "push" }), gitlabHeaders({ "x-gitlab-event": "Push Hook" })));
     expect(response.status).toBe(400);
     expect(processWebhookMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "IN_PROGRESS", answer: 503 },
+    { status: "DUPLICATE", answer: 202 },
+    { status: "PROCESSED", answer: 202 },
+  ] as const)("answers the $status processing result with $answer", async ({ status, answer }) => {
+    const route = createGitLabWebhookPostHandler({
+      lookupCredential: async () => webhookCredential("gitlab", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status }),
+    });
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failed = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(request(issuePayload, gitlabHeaders({ "Idempotency-Key": "stable-message" })));
+
+      expect(response.status).toBe(answer);
+      expect(await response.text()).toBe("");
+      expect(failed).not.toHaveBeenCalled();
+      // An in-flight retry is not a processing failure: at most one line,
+      // carrying the receipt key and the execution UUID and nothing from the
+      // payload.
+      expect(warned.mock.calls).toEqual(status === "IN_PROGRESS" ? [[expect.any(String)]] : []);
+      const [line = ""] = warned.mock.calls[0] ?? [];
+      expect(line).toEqual(status === "IN_PROGRESS" ? expect.stringContaining("stable-message") : "");
+      expect(line).toEqual(status === "IN_PROGRESS" ? expect.stringContaining("uuid-1") : "");
+      expect(JSON.stringify(warned.mock.calls)).not.toContain("gitlab-org");
+    } finally {
+      warned.mockRestore();
+      failed.mockRestore();
+    }
   });
 
   it("answers 503 and lets the instance retry when processing fails", async () => {

@@ -1,7 +1,7 @@
 import { parseGitLabWebhookDeliveryDetailed } from "@/lib/gitlab/webhook-schema";
 import { verifyGitLabWebhookToken } from "@/lib/gitlab/webhook-token";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
+import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
@@ -9,7 +9,7 @@ import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/cr
 
 export type GitLabWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
-  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<unknown>;
+  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookProcessingResult>;
 };
 
 // GitLab documents no webhook payload ceiling the way GitHub does; the
@@ -85,7 +85,18 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     }
 
     try {
-      await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      if (processed.status === "IN_PROGRESS") {
+        // An earlier attempt still holds this message's lease and may yet
+        // fail, so the retry is not acknowledged: an empty 503 makes GitLab
+        // retry. Not a processing failure, so one fixed-template line naming
+        // only the receipt key and this execution's UUID.
+        console.warn(
+          `Webhook delivery ${delivery.deliveryId} (execution ${delivery.executionId})`
+            + " is still being processed by an earlier attempt; answered 503 so it is retried.",
+        );
+        return new Response(null, { status: 503 });
+      }
       return new Response(null, { status: 202 });
     } catch (error) {
       // The GitLab twin of the GitHub receiver's diagnostic: the instance sees

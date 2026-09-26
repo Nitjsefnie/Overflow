@@ -28,11 +28,18 @@ export type WebhookProcessorDependencies = {
   enqueueReconciliation(repositoryId: string, delivery: GitHubWebhookDelivery): Promise<unknown>;
 };
 
-export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" };
+/**
+ * DUPLICATE: the receipt is already PROCESSED, or this attempt recorded its
+ * work but lost the lease before marking it. IN_PROGRESS: an earlier attempt
+ * still holds the lease, so nothing was done and the sender must retry — that
+ * attempt may yet fail.
+ */
+export type WebhookProcessingResult = { status: "PROCESSED" | "DUPLICATE" | "IN_PROGRESS" };
 
 export type WebhookDeliveryClaim =
   | { status: "CLAIMED"; receiptId: string; leaseToken: string }
-  | { status: "DUPLICATE" };
+  | { status: "DUPLICATE" }
+  | { status: "IN_PROGRESS" };
 
 /**
  * Mirrors known issues immediately and schedules the repository's derived fold.
@@ -47,8 +54,8 @@ export async function processWebhook(
   scope: WebhookReceiptScope,
 ): Promise<WebhookProcessingResult> {
   const claim = await dependencies.store.claimDelivery(delivery, scope);
-  if (claim.status === "DUPLICATE") {
-    return { status: "DUPLICATE" };
+  if (claim.status !== "CLAIMED") {
+    return { status: claim.status };
   }
 
   try {

@@ -1,9 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createHmac, randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route";
+import { createGitLabWebhookPostHandler } from "@/app/api/gitlab/webhooks/route";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
@@ -110,6 +112,119 @@ describe("scoped webhook receipts", () => {
       ]);
   });
 
+  it("answers a claim that finds a live lease as in progress and leaves the receipt untouched", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const delivery = await deliveryFor(fixture, randomUUID());
+    const scope = { provider: "gitlab" as const, registrationId: fixture.repositoryId };
+    const store = new PostgresFoldStore(sql);
+    const first = await store.claimDelivery(delivery, scope);
+    if (first.status !== "CLAIMED") throw new Error("Expected the first attempt to claim the receipt");
+    const before = await receiptRows(scope, delivery.deliveryId);
+    expect(before).toEqual([expect.objectContaining({
+      processing_state: "PENDING", attempt_count: 1, execution_id: delivery.executionId, processing_lease_token: first.leaseToken,
+    })]);
+
+    await expect(store.claimDelivery({ ...delivery, executionId: "retry" }, scope)).resolves.toEqual({ status: "IN_PROGRESS" });
+
+    expect(await receiptRows(scope, delivery.deliveryId)).toEqual(before);
+  });
+
+  it.each([
+    { prior: "PROCESSED", expected: "DUPLICATE", attempts: 1 },
+    { prior: "FAILED", expected: "CLAIMED", attempts: 2 },
+    { prior: "EXPIRED", expected: "CLAIMED", attempts: 2 },
+  ] as const)("classifies a claim over a $prior receipt as $expected", async ({ prior, expected, attempts }) => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const delivery = await deliveryFor(fixture, randomUUID());
+    const scope = { provider: "github" as const, registrationId: fixture.repositoryId };
+    const store = new PostgresFoldStore(sql);
+    const first = await store.claimDelivery(delivery, scope);
+    if (first.status !== "CLAIMED") throw new Error("Expected the first attempt to claim the receipt");
+    if (prior === "PROCESSED") expect(await store.markProcessed(first.receiptId, first.leaseToken)).toBe(true);
+    // The lease holder's own receipt id and token, in that order, mark the row
+    // FAILED through the store; a swapped delegation would answer false here.
+    if (prior === "FAILED") expect(await store.markFailed(first.receiptId, first.leaseToken, "ignored")).toBe(true);
+    if (prior === "EXPIRED") await sql`update webhook_deliveries set lease_expires_at = now() - interval '1 second' where id = ${first.receiptId}`;
+    expect(await receiptRows(scope, delivery.deliveryId)).toEqual([expect.objectContaining({
+      processing_state: prior === "EXPIRED" ? "PENDING" : prior,
+      error_message: prior === "FAILED" ? "Webhook processing failed." : null,
+    })]);
+
+    const second = await store.claimDelivery({ ...delivery, executionId: "retry" }, scope);
+
+    expect(second.status).toBe(expected);
+    expect(await receiptRows(scope, delivery.deliveryId)).toEqual([expect.objectContaining({
+      processing_state: expected === "CLAIMED" ? "PENDING" : "PROCESSED",
+      attempt_count: attempts,
+      execution_id: expected === "CLAIMED" ? "retry" : delivery.executionId,
+      processing_lease_token: second.status === "CLAIMED" ? second.leaseToken : null,
+    })]);
+  });
+
+  it("does not let a leased legacy receipt with the same key hold up a scoped claim", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const delivery = await deliveryFor(fixture, randomUUID());
+    const legacyToken = randomUUID();
+    expect(await legacyClaim(delivery, legacyToken)).toEqual([{ processing_lease_token: legacyToken }]);
+    const legacyBefore = await sql`select * from webhook_deliveries where github_delivery_id = ${delivery.deliveryId}`;
+    expect(legacyBefore).toEqual([expect.objectContaining({ processing_state: "PENDING", processing_lease_token: legacyToken })]);
+
+    const claim = await new PostgresFoldStore(sql).claimDelivery(delivery, { provider: "github", registrationId: fixture.repositoryId });
+
+    expect(claim.status).toBe("CLAIMED");
+    expect(await sql`select * from webhook_deliveries where github_delivery_id = ${delivery.deliveryId}`).toEqual(legacyBefore);
+  });
+
+  it("does not let a processed legacy receipt with the same key turn an in-flight scoped claim into a duplicate", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const delivery = await deliveryFor(fixture, randomUUID());
+    const legacyToken = randomUUID();
+    await legacyClaim(delivery, legacyToken);
+    expect(await legacyMarkProcessed(delivery.deliveryId, legacyToken)).toHaveLength(1);
+    const scope = { provider: "github" as const, registrationId: fixture.repositoryId };
+    const store = new PostgresFoldStore(sql);
+    expect((await store.claimDelivery(delivery, scope)).status).toBe("CLAIMED");
+
+    await expect(store.claimDelivery({ ...delivery, executionId: "retry" }, scope)).resolves.toEqual({ status: "IN_PROGRESS" });
+  });
+
+  it.each(["github", "gitlab"] as const)(
+    "asks %s to retry while the first attempt holds the lease, then processes the retry once that attempt fails",
+    async (provider) => {
+      const fixture = await materializeRepositoryFixture(sql);
+      const [repository] = provider === "gitlab"
+        ? await sql`update registered_repositories
+            set provider = 'gitlab', instance_url = 'https://gitlab.example.com', forge_project_id = github_repository_id
+            where id = ${fixture.repositoryId} returning github_repository_id`
+        : await sql`select github_repository_id from registered_repositories where id = ${fixture.repositoryId}`;
+      const projectId = Number(repository.github_repository_id);
+      const store = new PostgresFoldStore(sql);
+      const scope = { provider, registrationId: fixture.repositoryId };
+      const key = randomUUID();
+      const send = routeSender(provider, fixture, projectId, store, key);
+      const jobs = () => sql`select repository_id from repository_reconciliation_jobs where repository_id = ${fixture.repositoryId}`;
+      expect(await jobs()).toEqual([]);
+
+      const first = await store.claimDelivery({ ...(await deliveryFor(fixture, key)), executionId: provider === "gitlab" ? "execution-1" : key }, scope);
+      if (first.status !== "CLAIMED") throw new Error("Expected the first attempt to claim the receipt");
+      const leased = await receiptRows(scope, key);
+
+      const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect((await send("execution-2")).status).toBe(503);
+      } finally {
+        warned.mockRestore();
+      }
+      expect(await receiptRows(scope, key)).toEqual(leased);
+
+      expect(await store.markFailed(first.receiptId, first.leaseToken, "ignored")).toBe(true);
+
+      expect((await send("execution-3")).status).toBe(202);
+      expect(await receiptRows(scope, key)).toEqual([expect.objectContaining({ processing_state: "PROCESSED", attempt_count: 2 })]);
+      expect(await jobs()).toEqual([{ repository_id: fixture.repositoryId }]);
+    },
+  );
+
   it("rejects a receipt mixing legacy and scoped identities", async () => {
     await expect(sql`insert into webhook_deliveries
       (github_delivery_id, provider, registration_id, delivery_key, execution_id, event_name, processing_state)
@@ -144,6 +259,59 @@ async function deliveryFor(fixture: Awaited<ReturnType<typeof materializeReposit
     subject: { kind: "ISSUE", id: fixture.fold.issues[0].githubIssueId, number: 1 },
     issue: { state: "OPEN", updatedAt: "2026-09-26T12:00:00Z", title: "Updated", body: "", url: "https://example.com/issue/1" },
   };
+}
+
+function receiptRows(scope: WebhookReceiptScope, deliveryKey: string) {
+  return sql`select processing_state, attempt_count, execution_id, processing_lease_token::text, lease_expires_at, error_message, processed_at
+    from webhook_deliveries
+    where provider = ${scope.provider} and registration_id = ${scope.registrationId} and delivery_key = ${deliveryKey}`;
+}
+
+// Drives the real route handler factory over the real processor and store; the
+// credential lookup is the only stand-in, pinned to the fixture's registration.
+function routeSender(
+  provider: "github" | "gitlab",
+  fixture: Awaited<ReturnType<typeof materializeRepositoryFixture>>,
+  projectId: number,
+  store: PostgresFoldStore,
+  key: string,
+): (execution: string) => Promise<Response> {
+  const secret = "receipt-scope-secret";
+  const credentialId = "181a4fbb-64d1-44fd-82da-cd191613798c";
+  const credential = {
+    repositoryId: fixture.repositoryId, credentialId, provider, secret, projectId, webhookId: 4242, configuredAt: null,
+    instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null,
+  };
+  const dependencies = {
+    lookupCredential: async () => credential,
+    processWebhook: (delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope) => processWebhook({ store,
+      enqueueReconciliation: (repositoryId, event) => store.enqueueWebhookReconciliation(repositoryId, event),
+    }, delivery, scope),
+  };
+  const url = `https://overflow.test/api/${provider}/webhooks?hook=${credentialId}`;
+  if (provider === "github") {
+    const route = createGitHubWebhookPostHandler(dependencies);
+    const body = JSON.stringify({
+      action: "closed", repository: { id: projectId, full_name: "owner/project" },
+      pull_request: { id: fixture.fold.pullRequests[0].githubPullRequestId, number: 11 },
+    });
+    const signature = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+    return () => route(new Request(url, { method: "POST", body, headers: {
+      "x-github-event": "pull_request", "x-github-delivery": key, "x-hub-signature-256": signature,
+    } }));
+  }
+  const route = createGitLabWebhookPostHandler(dependencies);
+  const body = JSON.stringify({
+    object_kind: "issue",
+    project: { id: projectId, path_with_namespace: "group/project", web_url: "https://gitlab.example.com/group/project" },
+    object_attributes: {
+      id: fixture.fold.issues[0].githubIssueId, iid: 1, title: "Updated", description: "", state: "opened",
+      updated_at: "2026-09-26T12:00:00Z", url: "https://gitlab.example.com/group/project/-/issues/1", action: "reopen",
+    },
+  });
+  return (execution: string) => route(new Request(url, { method: "POST", body, headers: {
+    "x-gitlab-event": "Issue Hook", "x-gitlab-token": secret, "x-gitlab-webhook-uuid": execution, "Idempotency-Key": key,
+  } }));
 }
 
 function deliver(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope) {
