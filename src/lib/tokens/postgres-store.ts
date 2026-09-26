@@ -4,6 +4,7 @@ import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 
 export type ApiTokenAccount = {
   id: string;
+  tokenId: string;
   role: UserRole;
   enforcementState: EnforcementState;
 };
@@ -25,9 +26,9 @@ export type ApiTokenStatus = ApiTokenSummary & { expired: boolean };
  * Issuing is one upsert on the `user_id` unique constraint, which is what makes
  * regeneration revoke the previous token atomically: a delete followed by an
  * insert would leave a window in which the account has no token, and a bare
- * insert a window in which it has two. Reissuing resets `created_at` and
- * `expires_at`, so a summary always describes the token the account currently
- * holds and regeneration restarts its lifetime.
+ * insert a window in which it has two. Reissuing rotates the issuance id,
+ * clears last use, and resets `created_at` and `expires_at`, so a summary
+ * describes the current token and regeneration restarts its lifetime.
  *
  * Expiry is decided here, once, by the database clock: every bearer route
  * resolves its credential through `findAccountByTokenHash`, so an expired
@@ -44,7 +45,8 @@ export class PostgresApiTokenStore {
       insert into api_tokens (user_id, token_hash, expires_at)
       values (${userId}, ${tokenHash}, now() + make_interval(days => ${API_TOKEN_LIFETIME_DAYS}))
       on conflict (user_id) do update
-      set token_hash = excluded.token_hash, created_at = now(), expires_at = excluded.expires_at
+      set id = gen_random_uuid(), token_hash = excluded.token_hash,
+          created_at = now(), expires_at = excluded.expires_at, last_used_at = null
       returning created_at, expires_at
     `;
     return { createdAt: row.created_at, expiresAt: row.expires_at };
@@ -52,19 +54,24 @@ export class PostgresApiTokenStore {
 
   public async findAccountByTokenHash(tokenHash: Buffer): Promise<ApiTokenAccount | null> {
     const [row] = await this.sql<
-      { id: string; role: UserRole; enforcement_state: EnforcementState }[]
+      { id: string; token_id: string; role: UserRole; enforcement_state: EnforcementState }[]
     >`
-      select users.id, users.role, users.enforcement_state
-      from api_tokens
-      join users on users.id = api_tokens.user_id
-      where api_tokens.token_hash = ${tokenHash}
-        and api_tokens.expires_at > now()
-      limit 1
+      with matched_token as (
+        select id, user_id from api_tokens
+        where token_hash = ${tokenHash} and expires_at > now()
+      ), stamped as (
+        update api_tokens set last_used_at = now()
+        where id = (select id from matched_token)
+          and (last_used_at is null or last_used_at < now() - interval '1 minute')
+      )
+      select users.id, matched_token.id as token_id, users.role, users.enforcement_state
+      from matched_token
+      join users on users.id = matched_token.user_id
     `;
     if (row === undefined) {
       return null;
     }
-    return { id: row.id, role: row.role, enforcementState: row.enforcement_state };
+    return { id: row.id, tokenId: row.token_id, role: row.role, enforcementState: row.enforcement_state };
   }
 
   public async getTokenSummary(userId: string): Promise<ApiTokenStatus | null> {

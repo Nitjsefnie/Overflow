@@ -593,6 +593,7 @@ describe("POST /api/repositories", () => {
 const apiToken = `ovf_${"recognisable-api-credential".padEnd(43, "_")}`;
 const tokenAccount: ApiTokenAccount = {
   id: "token-account-id",
+  tokenId: "68200000-0000-4000-8000-000000000001",
   role: "MEMBER",
   enforcementState: "ACTIVE",
 };
@@ -753,7 +754,7 @@ describe("Overflow token registration", () => {
   it.each([
     { account: tokenAccount, credential: apiToken },
     {
-      account: { id: "second-token-account-id", role: "MODERATOR", enforcementState: "ACTIVE" } as const,
+      account: { id: "second-token-account-id", tokenId: "68200000-0000-4000-8000-000000000002", role: "MODERATOR", enforcementState: "ACTIVE" } as const,
       credential: `ovf_${"second-api-credential".padEnd(43, "_")}`,
     },
   ])("registers with a valid token for $account.id using the resolved account and never reads the cookie", async ({ account, credential }) => {
@@ -1043,7 +1044,7 @@ describe("Overflow token registration", () => {
     const identities = [
       { account: tokenAccount, oauth: "stored-github-oauth-token" },
       {
-        account: { id: "second-token-account-id", role: "MEMBER", enforcementState: "ACTIVE" } as const,
+        account: { id: "second-token-account-id", tokenId: "68200000-0000-4000-8000-000000000002", role: "MEMBER", enforcementState: "ACTIVE" } as const,
         oauth: "second-account-github-oauth-token",
       },
     ];
