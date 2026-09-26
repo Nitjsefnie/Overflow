@@ -12,8 +12,16 @@ import { reasonText } from "@/lib/validation/reason";
 
 const MCP_REQUEST_ORIGIN = "http://mcp.internal";
 
-/** The headers of the incoming MCP request a synthesized request carries. */
+/** The credential headers of the incoming MCP request a synthesized request carries. */
 const CREDENTIAL_HEADER_NAMES = ["authorization", "cookie"] as const;
+
+/**
+ * The client-address header a synthesized request carries, kept apart from the
+ * credential list because it authenticates nothing: it lets a wrapped route's
+ * privileged-action journal name the real client rather than the MCP hop.
+ * nginx sets it; `X-Forwarded-For` is client-appendable and is never carried.
+ */
+const CLIENT_ADDRESS_HEADER_NAMES = ["x-real-ip"] as const;
 
 export type WrappedRouteContext = {
   params: Promise<Record<string, string>>;
@@ -114,13 +122,14 @@ interface RouteToolSpec {
 
 /**
  * Builds the ten tools fresh for one incoming request: they close over that
- * request's credential headers, so nothing here outlives the call.
+ * request's credential and client-address headers, so nothing here outlives
+ * the call.
  */
 export function defineMcpTools(
   dependencies: McpToolDependencies,
-  credentialHeaders: Headers,
+  incomingHeaders: Headers,
 ): ToolDefinition[] {
-  const credentials = forwardedCredentials(credentialHeaders);
+  const forwarded = forwardedHeaders(incomingHeaders);
 
   return [
     defineRouteTool(
@@ -133,7 +142,7 @@ export function defineMcpTools(
         handler: dependencies.issuesBoard,
         pathFor: (args) => withQuery("/api/issues", args, ["repository", "openingLabel", "claimState"]),
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -144,7 +153,7 @@ export function defineMcpTools(
         handler: dependencies.settlementsList,
         pathFor: () => "/api/settlements",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -156,7 +165,7 @@ export function defineMcpTools(
         pathFor: (args) => `/api/settlements/${encodeURIComponent(String(args.id))}`,
         idArg: "id",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -167,7 +176,7 @@ export function defineMcpTools(
         handler: dependencies.calibrationCompare,
         pathFor: () => "/api/calibration",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -178,7 +187,7 @@ export function defineMcpTools(
         handler: dependencies.dashboardSummary,
         pathFor: () => "/api/dashboard",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -189,7 +198,7 @@ export function defineMcpTools(
         handler: dependencies.moderationQueue,
         pathFor: () => "/api/moderation/audits",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -200,7 +209,7 @@ export function defineMcpTools(
         handler: dependencies.auditOpen,
         pathFor: () => "/api/moderation",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -212,7 +221,7 @@ export function defineMcpTools(
         pathFor: (args) => `/api/moderation/${encodeURIComponent(String(args.id))}`,
         idArg: "id",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -223,7 +232,7 @@ export function defineMcpTools(
         handler: dependencies.correctionOpen,
         pathFor: () => "/api/overrides",
       },
-      credentials,
+      forwarded,
     ),
     defineRouteTool(
       {
@@ -235,12 +244,12 @@ export function defineMcpTools(
         pathFor: (args) => `/api/overrides/${encodeURIComponent(String(args.id))}`,
         idArg: "id",
       },
-      credentials,
+      forwarded,
     ),
   ];
 }
 
-function defineRouteTool(spec: RouteToolSpec, credentials: Headers): ToolDefinition {
+function defineRouteTool(spec: RouteToolSpec, forwarded: Headers): ToolDefinition {
   return {
     name: spec.name,
     description: spec.description,
@@ -250,7 +259,7 @@ function defineRouteTool(spec: RouteToolSpec, credentials: Headers): ToolDefinit
         const writesBody = spec.method !== "GET";
         const request = new Request(`${MCP_REQUEST_ORIGIN}${spec.pathFor(args)}`, {
           method: spec.method,
-          headers: writesBody ? withJsonContentType(credentials) : credentials,
+          headers: writesBody ? withJsonContentType(forwarded) : forwarded,
           body: writesBody ? JSON.stringify(bodyFrom(spec, args)) : undefined,
         });
         const context = spec.idArg === undefined ? undefined : paramsContext(spec.idArg, args);
@@ -274,13 +283,14 @@ function defineRouteTool(spec: RouteToolSpec, credentials: Headers): ToolDefinit
 }
 
 /**
- * Only the two credential headers cross the boundary, and only when the
- * incoming request actually carried them — never the rest of the MCP
- * transport's headers, which mean nothing to the wrapped routes.
+ * Only the two credential headers and the client-address header cross the
+ * boundary, and only when the incoming request actually carried them — never
+ * the rest of the MCP transport's headers, which mean nothing to the wrapped
+ * routes.
  */
-function forwardedCredentials(incoming: Headers): Headers {
+function forwardedHeaders(incoming: Headers): Headers {
   const forwarded = new Headers();
-  for (const name of CREDENTIAL_HEADER_NAMES) {
+  for (const name of [...CREDENTIAL_HEADER_NAMES, ...CLIENT_ADDRESS_HEADER_NAMES]) {
     const value = incoming.get(name);
     if (value !== null) {
       forwarded.set(name, value);
@@ -293,8 +303,8 @@ function forwardedCredentials(incoming: Headers): Headers {
  * The media-type guard on the write routes accepts a JSON content type, and
  * the Request constructor would otherwise stamp a string body as text/plain.
  */
-function withJsonContentType(credentials: Headers): Headers {
-  const headers = new Headers(credentials);
+function withJsonContentType(forwarded: Headers): Headers {
+  const headers = new Headers(forwarded);
   headers.set("content-type", "application/json");
   return headers;
 }

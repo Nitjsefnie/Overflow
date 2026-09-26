@@ -238,6 +238,41 @@ describe("POST /api/mcp", () => {
     expect(synthesized.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
   });
 
+  /** Drives one audit_open tool call and returns the request the route received. */
+  async function synthesizedAuditOpen(headers: Record<string, string>): Promise<Request> {
+    const auditOpen = vi.fn(async () => Response.json({ ok: true }));
+    const dependencies = endpointDependencies({
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId, tokenId: memberId }),
+      defineTools: vi.fn((incoming: Headers) => stubTools(incoming, { auditOpen })),
+    });
+
+    const response = await createMcpPostHandler(dependencies)(
+      mcpRequest(rpc(4, "tools/call", { name: "audit_open", arguments: auditOpenArguments }), {
+        authorization: `Bearer ${TOKEN}`,
+        ...headers,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(auditOpen).toHaveBeenCalledTimes(1);
+    const [synthesized] = auditOpen.mock.calls[0] as unknown as [Request];
+    return synthesized;
+  }
+
+  it("forwards the outer request's X-Real-IP to the wrapped route, so its journal names the real client", async () => {
+    const synthesized = await synthesizedAuditOpen({ "x-real-ip": "203.0.113.7" });
+
+    expect(synthesized.headers.get("x-real-ip")).toBe("203.0.113.7");
+    expect(synthesized.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("never forwards X-Forwarded-For, nor invents an X-Real-IP from it", async () => {
+    const synthesized = await synthesizedAuditOpen({ "x-forwarded-for": "203.0.113.7" });
+
+    expect(synthesized.headers.get("x-forwarded-for")).toBeNull();
+    expect(synthesized.headers.get("x-real-ip")).toBeNull();
+  });
+
   it("answers a notification with 202 and an empty body", async () => {
     const dependencies = endpointDependencies();
     const notification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
@@ -520,6 +555,36 @@ describe("transport-to-wrapped-route composition", () => {
       auditOpenArguments,
       { kind: "token", tokenId: bearerTokenId },
     );
+  });
+
+  it("journals an MCP-originated write with the outer request's client address", async () => {
+    const bearerTokenId = "00000000-0000-4000-8000-00000000000b";
+    const gate = {
+      getSession: vi.fn().mockResolvedValue(null),
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId, tokenId: bearerTokenId }),
+      getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+    };
+    const { endpoint } = auditOpenComposition({ endpoint: gate, moderation: gate });
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    try {
+      await createMcpPostHandler(endpoint)(
+        mcpRequest(rpc(10, "tools/call", { name: "audit_open", arguments: auditOpenArguments }), {
+          authorization: `Bearer ${TOKEN}`,
+          "x-real-ip": "2001:db8::17",
+        }),
+      );
+
+      expect(consoleInfo).toHaveBeenCalledExactlyOnceWith("Privileged action", {
+        action: "audit.open",
+        actorId: memberId,
+        credential: { kind: "token", tokenId: bearerTokenId },
+        clientAddress: "2001:db8::17",
+        subject: { auditId: openedAudit.id, targetAccountId },
+      });
+    } finally {
+      consoleInfo.mockRestore();
+    }
   });
 });
 
