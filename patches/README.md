@@ -6,19 +6,22 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Six groups of defects. The first is a shutdown that stalls after a backend
+Seven groups of defects. The first is a shutdown that stalls after a backend
 loss, during reconnect backoff, or around a reservation; the second is a
 reconnect loop that retries with no delay at all; the third is a `reserve()`
 that never settles; the fourth answers a dead backend's error to the query that
 replaces it; the fifth hands queued work to a connection the pool has already
 taken back; the sixth lets a shutdown report itself finished while work the
-pool accepted is neither run nor refused. The shutdown and reconnect repairs
+pool accepted is neither run nor refused; the seventh builds a new connection's
+first query before the array types it fetched are applied, so an `sql.array()`
+parameter in that query binds as a scalar. The shutdown and reconnect repairs
 share the first section below; the remaining groups each have their own.
 
-`git` renders the patch as fifteen hunks: nine in `src/connection.js`, four
+`git` renders the patch as seventeen hunks: eleven in `src/connection.js`, four
 in `src/index.js`, one in `src/queue.js`, and one in `cjs/src/index.js` — the
-CJS load guard, which repairs nothing and has its own section below. Some
-`src/` hunks carry several repairs:
+CJS load guard, which repairs nothing and has its own section below. The
+array-type repair is a single edit to one function that `git` renders as two of
+the `src/connection.js` hunks. Some `src/` hunks carry several repairs:
 `reserve()`'s refusal and rejection wrapper share a hunk with `release()`'s
 ownership guard and shutdown termination branch. The synchronous
 `endRequested` assignment shares a hunk with the backlog drain in `end()`;
@@ -671,6 +674,74 @@ not a check. A future edit that queues work after `end()` has drained would
 bring it back, and the only route that still can is `reserve()`, which the hunk
 above closes.
 
+### An `sql.array()` parameter in a new client's first query binds as a scalar
+
+One edit to `fetchArrayTypes()` in the package's own `src/connection.js`, which
+`git` renders as two hunks.
+
+On a freshly created client, the first query carrying an `sql.array(...)`
+parameter sent its array as the scalar element type. The server received
+`"1,2"` as text and answered `malformed array literal` (`22P02`) under an array
+cast, `op ANY/ALL (array) requires array on right side` under an uncast
+`= any(...)`, or `cannot cast type bigint to bigint[]` for an explicit element
+type. With no cast at all the query succeeded and returned the scalar string
+`"a,b"` where an array was sent, which is wrong data rather than an error. A
+client that had completed any earlier query was unaffected, and a `max: 10`
+client given three concurrent cold queries failed exactly one of them. Every
+`sql.array` call site in this repository is on that path whenever it is the
+first query its client sends.
+
+The cause, by line in stock 3.4.9 `src/`:
+
+- `index.js:326`, `array()`, builds a `Parameter` that holds a reference to
+  `options.shared.typeArrayMap`, which starts empty (`index.js:498`).
+- `types.js:89`, `handleValue`, reads that map when the query is **built**:
+  `x.array[x.type || inferType(x.value)] || x.type || ...`. An empty map falls
+  back to the scalar element type: 25 (text) for numbers and strings, or the
+  explicit type.
+- `connection.js:224-230`, `build()`, calls `handleValue`, and `execute()` calls
+  `build()` synchronously.
+- `connection.js:562-564`: the first `ReadyForQuery` of a connection with
+  `initial` set calls `fetchArrayTypes()` (`connection.js:768-779`). That
+  function awaits the `pg_type` query and fills the map in the continuation
+  (`connection.js:778`, through `addArrayType` at `connection.js:784`).
+- The fetch's own `ReadyForQuery` resolves that query (`connection.js:544`),
+  which only queues the continuation. Then, in the same synchronous call and
+  with `initial` still set, it goes on to `execute(initial)`
+  (`connection.js:567`), building the opening query against the empty map.
+
+Each connection fetches types itself (`needsTypes` at `connection.js:84` and
+`:368`). The first connection to finish is the one that fails; its continuation
+fills the shared map before the other sockets' `ReadyForQuery` is handled,
+which is why exactly one of the concurrent queries failed.
+
+The repair applies the fetched types inside the fetch query's `resolve()`,
+which `ReadyForQuery` calls synchronously before it reaches the opening query.
+It wraps the query's own `resolve` rather than replacing it, so the query still
+settles and `await query` still observes it. A failing type fetch rejects
+exactly as it does in stock. This is the mechanism `fetchState()`
+(`connection.js:800-810`) already uses to apply its result before the same
+`ReadyForQuery` reads it. The ordering invariant is local to the one function
+that produces the types, so the patched `ReadyForQuery` and its startup
+bookkeeping stay unchanged. A reservation's first query was already built
+after the continuation had run and is unaffected either way.
+
+`tests/db/sql-array-cold-client.test.ts` holds it. Every case sends its query
+as a brand-new client's first query and asserts the returned value: `bigint[]`,
+`int[]`, `uuid[]` and `text[]` casts, the application's
+`x = any(${sql.array([...])}::bigint[])` shape, an uncast `= any(...)`, an
+uncast parameter that must come back as an array, an explicit element type,
+three concurrent first queries on a `max: 10` client, and the first query on a
+freshly reserved connection. Reverting the repair in the installed module fails
+every case except the reserved one, which pins the reserve startup path.
+
+Like every repair above, it is deliberately absent from `cjs/`. That build
+throws at load (the next section), so the repair has no CJS copy to drift.
+
+This is Overflow issue 711. It reproduces identically on stock
+`postgres@3.4.9`, and is reported upstream as
+https://github.com/porsager/postgres/issues/789 (comment 5845365113).
+
 ### `require('postgres')` throws instead of silently running the stock client
 
 One hunk, in the package's prebuilt CommonJS entry `cjs/src/index.js` — the
@@ -709,7 +780,7 @@ guard. The correct-proof recipe, updated:
 - `readlink -f node_modules/postgres` resolves into a store directory whose
   `_patch_hash=` equals the `hash:` under `patchedDependencies` in
   `pnpm-lock.yaml`, which equals the patch file's sha256;
-- the hunks — fifteen — are present verbatim in the installed files the patch
+- the hunks — seventeen — are present verbatim in the installed files the patch
   names; and
 - the require probe throws.
 
@@ -717,8 +788,8 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
 
 ### Housekeeping
 
-- **The repairs land only in the ESM build.** Fourteen of the fifteen hunks
-  land in `src/`; the fifteenth is the CJS load guard (the section above). The package
+- **The repairs land only in the ESM build.** Sixteen of the seventeen hunks
+  land in `src/`; the seventeenth is the CJS load guard (the section above). The package
   also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
   query in the slot in `error()`, leave `closed()` without the settle and with
   the stale `errorResponse`, still take the connect-phase early return above
@@ -730,7 +801,9 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   spent `release()` hand a connection back to the pool, still leave `end()`'s
   backlog neither run nor refused, still let `reserve()` queue into an ending
   pool, lack the synchronous `endRequested` admission flag, still return a
-  released reservation to a pool that is ending, and carry no `peek` in their
+  released reservation to a pool that is ending, still build a new
+  connection's first query before its fetched array types are applied, and
+  carry no `peek` in their
   `queue.js` — the same as on `main`, so this is a standing property of the
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
@@ -756,7 +829,8 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   `tests/db/pipelined-query-after-build-failure.test.ts`,
   `tests/db/reserve-contract.test.ts`,
   `tests/db/reserve-shutdown-race.test.ts`,
-  `tests/db/postgres-queue.test.ts` and
+  `tests/db/postgres-queue.test.ts`,
+  `tests/db/sql-array-cold-client.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
   whether the release really carries every fix without the regression. All of
   them: the shutdown suites cover different orderings, and a release that settles

@@ -66,6 +66,19 @@ describe("an sql.array parameter in a new client's first query", () => {
     expect(rows.map((row) => row.x)).toEqual(["1001"]);
   });
 
+  it("binds numbers cast to int[] as an array", async () => {
+    const rows = await withColdClient(1, (sql) => sql`select ${sql.array([1, 2])}::int[] as v`);
+
+    expect(rows.map((row) => row.v)).toEqual([[1, 2]]);
+  });
+
+  it("binds uuid strings cast to uuid[] as an array", async () => {
+    const id = "00000000-0000-0000-0000-000000000001";
+    const rows = await withColdClient(1, (sql) => sql`select ${sql.array([id])}::uuid[] as v`);
+
+    expect(rows.map((row) => row.v)).toEqual([[id]]);
+  });
+
   it("binds strings cast to text[] as an array", async () => {
     const rows = await withColdClient(1, (sql) => sql`select ${sql.array(["a", "b"])}::text[] as v`);
 
