@@ -27,10 +27,12 @@ function untouchableStore(): CredentialStore {
 }
 
 function previousKeyRow(): StoredCredential {
-  const binding = usersColumn.bind({ github_user_id: "7001" });
+  const naturalKey = { github_user_id: "7001" };
+  const binding = usersColumn.bind(naturalKey);
   return {
     id: "00000000-0000-4000-8000-000000000001",
     envelope: Buffer.from(encryptToken("oauth-token", keys.previous!, binding), "utf8"),
+    naturalKey,
     binding,
   };
 }

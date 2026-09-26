@@ -261,12 +261,12 @@ describe("re-encrypting stored credentials under the current key", () => {
     const real = postgresCredentialStore(sql);
     const store: CredentialStore = {
       readBatch: real.readBatch,
-      async replaceIfUnchanged(column, id, previous, next) {
-        if (id === raced.id) {
+      async replaceIfUnchanged(column, credential, next) {
+        if (credential.id === raced.id) {
           await sql`update users set encrypted_oauth_token = ${Buffer.from(encryptToken("concurrent-oauth", currentKey,
             credentialBinding.userOAuthToken(raced.githubUserId)), "utf8")} where id = ${raced.id}`;
         }
-        return real.replaceIfUnchanged(column, id, previous, next);
+        return real.replaceIfUnchanged(column, credential, next);
       },
     };
 
@@ -277,6 +277,57 @@ describe("re-encrypting stored credentials under the current key", () => {
     const repositories = new PostgresRepositoryStore(sql, currentKey, "");
     await expect(repositories.getGitHubAccessToken(raced.id)).resolves.toBe("concurrent-oauth");
     await expect(repositories.getGitHubAccessToken(untouched.id)).resolves.toBe(legacyV1Plaintext);
+  });
+
+  // Each case moves one natural-key column the row's binding was built from,
+  // after the read and before the compare-and-swap, leaving the ciphertext
+  // untouched. `provider` has no case: its check constraint admits one value.
+  it.each([
+    {
+      table: "users", keyColumn: "github_user_id",
+      async seed() { return (await insertUser(() => legacyV1Envelope)).id; },
+      async move(id: string) { await sql`update users set github_user_id = ${externalId++} where id = ${id}`; },
+    },
+    {
+      table: "user_forge_identities", keyColumn: "instance_url",
+      async seed() { return (await insertForgeIdentity((await insertUser(null)).id, () => legacyV1Envelope)).id; },
+      async move(id: string) {
+        await sql`update user_forge_identities set instance_url = 'https://moved.example.com' where id = ${id}`;
+      },
+    },
+    {
+      table: "user_forge_identities", keyColumn: "forge_user_id",
+      async seed() { return (await insertForgeIdentity((await insertUser(null)).id, () => legacyV1Envelope)).id; },
+      async move(id: string) { await sql`update user_forge_identities set forge_user_id = ${externalId++} where id = ${id}`; },
+    },
+    {
+      table: "registered_repositories", keyColumn: "webhook_credential_id",
+      async seed() {
+        const sponsor = await insertUser(null);
+        const repository = await registerRepository(previousKey, sponsor.id, "moved-secret");
+        return repository.id;
+      },
+      async move(id: string) {
+        await sql`update registered_repositories set webhook_credential_id = ${randomUUID()} where id = ${id}`;
+      },
+    },
+  ])("skips a $table row whose $keyColumn changed between read and write", async ({ table, seed, move }) => {
+    const id = await seed();
+    const real = postgresCredentialStore(sql);
+    const store: CredentialStore = {
+      readBatch: real.readBatch,
+      async replaceIfUnchanged(column, credential, next) {
+        if (credential.id === id) await move(id);
+        return real.replaceIfUnchanged(column, credential, next);
+      },
+    };
+    const before = (await snapshot()).get(`${table}:${id}`);
+
+    const result = await run([], { store });
+
+    const tableSummary = result.output.find((line) => line.table === table && "reencrypted" in line);
+    expect(tableSummary).toMatchObject({ reencrypted: 0, skipped: 1, failed: 0 });
+    expect((await snapshot()).get(`${table}:${id}`)).toBe(before);
   });
 
   it("reports an undecryptable row by table and id only, keeps going, and exits non-zero", async () => {
