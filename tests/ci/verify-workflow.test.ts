@@ -94,6 +94,79 @@ describe("the verify workflow's page-geometry step", () => {
 });
 
 /**
+ * The verify job's "Ratchet documents" step is the pull_request half of the
+ * issue 647 gate: it runs main's scripts/check-ratchets.ts against the merge
+ * ref's parents — HEAD^1 the base tip, HEAD^2 the pull request head — after
+ * completing the history of both sides, because the checkout is shallow at
+ * that point and a shallow history can hand git merge-base a wrong base
+ * without erroring. The wiring is pinned exactly because a rewiring can be
+ * silent: a swapped parent order judges the head against the wrong side, a
+ * depth-limited fetch leaves the merge base untrustworthy, and an added `if`
+ * or continue-on-error leaves the step in the file while CI stops gating on
+ * it. (The pull_request_target half lives in ratchet-guard.yml, pinned by
+ * tests/api/ci-workflows.test.ts.)
+ *
+ * Assertions are made on the parsed YAML data (step.name / step.run / step.if),
+ * never on the raw bytes, so reformatting the file does not disturb them and
+ * a rewired or un-gated step fails loudly here instead of quietly narrowing
+ * what CI gates on.
+ */
+describe("the verify workflow's ratchet documents step", () => {
+  let steps: WorkflowStep[] = [];
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    const workflow = parse(source) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+
+    steps = workflow.jobs?.verify?.steps ?? [];
+  });
+
+  const ratchet = () => steps.filter((step) => step.name === "Ratchet documents");
+
+  it("exists exactly once in the verify job", () => {
+    expect(ratchet(), "the verify job must keep its Ratchet documents step").toHaveLength(1);
+  });
+
+  it("fetches full history and checks the base parent against the head parent", () => {
+    const [step] = ratchet();
+
+    expect(step, "the verify job must contain the Ratchet documents step").toBeDefined();
+    expect(
+      step.run,
+      "the step must fetch --unshallow (a depth-limited history can make git merge-base " +
+        "return a wrong base without erroring) and then compare HEAD^1 — the merge ref's " +
+        "base parent — with HEAD^2 — the pull request head — in that order; a swapped " +
+        "order judges the base against the head's documents and passes a real relaxation",
+    ).toBe(
+      'git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"\n' +
+        "node scripts/check-ratchets.ts HEAD^1 HEAD^2\n",
+    );
+  });
+
+  it("gates pull requests only, and gates unconditionally when it runs", () => {
+    const [step] = ratchet();
+
+    expect(step, "the verify job must contain the Ratchet documents step").toBeDefined();
+    expect(
+      step.if,
+      "the step must run on pull_request events exactly — a push run has no merge ref, " +
+        "so HEAD^2 does not exist there",
+    ).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(
+      step.env,
+      "the pull request number must reach the fetch through env, never ${{ }} interpolation " +
+        "in the run block",
+    ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
+    expect(
+      Boolean(step["continue-on-error"]),
+      "the step must not be continue-on-error — a tolerated failure does not gate the merge",
+    ).toBe(false);
+  });
+});
+
+/**
  * Concurrency is the difference between a superseded pull request branch run
  * (fine to cancel) and a merged SHA's run (never fine): the deploy gate in
  * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
