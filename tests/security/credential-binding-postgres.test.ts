@@ -10,7 +10,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken, isEnvelopeCurrent } from "@/lib/security/token-cipher";
 
 // The real stores, migrations, and pool teardown must share this file's module
 // graph, not consumers that captured another file's database mock.
@@ -146,6 +146,26 @@ describe("stored credentials are bound to their row", () => {
     `;
     await expect(new PostgresForgeIdentityStore(sql, currentKey, legacyV1Key)
       .getForgeToken(forgeOwner.id, "https://legacy.example.com")).resolves.toMatchObject({ token: legacyV1Plaintext });
+  });
+
+  it("seals new webhook secrets under the current key only while a previous key is configured", async () => {
+    const sponsor = await insertUser();
+    const store = new PostgresRepositoryStore(sql, currentKey, retiredKey);
+    const created = await registerWithWebhook(store, sponsor.id, "rotation-window");
+    const staged = await registerWithWebhook(store, sponsor.id, "unused");
+    await sql`update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null,
+      webhook_configured_at = null where id = ${staged.repositoryId}`;
+    const [target] = await sql<{ github_repository_id: string; github_webhook_id: string }[]>`
+      select github_repository_id, github_webhook_id from registered_repositories where id = ${staged.repositoryId}`;
+    await store.stageWebhookCredential({ repositoryId: staged.repositoryId, provider: "github", instanceUrl: null,
+      projectId: Number(target!.github_repository_id), webhookId: Number(target!.github_webhook_id) });
+
+    const rows = await sql<{ encrypted_webhook_secret: Buffer }[]>`
+      select encrypted_webhook_secret from registered_repositories where id in ${sql([created.repositoryId, staged.repositoryId])}`;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(isEnvelopeCurrent(Buffer.from(row.encrypted_webhook_secret).toString("utf8"), currentKey)).toBe(true);
+    }
   });
 
   it("reads a credential sealed under the previous key after the current key rotates", async () => {

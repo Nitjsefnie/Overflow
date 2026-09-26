@@ -51,7 +51,7 @@ import {
   applyGrantedSettlementOverride,
 } from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
-import { credentialBinding, decryptToken, loadTokenKeySet } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
 type RepositoryFoldRevisionCountsRow = {
   repository_id: string;
@@ -880,8 +880,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     if (row === undefined || row.encrypted_oauth_token === null) {
       return null;
     }
-    const keys = { TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey };
-    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), loadTokenKeySet(keys),
+    const keys = tokenKeySetFrom(this.tokenEncryptionKey, this.previousTokenEncryptionKey);
+    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), keys,
       credentialBinding.userOAuthToken(row.github_user_id));
   }
 

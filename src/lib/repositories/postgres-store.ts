@@ -23,7 +23,7 @@ import {
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { getCoordinationSql, getSql } from "@/lib/db/client";
-import { credentialBinding, decryptToken, encryptToken, loadTokenKeySet, type TokenKeySet } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, encryptToken, tokenKeySetFrom, type TokenKeySet } from "@/lib/security/token-cipher";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { generateWebhookCredential, type WebhookCredentialRecord, type WebhookCredentialTarget } from "@/lib/webhooks/credentials";
 
@@ -76,10 +76,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   ) {}
 
   private tokenKeys(): TokenKeySet {
-    return loadTokenKeySet({
-      TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey,
-      TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey,
-    });
+    return tokenKeySetFrom(this.tokenEncryptionKey, this.previousTokenEncryptionKey);
   }
 
   public async findRepositoryProviderById(githubRepositoryId: number): Promise<string | null> {
