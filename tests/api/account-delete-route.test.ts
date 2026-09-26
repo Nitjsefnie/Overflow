@@ -42,7 +42,12 @@ function dependencies() {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.clearAllMocks();
+  // resetAllMocks, not clearAllMocks: a queued mockResolvedValueOnce survives
+  // clearing, so once-values queued by an earlier refusal test that never
+  // reaches signOut absorb the next test's call — its in-mock ordering
+  // assertion then never runs. Resetting drops the queued once-values while
+  // keeping each vi.fn(implementation) default.
+  vi.resetAllMocks();
 });
 afterAll(() => vi.resetModules());
 
