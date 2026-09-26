@@ -765,7 +765,7 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate (absent)");
-    expect(result.stderr).toContain("nothing has been mutated");
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
     const entries = await readLog(fixture.shimLog);
     expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
@@ -837,7 +837,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate");
     expect(result.stderr).toContain("pending");
-    expect(result.stderr).toContain("nothing has been mutated");
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
     const entries = await readLog(fixture.shimLog);
     expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
@@ -1007,6 +1007,7 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(`HEAD in ${fixture.tree} is not an ancestor of the fetched main (${FIXTURE_HASH})`);
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
     expect((await readLog(fixture.shimLog)).map(describeEntry)).toEqual([
       `flock -w 900 9`,
       `git fetch origin main`,
@@ -1204,6 +1205,9 @@ describe("scripts/deploy-revision.sh", () => {
  * parses the fixture slug, and a clone-local insteadOf rewrites it to the
  * origin repo, so the fetch never leaves the fixture. The origin commits a
  * .gitignore for the fixture's release layout, so the tree starts clean.
+ * The clone fetches BEFORE origin gains its three commits, so its FETCH_HEAD
+ * and origin/main both sit at the base: only the deploy's own fetch can
+ * bring the tip.
  * Global and system git config are shut out of the fixture and the deploy
  * alike, so a host setting (pull.rebase, say) cannot decide the outcome.
  */
@@ -1228,19 +1232,22 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   run(origin, ["add", ".gitignore", "app.txt"]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
-  for (const n of [1, 2, 3]) {
-    await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
-    run(origin, ["add", "incoming.txt"]);
-    run(origin, ["commit", "-q", "-m", `incoming ${n}`]);
-  }
-  const tip = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
   git("init", "-q", "-b", "main");
   git("remote", "add", "origin", FIXTURE_REMOTE_URL);
   git("config", `url.${origin}.insteadOf`, FIXTURE_REMOTE_URL);
   git("fetch", "-q", "origin", "main");
   git("checkout", "-q", "-B", "main", behind);
+  for (const n of [1, 2, 3]) {
+    await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
+    run(origin, ["add", "incoming.txt"]);
+    run(origin, ["commit", "-q", "-m", `incoming ${n}`]);
+  }
+  const tip = run(origin, ["rev-parse", "HEAD"]);
   expect(git("status", "--porcelain=v1", "-uall"), "the fixture tree starts clean").toBe("");
+  for (const ref of ["FETCH_HEAD", "origin/main"]) {
+    expect(git("rev-parse", ref), `${ref} starts at the base, not the tip`).toBe(behind);
+  }
   return { fixture, behind, tip, git };
 }
 
@@ -1288,8 +1295,40 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(`HEAD in ${fixture.tree} is not an ancestor of the fetched main (${tip})`);
+    expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
     expect(git("rev-parse", "HEAD")).toBe(diverged);
     expect((await readLog(fixture.shimLog)).some((entry) => entry.cmd === "gh"), "the CI gate never ran").toBe(false);
+  });
+
+  it("refuses a tree ahead of main before either gate, leaving HEAD where it was", async () => {
+    const { fixture, tip, git } = await makeGitFixture();
+    // The clone catches up to main, then carries one commit main does not
+    // have: HEAD is a descendant of the fetched tip, never an ancestor.
+    git("fetch", "-q", "origin", "main");
+    git("merge", "-q", "--ff-only", tip);
+    await writeFile(path.join(fixture.tree, "local.txt"), "local only\n");
+    git("add", "local.txt");
+    git("commit", "-q", "-m", "local commit ahead of main");
+    const ahead = git("rev-parse", "HEAD");
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`HEAD in ${fixture.tree} is not an ancestor of the fetched main (${tip})`);
+    expect(git("rev-parse", "HEAD")).toBe(ahead);
+    expect(git("status", "--porcelain=v1", "-uall")).toBe("");
+    expect((await readLog(fixture.shimLog)).some((entry) => entry.cmd === "gh"), "the CI gate never ran").toBe(false);
+  });
+
+  it("deploys what its own fetch retrieved even when no refspec maps main to origin/main", async () => {
+    const { fixture, behind, tip, git } = await makeGitFixture();
+    // A single-branch or custom-refspec clone: the fetch writes FETCH_HEAD but
+    // leaves origin/main where it was, at the base.
+    git("config", "--unset-all", "remote.origin.fetch");
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "origin/main"), "the premise: origin/main did not move").toBe(behind);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
   });
 
   it("fast-forwards to the fetched commit once the gates pass, and records it as the release's source", async () => {

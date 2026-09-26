@@ -633,8 +633,9 @@ immediately, and a check whose latest run is queued, in progress or has not
 been created yet makes the script wait, polling every 15 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
 the still-pending checks named, an absent run reported as `<check> (absent)`.
-A refused gate mutates nothing: the tree has not moved yet, so it stays on the
-commit it was on.
+A refused gate leaves `HEAD`, the index and the working tree untouched, so the
+tree stays on the commit it was on; only the refs the fetch wrote
+(`FETCH_HEAD`, `origin/main`) have moved.
 `OVERFLOW_DEPLOY_CI_GATE=skip` bypasses the entire gate with a loud warning
 naming the skip and the SHA, and is reserved for rollback or recovery deploys
 when main's CI is red; unset or empty enforces the gate, and any other value
@@ -719,10 +720,11 @@ before touching anything and passes it as `--expect-current`, and
 off-procedure actor — an old copy of this document, a hand-run switch —
 therefore cannot silently supersede an in-flight deploy: production never moves
 backward and an already-verified release is never silently discarded. When the
-switch reports the mismatch, re-run the whole procedure from `git pull`
-onwards. A missing or dangling `.next` at anchor time is a host that needs
-repair or the one-time migration, not a routine deploy; the conditional switch
-refuses that state rather than building on it.
+switch reports the mismatch, re-run the whole procedure: the script from the
+start, or the manual block below from `git pull` onwards. A missing or
+dangling `.next` at anchor time is a host that needs repair or the one-time
+migration, not a routine deploy; the conditional switch refuses that state
+rather than building on it.
 
 **Migrations apply before the build, and the release they accompany starts
 serving only at the switch.** Between those points the previous release serves
