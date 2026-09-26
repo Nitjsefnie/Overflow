@@ -130,6 +130,22 @@ jobs:
       - name: Module size ceilings
         run: node scripts/check-module-size.ts
 
+      # A pull request must not relax its own ratchet documents (issue 647):
+      # the coverage floor, the module size ceilings and the module size
+      # baseline may only tighten. The merge ref merges the head into the
+      # base, so HEAD^1 is the base tip and HEAD^2 the head, and the check
+      # compares each document at their merge base with the head's copy. The
+      # checkout is depth-1, and a shallow history makes git merge-base fail
+      # — or worse, return a wrong base without erroring — so the step first
+      # completes the history of both sides before checking.
+      - name: Ratchet documents
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --unshallow origin main "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          node scripts/check-ratchets.ts HEAD^1 HEAD^2
+
       - name: Typecheck
         run: pnpm typecheck
 
