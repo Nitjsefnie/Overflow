@@ -13,3 +13,15 @@ updates:
       # --frozen-lockfile`. Bump postgres by hand only — extend the patch and update the
       # lockfile hash together.
       - dependency-name: "postgres"
+    groups:
+      # react-dom refuses to load beside any other react version ("Incompatible
+      # React versions"), and the @types pair peers the same way, so these four
+      # move together in one pull request or not at all. Exact names only: a
+      # wildcard such as `*react*` would also sweep in @vitejs/plugin-react and
+      # @testing-library/react.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
