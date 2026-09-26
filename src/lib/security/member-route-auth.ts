@@ -1,7 +1,7 @@
 import type { UserRole } from "@/lib/db/types";
 import {
   resolveRouteCredential,
-  type RouteCredentialSession,
+  type ResolvedRouteCredential,
 } from "@/lib/security/route-credential";
 
 /**
@@ -19,7 +19,7 @@ export type MemberRouteSession = {
  */
 export type MemberRouteDependencies = {
   getSession: () => Promise<MemberRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
 
@@ -61,7 +61,7 @@ export async function requiredMemberSession(
   request: Request,
   dependencies: MemberRouteDependencies,
 ): Promise<{ user: { id: string; role: UserRole } } | Response> {
-  let credential: RouteCredentialSession | Response | null;
+  let credential: ResolvedRouteCredential | Response | null;
   try {
     credential = await resolveRouteCredential(request, dependencies);
   } catch (error) {

@@ -10,6 +10,7 @@ import {
   type ModeratorSummary,
 } from "@/lib/moderation/service";
 import { guardByCredential } from "@/lib/security/route-credential";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const roleChangeSchema = z
@@ -29,12 +30,13 @@ export type ModeratorRouteService = {
     actor: { id: string; role: UserRole },
     targetAccountId: string,
     moderator: boolean,
+    credential?: RouteCredentialReference | null,
   ): Promise<ModeratorRoleChange>;
 };
 
 export type ModeratorRouteDependencies = {
   getSession: () => Promise<ModeratorRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModeratorRouteService>;
 };
@@ -83,6 +85,7 @@ export function createModeratorPostHandler(dependencies: ModeratorRouteDependenc
         session.user,
         input.targetAccountId,
         input.moderator,
+        session.credential,
       );
       return Response.json({ change });
     } catch (error) {

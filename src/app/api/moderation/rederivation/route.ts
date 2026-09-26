@@ -34,7 +34,7 @@ export type RederivationRouteService = {
 
 export type RederivationRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<RederivationRouteService>;
 };

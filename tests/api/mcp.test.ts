@@ -486,14 +486,15 @@ describe("transport-to-wrapped-route composition", () => {
   });
 
   it("carries the bearer credential through both gates to the wrapped moderation service", async () => {
+    const bearerTokenId = "00000000-0000-4000-8000-00000000000b";
     const { endpoint, openAccountAudit } = auditOpenComposition({
       endpoint: {
         getSession: vi.fn().mockResolvedValue(null),
-        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId }),
+        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId, tokenId: bearerTokenId }),
         getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
       },
       moderation: {
-        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId }),
+        findAccountByTokenHash: vi.fn().mockResolvedValue({ id: memberId, tokenId: bearerTokenId }),
         getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
       },
     });
@@ -507,7 +508,8 @@ describe("transport-to-wrapped-route composition", () => {
 
     // The bearer credential authenticates the MCP request and is forwarded on
     // the synthesized request, so the wrapped route authenticates the same
-    // account through its own gate and the write reaches the service in band.
+    // account through its own gate — resolving to the same token issuance — and
+    // the write reaches the service in band, carrying the issuance reference.
     expect(response.status).toBe(200);
     expect(body.result.isError).toBeUndefined();
     expect(body.result.content).toEqual([
@@ -516,6 +518,7 @@ describe("transport-to-wrapped-route composition", () => {
     expect(openAccountAudit).toHaveBeenCalledExactlyOnceWith(
       { id: memberId, role: "MODERATOR" },
       auditOpenArguments,
+      { kind: "token", tokenId: bearerTokenId },
     );
   });
 });

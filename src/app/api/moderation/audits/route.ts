@@ -13,7 +13,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 export type ModerationAuditsRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   listOpenAudits: () => Promise<OpenAuditProjection[]>;
 };

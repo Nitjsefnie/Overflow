@@ -41,7 +41,7 @@ export type ModerationRouteService = Pick<
 
 export type ModerationRouteDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<ModerationRouteService>;
 };
@@ -81,7 +81,11 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
     }
 
     try {
-      const audit = await (await dependencies.createService()).openAccountAudit(session.user, input);
+      const audit = await (await dependencies.createService()).openAccountAudit(
+        session.user,
+        input,
+        session.credential,
+      );
       return Response.json({ audit }, { status: 201 });
     } catch (error) {
       return moderationErrorResponse(error);
@@ -111,6 +115,7 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
         session.user,
         input.targetAccountId,
         input.plan,
+        session.credential,
       );
       return Response.json({ recalibration });
     } catch (error) {

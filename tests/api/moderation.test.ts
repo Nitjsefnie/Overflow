@@ -661,6 +661,7 @@ describe("recalibration adjustment apply API", () => {
       { id: moderatorSession.user.id, role: "MODERATOR" },
       targetAccountId,
       adjustmentReason,
+      { kind: "session" },
     );
   });
 
@@ -837,6 +838,7 @@ describe("recalibration adjustment reversal API", () => {
       { id: moderatorSession.user.id, role: "MODERATOR" },
       appliedAdjustmentId,
       reversalReason,
+      { kind: "session" },
     );
   });
 
@@ -979,6 +981,7 @@ describe("reason length caps", () => {
     expect(open).toHaveBeenCalledExactlyOnceWith(
       { id: moderatorSession.user.id, role: "MODERATOR" },
       { ...openPayload(), reason: maxReason },
+      { kind: "session" },
     );
   });
 
@@ -1012,6 +1015,7 @@ describe("reason length caps", () => {
       { id: moderatorSession.user.id, role: "MODERATOR" },
       targetAccountId,
       maxReason,
+      { kind: "session" },
     );
   });
 
@@ -1048,6 +1052,7 @@ describe("reason length caps", () => {
         { id: moderatorSession.user.id, role: "MODERATOR" },
         auditId,
         maxReason,
+        { kind: "session" },
       );
     },
   );
@@ -1086,6 +1091,7 @@ describe("reason length caps", () => {
       { id: moderatorSession.user.id, role: "MODERATOR" },
       targetAccountId,
       maxReason,
+      { kind: "session" },
     );
   });
 
@@ -1119,6 +1125,7 @@ describe("reason length caps", () => {
       { id: moderatorSession.user.id, role: "MODERATOR" },
       appliedAdjustmentId,
       maxReason,
+      { kind: "session" },
     );
   });
 
@@ -1534,6 +1541,7 @@ describe("moderation mutations reachable only from the deployment's own origin",
       { id: moderatorSession.user.id, role: "MODERATOR" },
       targetAccountId,
       true,
+      { kind: "session" },
     );
   });
 });

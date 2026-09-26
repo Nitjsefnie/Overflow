@@ -25,6 +25,9 @@ import {
   distributeAdjustmentLines,
 } from "@/lib/moderation/adjustment";
 import type { CalibrationCohortSnapshot } from "@/lib/moderation/service";
+import { parseStoredSnapshot } from "@/lib/moderation/snapshot";
+import { credentialKind, credentialTokenId } from "@/lib/moderation/writer-credential";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 
 /** Why a credit-adjustment action was refused with a conflict. */
 export type RecalibrationCreditConflict =
@@ -100,11 +103,13 @@ export type RecalibrationCreditStore = {
     actorId: string;
     targetAccountId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult>;
   reverseModerationCreditAdjustment(input: {
     actorId: string;
     adjustmentId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult>;
   listCreditAdjustments(targetAccountId: string): Promise<CreditAdjustmentRecord[]>;
 };
@@ -171,6 +176,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     targetAccountId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.applyRecalibrationCreditAdjustmentInTransaction(input).catch((error) => {
       // Two applies racing past the same audit are separated by the partial
@@ -188,6 +194,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     targetAccountId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.sql.begin(async (transaction) => {
       const [target] = await transaction<{ id: string; enforcement_state: EnforcementState }[]>`
@@ -239,14 +246,17 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
       const [event] = await transaction<{ id: string }[]>`
         insert into moderation_events (
           target_user_id, actor_id, audit_id, prior_state, new_state, reason,
-          cohort_definition, cohort_statistics, recalibration_plan
+          cohort_definition, cohort_statistics, recalibration_plan,
+          credential_kind, credential_token_id
         )
         values (
           ${target.id}, ${input.actorId}, ${audit.id},
           ${target.enforcement_state}, ${target.enforcement_state}, ${input.reason},
           ${transaction.json(cohortDefinition as unknown as JSONValue)},
           ${transaction.json(comparison as unknown as JSONValue)},
-          null
+          ${null},
+          ${credentialKind(input.credential)},
+          ${credentialTokenId(input.credential)}
         )
         returning id
       `;
@@ -309,6 +319,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     adjustmentId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.reverseModerationCreditAdjustmentInTransaction(input).catch((error) => {
       // Two reversals racing for the same original are separated by the
@@ -326,6 +337,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     adjustmentId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.sql.begin(async (transaction) => {
       const [original] = await transaction<AdjustmentCoreRow[]>`
@@ -374,11 +386,14 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
       // the original adjustment row and its lines, carried by linkage.
       const [event] = await transaction<{ id: string }[]>`
         insert into moderation_events (
-          target_user_id, actor_id, audit_id, prior_state, new_state, reason
+          target_user_id, actor_id, audit_id, prior_state, new_state, reason,
+          credential_kind, credential_token_id
         )
         values (
           ${target.id}, ${input.actorId}, ${original.calibration_audit_id},
-          ${target.enforcement_state}, ${target.enforcement_state}, ${input.reason}
+          ${target.enforcement_state}, ${target.enforcement_state}, ${input.reason},
+          ${credentialKind(input.credential)},
+          ${credentialTokenId(input.credential)}
         )
         returning id
       `;
@@ -727,140 +742,6 @@ function compensableLineInputs(
   });
   const compensable = lineInputs.filter((line) => line.creditorKey !== targetAccountId);
   return compensable.length === 0 ? null : compensable;
-}
-
-/**
- * Reads the audit's stored snapshot back from its JSONB columns, validating the
- * shape: the pairs must be complete calibration pairs and the comparison a
- * complete one, since the adjustment is computed from exactly this evidence.
- * Null when the stored value is not a snapshot.
- */
-function parseStoredSnapshot(audit: {
-  cohort_definition: unknown;
-  cohort_statistics: unknown;
-}): CalibrationCohortSnapshot | null {
-  if (
-    typeof audit.cohort_definition !== "object" ||
-    audit.cohort_definition === null ||
-    typeof audit.cohort_statistics !== "object" ||
-    audit.cohort_statistics === null
-  ) {
-    return null;
-  }
-  const definition = audit.cohort_definition as Record<string, unknown>;
-  const comparison = audit.cohort_statistics as Record<string, unknown>;
-
-  if (typeof definition["targetAccountId"] !== "string") {
-    return null;
-  }
-  const repositoryId = definition["repositoryId"];
-  if (repositoryId !== null && typeof repositoryId !== "string") {
-    return null;
-  }
-  if (typeof definition["sampleStartedAt"] !== "string" || typeof definition["sampleEndedAt"] !== "string") {
-    return null;
-  }
-  const selfWorkPairs = parseStoredPairs(definition["selfWorkPairs"]);
-  const outsiderSettlementPairs = parseStoredPairs(definition["outsiderSettlementPairs"]);
-  if (selfWorkPairs === null || outsiderSettlementPairs === null) {
-    return null;
-  }
-
-  const selfWork = parseStoredSummary(comparison["selfWork"]);
-  const outsider = parseStoredSummary(comparison["outsider"]);
-  if (selfWork === null || outsider === null) {
-    return null;
-  }
-  const differenceBetweenMeans = comparison["differenceBetweenMeans"];
-  if (differenceBetweenMeans !== null && typeof differenceBetweenMeans !== "number") {
-    return null;
-  }
-
-  return {
-    targetAccountId: definition["targetAccountId"],
-    repositoryId,
-    sampleStartedAt: definition["sampleStartedAt"],
-    sampleEndedAt: definition["sampleEndedAt"],
-    selfWorkPairs,
-    outsiderSettlementPairs,
-    comparison: { selfWork, outsider, differenceBetweenMeans },
-  };
-}
-
-function parseStoredPairs(value: unknown): CalibrationPair[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const pairs: CalibrationPair[] = [];
-  const seenProofs = new Set<string>();
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) {
-      return null;
-    }
-    const pair = entry as Record<string, unknown>;
-    const proofSha256 = pair["proofSha256"];
-    if (
-      !isPositiveSafeInteger(pair["githubRepositoryId"]) ||
-      !isPositiveSafeInteger(pair["githubIssueId"]) ||
-      !isPositiveSafeInteger(pair["githubPullRequestId"]) ||
-      !isDifficultyPoints(pair["offeredDifficulty"]) ||
-      !isDifficultyPoints(pair["settledDifficulty"]) ||
-      typeof proofSha256 !== "string" ||
-      !/^[0-9a-f]{64}$/.test(proofSha256) ||
-      typeof pair["mergedAt"] !== "string" ||
-      Number.isNaN(Date.parse(pair["mergedAt"]))
-    ) {
-      return null;
-    }
-    // A repeated proof inside one cohort list would compensate one settlement
-    // twice (or inflate a self cohort it does not belong to), so a snapshot
-    // carrying one is malformed evidence, refused before anything computes.
-    if (seenProofs.has(proofSha256)) {
-      return null;
-    }
-    seenProofs.add(proofSha256);
-    pairs.push({
-      githubRepositoryId: pair["githubRepositoryId"],
-      githubIssueId: pair["githubIssueId"],
-      githubPullRequestId: pair["githubPullRequestId"],
-      mergedAt: pair["mergedAt"],
-      proofSha256,
-      offeredDifficulty: pair["offeredDifficulty"],
-      settledDifficulty: pair["settledDifficulty"],
-    });
-  }
-  return pairs;
-}
-
-function parseStoredSummary(value: unknown): CalibrationCohortSnapshot["comparison"]["selfWork"] | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const summary = value as Record<string, unknown>;
-  if (
-    !isNonNegativeSafeInteger(summary["count"]) ||
-    typeof summary["meanDelta"] !== "number" ||
-    typeof summary["medianDelta"] !== "number"
-  ) {
-    return null;
-  }
-  return {
-    count: summary["count"],
-    meanDelta: summary["meanDelta"],
-    medianDelta: summary["medianDelta"],
-  };
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-function isNonNegativeSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isDifficultyPoints(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 10;
 }
 
 type SubstantiatedAuditRow = {
