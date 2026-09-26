@@ -134,6 +134,35 @@ describe("webhook delivery classification", () => {
   });
 });
 
+describe("webhook repository visibility", () => {
+  // The payload's own visibility word is the only signal that outranks the
+  // registration row, so a delivery whose payload says the repository is not
+  // public must carry it; a payload silent on visibility must carry no word
+  // at all, since absence is unknown and the payload alone never refuses.
+  it.each([
+    { name: "private", privateField: true as const },
+    { name: "public", privateField: false as const },
+    { name: "silent", privateField: undefined },
+  ])("maps a payload $name about visibility onto the repositoryPrivate word", ({ privateField }) => {
+    const result = parseGitHubWebhookDeliveryDetailed("issues", "delivery", {
+      action: "edited",
+      repository: {
+        id: 42,
+        full_name: "octo/example",
+        ...(privateField === undefined ? {} : { private: privateField }),
+      },
+      issue,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    if (privateField === true) {
+      expect(result.delivery.repositoryPrivate).toBe(true);
+    } else {
+      expect("repositoryPrivate" in result.delivery).toBe(false);
+    }
+  });
+});
+
 function parseDetailed(event: string, value: unknown): GitHubWebhookParseResult {
   return parseGitHubWebhookDeliveryDetailed(event, "delivery", {
     action: event === "issues" ? "edited" : "created",
