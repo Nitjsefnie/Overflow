@@ -115,27 +115,60 @@ function scriptedLookup(answers: string[][]): { lookup: typeof dnsLookup; calls:
   return { lookup: lookup as unknown as typeof dnsLookup, calls };
 }
 
+const refusalMessage = "The destination was refused.";
+
+/**
+ * Awaits a rejection and pins it as the one refusal: the refusal class, the
+ * fixed message, and none of `hidden` (the address, the port, the status)
+ * anywhere in what the error exposes.
+ */
+async function expectRefusal(pending: Promise<unknown>, hidden: string[]): Promise<void> {
+  const outcome = await pending.then(
+    (value: unknown) => ({ settled: "resolved" as const, value }),
+    (error: unknown) => ({ settled: "rejected" as const, value: error }),
+  );
+  expect(outcome.settled).toBe("rejected");
+  expect(outcome.value).toBeInstanceOf(DestinationRefusedError);
+  const error = outcome.value as Error;
+  expect(error.message).toBe(refusalMessage);
+  const exposed = `${String(error)} ${JSON.stringify(error)}`;
+  for (const value of hidden) {
+    expect(exposed).not.toContain(value);
+  }
+}
+
 describe("classifying an address as public", () => {
+  // First, a lower-half, and the last address of every refused range, so a
+  // range narrowed at either end is caught.
   it.each([
     ["0.0.0.0"],
     ["0.1.2.3"],
+    ["0.255.255.255"],
     ["10.0.0.1"],
     ["10.255.255.255"],
     ["100.64.0.1"],
-    ["100.127.255.254"],
+    ["100.127.255.255"],
     ["127.0.0.1"],
-    ["127.255.255.254"],
+    ["127.255.255.255"],
+    ["169.254.0.0"],
     ["169.254.169.254"],
+    ["169.254.255.255"],
     ["172.16.0.1"],
     ["172.31.255.255"],
     ["192.0.0.1"],
+    ["192.0.0.255"],
     ["192.0.2.1"],
+    ["192.0.2.255"],
     ["192.88.99.1"],
+    ["192.88.99.255"],
     ["192.168.1.1"],
+    ["192.168.255.255"],
     ["198.18.0.1"],
     ["198.19.255.255"],
     ["198.51.100.1"],
+    ["198.51.100.255"],
     ["203.0.113.1"],
+    ["203.0.113.255"],
     ["224.0.0.1"],
     ["239.255.255.255"],
     ["240.0.0.1"],
@@ -145,7 +178,9 @@ describe("classifying an address as public", () => {
     ["[::1]"],
     ["fc00::1"],
     ["fd00::1"],
+    ["fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
     ["fe80::1"],
+    ["febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
     ["ff02::1"],
     ["64:ff9b::7f00:1"],
     ["::ffff:127.0.0.1"],
@@ -153,11 +188,15 @@ describe("classifying an address as public", () => {
     ["::ffff:169.254.169.254"],
     ["::127.0.0.1"],
     ["1000::1"],
+    ["1fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
     ["4000::1"],
     ["2001::1"],
     ["2001:1ff:ffff::1"],
+    ["2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff"],
     ["2001:db8::1"],
+    ["2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"],
     ["2002:7f00:1::"],
+    ["2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
   ])("refuses %s", (address) => {
     expect(isPublicAddress(address)).toBe(false);
   });
@@ -166,29 +205,55 @@ describe("classifying an address as public", () => {
     expect(isPublicAddress("::ffff:8.8.8.8")).toBe(false);
   });
 
-  it.each([["localhost"], ["gitlab.example"], [""], ["fe80::1%eth0"], ["127.0.0.1:80"]])(
-    "refuses %j, which is not an address",
-    (value) => {
-      expect(isPublicAddress(value)).toBe(false);
-    },
-  );
+  it.each([
+    ["localhost"],
+    ["gitlab.example"],
+    [""],
+    ["fe80::1%eth0"],
+    ["2606:4700::1%eth0"],
+    ["127.0.0.1:80"],
+  ])("refuses %j, which is not a bare address", (value) => {
+    expect(isPublicAddress(value)).toBe(false);
+  });
 
+  // The public neighbours on either side of the refused ranges.
   it.each([
     ["8.8.8.8"],
     ["1.1.1.1"],
+    ["1.0.0.0"],
     ["9.255.255.255"],
-    ["11.0.0.1"],
+    ["11.0.0.0"],
     ["100.63.255.255"],
-    ["100.128.0.1"],
+    ["100.128.0.0"],
+    ["126.255.255.255"],
+    ["128.0.0.0"],
+    ["169.253.255.255"],
+    ["169.255.0.0"],
     ["172.15.255.255"],
-    ["172.32.0.1"],
+    ["172.32.0.0"],
     ["192.0.1.1"],
-    ["198.20.0.1"],
+    ["192.0.3.0"],
+    ["192.88.98.255"],
+    ["192.88.100.0"],
+    ["192.167.255.255"],
+    ["192.169.0.0"],
+    ["198.17.255.255"],
+    ["198.20.0.0"],
+    ["198.51.99.255"],
+    ["198.51.101.0"],
+    ["203.0.112.255"],
+    ["203.0.114.0"],
     ["223.255.255.255"],
+    ["2000::1"],
+    ["3000::1"],
     ["2606:4700:4700::1111"],
     ["[2606:4700:4700::1111]"],
     ["2a00:1450:4001::200e"],
-    ["2001:200::1"],
+    ["2001:200::"],
+    ["2001:db7:ffff:ffff:ffff:ffff:ffff:ffff"],
+    ["2001:db9::"],
+    ["2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff"],
+    ["2003::"],
   ])("allows %s", (address) => {
     expect(isPublicAddress(address)).toBe(true);
   });
@@ -198,9 +263,10 @@ describe("refusing loopback destinations before connecting", () => {
   it.each([["http"], ["https"]])("refuses %s://127.0.0.1 and never connects", async (scheme) => {
     const listener = await listen("127.0.0.1");
 
-    await expect(publicFetch(`${scheme}://127.0.0.1:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(publicFetch(`${scheme}://127.0.0.1:${listener.port}/`), [
+      "127.0.0.1",
+      String(listener.port),
+    ]);
     expect(listener.connections).toBe(0);
   });
 
@@ -213,9 +279,7 @@ describe("refusing loopback destinations before connecting", () => {
       return;
     }
 
-    await expect(publicFetch(`http://[::1]:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(publicFetch(`http://[::1]:${listener.port}/`), ["::1", String(listener.port)]);
     expect(listener.connections).toBe(0);
   });
 
@@ -223,18 +287,19 @@ describe("refusing loopback destinations before connecting", () => {
     const ipv4 = await listen("127.0.0.1");
     const ipv6 = await listenOrNull("::1", ipv4.port);
 
-    await expect(publicFetch(`http://localhost:${ipv4.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(publicFetch(`http://localhost:${ipv4.port}/`), ["127.0.0.1", "::1", "localhost"]);
     expect(ipv4.connections).toBe(0);
     expect(ipv6?.connections ?? 0).toBe(0);
   });
 
   it("refuses a scheme other than http and https", async () => {
-    await expect(publicFetch("file:///etc/passwd")).rejects.toBeInstanceOf(DestinationRefusedError);
+    await expectRefusal(publicFetch("file:///etc/passwd"), ["file", "/etc/passwd"]);
   });
 });
 
+// The hostname cases run over both schemes: https is the production case,
+// and the refusal lands in the lookup, before any TLS, so a plain TCP
+// listener's connection counter is still the witness.
 describe("judging the address the socket connects to", () => {
   it("connects where an injected lookup points a hostname, when that address is permitted", async () => {
     const listener = await listen("127.0.0.1");
@@ -248,55 +313,77 @@ describe("judging the address the socket connects to", () => {
     expect(listener.requests[0]?.headers.host).toBe(`gitlab.rebind.test:${listener.port}`);
   });
 
-  it("refuses a name that answered public when checked and loopback when connected", async () => {
-    const listener = await listen("127.0.0.1");
-    const { lookup, calls } = scriptedLookup([["8.8.8.8"], ["127.0.0.1"]]);
-    const guardedFetch = createPublicFetch({ lookup });
+  it.each([["http"], ["https"]])(
+    "refuses a %s name that answered public when checked and loopback when connected",
+    async (scheme) => {
+      const listener = await listen("127.0.0.1");
+      const { lookup, calls } = scriptedLookup([["8.8.8.8"], ["127.0.0.1"]]);
+      const guardedFetch = createPublicFetch({ lookup });
 
-    // What a validate-then-fetch check would see: a public answer.
-    const checked = await new Promise<string>((resolve, reject) => {
-      lookup("gitlab.rebind.test", {}, (error, address) => {
-        if (error) reject(error);
-        else resolve(address);
+      // What a validate-then-fetch check would see: a public answer.
+      const checked = await new Promise<string>((resolve, reject) => {
+        lookup("gitlab.rebind.test", {}, (error, address) => {
+          if (error) reject(error);
+          else resolve(address);
+        });
       });
-    });
-    expect(isPublicAddress(checked)).toBe(true);
+      expect(isPublicAddress(checked)).toBe(true);
 
-    await expect(guardedFetch(`http://gitlab.rebind.test:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
-    expect(calls).toHaveLength(2);
-    expect(listener.connections).toBe(0);
-  });
+      await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), [
+        "127.0.0.1",
+        "8.8.8.8",
+      ]);
+      expect(calls).toHaveLength(2);
+      expect(listener.connections).toBe(0);
+    },
+  );
 
-  it("refuses when any address in an all-addresses answer is non-public", async () => {
-    const listener = await listen("127.0.0.1");
-    const { lookup, calls } = scriptedLookup([["8.8.8.8", "127.0.0.1"]]);
-    const guardedFetch = createPublicFetch({ lookup });
+  it.each([["http"], ["https"]])(
+    "refuses a %s name when any address in an all-addresses answer is non-public",
+    async (scheme) => {
+      const listener = await listen("127.0.0.1");
+      const { lookup, calls } = scriptedLookup([["8.8.8.8", "127.0.0.1"]]);
+      const guardedFetch = createPublicFetch({ lookup });
 
-    await expect(guardedFetch(`http://gitlab.rebind.test:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
-    expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: true }]);
-    expect(listener.connections).toBe(0);
-  });
+      await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), [
+        "127.0.0.1",
+        "8.8.8.8",
+      ]);
+      expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: true }]);
+      expect(listener.connections).toBe(0);
+    },
+  );
 
-  it("refuses a non-public single-address answer when family autoselection is off", async () => {
-    const listener = await listen("127.0.0.1");
-    const { lookup, calls } = scriptedLookup([["127.0.0.1"]]);
-    const guardedFetch = createPublicFetch({ lookup });
-    const previous = getDefaultAutoSelectFamily();
-    setDefaultAutoSelectFamily(false);
-    try {
-      await expect(
-        guardedFetch(`http://gitlab.rebind.test:${listener.port}/`),
-      ).rejects.toBeInstanceOf(DestinationRefusedError);
-    } finally {
-      setDefaultAutoSelectFamily(previous);
-    }
-    expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: false }]);
-    expect(listener.connections).toBe(0);
-  });
+  it.each([["http"], ["https"]])(
+    "refuses a %s name whose all-addresses answer is empty",
+    async (scheme) => {
+      const listener = await listen("127.0.0.1");
+      const { lookup, calls } = scriptedLookup([[]]);
+      const guardedFetch = createPublicFetch({ lookup });
+
+      await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), []);
+      expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: true }]);
+      expect(listener.connections).toBe(0);
+    },
+  );
+
+  it.each([["http"], ["https"]])(
+    "refuses a %s name's non-public single-address answer when family autoselection is off",
+    async (scheme) => {
+      const listener = await listen("127.0.0.1");
+      const { lookup, calls } = scriptedLookup([["127.0.0.1"]]);
+      const guardedFetch = createPublicFetch({ lookup });
+      const previous = getDefaultAutoSelectFamily();
+      setDefaultAutoSelectFamily(false);
+      try {
+        await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), ["127.0.0.1"]);
+      } finally {
+        setDefaultAutoSelectFamily(previous);
+      }
+      expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: false }]);
+      expect(listener.connections).toBe(0);
+    },
+  );
 });
 
 describe("following no redirects", () => {
@@ -310,9 +397,11 @@ describe("following no redirects", () => {
       });
       const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
 
-      await expect(guardedFetch(`http://127.0.0.1:${origin.port}/`)).rejects.toBeInstanceOf(
-        DestinationRefusedError,
-      );
+      await expectRefusal(guardedFetch(`http://127.0.0.1:${origin.port}/`), [
+        String(status),
+        String(target.port),
+        "location",
+      ]);
       expect(origin.requests).toHaveLength(1);
       expect(target.connections).toBe(0);
     },
@@ -325,9 +414,7 @@ describe("following no redirects", () => {
     });
     const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
 
-    await expect(guardedFetch(`http://127.0.0.1:${origin.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(guardedFetch(`http://127.0.0.1:${origin.port}/`), [String(status)]);
   });
 });
 
@@ -420,7 +507,11 @@ describe("reading the response", () => {
       response.write("half", () => response.socket?.destroy());
     });
 
-    await expect(guardedFetch(`http://127.0.0.1:${listener.port}/`)).rejects.toBeInstanceOf(Error);
+    // Node's own error for a response cut short, not a Response handed back
+    // with a truncated body.
+    await expect(guardedFetch(`http://127.0.0.1:${listener.port}/`)).rejects.toMatchObject({
+      code: "ECONNRESET",
+    });
   });
 
   it("accepts a body of exactly the limit", async () => {
@@ -438,9 +529,10 @@ describe("reading the response", () => {
       response.end(Buffer.alloc(bodyLimit + 1, 0x61));
     });
 
-    await expect(guardedFetch(`http://127.0.0.1:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(guardedFetch(`http://127.0.0.1:${listener.port}/`), [
+      String(bodyLimit),
+      String(listener.port),
+    ]);
   });
 
   it("refuses an oversize body that arrives without a content length", async () => {
@@ -452,9 +544,10 @@ describe("reading the response", () => {
       response.end();
     });
 
-    await expect(guardedFetch(`http://127.0.0.1:${listener.port}/`)).rejects.toBeInstanceOf(
-      DestinationRefusedError,
-    );
+    await expectRefusal(guardedFetch(`http://127.0.0.1:${listener.port}/`), [
+      String(bodyLimit),
+      String(listener.port),
+    ]);
   });
 });
 
