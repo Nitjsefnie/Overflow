@@ -256,6 +256,45 @@ describe("GitLab webhook delivery classification", () => {
   });
 });
 
+describe("GitLab webhook repository visibility", () => {
+  // GitLab exposes visibility as an integer level: 0 private, 10 internal,
+  // 20 public. Any present level below public is a non-public word — internal
+  // matches registration, which maps internal to PRIVATE and refuses — and
+  // silence is unknown, so the payload alone never refuses.
+  it.each([
+    { name: "private (0)", visibility_level: 0 },
+    { name: "internal (10)", visibility_level: 10 },
+  ])("carries repositoryPrivate for a $name project", ({ visibility_level }) => {
+    const delivery = parse(payload({ project: { ...project, visibility_level } }));
+    expect(delivery?.repositoryPrivate).toBe(true);
+  });
+
+  it.each([
+    { name: "public (20)", visibility_level: 20 },
+    { name: "silent about visibility", visibility_level: undefined },
+  ])("carries no repositoryPrivate word when the project is $name", ({ visibility_level }) => {
+    const result = parseGitLabWebhookDeliveryDetailed("Issue Hook", "uuid-1", payload({
+      project: {
+        ...project,
+        ...(visibility_level === undefined ? {} : { visibility_level }),
+      },
+    }));
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect("repositoryPrivate" in result.delivery).toBe(false);
+  });
+
+  it("carries repositoryPrivate for a private project on a merge request payload", () => {
+    const result = parseMergeRequest({
+      ...mergeRequestPayload(),
+      project: { ...project, visibility_level: 0 },
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.delivery.repositoryPrivate).toBe(true);
+  });
+});
+
 describe("GitLab webhook message identity", () => {
   it.each([
     { name: "uses Idempotency-Key when stable headers conflict", ids: { idempotencyKey: " message-1 ", webhookId: "other" }, key: "message-1" },

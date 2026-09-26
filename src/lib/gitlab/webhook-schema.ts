@@ -71,6 +71,7 @@ const gitlabProjectSchema = z.object({
   id: z.number().int().positive(),
   path_with_namespace: z.string().trim().min(1),
   web_url: z.string(),
+  visibility_level: z.int().optional(),
 });
 
 const gitlabIssueAttributesSchema = z.object({
@@ -171,6 +172,7 @@ export function parseGitLabWebhookDeliveryDetailed(
         url: parsed.data.object_attributes.url,
       },
       forge: { provider: "gitlab", instanceUrl },
+      ...repositoryPrivateOf(parsed.data.project),
     },
   };
 }
@@ -209,6 +211,7 @@ function parseMergeRequestPayload(deliveryId: string, executionId: string, paylo
         number: parsed.data.object_attributes.iid,
       },
       forge: { provider: "gitlab", instanceUrl },
+      ...repositoryPrivateOf(parsed.data.project),
     },
   };
 }
@@ -222,6 +225,16 @@ function instanceUrlOf(project: { web_url: string }): string | null {
   } catch {
     return null;
   }
+}
+
+// GitLab exposes visibility as an integer level: 0 private, 10 internal,
+// 20 public. Any present level other than public is the non-public word the
+// shared delivery carries — internal matches registration, which maps
+// internal to PRIVATE and refuses — and silence is unknown, so the payload
+// alone never refuses.
+function repositoryPrivateOf(project: { visibility_level?: number }): { repositoryPrivate?: true } {
+  if (project.visibility_level === undefined || project.visibility_level === 20) return {};
+  return { repositoryPrivate: true };
 }
 
 export function parseGitLabWebhookDelivery(
