@@ -89,10 +89,11 @@ describe("POST /api/tokens", () => {
 
   it("returns a structured 502 without logging when token store creation fails after minting", async () => {
     const handler = createApiTokenPostHandler({
-      getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
+      getSession: async () => ({ user: { id: "member-id", role: "MEMBER", authenticatedAt: freshSignIn } }),
       createTokenStore: async () => {
         throw new Error("token store unavailable");
       },
+      now: () => clockAt,
     });
 
     const response = await handler(mintRequest());
@@ -186,6 +187,75 @@ describe("POST /api/tokens", () => {
     expect(createTokenStore).not.toHaveBeenCalled();
   });
 
+  describe("GitHub sign-in freshness", () => {
+    const tenMinutes = 10 * 60 * 1000;
+    const refusal = {
+      error: {
+        code: "REAUTHENTICATION_REQUIRED",
+        message: "Confirm your GitHub sign-in to issue an API token.",
+      },
+    };
+
+    it.each([
+      { label: "exactly ten minutes old", now: clockAt + tenMinutes },
+      { label: "signed in this instant", now: clockAt },
+      { label: "a minute ahead of the clock (allowed skew)", now: clockAt - 60_000 },
+    ])("mints for a sign-in $label", async ({ now }) => {
+      const store = recordingStore();
+      const handler = createApiTokenPostHandler(signedInAs("member-id", store, clockAt / 1000, now));
+
+      const response = await handler(mintRequest());
+
+      expect(response.status).toBe(201);
+      expect(store.calls).toHaveLength(1);
+    });
+
+    it.each([
+      { label: "one millisecond past ten minutes old", authenticatedAt: clockAt / 1000, now: clockAt + tenMinutes + 1 },
+      { label: "hours old", authenticatedAt: clockAt / 1000 - 4 * 3600, now: clockAt },
+      { label: "absent (a JWT issued before the claim existed)", authenticatedAt: null, now: clockAt },
+      { label: "further ahead of the clock than the allowed skew", authenticatedAt: clockAt / 1000, now: clockAt - 60_001 },
+    ])("refuses a sign-in $label with 403 before minting or storing", async ({ authenticatedAt, now }) => {
+      const store = recordingStore();
+      const createTokenStore = vi.fn(async () => store);
+      const handler = createApiTokenPostHandler({
+        ...signedInAs("member-id", store, authenticatedAt, now),
+        createTokenStore,
+      });
+
+      const response = await handler(mintRequest());
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual(refusal);
+      expect(createTokenStore).not.toHaveBeenCalled();
+      expect(store.calls).toEqual([]);
+    });
+
+    it("still answers 401, not 403, when there is no session at all", async () => {
+      const store = recordingStore();
+      const handler = createApiTokenPostHandler({ ...signedOut(store), now: () => clockAt });
+
+      const response = await handler(mintRequest());
+
+      expect(response.status).toBe(401);
+    });
+
+    it.each([
+      { label: "a stale", authenticatedAt: 1 },
+      { label: "no", authenticatedAt: undefined },
+      { label: "a non-numeric", authenticatedAt: "1790424000" },
+    ])("refuses $label sign-in instant read from the production session", async ({ authenticatedAt }) => {
+      productionAuth.mockResolvedValueOnce({
+        user: { id: "member-id", role: "MEMBER", ...(authenticatedAt === undefined ? {} : { authenticatedAt }) },
+      });
+
+      const response = await productionPost(mintRequest({ "content-type": "application/json" }));
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual(refusal);
+    });
+  });
+
   // The invariant at the production wiring, not only through injected
   // dependencies: a syntactically valid ovf_ credential in the Authorization
   // header and no session is 401, because the production route module never
@@ -244,10 +314,23 @@ function signedOut(store: ApiTokenIssuer): ApiTokenRouteDependencies {
   };
 }
 
-function signedInAs(userId: string, store: ApiTokenIssuer): ApiTokenRouteDependencies {
+/**
+ * The injected clock every handler test reads, and a GitHub sign-in one minute
+ * before it: fresh enough to mint, and independent of the day the suite runs.
+ */
+const clockAt = Date.parse("2026-09-26T12:00:00.000Z");
+const freshSignIn = clockAt / 1000 - 60;
+
+function signedInAs(
+  userId: string,
+  store: ApiTokenIssuer,
+  authenticatedAt: number | null = freshSignIn,
+  now: number = clockAt,
+): ApiTokenRouteDependencies {
   return {
-    getSession: async () => ({ user: { id: userId, role: "MEMBER" } }),
+    getSession: async () => ({ user: { id: userId, role: "MEMBER", authenticatedAt } }),
     createTokenStore: async () => store,
+    now: () => now,
   };
 }
 

@@ -1074,7 +1074,8 @@ describe("Overflow token registration", () => {
 
     const credentials: string[] = [];
     for (const [index, { account }] of identities.entries()) {
-      readSession.mockResolvedValue({ user: account });
+      // Minting needs a recent GitHub sign-in; this session completed one just now.
+      readSession.mockResolvedValue({ user: { ...account, authenticatedAt: Math.floor(Date.now() / 1000) } });
       const response = await mintToken(
         // Minting is a cookie-authenticated mutation, so it is same-origin only.
         new Request(`${requestHost}/api/tokens`, {

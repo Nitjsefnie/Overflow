@@ -17,10 +17,29 @@ import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgr
  * Authentication is the cookie session alone. A token cannot mint its
  * successor, so regeneration stays a human act in a browser and a leaked token
  * cannot roll itself forward and lock its owner out.
+ *
+ * The session must also carry a GitHub sign-in completed within the last
+ * {@link REAUTHENTICATION_WINDOW_MS}. A session stays valid long after the
+ * sign-in that issued it, and a client holding only the session cookie cannot
+ * complete a GitHub OAuth round trip; the account's owner can, in one click.
+ * So minting a credential that outlives the session asks for that round trip.
  */
 
+/** How recent the session's GitHub sign-in must be to mint a token. */
+export const REAUTHENTICATION_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * How far a recorded sign-in may sit ahead of this server's clock and still
+ * count. The instant is written by the jwt callback on an Overflow server and
+ * floored to whole seconds, so on one host it is never ahead at all; the
+ * allowance covers only a small disagreement between servers' clocks, and
+ * anything further ahead is a claim no sign-in produced.
+ */
+export const AUTHENTICATION_CLOCK_SKEW_MS = 60 * 1000;
+
 export type ApiTokenRouteSession = {
-  user: { id: string; role: UserRole };
+  /** `authenticatedAt`: the last GitHub sign-in, epoch seconds; null when the JWT records none. */
+  user: { id: string; role: UserRole; authenticatedAt: number | null };
 };
 
 export type ApiTokenIssuer = {
@@ -30,6 +49,8 @@ export type ApiTokenIssuer = {
 export type ApiTokenRouteDependencies = {
   getSession: () => Promise<ApiTokenRouteSession | null>;
   createTokenStore: () => Promise<ApiTokenIssuer>;
+  /** The current instant in epoch milliseconds; `Date.now` unless a test pins it. */
+  now?: () => number;
 };
 
 export type ApiTokenPostHandler = (request: Request) => Promise<Response>;
@@ -55,6 +76,13 @@ export function createApiTokenPostHandler(
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+    if (!isRecentSignIn(session.user.authenticatedAt, (dependencies.now ?? Date.now)())) {
+      return errorResponse(
+        403,
+        "REAUTHENTICATION_REQUIRED",
+        "Confirm your GitHub sign-in to issue an API token.",
+      );
+    }
 
     const { token, tokenHash } = mintApiToken();
     let createdAt: Date;
@@ -77,19 +105,31 @@ export const POST = createApiTokenPostHandler({
   async getSession() {
     const { auth } = await import("@/auth");
     const session = await auth();
-    const user = session?.user as { id?: unknown; role?: unknown } | undefined;
+    const user = session?.user as { id?: unknown; role?: unknown; authenticatedAt?: unknown } | undefined;
     if (
       typeof user?.id !== "string" ||
       (user.role !== "MEMBER" && user.role !== "MODERATOR")
     ) {
       return null;
     }
-    return { user: { id: user.id, role: user.role } };
+    const authenticatedAt =
+      typeof user.authenticatedAt === "number" && Number.isFinite(user.authenticatedAt)
+        ? user.authenticatedAt
+        : null;
+    return { user: { id: user.id, role: user.role, authenticatedAt } };
   },
   async createTokenStore() {
     return new PostgresApiTokenStore();
   },
 });
+
+function isRecentSignIn(authenticatedAt: number | null, nowMs: number): boolean {
+  if (authenticatedAt === null) {
+    return false;
+  }
+  const ageMs = nowMs - authenticatedAt * 1000;
+  return ageMs >= -AUTHENTICATION_CLOCK_SKEW_MS && ageMs <= REAUTHENTICATION_WINDOW_MS;
+}
 
 function errorResponse(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });
