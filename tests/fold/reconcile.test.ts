@@ -17,6 +17,8 @@ import { GitLabApiError } from "@/lib/gitlab/client";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
 import { verifiedRepositoryPayload } from "../support/verified-repository";
+import { inspect } from "node:util";
+import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("reconcileRepository", () => {
   it("enables bounded timeline verification from the repository catalogs", async () => {
@@ -591,6 +593,31 @@ describe("reconcileRepository", () => {
     } finally {
       errorLog.mockRestore();
     }
+  });
+
+  it("keeps Postgres record text out of the failure log and rethrown cause", async () => {
+    await withRecordBearingPostgresWrite(async (write, originalError) => {
+      const dependencies = reconciliationDependencies({ materialize: vi.fn().mockImplementation(write) });
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const failure = await reconcileRepository(dependencies, "repository").catch((caught: unknown) => caught);
+        const upstream = originalError();
+        const logged = inspect(errorLog.mock.calls, { depth: null });
+        const thrown = inspect(failure, { depth: null });
+        expect(inspect(upstream, { depth: null })).toContain(RECORD_MARKER);
+        expect(logged).not.toContain(RECORD_MARKER);
+        expect(thrown).not.toContain(RECORD_MARKER);
+        expect(logged).toContain("Reconciliation of repository repository failed.");
+        expect(logged).toContain(upstream.code);
+        expect(thrown).toContain(upstream.code);
+        const reportedCause = (failure as Error).cause as Error;
+        expect(reportedCause.message).toBe("test write failed");
+        expect(Object.keys(reportedCause).sort()).toEqual(["code", "name", "routine", "severity"]);
+        expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.");
+      } finally {
+        errorLog.mockRestore();
+      }
+    });
   });
 
   it("keeps a GitHub response body in the logged cause and out of the stored failure", async () => {

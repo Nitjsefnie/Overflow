@@ -1,5 +1,6 @@
 import type { GitHubWebhookDelivery, GitHubWebhookIssue } from "@/lib/github/webhook-schema";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
+import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
 export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery): Promise<WebhookDeliveryClaim>;
@@ -71,10 +72,8 @@ export async function processWebhook(
     } catch {
       // A stale pending lease remains reclaimable if recording its failure also fails.
     }
-    // The stored message stays the sanitized constant: persisted error text is
-    // product data, and an upstream error can carry secrets (a connection
-    // string, a token in a URL). The cause belongs in the server log instead,
-    // so it rides on the thrown error for the route to report there.
-    throw new Error("Webhook processing failed.", { cause: error });
+    // The stored message stays fixed. Strip record-bearing PostgreSQL fields
+    // from the cause before a route logs the thrown error.
+    throw new Error("Webhook processing failed.", { cause: redactPostgresError(error) });
   }
 }
