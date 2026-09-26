@@ -3,6 +3,7 @@ import { mintApiToken } from "@/lib/security/api-token";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgres-store";
 import { isRecentSignIn } from "@/lib/auth/recent-sign-in";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 export { REAUTHENTICATION_WINDOW_MS, AUTHENTICATION_CLOCK_SKEW_MS } from "@/lib/auth/recent-sign-in";
 
@@ -41,6 +42,12 @@ export type ApiTokenIssuer = {
 
 export type ApiTokenRouteDependencies = {
   getSession: () => Promise<ApiTokenRouteSession | null>;
+  /**
+   * The account's role read live at request time. A session JWT outlives the
+   * account it was issued for (issue 733), so minting re-reads the row rather
+   * than trusting the session: a null here is a deleted (or missing) account.
+   */
+  getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createTokenStore: () => Promise<ApiTokenIssuer>;
   /** The current instant in epoch milliseconds; `Date.now` unless a test pins it. */
   now?: () => number;
@@ -69,6 +76,20 @@ export function createApiTokenPostHandler(
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
+
+    // The live-account gate runs before anything account-scoped happens — in
+    // particular before the recent-sign-in check, so a deleted account reads
+    // the FORBIDDEN refusal, not the reauthentication one.
+    let role: UserRole | null;
+    try {
+      role = await dependencies.getCurrentRole(session.user.id);
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to issue an API token.");
+    }
+    if (role === null) {
+      return errorResponse(403, "FORBIDDEN", "A member account is required.");
+    }
+
     if (!isRecentSignIn(session.user.authenticatedAt, (dependencies.now ?? Date.now)())) {
       return errorResponse(
         403,
@@ -95,6 +116,7 @@ export function createApiTokenPostHandler(
 }
 
 export const POST = createApiTokenPostHandler({
+  getCurrentRole: getCurrentUserRole,
   async getSession() {
     const { auth } = await import("@/auth");
     const session = await auth();

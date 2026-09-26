@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import postgres, { type Sql } from "postgres";
+import type { StartedTestContainer } from "testcontainers";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
 import {
   foreignOrigin,
@@ -7,12 +9,31 @@ import {
   useTrustedOrigin,
 } from "../support/trusted-origin";
 import { apiTokenPrefix, hashApiToken, mintApiToken } from "@/lib/security/api-token";
+import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
+import { closeSql } from "@/lib/db/client";
+import { deleteAccount } from "@/lib/accounts/deletion";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
   createApiTokenPostHandler,
   POST as productionPost,
   type ApiTokenIssuer,
   type ApiTokenRouteDependencies,
 } from "@/app/api/tokens/route";
+
+// The production wiring reads the live role through `getSql()` (issue 733),
+// and the unit tests here run without a database: the stub answers one live
+// MEMBER role row. The container suite below passes its own sql to
+// getCurrentUserRole explicitly, so the stub never stands in for a real
+// lookup there, and runMigrations keeps the real module's transaction client.
+const { sqlStub } = vi.hoisted(() => ({
+  sqlStub: vi.fn(async () => [{ role: "MEMBER" }]),
+}));
+
+vi.mock("@/lib/db/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/client")>();
+  return { ...actual, getSql: () => sqlStub };
+});
 
 const { productionAuth } = vi.hoisted(() => ({ productionAuth: vi.fn() }));
 
@@ -90,6 +111,7 @@ describe("POST /api/tokens", () => {
   it("returns a structured 502 without logging when token store creation fails after minting", async () => {
     const handler = createApiTokenPostHandler({
       getSession: async () => ({ user: { id: "member-id", role: "MEMBER", authenticatedAt: freshSignIn } }),
+      getCurrentRole: async () => "MEMBER",
       createTokenStore: async () => {
         throw new Error("token store unavailable");
       },
@@ -110,6 +132,7 @@ describe("POST /api/tokens", () => {
       getSession: async () => {
         throw new Error("session backend unavailable");
       },
+      getCurrentRole: async () => "MEMBER",
       createTokenStore: async () => store,
     });
 
@@ -154,8 +177,9 @@ describe("POST /api/tokens", () => {
   // A forged request must cost the server nothing: no session read, no store.
   it("refuses a foreign-origin request before reading the session or the store", async () => {
     const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
     const createTokenStore = vi.fn();
-    const handler = createApiTokenPostHandler({ getSession, createTokenStore });
+    const handler = createApiTokenPostHandler({ getSession, getCurrentRole, createTokenStore });
 
     const response = await handler(
       mintRequest({ origin: foreignOrigin, "content-type": "text/plain" }),
@@ -171,8 +195,9 @@ describe("POST /api/tokens", () => {
 
   it("refuses a trusted-origin request that is not JSON", async () => {
     const getSession = vi.fn();
+    const getCurrentRole = vi.fn();
     const createTokenStore = vi.fn();
-    const handler = createApiTokenPostHandler({ getSession, createTokenStore });
+    const handler = createApiTokenPostHandler({ getSession, getCurrentRole, createTokenStore });
 
     const response = await handler(mintRequest({ "content-type": "text/plain" }));
 
@@ -310,6 +335,7 @@ function recordingStore(options: { failure?: boolean } = {}): RecordingStore {
 function signedOut(store: ApiTokenIssuer): ApiTokenRouteDependencies {
   return {
     getSession: async () => null,
+    getCurrentRole: async () => "MEMBER",
     createTokenStore: async () => store,
   };
 }
@@ -329,6 +355,7 @@ function signedInAs(
 ): ApiTokenRouteDependencies {
   return {
     getSession: async () => ({ user: { id: userId, role: "MEMBER", authenticatedAt } }),
+    getCurrentRole: async () => "MEMBER",
     createTokenStore: async () => store,
     now: () => now,
   };
@@ -340,3 +367,179 @@ function mintRequest(headers: Record<string, string> = {}): Request {
     headers: { origin: trustedOrigin, ...headers },
   });
 }
+
+/**
+ * Issue 733: the session JWT outlives the account it was issued for, so the
+ * route re-reads the account's role live before minting. The deleted row here
+ * is real: the suite runs the migrations and the account deletion against a
+ * disposable database, and the refusal is asserted through the real
+ * getCurrentUserRole, so a stub could never wave the gate through.
+ */
+describe("POST /api/tokens for a deleted account (issue 733)", () => {
+  let sql: Sql;
+  let container: StartedTestContainer | undefined;
+  let deletedAccountId = "";
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "tokens_deleted_account_test",
+      user: "tokens_deleted_account_test",
+      password: "tokens_deleted_account_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = postgres(started.databaseUrl, { max: 1 });
+    await runMigrations();
+    const githubUserId = 7_330_001;
+    const [row] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${githubUserId}, 'deleted-gate-member')
+      returning id
+    `;
+    deletedAccountId = row!.id;
+    await deleteAccount(sql, githubUserId, { confirm: true });
+  });
+
+  afterAll(async () => {
+    // Two pools: runMigrations ran on the module client, the fixtures on this one.
+    await closeSql();
+    await sql.end();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  it("refuses to mint with the member-gate envelope when the account row is deleted", async () => {
+    // The lookup is the real one against the container: the row is provably
+    // deleted, not merely unknown to a stub.
+    expect(await getCurrentUserRole(deletedAccountId, sql)).toBeNull();
+
+    const store = recordingStore();
+    const createTokenStore = vi.fn(async () => store);
+    const handler = createApiTokenPostHandler({
+      getSession: async () => ({ user: { id: deletedAccountId, role: "MEMBER", authenticatedAt: freshSignIn } }),
+      getCurrentRole: (userId) => getCurrentUserRole(userId, sql),
+      createTokenStore,
+      now: () => clockAt,
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(createTokenStore).not.toHaveBeenCalled();
+    expect(store.calls).toEqual([]);
+  });
+
+  it("answers the member-gate envelope for the deleted account even with a stale sign-in", async () => {
+    // The ordering pin, against the real deleted row: the live-account gate
+    // precedes the recent-sign-in check, so a deleted account never reads the
+    // reauthentication refusal.
+    const store = recordingStore();
+    const handler = createApiTokenPostHandler({
+      getSession: async () => ({ user: { id: deletedAccountId, role: "MEMBER", authenticatedAt: 1 } }),
+      getCurrentRole: (userId) => getCurrentUserRole(userId, sql),
+      createTokenStore: async () => store,
+      now: () => clockAt,
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(store.calls).toEqual([]);
+  });
+});
+
+describe("POST /api/tokens live-account gate (issue 733)", () => {
+  beforeEach(() => {
+    spyOnConsoleOutput();
+  });
+
+  afterEach(() => {
+    try {
+      expectNoConsoleOutput();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("refuses with the exact member-gate envelope when the role read returns null", async () => {
+    const store = recordingStore();
+    const getCurrentRole = vi.fn(async () => null);
+    const handler = createApiTokenPostHandler({
+      ...signedInAs("member-id", store),
+      getCurrentRole,
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(getCurrentRole).toHaveBeenCalledExactlyOnceWith("member-id");
+    expect(store.calls).toEqual([]);
+  });
+
+  it("mints when the role read confirms a live account", async () => {
+    const store = recordingStore();
+    const getCurrentRole = vi.fn(async () => "MODERATOR" as const);
+    const handler = createApiTokenPostHandler({
+      ...signedInAs("moderator-id", store),
+      getCurrentRole,
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(201);
+    expect(getCurrentRole).toHaveBeenCalledTimes(1);
+    expect(store.calls).toEqual([{ userId: "moderator-id", tokenHash: expect.any(Buffer) }]);
+  });
+
+  it("answers 502 without minting when the role read fails", async () => {
+    const store = recordingStore();
+    const handler = createApiTokenPostHandler({
+      ...signedInAs("member-id", store),
+      getCurrentRole: async () => {
+        throw new Error("role lookup unavailable");
+      },
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to issue an API token." },
+    });
+    expect(store.calls).toEqual([]);
+  });
+
+  it("still answers the recent-sign-in 403 for a live account with a stale sign-in", async () => {
+    // The ordering pin's other half: a live account's stale sign-in is the
+    // reauthentication refusal, so the two 403s stay distinguishable.
+    const store = recordingStore();
+    const getCurrentRole = vi.fn(async () => "MEMBER" as const);
+    const handler = createApiTokenPostHandler({
+      ...signedInAs("member-id", store, 1),
+      getCurrentRole,
+    });
+
+    const response = await handler(mintRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "REAUTHENTICATION_REQUIRED",
+        message: "Confirm your GitHub sign-in to issue an API token.",
+      },
+    });
+    expect(getCurrentRole).toHaveBeenCalledTimes(1);
+    expect(store.calls).toEqual([]);
+  });
+});
