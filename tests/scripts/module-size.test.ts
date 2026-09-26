@@ -14,11 +14,26 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyTighten,
+  classify,
   collectViolations,
+  configurationErrors,
   countLines,
+  DOC_PATH,
+  EXCLUSIONS,
+  MEASURED_FAMILIES,
   runCheck,
+  trackedPaths,
   type ModuleSizeDoc,
 } from "../../scripts/check-module-size.ts";
+
+const CEILINGS = { src: 800, tests: 2500, tooling: 800, stylesheets: 800, migrations: 400 };
+const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+
+function ceilingsWithout(...families: string[]): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(CEILINGS).filter(([family]) => !families.includes(family)),
+  );
+}
 
 let root: string;
 
@@ -32,7 +47,7 @@ afterEach(() => {
 
 function document(baseline: Record<string, number> = {}): ModuleSizeDoc {
   return {
-    ceilings: { src: 800, tests: 2500 },
+    ceilings: { ...CEILINGS },
     module_size_baseline: baseline,
   };
 }
@@ -200,7 +215,7 @@ describe("module size ratchet", () => {
       "src/z-lowered.ts": 850,
       "src/a-kept.ts": 950,
     });
-    expect(tightened.ceilings).toEqual({ src: 800, tests: 2500 });
+    expect(tightened.ceilings).toEqual(CEILINGS);
   });
 
   it("counts newline characters with wc -l semantics", () => {
@@ -261,5 +276,172 @@ describe("module size ratchet", () => {
     expect(tighten.stderr).toBe("");
     expect(JSON.parse(readFileSync(join(root, "scripts/module-size.json"), "utf8")))
       .toEqual(document());
+  });
+});
+
+describe("module size families and exclusions", () => {
+  it.each([
+    ["src/lib/fold/repository-fold.ts", "src"],
+    ["src/app/page.tsx", "src"],
+    ["tests/db/schema.test.ts", "tests"],
+    ["tests/ui/panel.test.tsx", "tests"],
+    ["scripts/migrate.ts", "tooling"],
+    ["scripts/check-page-geometry.mjs", "tooling"],
+    ["scripts/db-backup.sh", "tooling"],
+    ["next.config.ts", "tooling"],
+    ["eslint.config.mjs", "tooling"],
+    ["src/app/globals.css", "stylesheets"],
+    ["db/migrations/001_initial.sql", "migrations"],
+  ])("measures %s in the %s family", (path, name) => {
+    expect(classify(path)).toEqual({ kind: "measured", name });
+  });
+
+  it.each([
+    ["README.md", "documentation"],
+    ["deploy/README.md", "documentation"],
+    [".github/PULL_REQUEST_TEMPLATE.md", "documentation"],
+    ["LICENSE", "documentation"],
+    [".github/workflows/ci.yml", "repository metadata"],
+    [".github/required-checks.json", "repository metadata"],
+    [".gitignore", "repository metadata"],
+    [".dockerignore", "repository metadata"],
+    [".env.example", "repository metadata"],
+    ["package.json", "package manifests"],
+    ["pnpm-lock.yaml", "package manifests"],
+    ["pnpm-workspace.yaml", "package manifests"],
+    ["tsconfig.json", "package manifests"],
+    ["scripts/module-size.json", "ratchet documents"],
+    ["patches/postgres@3.4.9.patch", "dependency patches"],
+    ["deploy/overflow.service", "deployment units"],
+    ["deploy/overflow-backup.timer", "deployment units"],
+    ["Dockerfile", "deployment units"],
+    ["docker-compose.yml", "deployment units"],
+    ["public/mark.svg", "static assets"],
+  ])("records %s as excluded under %s", (path, name) => {
+    expect(classify(path)).toEqual({ kind: "excluded", name });
+  });
+
+  it.each([
+    "scripts/lib/helper.ts",
+    "config/app.config.ts",
+    "src/lib/data.json",
+    "public/app.js",
+    ".github/scripts/label.ts",
+    "db/seed.sql",
+    "tools/build.py",
+  ])("classifies %s as neither measured nor excluded", (path) => {
+    expect(classify(path)).toBeUndefined();
+  });
+
+  it("reports unclassified for a path in no family and no exclusion", () => {
+    const files = filesWithLines({ "tools/build.py": 10, "README.md": 3000 });
+    expect(collectViolations(files, document())).toMatchObject([
+      { kind: "unclassified", path: "tools/build.py" },
+    ]);
+  });
+
+  it("reports unknown-ceiling for a ceilings key that names no measured family", () => {
+    const doc = { ...document(), ceilings: { ...CEILINGS, docs: 300 } };
+    expect(collectViolations(filesWithLines({}), doc)).toMatchObject([
+      { kind: "unknown-ceiling", path: DOC_PATH },
+    ]);
+  });
+
+  it("reports over naming the stylesheets family for an unlisted stylesheet", () => {
+    const files = filesWithLines({ "src/app/theme.css": 801 });
+    const violations = collectViolations(files, document());
+    expect(violations).toMatchObject([{ kind: "over", path: "src/app/theme.css" }]);
+    expect(violations[0]?.detail).toContain("stylesheets");
+  });
+
+  it("applies each family's own ceiling", () => {
+    const files = filesWithLines({
+      "db/migrations/100_big.sql": 401,
+      "db/migrations/101_fits.sql": 400,
+      "scripts/tool.mjs": 801,
+      "tests/fits.test.ts": 801,
+    });
+    expect(collectViolations(files, document())).toMatchObject([
+      { kind: "over", path: "db/migrations/100_big.sql" },
+      { kind: "over", path: "scripts/tool.mjs" },
+    ]);
+  });
+
+  it("reports unmeasured-entry for a baseline entry outside every measured family", () => {
+    const files = filesWithLines({ "README.md": 900, "tools/build.py": 900 });
+    const doc = document({ "README.md": 900, "tools/build.py": 900 });
+    expect(collectViolations(files, doc)).toMatchObject([
+      { kind: "unmeasured-entry", path: "README.md" },
+      { kind: "unmeasured-entry", path: "tools/build.py" },
+      { kind: "unclassified", path: "tools/build.py" },
+    ]);
+  });
+
+  it("drops an unmeasured baseline entry on tighten", () => {
+    const files = filesWithLines({ "README.md": 900, "src/big.ts": 900 });
+    const doc = document({ "README.md": 900, "src/big.ts": 900 });
+    const tightened = applyTighten(files, doc).doc;
+    expect(tightened.module_size_baseline).toEqual({ "src/big.ts": 900 });
+    expect(collectViolations(files, tightened)).toEqual([]);
+  });
+
+  it("names every measured family that has no ceilings key as a configuration error", () => {
+    const doc = { ...document(), ceilings: ceilingsWithout("stylesheets", "migrations") };
+    expect(configurationErrors(doc)).toEqual([
+      expect.stringContaining("stylesheets"),
+      expect.stringContaining("migrations"),
+    ]);
+    expect(configurationErrors(document())).toEqual([]);
+  });
+
+  it("exits 2 on a measured family with no ceilings key", () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(
+      join(root, DOC_PATH),
+      JSON.stringify({ ceilings: ceilingsWithout("migrations"), module_size_baseline: {} }),
+    );
+    const script = fileURLToPath(new URL("../../scripts/check-module-size.ts", import.meta.url));
+    for (const args of [[script], [script, "--tighten"]]) {
+      const run = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("migrations");
+    }
+  });
+
+  it("reports an unclassified tracked file end to end and skips excluded ones", () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
+    git("init", "-q");
+    filesWithLines({ "tools/build.py": 5, "README.md": 3000, "src/app/big.css": 900 });
+    git("add", "-A");
+    expect(runCheck(root, document())).toMatchObject([
+      { kind: "over", path: "src/app/big.css" },
+      { kind: "unclassified", path: "tools/build.py" },
+    ]);
+  });
+
+  it("gives every family and exclusion a distinct name", () => {
+    const names = [...MEASURED_FAMILIES, ...EXCLUSIONS].map((c) => c.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("places every tracked file of this repository in exactly one family or exclusion", () => {
+    const paths = trackedPaths(repositoryRoot);
+    expect(paths.length).toBeGreaterThan(0);
+    const misplaced = paths
+      .map((path) => ({
+        path,
+        matches: [...MEASURED_FAMILIES, ...EXCLUSIONS]
+          .filter((c) => c.matches(path))
+          .map((c) => c.name),
+      }))
+      .filter(({ matches }) => matches.length !== 1);
+    expect(misplaced).toEqual([]);
+  });
+
+  it("passes on this repository with the committed module-size document", () => {
+    const doc: ModuleSizeDoc = JSON.parse(readFileSync(join(repositoryRoot, DOC_PATH), "utf8"));
+    expect(configurationErrors(doc)).toEqual([]);
+    expect(runCheck(repositoryRoot, doc)).toEqual([]);
   });
 });
