@@ -10,10 +10,12 @@ export async function withRecordBearingPostgresWrite<T>(
   const started = await startPostgresContainer({ database: "error_redaction", user: "error_redaction", password: "error_redaction" });
   const sql = postgres(started.databaseUrl);
   try {
+    await sql.unsafe(`create function "${RECORD_MARKER}"() returns void language plpgsql as $$
+      begin raise exception using message = 'test write failed', detail = '${RECORD_MARKER}'; end $$`);
     let failure: unknown;
     const write = async (): Promise<never> => {
       try {
-        await sql.unsafe(`do $$ begin raise exception using message = 'test write failed', detail = '${RECORD_MARKER}'; end $$`);
+        await sql.unsafe(`select "${RECORD_MARKER}"()`);
         throw new Error("Expected the test database write to fail.");
       } catch (error) {
         if (error instanceof postgres.PostgresError) failure = error;

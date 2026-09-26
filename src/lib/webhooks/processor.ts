@@ -72,8 +72,9 @@ export async function processWebhook(
     } catch {
       // A stale pending lease remains reclaimable if recording its failure also fails.
     }
-    // The stored message stays fixed. Strip record-bearing PostgreSQL fields
-    // from the cause before a route logs the thrown error.
+    // The stored failure text is product data, and upstream errors can carry
+    // secrets such as a token in a URL. Keep the stored message fixed and strip
+    // record-bearing PostgreSQL fields before a route logs the thrown cause.
     throw new Error("Webhook processing failed.", { cause: redactPostgresError(error) });
   }
 }
