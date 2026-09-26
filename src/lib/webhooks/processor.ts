@@ -4,9 +4,22 @@ import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
 export type WebhookReceiptScope = { provider: "github" | "gitlab"; registrationId: string };
 
+/**
+ * The registration row a webhook delivery resolves against. `unavailableReason`
+ * is the sweep's word that it cannot currently verify the repository as
+ * crawlable-and-public (NOT_FOUND, NOT_PUBLIC, IDENTITY_MISMATCH); the row
+ * still reads `active` while it stands, because flipping `active` would end
+ * the crawl and with it the sweep's automatic recovery.
+ */
+export type WebhookRepositoryRegistration = {
+  id: string;
+  active: boolean;
+  unavailableReason: string | null;
+};
+
 export type WebhookDeliveryStore = {
   claimDelivery(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookDeliveryClaim>;
-  findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null>;
+  findRepositoryByGitHubId(githubRepositoryId: number): Promise<WebhookRepositoryRegistration | null>;
   /**
    * Resolves the registration holding this forge identity — provider,
    * normalized instance URL, forge project id. A GitLab delivery resolves
@@ -17,7 +30,7 @@ export type WebhookDeliveryStore = {
     provider: string,
     instanceUrl: string,
     forgeProjectId: number,
-  ): Promise<{ id: string; active: boolean } | null>;
+  ): Promise<WebhookRepositoryRegistration | null>;
   applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void>;
   markProcessed(receiptId: string, leaseToken: string): Promise<boolean>;
   markFailed(receiptId: string, leaseToken: string, errorMessage: string): Promise<boolean>;
@@ -72,9 +85,16 @@ export async function processWebhook(
     // nothing and enqueues nothing, even while the registration row still
     // reads active: the payload is the forge's own word about visibility, and
     // acting on it would keep exposing a repository that has gone private.
-    // The receipt is still marked PROCESSED, so the route answers 202 and the
-    // sender never retries.
-    if (repository !== null && repository.active && delivery.repositoryPrivate !== true) {
+    // The registration row itself carries the same veto through its sweep
+    // word: a row whose unavailableReason is set cannot currently be verified
+    // as crawlable-and-public, and it still reads active — flipping active
+    // would end the crawl and with it the sweep's automatic recovery — so the
+    // word decides here instead. The receipt is still marked PROCESSED, so the
+    // route answers 202 and the sender never retries.
+    if (
+      repository !== null && repository.active
+        && repository.unavailableReason === null && delivery.repositoryPrivate !== true
+    ) {
       if (delivery.subject.kind === "ISSUE" && delivery.issue !== undefined) {
         await dependencies.store.applyIssueView(repository.id, delivery.subject.id, sanitizeForgeStrings(delivery.issue));
       }

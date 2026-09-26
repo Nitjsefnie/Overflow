@@ -45,7 +45,10 @@ describe("processWebhook", () => {
 
   it.each([
     { repository: null, tracking: "a repository Overflow does not know" },
-    { repository: { id: "repository", active: false }, tracking: "a repository Overflow no longer tracks" },
+    {
+      repository: { id: "repository", active: false, unavailableReason: null },
+      tracking: "a repository Overflow no longer tracks",
+    },
   ])("does not schedule a fold for $tracking", async ({ repository }) => {
     const dependencies = processorDependencies({
       findRepositoryByGitHubId: vi.fn().mockResolvedValue(repository),
@@ -62,11 +65,30 @@ describe("processWebhook", () => {
     // webhooks even while the row still reads active. The receipt is still
     // marked PROCESSED, so the route answers 202 and the sender never retries.
     const dependencies = processorDependencies({
-      findRepositoryByGitHubId: vi.fn().mockResolvedValue({ id: "repository", active: true }),
+      findRepositoryByGitHubId: vi.fn().mockResolvedValue({ id: "repository", active: true, unavailableReason: null }),
     });
 
     await expect(processWebhook(dependencies, { ...delivery(), repositoryPrivate: true }, scope))
       .resolves.toEqual({ status: "PROCESSED" });
+
+    expect(dependencies.store.applyIssueView).not.toHaveBeenCalled();
+    expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
+    expect(dependencies.store.markProcessed).toHaveBeenCalledWith("receipt-1", "lease-1");
+  });
+
+  it("applies nothing for a repository the sweep cannot currently verify as public", async () => {
+    // The registration row's own unavailability word is the DB axis: the
+    // sweep leaves such a row active on purpose (flipping active would end
+    // the crawl and with it the automatic recovery), so the processor reads
+    // unavailableReason instead. The receipt is still marked PROCESSED, so
+    // the route answers 202 and the sender never retries.
+    const dependencies = processorDependencies({
+      findRepositoryByGitHubId: vi.fn().mockResolvedValue(
+        { id: "repository", active: true, unavailableReason: "NOT_PUBLIC" },
+      ),
+    });
+
+    await expect(processWebhook(dependencies, delivery(), scope)).resolves.toEqual({ status: "PROCESSED" });
 
     expect(dependencies.store.applyIssueView).not.toHaveBeenCalled();
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
@@ -158,7 +180,9 @@ describe("processWebhook", () => {
       repositoryGitHubId: 278964,
       forge: { provider: "gitlab" as const, instanceUrl: "https://gitlab.example.com" },
     };
-    dependencies.store.findRepositoryByForgeIdentity = vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true });
+    dependencies.store.findRepositoryByForgeIdentity = vi.fn().mockResolvedValue(
+      { id: "gitlab-repository", active: true, unavailableReason: null },
+    );
 
     const result = await processWebhook(dependencies, forgeDelivery, { ...scope, provider: "gitlab" });
 
@@ -185,7 +209,9 @@ describe("processWebhook", () => {
 
   it("applies the issue view of a forge delivery through the same seam", async () => {
     const dependencies = processorDependencies({
-      findRepositoryByForgeIdentity: vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true }),
+      findRepositoryByForgeIdentity: vi.fn().mockResolvedValue(
+        { id: "gitlab-repository", active: true, unavailableReason: null },
+      ),
     });
     const forgeDelivery = {
       ...delivery(),
@@ -235,9 +261,9 @@ function processorDependencies(
     applyIssueView: vi.fn().mockResolvedValue(undefined),
     claimDelivery: vi.fn().mockResolvedValue(overrides.claimDelivery ?? claimedLease("lease-1")),
     findRepositoryByGitHubId:
-      overrides.findRepositoryByGitHubId ?? vi.fn().mockResolvedValue({ id: "repository", active: true }),
+      overrides.findRepositoryByGitHubId ?? vi.fn().mockResolvedValue({ id: "repository", active: true, unavailableReason: null }),
     findRepositoryByForgeIdentity:
-      overrides.findRepositoryByForgeIdentity ?? vi.fn().mockResolvedValue({ id: "repository", active: true }),
+      overrides.findRepositoryByForgeIdentity ?? vi.fn().mockResolvedValue({ id: "repository", active: true, unavailableReason: null }),
     markProcessed: overrides.markProcessed ?? vi.fn().mockResolvedValue(true),
     markFailed: overrides.markFailed ?? vi.fn().mockResolvedValue(true),
   };
