@@ -282,10 +282,7 @@ describe("GitLab webhook route", () => {
       // An in-flight retry is not a processing failure: at most one line,
       // carrying the receipt key and the execution UUID and nothing from the
       // payload.
-      expect(warned.mock.calls).toEqual(status === "IN_PROGRESS" ? [[expect.any(String)]] : []);
-      const [line = ""] = warned.mock.calls[0] ?? [];
-      expect(line).toEqual(status === "IN_PROGRESS" ? expect.stringContaining("stable-message") : "");
-      expect(line).toEqual(status === "IN_PROGRESS" ? expect.stringContaining("uuid-1") : "");
+      expect(warned.mock.calls).toEqual(status === "IN_PROGRESS" ? [[expect.stringMatching(/stable-message.*uuid-1/)]] : []);
       expect(JSON.stringify(warned.mock.calls)).not.toContain("gitlab-org");
     } finally {
       warned.mockRestore();
