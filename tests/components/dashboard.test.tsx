@@ -1022,6 +1022,40 @@ describe("member dashboard", () => {
     );
     expect(screen.getByRole("link", { name: "Moderation" })).toHaveAttribute("href", "/moderation");
   });
+
+  it("places the account controls after the forge identities panel", () => {
+    render(
+      <DashboardContent
+        memberName="Ada Lovelace"
+        isModerator={false}
+        dashboard={{
+          settledBalance: 0,
+          earnedTotal: 0,
+          givenTotal: 0,
+          reservedPoints: 0,
+          availableHeadroom: 0,
+          recentSettlements: [],
+          openClaims: [],
+          registeredRepositories: [],
+          enforcementNotices: [],
+          openAudit: null,
+        }}
+      />,
+    );
+
+    const forge = sectionFor("forge-identities-heading");
+    const controls = document.querySelector('section[aria-labelledby="account-controls-heading"]');
+    expect(controls).not.toBeNull();
+    expect(
+      forge.compareDocumentPosition(controls!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(controls as HTMLElement).getByRole("button", { name: "Download export" }),
+    ).toBeVisible();
+    expect(
+      within(controls as HTMLElement).getByRole("button", { name: "Delete account" }),
+    ).toBeVisible();
+  });
 });
 
 function ledgerTotalTerms(): string[] {

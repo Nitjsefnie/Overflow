@@ -97,7 +97,29 @@ describe("account-data notice page", () => {
     ).not.toBeNull();
   });
 
-  it("reaches the request route from the controls section too", async () => {
+  it("names the dashboard's in-app controls from the controls section, so a signed-in member needs no public request", async () => {
+    await renderAccountDataPage();
+
+    const controlsSection = document.getElementById("account-data-controls-heading")!.closest("section");
+    expect(controlsSection, "the controls section exists").not.toBeNull();
+    expect(
+      controlsSection!.querySelector('a[href="/dashboard"]'),
+      "the controls section names the in-app controls on the dashboard",
+    ).not.toBeNull();
+  });
+
+  it("names the dashboard's in-app deletion control from the deletion description too", async () => {
+    await renderAccountDataPage();
+
+    const deletionSection = document.getElementById("account-data-deletion-heading")!.closest("section");
+    expect(deletionSection, "the deletion section exists").not.toBeNull();
+    expect(
+      deletionSection!.querySelector('a[href="/dashboard"]'),
+      "the deletion description names the in-app deletion control on the dashboard",
+    ).not.toBeNull();
+  });
+
+  it("reaches the request route from the controls section too, for someone who cannot sign in", async () => {
     await renderAccountDataPage();
 
     const controlsSection = document.getElementById("account-data-controls-heading")!.closest("section");

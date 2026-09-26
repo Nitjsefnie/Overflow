@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
 
 export function AccountDataNotice() {
@@ -295,13 +296,17 @@ export function AccountDataNotice() {
             causes Overflow to try to record the failure time on the identity whose token was used.
           </li>
           <li>
-            Request deletion of your account, or an export of the data stored about it, by opening an issue
-            at{" "}
+            Download an export of the data stored about your account, or delete your account, from the{" "}
+            <Link href="/dashboard">account controls on your dashboard</Link> — no public request is
+            needed.
+          </li>
+          <li>
+            If you cannot sign in to Overflow, request deletion or an export of the data stored about
+            your account by opening an issue at{" "}
             <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
               github.com/Nitjsefnie/Overflow/issues
-            </a>
-            . That is the only route: no private channel exists. Open the issue from the GitHub account the
-            request is about.
+            </a>{" "}
+            from the GitHub account the request is about. No private channel exists.
           </li>
           <li>
             An export contains the fields stored about your account — a stored secret appears only as
@@ -316,7 +321,8 @@ export function AccountDataNotice() {
             you accept a public reply there, and only when the export holds no records of you acting on
             other accounts — no moderation action you took, no audit report you filed or decided, no role
             change you made, no override decision you issued — and no audit reports filed about your
-            account. Otherwise the export is held until a self-service export exists.
+            account. A member who can sign in downloads the export themselves, from the dashboard, in
+            every case.
           </li>
         </ul>
       </section>
@@ -380,7 +386,12 @@ export function AccountDataNotice() {
           </li>
         </ul>
         <p>
-          To request deletion, open an issue at{" "}
+          To delete your account, use the account controls on your{" "}
+          <Link href="/dashboard">dashboard</Link>: deletion there confirms a fresh GitHub sign-in
+          first, and refuses while your account still sponsors a registered repository.
+        </p>
+        <p>
+          If you cannot sign in, request deletion by opening an issue at{" "}
           <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
             github.com/Nitjsefnie/Overflow/issues
           </a>
