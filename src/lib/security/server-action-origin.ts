@@ -20,6 +20,10 @@ export const ORIGIN_MISCONFIGURED_MESSAGE = "The server is not configured to acc
  * inside the action, closes that gap with the same rule the route handlers
  * apply — and fails closed like them: a missing or malformed `APP_URL` refuses
  * the action rather than trusting whatever the request carries.
+ *
+ * An action must call this first and let its error propagate. Catching it to
+ * return form state would run the refusal path as a success, and the coverage
+ * test requires every exported action to reject with the guard's exact message.
  */
 export async function assertTrustedServerActionOrigin(): Promise<void> {
   const trustedOrigin = readTrustedOrigin();
