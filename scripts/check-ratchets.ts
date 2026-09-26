@@ -20,10 +20,18 @@
 // judge its content. A non-regular entry (anything but a 100644 blob) at the
 // head is a finding (exit 1) — it is the branch's own change; a non-regular
 // entry at the merge base is a git/parse error (exit 2).
+//
+// In the module size document every value may only fall and every existing
+// key must stay, except that a baseline entry may be dropped. Two additions
+// provably relax nothing and are accepted: a new ceiling that is a positive
+// integer, and a new baseline entry for a path that was a regular file at the
+// merge base, at or below that file's line count there (read as data with
+// `git show`, like the documents). Every other added key is a finding.
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { round2 } from "./check-coverage-floor.ts";
+import { countLines } from "./check-module-size.ts";
 
 export const COVERAGE_PATH = "scripts/coverage.json";
 export const MODULE_SIZE_PATH = "scripts/module-size.json";
@@ -160,14 +168,62 @@ function calibratorRelaxations(before: Map<string, unknown>, after: Map<string, 
   return out;
 }
 
+// What the merge base holds at a baseline path: a regular file's newline
+// count, the "<mode> <type>" of any other tree entry, or null when there is
+// no entry of that name.
+export type MergeBaseEntry = { lines: number } | { kind: string } | null;
+
+export type MergeBaseLookup = (path: string) => MergeBaseEntry;
+
+// Without a lookup nothing is known to exist at the merge base, so every
+// added baseline entry is refused.
+const NOTHING_AT_MERGE_BASE: MergeBaseLookup = () => null;
+
+// Adding a ceiling introduces a limit where there was none, so any positive
+// integer tightens.
+function addedCeiling(key: string, now: unknown): string[] {
+  if (Number.isInteger(now) && (now as number) > 0) return [];
+  return [finding(MODULE_SIZE_PATH, key, undefined, now, "ceiling added that is not a positive integer")];
+}
+
+// A path that was a regular file at the merge base, which carried a green
+// module-size check, was either over no ceiling (outside the tracked
+// families — the entry is a new cap at or below its size) or under its
+// ceiling (the entry then only makes check-module-size report it
+// `graduated`). So an entry at or below the merge-base size never grants
+// headroom the file did not already have, and growth past it is reported
+// `grown`. An entry for a new file, or above the merge-base size, could.
+function addedBaselineEntry(
+  key: string,
+  path: string,
+  now: unknown,
+  atMergeBase: MergeBaseLookup,
+): string[] {
+  const refuse = (why: string) => [finding(MODULE_SIZE_PATH, key, undefined, now, why)];
+  if (!Number.isInteger(now) || (now as number) < 0) {
+    return refuse("entry added that is not a non-negative integer");
+  }
+  const entry = atMergeBase(path);
+  if (entry === null) return refuse("entry added for a path absent at the merge base");
+  if (!("lines" in entry)) {
+    return refuse(`entry added for a path that is ${entry.kind}, not a regular file, at the merge base`);
+  }
+  if ((now as number) > entry.lines) {
+    return refuse(`entry added above the file's ${entry.lines} lines at the merge base`);
+  }
+  return [];
+}
+
 // Both sections are integer maps in which no value may rise; ceilings keep
-// their key set exactly, the baseline may only lose entries.
+// every existing key, the baseline may lose entries. What each may gain is
+// judged by addedCeiling and addedBaselineEntry.
 function integerMapRelaxations(
-  section: string,
+  section: "ceilings" | "module_size_baseline",
   base: unknown,
   head: unknown,
-  entriesMayBeRemoved: boolean,
+  atMergeBase: MergeBaseLookup,
 ): string[] {
+  const entriesMayBeRemoved = section === "module_size_baseline";
   if (!isObject(head)) {
     return [finding(MODULE_SIZE_PATH, section, base, head, "not an object")];
   }
@@ -181,7 +237,11 @@ function integerMapRelaxations(
   for (const [name, now] of Object.entries(head)) {
     const key = keyPath([section, name]);
     if (!Object.hasOwn(before, name)) {
-      out.push(finding(MODULE_SIZE_PATH, key, undefined, now, "entry added"));
+      out.push(
+        ...(section === "ceilings"
+          ? addedCeiling(key, now)
+          : addedBaselineEntry(key, name, now, atMergeBase)),
+      );
       continue;
     }
     const was = before[name];
@@ -196,7 +256,11 @@ function integerMapRelaxations(
   return out;
 }
 
-export function moduleSizeRelaxations(base: unknown, head: unknown): string[] {
+export function moduleSizeRelaxations(
+  base: unknown,
+  head: unknown,
+  atMergeBase: MergeBaseLookup = NOTHING_AT_MERGE_BASE,
+): string[] {
   if (base === null || base === undefined) return [];
   if (head === null || head === undefined) return [deleted(MODULE_SIZE_PATH)];
   if (!isObject(head) || !isObject(base)) {
@@ -211,10 +275,8 @@ export function moduleSizeRelaxations(base: unknown, head: unknown): string[] {
     const was = base[key];
     if (!Object.hasOwn(base, key)) {
       out.push(finding(MODULE_SIZE_PATH, key, undefined, now, "key added"));
-    } else if (key === "ceilings") {
-      out.push(...integerMapRelaxations(key, was, now, false));
-    } else if (key === "module_size_baseline") {
-      out.push(...integerMapRelaxations(key, was, now, true));
+    } else if (key === "ceilings" || key === "module_size_baseline") {
+      out.push(...integerMapRelaxations(key, was, now, atMergeBase));
     } else if (JSON.stringify(was) !== JSON.stringify(now)) {
       out.push(finding(MODULE_SIZE_PATH, key, was, now, "changed, and has no tightening direction"));
     }
@@ -265,13 +327,32 @@ export function mergeBase(cwd: string, base: string, head: string): string {
 // through the link.
 export const REGULAR_FILE = "100644 blob";
 
-// "<mode> <type>" of the tree entry at `path`, or null when there is none.
+// "<mode> <type>" of the tree entry named exactly `path`, or null when there
+// is none. git ls-tree reads its argument as a pattern — "dir/" lists the
+// directory's children — so pathspec magic is off and only a record whose
+// name equals `path` counts. Baseline keys are the branch's own text.
 export function entryKind(cwd: string, commit: string, path: string): string | null {
-  const listing = git(cwd, ["ls-tree", "-z", commit, "--", path]);
+  const listing = git(cwd, ["--literal-pathspecs", "ls-tree", "-z", commit, "--", path]);
   if (listing.status !== 0) throw new Error(`cannot list ${path} at ${commit}: ${listing.stderr}`);
-  if (listing.stdout === "") return null;
-  const [mode, type] = listing.stdout.split(/[ \t]/, 2);
-  return `${mode} ${type}`;
+  for (const record of listing.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab === -1 || record.slice(tab + 1) !== path) continue;
+    const [mode, type] = record.slice(0, tab).split(" ", 2);
+    return `${mode} ${type}`;
+  }
+  return null;
+}
+
+// The merge-base lookup checkRatchets hands moduleSizeRelaxations: the
+// newline count of a regular file at `commit`, read as data like the
+// documents and counted the way check-module-size counts.
+export function mergeBaseEntry(cwd: string, commit: string, path: string): MergeBaseEntry {
+  const kind = entryKind(cwd, commit, path);
+  if (kind === null) return null;
+  if (kind !== REGULAR_FILE) return { kind };
+  const blob = git(cwd, ["show", `${commit}:${path}`]);
+  if (blob.status !== 0) throw new Error(`cannot read ${path} at ${commit}: ${blob.stderr}`);
+  return { lines: countLines(blob.stdout) };
 }
 
 // The parsed document at `commit`, or null when the path does not exist
@@ -299,9 +380,13 @@ export function checkRatchets(
   const head = resolveCommit(cwd, headRev);
   const fork = mergeBase(cwd, base, head);
   const findings: string[] = [];
+  const atMergeBase: MergeBaseLookup = (path) => mergeBaseEntry(cwd, fork, path);
   const documents = [
     [COVERAGE_PATH, coverageRelaxations],
-    [MODULE_SIZE_PATH, moduleSizeRelaxations],
+    [
+      MODULE_SIZE_PATH,
+      (before: unknown, after: unknown) => moduleSizeRelaxations(before, after, atMergeBase),
+    ],
   ] as const;
   for (const [path, relaxations] of documents) {
     // A non-regular entry at head is the branch's own change, refused like
