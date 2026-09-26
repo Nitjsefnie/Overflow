@@ -126,15 +126,19 @@ describe("jwt callback wiring", () => {
     // this branch's deleted-session check must still see it. A token holding
     // both userId and authenticatedAt is signed out when its account is
     // DELETED, and carried through untouched — instant included — when LIVE.
+    // The recorded instant is an hour before the fake clock, so a mutant
+    // that rewrites authenticatedAt on every refresh call instead of only
+    // on the OAuth callback changes it and fails the LIVE leg.
     const jwt = await jwtCallback();
-    const token = { userId: "u1", role: "MEMBER", authenticatedAt: signedInAtSeconds };
+    const recordedAt = signedInAtSeconds - 3600;
+    const token = { userId: "u1", role: "MEMBER", authenticatedAt: recordedAt };
 
     mocks.findSessionAccountState.mockResolvedValue("DELETED");
     await expect(jwt({ token } as never)).resolves.toBeNull();
 
     mocks.findSessionAccountState.mockResolvedValue("LIVE");
     await expect(jwt({ token } as never)).resolves.toBe(token);
-    expect(token.authenticatedAt).toBe(signedInAtSeconds);
+    expect(token.authenticatedAt).toBe(recordedAt);
   });
 
   it("resolves the account inline on the sign-in branch and never consults the session state", async () => {

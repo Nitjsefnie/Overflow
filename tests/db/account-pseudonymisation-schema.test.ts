@@ -81,6 +81,17 @@ describe("account pseudonymisation schema", () => {
     expect(row!.deleted_at).toBeNull();
   });
 
+  it("accepts a live row with neither avatar nor token: the check binds only deleted rows", async () => {
+    const id = nextExternalId();
+    const [row] = await sql<{ id: string; deleted_at: Date | null }[]>`
+      insert into users (github_user_id, github_login, avatar_url, encrypted_oauth_token)
+      values (${id}, ${`pseudonymisation-user-${id}`}, null, null)
+      returning id, deleted_at
+    `;
+    expect(row!.id).toBeDefined();
+    expect(row!.deleted_at).toBeNull();
+  });
+
   it("rejects marking a row deleted while it still carries an avatar", async () => {
     const userId = await insertUser();
     await sql`update users set encrypted_oauth_token = null where id = ${userId}`;
@@ -131,8 +142,9 @@ describe("account pseudonymisation schema", () => {
   });
 
   it("makes user_forge_identities.encrypted_token nullable and admits the tombstone login", async () => {
-    await expect(columnShape("user_forge_identities", "encrypted_token")).resolves.toMatchObject({
+    await expect(columnShape("user_forge_identities", "encrypted_token")).resolves.toEqual({
       is_nullable: "YES",
+      data_type: "bytea",
     });
 
     const identityId = await insertForgeIdentity(await insertUser());

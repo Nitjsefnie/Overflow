@@ -458,6 +458,14 @@ describe("account deletion as pseudonymisation", () => {
     // carries the expiry alongside the creation instant, never the hash.
     expect(new Date(exported.apiToken!.expiresAt).toISOString()).toEqual(exported.apiToken!.expiresAt);
     expect(Object.keys(exported.apiToken!).sort()).toEqual(["createdAt", "expiresAt"]);
+    // The expiry must be the stored instant, not a stand-in: the export
+    // reports the token as the database holds it.
+    const [storedToken] = await sql<{ created_at: Date; expires_at: Date }[]>`
+      select created_at, expires_at from api_tokens where user_id = ${contributor.id}
+    `;
+    expect(new Date(exported.apiToken!.expiresAt).toISOString()).toEqual(
+      storedToken!.expires_at.toISOString(),
+    );
 
     expect(exported.forgeIdentities).toHaveLength(1);
     expect(exported.forgeIdentities[0]!.forgeUserId).toBe(777);

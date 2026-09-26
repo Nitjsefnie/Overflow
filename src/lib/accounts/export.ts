@@ -277,6 +277,8 @@ export async function exportAccount(
   githubUserId: number,
 ): Promise<AccountExport | null> {
   return sql.begin(
+    // No test pins this mode string: read committed passes every export test.
+    // The mode buys the single-snapshot property, not a pinned assertion.
     "isolation level repeatable read read only",
     async (tx): Promise<AccountExport | null> => {
       const [account] = await tx<{
@@ -358,6 +360,10 @@ export async function exportAccount(
           case "jsonb":
             setSection(document, entry.path, await loadJsonbRows(tx, account.id, entry));
             break;
+          default: {
+            const exhaustive: never = entry;
+            throw new Error(`unreachable export entry: ${JSON.stringify(exhaustive)}`);
+          }
         }
       }
       return document;
