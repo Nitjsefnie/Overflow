@@ -1,0 +1,364 @@
+# Incident response for Overflow operators
+
+## Responsibility and open decisions
+
+The maintainer, **Nitjsefnie**, decides the response and any notifications, and
+is responsible for sending them. Operators preserve evidence and carry out the
+agreed containment and recovery. Record what is known, what is inferred and
+what remains unknown; do not put credentials in the incident record.
+
+> **OPEN — maintainer decision:** the private contact address (see #650 and
+> #679). This runbook does not supply an address.
+
+> **OPEN — maintainer decision:** where the incident log is kept.
+
+Private vulnerability reporting: see #642. Alerting: see #651.
+
+Steps: [detect and triage](#detect-and-triage), [contain](#contain),
+[scope](#scope), [recover](#recover), [record](#record),
+[notification decision](#notification-decision).
+
+## Detect and triage
+
+Record the discovery time in UTC, the report or symptom, affected account and
+repository IDs, the suspected start and end of the incident, and whether abuse
+is continuing. Bring the evidence to Nitjsefnie. Preserve the relevant journal
+window immediately; widen it as new evidence changes the suspected window.
+Do not wait for a complete scope before containing active abuse.
+
+### Journal retention and immediate preservation
+
+Measured on 2026-09-26: `/etc/systemd/journald.conf` sets nothing (all defaults),
+no drop-ins, storage is persistent (`/var/log/journal` exists), so `SystemMaxUse`
+defaults to 10% of the filesystem capped at 4 GiB; `journalctl --disk-usage`
+reports 4 GiB, i.e. at the cap, so retention is size-bound, not time-bound;
+the oldest entry on 2026-09-26 was 2026-07-22; there is no time limit
+(`MaxRetentionSec` unset) and rsyslog is not running, so the journal is the
+only copy.
+
+Re-measure before relying on those observations:
+
+```bash
+journalctl --disk-usage
+journalctl --no-pager -q | head -1
+```
+
+Those are host-wide observations, not a promise that Overflow's entire
+incident window is present. Size pressure can remove older entries sooner.
+As root on the service host, replace the example UTC bounds and choose a new
+file in the maintainer-approved evidence location. Export the full window,
+including the object fields that can span multiple journal entries:
+
+```bash
+umask 077
+set -o noclobber
+journalctl -u overflow --utc --since '2026-09-26 00:00:00 UTC' \
+  --until '2026-09-27 00:00:00 UTC' --no-pager -o short-iso-precise \
+  > incident-journal.txt
+```
+
+`incident-journal.txt` is an example output filename, not the incident-log
+location decision. Preserve the original export with restricted access; keep
+working notes separately. The service's stdout and stderr go to the journal
+according to [overflow.service](overflow.service).
+
+## Contain
+
+Choose the narrowest action that stops the observed abuse. If the extent of
+compromise is unknown or requests must stop immediately, stop the service:
+
+```bash
+systemctl stop overflow.service
+systemctl is-active overflow.service
+```
+
+Expect `inactive` and a nonzero status from `is-active`. Restart only after the
+recovery checks below. Revocation and demotion do not undo completed work or
+guarantee cancellation of requests that already passed authentication.
+
+### Revoke one API token
+
+Use an operator-authorized `psql` connection to the intended database, as in
+[README.md](README.md). Confirm the database destination separately; never
+paste its connection secret into the incident record. The following recipes
+are pasted into `psql` (`\set` is a psql command). Replace example UUIDs with
+the observed IDs and save the returned non-secret fields before mutation.
+
+```sql
+\set ON_ERROR_STOP on
+\set actor_id '00000000-0000-4000-8000-000000000001'
+\set token_id '00000000-0000-4000-8000-000000000002'
+SELECT id, user_id, created_at, expires_at, last_used_at
+FROM api_tokens
+WHERE id = :'token_id'::uuid AND user_id = :'actor_id'::uuid;
+
+DELETE FROM api_tokens
+WHERE id = :'token_id'::uuid AND user_id = :'actor_id'::uuid
+RETURNING id, user_id, created_at, expires_at, last_used_at;
+```
+
+Expect one returned row and `DELETE 1`. Zero means that exact issuance is no
+longer present or the account/issuance IDs do not match: check the current
+token metadata in [Scope](#scope), rather than deleting another issuance by
+guess. The bearer lookup requires a matching unexpired row, so deletion stops
+future authentication with that token. This does not invalidate sessions or
+prevent an account with access from minting a replacement. A revoked token
+cannot be recovered; issue a fresh one only after account access is secured.
+The SQL operation does not emit a `Privileged action` line; record it manually.
+
+### Demote a moderator
+
+The application route is `POST /api/moderation/moderators`, with JSON fields
+`targetAccountId` and `moderator: false`, authorized by a trusted moderator.
+It records `moderator_role_changes` and a `moderator-role.revoke` journal entry,
+and refuses to revoke the last moderator. Prefer that route when a trusted
+moderator and a safe application instance are available.
+
+For emergency operator containment with the service stopped, use this direct
+SQL recipe. It deliberately bypasses the application's last-moderator guard
+and does **not** produce an application audit row or journal line. Capture its
+output and the operator's identity in the incident record:
+
+```sql
+\set ON_ERROR_STOP on
+\set target_id '00000000-0000-4000-8000-000000000001'
+SELECT id, github_user_id, role FROM users WHERE id = :'target_id'::uuid;
+
+UPDATE users SET role = 'MEMBER', updated_at = now()
+WHERE id = :'target_id'::uuid AND role = 'MODERATOR'
+RETURNING id, github_user_id, role, updated_at;
+```
+
+Expect one row with `role = MEMBER` and `UPDATE 1`; zero means missing or
+already demoted. Moderator gates read the current database role for both
+session and bearer requests, so a cached JWT role does not preserve moderator
+authority. Demotion leaves ordinary member access available.
+
+Remove the target's numeric GitHub user ID from `MODERATOR_GITHUB_USER_IDS`
+in the service environment before restarting: `src/auth.ts` and
+`src/lib/auth/account-store.ts` make that list a floor that promotes the
+account again at sign-in. Removing the ID alone does not demote the stored
+role. Confirm there is a trusted moderator for recovery; the same bootstrap
+list can restore trusted access on sign-in if all moderators were demoted.
+
+### Invalidate every session
+
+`src/auth.ts` uses JWT sessions; there is no stored session ID to revoke.
+Replace **`AUTH_SECRET`** in the root-only service environment file specified
+by [README.md](README.md), keeping its ownership and mode. Configure a fresh
+secret without retaining the compromised secret as a fallback. Do not include
+either value in commands saved as evidence. Restart to load the replacement:
+
+```bash
+systemctl restart overflow.service
+systemctl is-active overflow.service
+```
+
+Expect `active`; perform the readiness check in [Recover](#recover). Once the
+new process holds only the new secret, old JWT sessions cannot be decrypted
+and users must sign in again. Restarting without changing `AUTH_SECRET` does
+not invalidate them. This does not revoke database-backed API tokens or
+resolve compromised GitHub access. Do not restore a compromised auth secret
+as a recovery shortcut.
+
+## Scope
+
+### Database history by actor, credential and time
+
+In the same authorized `psql` session, replace the example account UUID and
+UTC bounds. Use a half-open window (`from_time` inclusive, `to_time` exclusive)
+so adjoining windows do not double-count rows:
+
+```sql
+\set ON_ERROR_STOP on
+\set actor_id '00000000-0000-4000-8000-000000000001'
+\set from_time '2026-09-26 00:00:00+00'
+\set to_time '2026-09-27 00:00:00+00'
+SELECT id, actor_id, target_account_id, new_role,
+       credential_kind, credential_token_id, created_at
+FROM moderator_role_changes
+WHERE actor_id = :'actor_id'::uuid
+  AND created_at >= :'from_time'::timestamptz
+  AND created_at < :'to_time'::timestamptz
+ORDER BY created_at, id;
+
+SELECT id, actor_id, target_user_id, prior_state, new_state, reason,
+       credential_kind, credential_token_id, created_at
+FROM moderation_events
+WHERE actor_id = :'actor_id'::uuid
+  AND created_at >= :'from_time'::timestamptz
+  AND created_at < :'to_time'::timestamptz
+ORDER BY created_at, id;
+```
+
+Start with all credentials for the actor so that a change from token to
+session is visible. To isolate a suspected issuance across both tables:
+
+```sql
+\set ON_ERROR_STOP on
+\set actor_id '00000000-0000-4000-8000-000000000001'
+\set token_id '00000000-0000-4000-8000-000000000002'
+\set from_time '2026-09-26 00:00:00+00'
+\set to_time '2026-09-27 00:00:00+00'
+SELECT 'moderator_role_changes' AS source, id, actor_id,
+       target_account_id AS target_id, credential_kind, credential_token_id,
+       created_at
+FROM moderator_role_changes
+WHERE actor_id = :'actor_id'::uuid AND credential_kind = 'token'
+  AND credential_token_id = :'token_id'::uuid
+  AND created_at >= :'from_time'::timestamptz
+  AND created_at < :'to_time'::timestamptz
+UNION ALL
+SELECT 'moderation_events' AS source, id, actor_id,
+       target_user_id AS target_id, credential_kind, credential_token_id,
+       created_at
+FROM moderation_events
+WHERE actor_id = :'actor_id'::uuid AND credential_kind = 'token'
+  AND credential_token_id = :'token_id'::uuid
+  AND created_at >= :'from_time'::timestamptz
+  AND created_at < :'to_time'::timestamptz
+ORDER BY created_at, source, id;
+```
+
+`credential_kind = 'session'` identifies the authentication kind only, not a
+particular browser or session JWT. `credential_kind = 'token'` plus
+`credential_token_id` identifies the issuance. All-null credential fields
+mean unknown: historical rows and writes by an older release have that shape.
+They are not evidence of a session or of no credential. The token ID has no
+foreign key, so history survives revocation, regeneration and account deletion.
+Do not use an inner join to current tokens to decide which history exists.
+
+### Current token metadata
+
+```sql
+\set ON_ERROR_STOP on
+\set actor_id '00000000-0000-4000-8000-000000000001'
+SELECT id, user_id, created_at, expires_at, last_used_at
+FROM api_tokens
+WHERE user_id = :'actor_id'::uuid;
+```
+
+There is at most one current token row per account. `last_used_at` is updated
+inside the token lookup statement only when null or older than one minute.
+It has throttled, one-minute resolution; it is not a request log, exact last
+request time, request count, or proof that a privileged action succeeded.
+Authentication can succeed before a later authorization or mutation fails.
+Null is not proof of no historical use, especially across older releases.
+
+Regeneration rotates `api_tokens.id`, clears `last_used_at`, and resets
+issuance/expiry timestamps, so an ID names one issuance under this release.
+The former row is not retained. An older release running after rollback does
+not rotate the ID or stamp last use; mark that interval as a correlation gap.
+No recipe selects bearer material or its hash.
+
+### Journal and request correlation
+
+Locate the fixed message within the preserved time window:
+
+```bash
+journalctl -u overflow --utc --since '2026-09-26 00:00:00 UTC' \
+  --until '2026-09-27 00:00:00 UTC' --no-pager -o short-iso-precise \
+  --grep 'Privileged action'
+```
+
+This filter locates starts, not necessarily whole objects. The logger calls
+`console.info("Privileged action", { action, actorId, credential, clientAddress, subject })`;
+Node may print the object over multiple lines. Inspect the full exported
+window around each match for all fields; do not treat this output as JSON or
+throw away continuation entries.
+
+The implemented action names and `subject` keys are:
+
+| `action` | `subject` keys |
+| --- | --- |
+| `moderator-role.grant`, `moderator-role.revoke` | `targetAccountId` |
+| `audit.open`, `audit.dismiss`, `audit.substantiate` | `auditId`, `targetAccountId` |
+| `recalibration.close` | `targetAccountId` |
+| `credit-adjustment.create` | `adjustmentId`, `targetAccountId` |
+| `credit-adjustment.reverse` | `adjustmentId`, `reversalId`, `targetAccountId` |
+| `repository.rederivation-request` | `repositoryId` |
+| `settlement-override.grant`, `settlement-override.decline` | `overrideRequestId`, `issueId` |
+
+Match journal `actorId` to SQL `actor_id`, `credential.kind` to
+`credential_kind`, and `credential.tokenId` (when present) to
+`credential_token_id`. Compare the journal timestamp with `created_at` and
+confirm the target/subject and action. These are correlation clues, not a
+unique join key: journal emission follows the successful operation, times can
+differ, and concurrent actions can be ambiguous. These two history tables
+are not a ledger of every action in the table above; retain the journal and
+follow its subject IDs when scoping other actions. Missing journal output is
+not proof of no mutation, particularly beyond retention or after a crash.
+
+`clientAddress` appears only in the journal, never in these database rows.
+It is trustworthy only because nginx sets `X-Real-IP` from `$remote_addr`
+after the Cloudflare real-ip step and the app listens on `127.0.0.1`; the app
+never reads `X-Forwarded-For`. `readClientAddress` validates a single address
+with `node:net` `isIP()`, returning null for an invalid or absent header.
+The MCP adapter forwards `x-real-ip` to its wrapped routes. If the proxy or
+loopback boundary was bypassed or compromised, do not trust the address.
+
+The nginx access log contains IP, path and user agent, with no account, and
+is shared by every site on this host and kept 14 days (host facts measured on
+2026-09-26). Preserve its relevant window and rotated files immediately.
+Confirm the host's configured access-log location rather than assuming a
+per-Overflow path. Correlate time, IP and request path with the journal; an
+IP or user agent alone does not identify an account or person. Shared-log
+requests may belong to other sites. Neither log's retention guarantees that
+an older incident is fully observable.
+
+## Recover
+
+Have Nitjsefnie approve the recovery based on the scoped cause and affected
+actions. Secure the affected accounts, replace compromised credentials and
+review unauthorized role grants and mutations before reopening access. Do
+not erase history to conceal or reverse an incident; `moderation_events` is
+immutable. Record any corrective action and its relationship to the original.
+
+Use [README.md](README.md)'s deployment and rollback procedure for a reviewed
+fix, or [backup-restore.md](backup-restore.md) if a restore is necessary. A
+release rollback does not revoke credentials or undo database mutations, and
+an older release can leave the credential/last-use gaps described above.
+
+If the service was stopped, start it after containment configuration is in
+place and check the same readiness endpoint used by the deployment procedure:
+
+```bash
+systemctl start overflow.service
+systemctl is-active overflow.service
+curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
+  --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:3000/api/readiness
+journalctl -u overflow -n 100 --no-pager
+```
+
+Expect `active` and HTTP `200`. Verify trusted access works, the revoked token
+is refused, the demoted account cannot moderate, and old sessions require
+sign-in after an auth-secret rotation. Readiness alone proves none of those
+containment properties. Re-scope the journal and database after recovery to
+look for continued unauthorized activity; keep the incident open if it recurs.
+
+## Record
+
+In the location chosen by Nitjsefnie, keep a UTC timeline of discovery,
+decisions, containment and recovery; who performed each action; affected
+account, token-issuance and subject IDs; returned SQL results; evidence export
+locations and time bounds; deployed release/rollback intervals; observed
+impact; and unresolved questions. Mark evidence lost to retention or missing
+from older releases. Record failed or zero-row containment attempts as well
+as successful ones, including direct SQL actions absent from app audit logs.
+
+Keep evidence access restricted. Do not copy bearer tokens, token hashes,
+cookie values, session JWTs or auth secrets into notes or log excerpts. The
+credential references above are deliberately sufficient for correlation
+without those secrets. Record who may access the evidence and the
+maintainer's decision about its handling; this runbook sets no new retention
+period for incident evidence or database rows.
+
+## Notification decision
+
+Nitjsefnie decides whether notification is required, who receives it, what it
+says and when, and sends it. Present the known scope, affected data/actions,
+impact, evidence gaps and containment status for that decision. Record the
+decision, reasoning, decision time and any notifications actually sent.
+This runbook does not choose a supervisory authority, lawful basis, contact
+address or notification deadline.
