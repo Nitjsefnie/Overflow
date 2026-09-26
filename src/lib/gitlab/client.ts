@@ -386,8 +386,9 @@ export class GitLabGateway {
   /**
    * The fold's evidence window reads `finalCommitAt` (the last push before the
    * merge), and the MR object does not carry it — it lives on the MR's commits.
-   * One bounded commit read supplies it; a failed read leaves it null, where
-   * the fold's own validity check refuses the MR rather than guessing.
+   * One bounded commit read supplies it; the read must succeed or its error
+   * propagates, so credential failures reach the credential-failure handling
+   * instead of silently refusing the MR as a closing pull request.
    */
   private async withFinalCommitAt(
     repository: GitHubRepositoryReference,
@@ -398,20 +399,18 @@ export class GitLabGateway {
     if (mergeRequest.merged_at === null) {
       return mapped;
     }
-    try {
-      const commits = await this.listAllPages<{ committed_at: string | null; committed_date: string }>(
-        `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits`,
-        "offset",
-      );
-      const timestamps = commits
-        .map((commit) => commit.committed_at ?? commit.committed_date)
-        .filter((value): value is string => typeof value === "string");
-      mapped.finalCommitAt = timestamps.length === 0
-        ? null
-        : normalizeTimestamp(timestamps.slice().sort().at(-1)!);
-    } catch {
-      mapped.finalCommitAt = null;
-    }
+    const commits = await this.listAllPages<{ committed_at: string | null; committed_date: string }>(
+      `/projects/${segment(`${repository.owner}/${repository.name}`)}/merge_requests/${mergeRequestIid}/commits`,
+      "offset",
+    );
+    // Normalize every timestamp first (unparsable input throws here); raw
+    // committer offsets make lexical order differ from chronological order.
+    const timestamps = commits
+      .map((commit) => commit.committed_at ?? commit.committed_date)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => normalizeTimestamp(value));
+    mapped.finalCommitAt = timestamps.length === 0 ? null
+      : timestamps.reduce((latest, value) => (Date.parse(value) > Date.parse(latest) ? value : latest));
     return mapped;
   }
 
