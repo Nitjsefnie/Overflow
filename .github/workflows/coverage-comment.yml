@@ -44,12 +44,18 @@ permissions:
   checks: "write"
   actions: "read"
 
-# Serializes runs for one head branch so concurrent runs cannot each post a
-# fresh comment and duplicate it; older runs still complete so a cancelled
-# successor does not silently drop the update. The group safely holds the
-# attacker-controlled branch name: it is an opaque string key, never executed.
+# Serializes runs for one head repository and branch so concurrent runs
+# cannot each post a fresh comment and duplicate it; older runs still
+# complete so a cancelled successor does not silently drop the update. The
+# key is a cancellation authority: a group keeps at most one pending run, and
+# a newly queued run supersedes the pending one even with cancel-in-progress
+# off. Keyed on the branch alone, another repository's same-named branch (two
+# forks' patch-1, say) would share the group and drop this PR's pending
+# update, leaving its older percentage looking current — so the head
+# repository is part of the key. The group safely holds the attacker-
+# controlled names: it is an opaque string key, never executed.
 concurrency:
-  group: coverage-comment-${{ github.event.workflow_run.head_branch }}
+  group: coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:

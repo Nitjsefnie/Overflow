@@ -55,6 +55,7 @@ describe("the coverage comment workflow's run blocks", () => {
   let resolveRun = "";
   let bodyRun = "";
   let upsertRun = "";
+  let checkRunRun = "";
   let tempRoot = "";
   let tempCounter = 0;
 
@@ -66,9 +67,11 @@ describe("the coverage comment workflow's run blocks", () => {
     resolveRun = steps.find((step) => step.name === "Resolve the destination pull request")?.run ?? "";
     bodyRun = steps.find((step) => step.name === "Determine the comment body")?.run ?? "";
     upsertRun = steps.find((step) => step.name === "Post or update the marker-identified comment")?.run ?? "";
+    checkRunRun = steps.find((step) => step.name === "Publish the coverage comment check run")?.run ?? "";
     expect(resolveRun, "the resolve step's run block must exist").not.toBe("");
     expect(bodyRun, "the body step's run block must exist").not.toBe("");
     expect(upsertRun, "the upsert step's run block must exist").not.toBe("");
+    expect(checkRunRun, "the check-run step's run block must exist").not.toBe("");
     tempRoot = join(tmpdir(), `coverage-comment-${process.pid}-${Date.now()}`);
     await mkdir(tempRoot, { recursive: true });
   });
@@ -159,6 +162,7 @@ describe("the coverage comment workflow's run blocks", () => {
     for (const key of [
       "GH_TOKEN", "REPO_SLUG", "HEAD_BRANCH", "HEAD_OWNER", "HEAD_REPO", "HEAD_SHA",
       "CONCLUSION", "PR_NUMBER", "SAME_REPO", "RUN_EVENT",
+      "PR_FOUND", "PR_OUTCOME", "COMMENT_OUTCOME",
     ]) {
       delete childEnv[key];
     }
@@ -309,8 +313,10 @@ describe("the coverage comment workflow's run blocks", () => {
       expect(outcome.argv, "no owner means no query can be scoped, so none is sent").toHaveLength(0);
     });
 
-    it.each(["workflow_dispatch", "push"])(
-      "exits silently without querying when the ci run was triggered by %s, not pull_request",
+    // An allowlist, not a denylist of today's other triggers, and an empty
+    // event is not a pull_request run either.
+    it.each(["workflow_dispatch", "push", "merge_group", ""])(
+      "exits silently without querying when the ci run was triggered by %j, not pull_request",
       async (event) => {
         const outcome = await runBlock(
           resolveRun,
@@ -495,35 +501,94 @@ describe("the coverage comment workflow's run blocks", () => {
   describe("posting or updating the marker-identified comment", () => {
     const BOT = "github-actions[bot]";
     const upsertEnv = { GH_TOKEN: "stub-token", REPO_SLUG, PR_NUMBER: "21" };
-    const planted: IssueComment = { id: 501, user: { login: "someone" }, body: `quoting ${MARKER} here` };
     const own: IssueComment = { id: 502, user: { login: BOT }, body: `${MARKER}\n\nold report` };
+    // Lookalike authors: another app's bot, the bare name, and a suffixed
+    // name — each would pass a cheaper reading of the exact-login predicate.
+    const lookalikes = ["someone", "dependabot[bot]", "github-actions", "github-actions[bot]x"];
+    const planted = (login: string): IssueComment => ({
+      id: 501,
+      user: { login },
+      body: `quoting ${MARKER} here`,
+    });
 
     const writes = (outcome: RunOutcome): string[][] =>
       outcome.argv.filter((call) => call.includes("PATCH") || call.includes("POST"));
 
-    it("posts a new comment when the only marker-carrying comment is someone else's", async () => {
-      const outcome = await runBlock(upsertRun, upsertEnv, {
-        comments: [planted, { id: 503, user: { login: BOT }, body: "unrelated bot comment" }],
-        bodyFile: `${MARKER}\n\nnew report\n`,
-      });
+    it.each(lookalikes)(
+      "posts a new comment when the only marker-carrying comment is %s's",
+      async (login) => {
+        const outcome = await runBlock(upsertRun, upsertEnv, {
+          comments: [planted(login), { id: 503, user: { login: BOT }, body: "unrelated bot comment" }],
+          bodyFile: `${MARKER}\n\nnew report\n`,
+        });
 
-      expect(outcome.result.status, log(outcome)).toBe(0);
-      expect(writes(outcome), "exactly one write").toHaveLength(1);
-      const [write] = writes(outcome);
-      expect(write).toEqual(expect.arrayContaining(["-X", "POST", `repos/${REPO_SLUG}/issues/21/comments`]));
-      expect(write.some((arg) => arg.includes("/issues/comments/501"))).toBe(false);
+        expect(outcome.result.status, log(outcome)).toBe(0);
+        expect(writes(outcome), "exactly one write").toHaveLength(1);
+        const [write] = writes(outcome);
+        expect(write).toEqual(expect.arrayContaining(["-X", "POST", `repos/${REPO_SLUG}/issues/21/comments`]));
+        expect(write.some((arg) => arg.includes("/issues/comments/501"))).toBe(false);
+      },
+    );
+
+    it.each(lookalikes)(
+      "updates the bot's own comment in place, never %s's planted marker listed before it",
+      async (login) => {
+        const outcome = await runBlock(upsertRun, upsertEnv, {
+          comments: [planted(login), own],
+          bodyFile: `${MARKER}\n\nnew report\n`,
+        });
+
+        expect(outcome.result.status, log(outcome)).toBe(0);
+        expect(writes(outcome), "exactly one write").toHaveLength(1);
+        const [write] = writes(outcome);
+        expect(write).toEqual(expect.arrayContaining(["-X", "PATCH", `repos/${REPO_SLUG}/issues/comments/502`]));
+      },
+    );
+  });
+
+  describe("publishing the coverage comment check run", () => {
+    // Step outcomes as GitHub reports them: a step skipped by its `if:` has
+    // outcome "skipped", and an unset output reads as the empty string.
+    const checkEnv = (found: string, prOutcome: string, commentOutcome: string): Record<string, string> => ({
+      GH_TOKEN: "stub-token",
+      REPO_SLUG,
+      HEAD_SHA: EVENT_SHA,
+      PR_FOUND: found,
+      PR_OUTCOME: prOutcome,
+      COMMENT_OUTCOME: commentOutcome,
     });
 
-    it("updates the bot's own comment in place, never a planted marker listed before it", async () => {
-      const outcome = await runBlock(upsertRun, upsertEnv, {
-        comments: [planted, own],
-        bodyFile: `${MARKER}\n\nnew report\n`,
-      });
+    const checkRunPosts = (outcome: RunOutcome): string[][] =>
+      outcome.argv.filter((call) => call.includes(`repos/${REPO_SLUG}/check-runs`));
+
+    it("publishes nothing after a silent exit of the resolve step", async () => {
+      const outcome = await runBlock(checkRunRun, checkEnv("false", "success", "skipped"));
 
       expect(outcome.result.status, log(outcome)).toBe(0);
-      expect(writes(outcome), "exactly one write").toHaveLength(1);
-      const [write] = writes(outcome);
-      expect(write).toEqual(expect.arrayContaining(["-X", "PATCH", `repos/${REPO_SLUG}/issues/comments/502`]));
+      expect(outcome.argv, "a silent exit publishes no check run at all").toHaveLength(0);
+    });
+
+    it.each([
+      ["the comment was posted or updated", "true", "success", "success", "success"],
+      ["the comment step failed", "true", "success", "failure", "failure"],
+      ["the resolve step failed", "", "failure", "skipped", "failure"],
+      ["the body step failed and the comment step was skipped", "true", "success", "skipped", "failure"],
+    ])("publishes one check run when %s", async (_label, found, prOutcome, commentOutcome, conclusion) => {
+      const outcome = await runBlock(checkRunRun, checkEnv(found, prOutcome, commentOutcome));
+
+      expect(outcome.result.status, log(outcome)).toBe(0);
+      expect(checkRunPosts(outcome), "exactly one check run").toHaveLength(1);
+      const [post] = checkRunPosts(outcome);
+      expect(post).toEqual(
+        expect.arrayContaining([
+          "-X",
+          "POST",
+          "name=coverage comment",
+          `head_sha=${EVENT_SHA}`,
+          "status=completed",
+          `conclusion=${conclusion}`,
+        ]),
+      );
     });
   });
 });
