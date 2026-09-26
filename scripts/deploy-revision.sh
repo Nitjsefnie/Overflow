@@ -21,16 +21,32 @@ log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 # The CI gate: refuse to ship a SHA that main's required checks have not
 # blessed. Runs against the fetched SHA before the fast-forward, so every
 # refusal below leaves HEAD, the index and the working tree untouched; only
-# the fetch's refs (FETCH_HEAD, origin/main) have moved. Per required
-# context, only the latest check run decides: completed + success passes;
-# completed + any other conclusion refuses immediately; a status that is not
-# completed is pending and waits; an absent run (GitHub has not created it
-# yet — the normal state in the first minute after a merge) waits too, listed
-# as `<check> (absent)`. The OVERFLOW_DEPLOY_CI_TIMEOUT deadline bounds the
-# wait, so a run that never registers — a renamed job, a path-filtered
-# workflow — still refuses at the deadline, named with the same marker.
+# the fetch's refs (FETCH_HEAD, origin/main) have moved. The required
+# contexts come from main's branch protection; .github/required-checks.json,
+# read from the deployed SHA itself, pins each one to the workflow file whose
+# job produces it, and a context with no pin refuses at once. Per context,
+# only the pinned workflow's job named for it decides: among that workflow's
+# runs on the SHA the newest run, and within it the latest attempt.
+# Completed + success passes; completed + any other conclusion refuses
+# immediately; a status that is not completed is pending and waits; an absent
+# job (GitHub has not created the run yet — the normal state in the first
+# minute after a merge) waits too, listed as `<check> (absent)`. The
+# OVERFLOW_DEPLOY_CI_TIMEOUT deadline bounds the wait, so a job that never
+# registers — a renamed job, a path-filtered workflow — still refuses at the
+# deadline, named with the same marker.
+#
+# Why job records and not check-run names: protection matches a required
+# check by name and app alone, and every workflow here posts through the one
+# GitHub Actions app, so a same-named job in any workflow, or a check-run any
+# job with checks: write creates through the Checks API, satisfies it. An
+# Actions job's id is its check-run's id, and a job record cannot be created
+# through the Checks API, so the gate trusts only the pinned workflow's job
+# records, and refuses outright when a check-run bearing a required name has
+# an id that is not one of them.
 required_checks_gate() {
-  local remote_url repo required check_runs check name status conclusion pending timeout deadline
+  local remote_url repo required pins check pin unmapped check_runs runs run_id run_path run_jobs jobs
+  local job_run job_path job_id job_name job_attempt job_status job_conclusion
+  local cr_id cr_name producer_ids status conclusion decided_run decided_attempt pending timeout deadline
   remote_url=$(git config --get remote.origin.url)
   repo=
   case "$remote_url" in
@@ -48,24 +64,94 @@ required_checks_gate() {
     printf 'could not determine required checks for main; refusing to deploy\n' >&2
     exit 1
   fi
+  # The pin map as `check<TAB>workflow path` lines. A missing file, invalid
+  # JSON, anything but an object of .github/workflows/*.yml paths, or an
+  # absent jq all fail here.
+  if ! pins=$(git show "$full_sha:.github/required-checks.json" | jq -r '
+      if type == "object" and all(.[]; type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z"))
+      then to_entries[] | [.key, .value] | @tsv
+      else error("not an object of .github/workflows/*.yml paths") end'); then
+    printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path); refusing to deploy.\n' "$full_sha" >&2
+    exit 1
+  fi
+  unmapped=
+  while IFS= read -r check; do
+    [ -n "$check" ] || continue
+    [ -n "$(pin_for "$check")" ] || unmapped+="${unmapped:+, }$check"
+  done <<<"$required"
+  if [ -n "$unmapped" ]; then
+    printf 'Required checks with no pin in .github/required-checks.json at %s: %s; refusing to deploy.\n' "$full_sha" "$unmapped" >&2
+    exit 1
+  fi
   timeout="${OVERFLOW_DEPLOY_CI_TIMEOUT:-900}"
   deadline=$((SECONDS + timeout))
   while :; do
-    if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?per_page=100" --paginate \
-        --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv'); then
+    # Check-runs first: every check-run read here already has its job, so
+    # the job reads that follow cannot miss the producer of one seen here.
+    if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100" --paginate \
+        --jq '.check_runs[] | [.id, .name] | @tsv'); then
       printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
       exit 1
     fi
+    if ! runs=$(gh api "repos/$repo/actions/runs?head_sha=$full_sha&per_page=100" --paginate \
+        --jq '.workflow_runs[] | [.id, .path] | @tsv'); then
+      printf 'Could not read workflow runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
+      exit 1
+    fi
+    # Every job of every run of a pinned workflow, one per line:
+    # run, path, job id, name, attempt, status, conclusion.
+    jobs=
+    while IFS=$'\t' read -r run_id run_path; do
+      [ -n "$run_id" ] || continue
+      is_pinned_path "$run_path" || continue
+      if ! run_jobs=$(gh api "repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100" --paginate \
+          --jq '.jobs[] | [.id, .name, .run_attempt, .status, (.conclusion // "")] | @tsv' </dev/null); then
+        printf 'Could not read the jobs of workflow run %s for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
+        exit 1
+      fi
+      while IFS= read -r job_id; do
+        if [ -n "$job_id" ]; then
+          jobs+="$run_id"$'\t'"$run_path"$'\t'"$job_id"$'\n'
+        fi
+      done <<<"$run_jobs"
+    done <<<"$runs"
+    # Second producer, checked before any waiting: every check-run bearing a
+    # required name must be one of the pinned workflow's jobs of that name.
+    while IFS= read -r check; do
+      [ -n "$check" ] || continue
+      pin=$(pin_for "$check")
+      producer_ids=$'\n'
+      while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
+        if [ "$job_path" = "$pin" ] && [ "$job_name" = "$check" ]; then
+          producer_ids+="$job_id"$'\n'
+        fi
+      done <<<"$jobs"
+      while IFS=$'\t' read -r cr_id cr_name; do
+        [ "$cr_name" = "$check" ] || continue
+        if [[ "$producer_ids" != *$'\n'"$cr_id"$'\n'* ]]; then
+          printf 'Required check %s has check-run %s on %s that was not produced by the pinned workflow file %s; refusing to deploy.\n' "$check" "$cr_id" "$full_sha" "$pin" >&2
+          exit 1
+        fi
+      done <<<"$check_runs"
+    done <<<"$required"
     pending=
     while IFS= read -r check; do
       [ -n "$check" ] || continue
-      name=
-      while IFS=$'\t' read -r name status conclusion; do
-        [ "$name" = "$check" ] && break
-      done <<EOF
-$check_runs
-EOF
-      if [ "$name" != "$check" ]; then
+      pin=$(pin_for "$check")
+      # The newest run decides, and within it the latest attempt. On equal
+      # keys (two same-named jobs in one attempt) a non-success replaces a
+      # success, so a tie can only hold the deploy back.
+      decided_run=0 decided_attempt=0 status='' conclusion=''
+      while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
+        [ "$job_path" = "$pin" ] && [ "$job_name" = "$check" ] || continue
+        if [ "$job_run" -gt "$decided_run" ] \
+          || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -gt "$decided_attempt" ]; } \
+          || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -eq "$decided_attempt" ] \
+            && ! { [ "$job_status" = completed ] && [ "$job_conclusion" = success ]; }; }; then
+          decided_run=$job_run decided_attempt=$job_attempt status=$job_status conclusion=$job_conclusion
+        fi
+      done <<<"$jobs"
+      if [ -z "$status" ]; then
         pending+="${pending:+, }$check (absent)"
         continue
       fi
@@ -77,9 +163,7 @@ EOF
         printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "$conclusion" "$full_sha" >&2
         exit 1
       fi
-    done <<EOF
-$required
-EOF
+    done <<<"$required"
     [ -z "$pending" ] && break
     if [ "$SECONDS" -ge "$deadline" ]; then
       printf 'Required checks still pending after %ss: %s. The deploy was refused; HEAD, the index and the working tree are untouched; only the fetched refs moved.\n' "$timeout" "$pending" >&2
@@ -87,6 +171,29 @@ EOF
     fi
     sleep 15
   done
+}
+
+# The workflow path the gate's parsed pin map ($pins) gives a check; empty
+# when the check has no pin.
+pin_for() {
+  local key value
+  while IFS=$'\t' read -r key value; do
+    if [ "$key" = "$1" ]; then
+      printf '%s' "$value"
+      return
+    fi
+  done <<<"$pins"
+}
+
+# Whether a workflow path is the pin of some required check.
+is_pinned_path() {
+  local check
+  while IFS= read -r check; do
+    if [ -n "$check" ] && [ "$(pin_for "$check")" = "$1" ]; then
+      return 0
+    fi
+  done <<<"$required"
+  return 1
 }
 
 cd "$tree"

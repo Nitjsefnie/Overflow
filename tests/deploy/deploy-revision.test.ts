@@ -71,7 +71,8 @@ interface Fixture {
   shimLog: string;
   prevDir: string;
   protectionJson: string;
-  checkRunsSuccess: string;
+  requiredChecks: string;
+  gateSuccess: string;
 }
 
 let liveFixture: Fixture | undefined;
@@ -87,7 +88,104 @@ const FIXTURE_HASH = "abc1234";
 const FIXTURE_REPO = "overflow-fixture/overflow-fixture";
 const FIXTURE_REMOTE_URL = `git@github.com:${FIXTURE_REPO}.git`;
 const JQ_PROTECTION = `([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]`;
-const JQ_CHECKRUNS = `.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv`;
+const JQ_CHECKRUNS = `.check_runs[] | [.id, .name] | @tsv`;
+const JQ_RUNS = `.workflow_runs[] | [.id, .path] | @tsv`;
+const JQ_JOBS = `.jobs[] | [.id, .name, .run_attempt, .status, (.conclusion // "")] | @tsv`;
+const MAP_PATH = ".github/required-checks.json";
+/** The fixture's pin map: protection requires verify and deploy-gate. */
+const FIXTURE_PINS: Record<string, string> = {
+  verify: ".github/workflows/ci.yml",
+  "deploy-gate": ".github/workflows/deploy-gate.yml",
+};
+/** Where each fixture check's job runs; claim is a workflow nothing pins. */
+const FIXTURE_WORKFLOWS: Record<string, string> = {
+  ...FIXTURE_PINS,
+  claim: ".github/workflows/claim.yml",
+};
+const FIXTURE_RUN_IDS: Record<string, number> = {
+  ".github/workflows/ci.yml": 100,
+  ".github/workflows/deploy-gate.yml": 200,
+  ".github/workflows/claim.yml": 300,
+};
+
+/**
+ * The gate's reads in call order when one poll iteration settles it on `sha`
+ * with the fixture's pinned runs (100 and 200): protection, the pin map at the
+ * SHA, every check-run, the workflow runs, and the jobs of each pinned run.
+ */
+function gateReads(sha: string): string[] {
+  return [
+    `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
+    `git show ${sha}:${MAP_PATH}`,
+    `gh api repos/${FIXTURE_REPO}/commits/${sha}/check-runs?filter=all&per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+    `gh api repos/${FIXTURE_REPO}/actions/runs?head_sha=${sha}&per_page=100 --paginate --jq ${JQ_RUNS}`,
+    ...[100, 200].map(
+      (id) => `gh api repos/${FIXTURE_REPO}/actions/runs/${id}/jobs?filter=all&per_page=100 --paginate --jq ${JQ_JOBS}`,
+    ),
+  ];
+}
+
+interface GateJob {
+  id: number;
+  name: string;
+  attempt?: number;
+  status: string;
+  conclusion?: string;
+}
+
+interface GateRun {
+  id: number;
+  path: string;
+  jobs: GateJob[];
+}
+
+/**
+ * Writes one poll iteration's GitHub state as the gh shim serves it: each file
+ * holds what gh prints after the script's --jq program for that endpoint. A
+ * job's check-run shares its id, as on GitHub; `extraCheckRuns` are check-runs
+ * no job produced (created through the Checks API).
+ */
+async function writeGateState(
+  fixture: Pick<Fixture, "dir">,
+  name: string,
+  runs: GateRun[],
+  extraCheckRuns: Array<[number, string]> = [],
+): Promise<string> {
+  const directory = path.join(fixture.dir, name);
+  await mkdir(directory);
+  const tsv = (rows: Array<Array<string | number>>) => rows.map((row) => row.join("\t") + "\n").join("");
+  await writeFile(path.join(directory, "runs.tsv"), tsv(runs.map((run) => [run.id, run.path])));
+  for (const run of runs) {
+    await writeFile(
+      path.join(directory, `jobs-${run.id}.tsv`),
+      tsv(run.jobs.map((job) => [job.id, job.name, job.attempt ?? 1, job.status, job.conclusion ?? ""])),
+    );
+  }
+  const checkRuns = [...runs.flatMap((run) => run.jobs.map((job) => [job.id, job.name])), ...extraCheckRuns];
+  await writeFile(path.join(directory, "check-runs.tsv"), tsv(checkRuns));
+  return directory;
+}
+
+/**
+ * The common case: one run per workflow, one job per row, each job in the
+ * workflow FIXTURE_WORKFLOWS places it in.
+ */
+async function writeCheckRuns(
+  fixture: Pick<Fixture, "dir">,
+  name: string,
+  rows: Array<[string, string, string?]>,
+): Promise<string> {
+  const runs = new Map<string, GateRun>();
+  for (const [check, status, conclusion] of rows) {
+    const workflow = FIXTURE_WORKFLOWS[check]!;
+    const runId = FIXTURE_RUN_IDS[workflow]!;
+    const run = runs.get(workflow) ?? { id: runId, path: workflow, jobs: [] };
+    run.jobs.push({ id: runId * 10 + run.jobs.length + 1, name: check, status, conclusion });
+    runs.set(workflow, run);
+  }
+  return writeGateState(fixture, name, [...runs.values()]);
+}
+
 const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 const LISTING_REGEX = String.raw`.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}`;
 
@@ -129,20 +227,19 @@ async function makeFixture(options: {
   await mkdir(bins);
   // The gh shim cats these files verbatim, so each holds what gh prints after
   // applying the script's --jq program for that API path: the protection call
-  // yields one required-check name per line, and the check-runs call yields
-  // `name\tstatus\tconclusion` TSV. The argv-shape assertions below still pin
-  // that the script passes those exact --jq programs.
+  // yields one required-check name per line, and each gate state directory
+  // (writeGateState) holds the TSV the check-runs, runs and jobs calls yield.
+  // The argv-shape assertions below still pin that the script passes those
+  // exact --jq programs. The git shim serves requiredChecks as the pin map.
   const protectionJson = path.join(dir, "protection.txt");
   await writeFile(protectionJson, "verify\ndeploy-gate\n");
-  const checkRunsSuccess = path.join(dir, "check-runs-success.txt");
-  await writeFile(
-    checkRunsSuccess,
-    [
-      "verify\tcompleted\tsuccess",
-      "deploy-gate\tcompleted\tsuccess",
-      "claim\tcompleted\tsuccess",
-    ].join("\n") + "\n",
-  );
+  const requiredChecks = path.join(dir, "required-checks.json");
+  await writeFile(requiredChecks, JSON.stringify(FIXTURE_PINS, null, 2) + "\n");
+  const gateSuccess = await writeCheckRuns({ dir }, "gate-success", [
+    ["verify", "completed", "success"],
+    ["deploy-gate", "completed", "success"],
+    ["claim", "completed", "success"],
+  ]);
   const fixture: Fixture = {
     dir,
     tree,
@@ -155,7 +252,8 @@ async function makeFixture(options: {
     shimLog: path.join(dir, "shim-log"),
     prevDir,
     protectionJson,
-    checkRunsSuccess,
+    requiredChecks,
+    gateSuccess,
   };
   liveFixture = fixture;
   return fixture;
@@ -193,6 +291,11 @@ if [ "$1" = rev-parse ]; then
   printf '%s\\n' "\${GIT_SHIM_HASH_FULL:-\${GIT_SHIM_HASH:-}}"
   exit 0
 fi
+if [ "$1" = show ]; then
+  if [ -n "\${GIT_SHIM_SHOW_RC:-}" ]; then exit "\$GIT_SHIM_SHOW_RC"; fi
+  cat "\${GIT_SHIM_REQUIRED_CHECKS:?}"
+  exit 0
+fi
 if [ "$1" = config ]; then
   printf '%s\\n' "\${GIT_SHIM_REMOTE_URL:-}"
   exit 0
@@ -223,7 +326,7 @@ exit 0
 `,
   },
   gh: {
-    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_CHECKRUNS_SEQUENCE", "GH_SHIM_STATUS"],
+    envKeys: ["GH_SHIM_PROTECTION_JSON", "GH_SHIM_GATE_SEQUENCE", "GH_SHIM_STATUS", "GH_SHIM_FAIL_MATCH"],
     dispatch: `
 if [ -n "\${GH_SHIM_STATUS:-}" ] && [ "\$GH_SHIM_STATUS" != 0 ]; then exit "\$GH_SHIM_STATUS"; fi
 path=""
@@ -232,17 +335,29 @@ for a in "\$@"; do
   if [ "\$prev" = api ]; then path="\$a"; fi
   prev="\$a"
 done
+if [ -n "\${GH_SHIM_FAIL_MATCH:-}" ] && [[ "\$path" == *"\$GH_SHIM_FAIL_MATCH"* ]]; then exit 1; fi
+# The check-runs read opens each poll iteration, so it advances the gate
+# state sequence; the runs and jobs reads that follow serve the same state.
+state_file="\${SHIM_LOG:?}.gh-state"
 case "\$path" in
   */branches/main/protection)
     cat "\${GH_SHIM_PROTECTION_JSON:?}"
     ;;
-  */check-runs*)
+  */commits/*/check-runs*)
     idx_file="\${SHIM_LOG:?}.gh-seq"
     idx=\$(cat "\$idx_file" 2>/dev/null || printf '0')
-    IFS=':' read -r -a seq_files <<< "\${GH_SHIM_CHECKRUNS_SEQUENCE:?}"
-    if [ "\$idx" -ge \${#seq_files[@]} ]; then idx=\$((\${#seq_files[@]} - 1)); fi
-    cat "\${seq_files[\$idx]}"
+    IFS=':' read -r -a seq_dirs <<< "\${GH_SHIM_GATE_SEQUENCE:?}"
+    if [ "\$idx" -ge \${#seq_dirs[@]} ]; then idx=\$((\${#seq_dirs[@]} - 1)); fi
+    printf '%s' "\${seq_dirs[\$idx]}" > "\$state_file"
+    cat "\${seq_dirs[\$idx]}/check-runs.tsv"
     printf '%s' "\$((idx + 1))" > "\$idx_file"
+    ;;
+  */actions/runs/*/jobs*)
+    run_id="\${path#*/actions/runs/}"
+    cat "\$(cat "\$state_file")/jobs-\${run_id%%/*}.tsv"
+    ;;
+  */actions/runs"?"*)
+    cat "\$(cat "\$state_file")/runs.tsv"
     ;;
   *)
     exit 1
@@ -311,6 +426,13 @@ function describeEntry(entry: ShimLogEntry): string {
   return `${entry.cmd} ${entry.args.join(" ")}`;
 }
 
+/** The gate's own reads, in order: every gh call and the pin-map read. */
+function gateLog(entries: ShimLogEntry[]): string[] {
+  return entries
+    .filter((entry) => entry.cmd === "gh" || (entry.cmd === "git" && entry.args[0] === "show"))
+    .map(describeEntry);
+}
+
 /** A refused deploy never reaches the fast-forward, the only step that moves HEAD. */
 function expectTreeNotMoved(entries: ShimLogEntry[], label = "the fast-forward"): void {
   expect(entries.some((entry) => entry.cmd === "git" && entry.args[0] === "merge"), label).toBe(false);
@@ -334,7 +456,8 @@ async function runDeploy(
       GIT_SHIM_TREE: fixture.tree,
       GIT_SHIM_REMOTE_URL: FIXTURE_REMOTE_URL,
       GH_SHIM_PROTECTION_JSON: fixture.protectionJson,
-      GH_SHIM_CHECKRUNS_SEQUENCE: fixture.checkRunsSuccess,
+      GIT_SHIM_REQUIRED_CHECKS: fixture.requiredChecks,
+      GH_SHIM_GATE_SEQUENCE: fixture.gateSuccess,
       OVERFLOW_DEPLOY_TREE: fixture.tree,
       OVERFLOW_DEPLOY_ENV_FILE: fixture.envFile,
       OVERFLOW_DEPLOY_LOCK: fixture.lock,
@@ -416,8 +539,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
       `git config --get remote.origin.url`,
-      `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
-      `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+      ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
       `pnpm install --frozen-lockfile`,
       `pnpm db:migrate`,
@@ -685,33 +807,23 @@ describe("scripts/deploy-revision.sh", () => {
   it("gates the deploy on main's required checks for the deployed SHA", async () => {
     const source = await readFile(script, "utf8");
     expect(source).toContain('gh api "repos/$repo/branches/main/protection"');
-    expect(source).toContain('"repos/$repo/commits/$full_sha/check-runs?per_page=100"');
+    expect(source).toContain('git show "$full_sha:.github/required-checks.json"');
+    expect(source).toContain('"repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100"');
+    expect(source).toContain('"repos/$repo/actions/runs?head_sha=$full_sha&per_page=100"');
+    expect(source).toContain('"repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100"');
     expect(source).toContain("--paginate");
     expect(source).toContain("OVERFLOW_DEPLOY_CI_TIMEOUT");
     expect(source).toContain("OVERFLOW_DEPLOY_CI_GATE");
     expect(source).toContain("git rev-parse --verify 'FETCH_HEAD^{commit}'");
   });
 
-  async function writeCheckRuns(
-    fixture: Fixture,
-    name: string,
-    rows: Array<[string, string, string?]>,
-  ): Promise<string> {
-    const file = path.join(fixture.dir, name);
-    await writeFile(
-      file,
-      rows.map(([n, status, conclusion]) => [n, status, conclusion ?? ""].join("\t")).join("\n") + "\n",
-    );
-    return file;
-  }
-
   it("refuses before install when a required check's latest run failed", async () => {
     const fixture = await makeFixture();
-    const failed = await writeCheckRuns(fixture, "check-runs-failed.txt", [
+    const failed = await writeCheckRuns(fixture, "gate-failed", [
       ["verify", "completed", "failure"],
       ["deploy-gate", "completed", "success"],
     ]);
-    const result = await runDeploy(fixture, { GH_SHIM_CHECKRUNS_SEQUENCE: failed });
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: failed });
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("verify");
@@ -724,24 +836,25 @@ describe("scripts/deploy-revision.sh", () => {
     );
     expect(started).toEqual([]);
     expect(entries.some((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart")).toBe(false);
-    expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH));
+    expect(entries.some((entry) => entry.cmd === "sleep")).toBe(false);
     expectTreeNotMoved(entries);
   });
 
   it("waits for an absent required check run and proceeds once it appears and succeeds", async () => {
     const fixture = await makeFixture();
-    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+    const absent = await writeCheckRuns(fixture, "gate-absent", [
       ["verify", "completed", "success"],
       ["claim", "completed", "success"],
     ]);
     const result = await runDeploy(fixture, {
-      GH_SHIM_CHECKRUNS_SEQUENCE: `${absent}:${fixture.checkRunsSuccess}`,
+      GH_SHIM_GATE_SEQUENCE: `${absent}:${fixture.gateSuccess}`,
     });
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const isCheckRuns = (entry: ShimLogEntry) =>
-      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?filter=all&per_page=100"));
     const checkRunsCalls = entries.filter(isCheckRuns);
     expect(checkRunsCalls).toHaveLength(2);
     const checkRunsAt = entries.findIndex(isCheckRuns);
@@ -754,12 +867,12 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("refuses on the timeout while a required check run stays absent, before mutating anything", async () => {
     const fixture = await makeFixture();
-    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+    const absent = await writeCheckRuns(fixture, "gate-absent", [
       ["verify", "completed", "success"],
       ["claim", "completed", "success"],
     ]);
     const result = await runDeploy(fixture, {
-      GH_SHIM_CHECKRUNS_SEQUENCE: absent,
+      GH_SHIM_GATE_SEQUENCE: absent,
       OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
     });
 
@@ -776,16 +889,16 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("refuses immediately when an absent run appears and concludes non-success", async () => {
     const fixture = await makeFixture();
-    const absent = await writeCheckRuns(fixture, "check-runs-absent.txt", [
+    const absent = await writeCheckRuns(fixture, "gate-absent", [
       ["verify", "completed", "success"],
       ["claim", "completed", "success"],
     ]);
-    const appeared = await writeCheckRuns(fixture, "check-runs-appeared-failed.txt", [
+    const appeared = await writeCheckRuns(fixture, "gate-appeared-failed", [
       ["verify", "completed", "success"],
       ["deploy-gate", "completed", "failure"],
     ]);
     const result = await runDeploy(fixture, {
-      GH_SHIM_CHECKRUNS_SEQUENCE: `${absent}:${appeared}`,
+      GH_SHIM_GATE_SEQUENCE: `${absent}:${appeared}`,
     });
 
     expect(result.status, result.stderr).not.toBe(0);
@@ -793,7 +906,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain("concluded failure");
     const entries = await readLog(fixture.shimLog);
     const isCheckRuns = (entry: ShimLogEntry) =>
-      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?filter=all&per_page=100"));
     expect(entries.filter(isCheckRuns)).toHaveLength(2);
     expect(entries.filter((entry) => entry.cmd === "sleep")).toHaveLength(1);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
@@ -801,18 +914,18 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("waits for a pending required check and proceeds once it succeeds", async () => {
     const fixture = await makeFixture();
-    const pending = await writeCheckRuns(fixture, "check-runs-pending.txt", [
+    const pending = await writeCheckRuns(fixture, "gate-pending", [
       ["verify", "completed", "success"],
       ["deploy-gate", "in_progress"],
     ]);
     const result = await runDeploy(fixture, {
-      GH_SHIM_CHECKRUNS_SEQUENCE: `${pending}:${fixture.checkRunsSuccess}`,
+      GH_SHIM_GATE_SEQUENCE: `${pending}:${fixture.gateSuccess}`,
     });
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const isCheckRuns = (entry: ShimLogEntry) =>
-      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?per_page=100"));
+      entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?filter=all&per_page=100"));
     const checkRunsCalls = entries.filter(isCheckRuns);
     expect(checkRunsCalls).toHaveLength(2);
     const checkRunsAt = entries.findIndex(isCheckRuns);
@@ -825,12 +938,12 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("refuses on the timeout while a required check stays pending, before mutating anything", async () => {
     const fixture = await makeFixture();
-    const pending = await writeCheckRuns(fixture, "check-runs-stuck-pending.txt", [
+    const pending = await writeCheckRuns(fixture, "gate-stuck-pending", [
       ["verify", "completed", "success"],
       ["deploy-gate", "in_progress"],
     ]);
     const result = await runDeploy(fixture, {
-      GH_SHIM_CHECKRUNS_SEQUENCE: pending,
+      GH_SHIM_GATE_SEQUENCE: pending,
       OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
     });
 
@@ -842,6 +955,230 @@ describe("scripts/deploy-revision.sh", () => {
     expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
+  });
+
+  /** A gate refusal starts nothing after the gate and leaves HEAD alone. */
+  function expectGateRefused(entries: ShimLogEntry[], label = "the gate refusal"): void {
+    expectTreeNotMoved(entries, label);
+    expect(entries.some((entry) => entry.cmd === "pnpm"), label).toBe(false);
+    expect(entries.some((entry) => entry.cmd === "systemctl"), label).toBe(false);
+  }
+
+  it("refuses when a same-named job in another workflow succeeded while the pinned job failed", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-collision", [
+      { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "failure" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+      { id: 400, path: ".github/workflows/claim.yml", jobs: [{ id: 4001, name: "verify", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "sleep")).toBe(false);
+    expectGateRefused(entries);
+  });
+
+  it("refuses a second producer of a required check-run without waiting, whatever the pinned job's state", async () => {
+    for (const [status, conclusion] of [["completed", "success"], ["in_progress", undefined]] as const) {
+      const fixture = await makeFixture();
+      const state = await writeGateState(
+        fixture,
+        "gate-second-producer",
+        [
+          { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status, conclusion }] },
+          { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+        ],
+        // A check-run created through the Checks API: no job record carries its id.
+        [[9999, "verify"]],
+      );
+      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+      expect(result.status, `${status}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, status).toContain("verify");
+      expect(result.stderr, status).toContain("9999");
+      const entries = await readLog(fixture.shimLog);
+      expect(entries.some((entry) => entry.cmd === "sleep"), status).toBe(false);
+      expectGateRefused(entries, status);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses immediately, naming it, when a required check has no pin in the map", async () => {
+    const fixture = await makeFixture();
+    const partial = path.join(fixture.dir, "required-checks-partial.json");
+    await writeFile(partial, JSON.stringify({ verify: FIXTURE_PINS.verify }));
+    const result = await runDeploy(fixture, { GIT_SHIM_REQUIRED_CHECKS: partial });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("deploy-gate");
+    const entries = await readLog(fixture.shimLog);
+    // Nothing is polled: the protection read and the map read, then refusal.
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+    expectGateRefused(entries);
+  });
+
+  it("refuses when the pin map at the SHA is missing, unparsable or misshapen", async () => {
+    const cases: Array<[string, Record<string, string>]> = [
+      ["missing at the SHA", { GIT_SHIM_SHOW_RC: "128" }],
+      ["invalid JSON", { map: "{ not json" }],
+      ["not an object", { map: JSON.stringify(Object.values(FIXTURE_PINS)) }],
+      ["a non-string value", { map: JSON.stringify({ ...FIXTURE_PINS, verify: 7 }) }],
+      ["a value outside .github/workflows/", { map: JSON.stringify({ ...FIXTURE_PINS, verify: "scripts/ci.yml" }) }],
+      ["a nested workflow path", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/x/ci.yml" }) }],
+      ["a non-YAML file", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/ci.json" }) }],
+      ["a trailing newline in a value", { map: JSON.stringify({ ...FIXTURE_PINS, verify: ".github/workflows/ci.yml\n" }) }],
+    ];
+    for (const [label, { map, ...env }] of cases) {
+      const fixture = await makeFixture();
+      if (map !== undefined) await writeFile(fixture.requiredChecks, map);
+      const result = await runDeploy(fixture, env);
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, label).toContain(MAP_PATH);
+      expect(result.stderr, label).toContain(FIXTURE_HASH);
+      const entries = await readLog(fixture.shimLog);
+      expect(gateLog(entries), label).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+      expectGateRefused(entries, label);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses, naming the map and the SHA, when jq is not installed", async () => {
+    const fixture = await makeFixture();
+    // Every shim plus only the real binaries the run touches up to the gate:
+    // bash and env for the shebangs, readlink for the anchor, cat for the
+    // shims' canned output. No jq anywhere on this PATH.
+    const noJqBins = path.join(fixture.dir, "bins-no-jq");
+    await mkdir(noJqBins);
+    for (const name of ALL_SHIMS) {
+      const { envKeys, dispatch } = SHIM_DISPATCH[name]!;
+      const file = path.join(noJqBins, name);
+      await writeFile(file, shimBody(name, envKeys, dispatch));
+      await chmod(file, 0o755);
+    }
+    for (const [link, target] of [
+      ["bash", "/bin/bash"],
+      ["env", "/usr/bin/env"],
+      ["readlink", "/usr/bin/readlink"],
+      ["cat", "/usr/bin/cat"],
+    ] as const) {
+      await symlink(target, path.join(noJqBins, link));
+    }
+    expect(
+      spawnSync("sh", ["-c", "command -v jq"], { encoding: "utf8", env: { ...process.env, PATH: noJqBins } }).status,
+      "the premise: no jq on the PATH",
+    ).not.toBe(0);
+
+    const result = await runDeploy(fixture, { PATH: noJqBins });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(MAP_PATH);
+    expect(result.stderr).toContain(FIXTURE_HASH);
+    const entries = await readLog(fixture.shimLog);
+    expect(gateLog(entries)).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
+    expectGateRefused(entries);
+  });
+
+  it("lets a rerun's latest attempt decide, wherever the jobs listing puts it", async () => {
+    const attempts: GateJob[] = [
+      { id: 1001, name: "verify", attempt: 1, status: "completed", conclusion: "failure" },
+      { id: 1002, name: "verify", attempt: 2, status: "completed", conclusion: "success" },
+    ];
+    for (const [label, jobs] of [
+      ["oldest first", attempts],
+      ["newest first", [...attempts].reverse()],
+    ] as const) {
+      const fixture = await makeFixture();
+      const state = await writeGateState(fixture, "gate-rerun", [
+        { id: 100, path: FIXTURE_PINS.verify!, jobs: [...jobs] },
+        { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+      ]);
+      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(0);
+      const entries = await readLog(fixture.shimLog);
+      expect(entries.some((entry) => entry.args[0] === "release:switch"), label).toBe(true);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses when a rerun's latest attempt failed after an earlier attempt passed", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-rerun-failed", [
+      {
+        id: 100,
+        path: FIXTURE_PINS.verify!,
+        jobs: [
+          { id: 1001, name: "verify", attempt: 1, status: "completed", conclusion: "success" },
+          { id: 1002, name: "verify", attempt: 2, status: "completed", conclusion: "failure" },
+        ],
+      },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("verify");
+    expect(result.stderr).toContain("failure");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("lets the newest run of the pinned workflow decide when it ran more than once on the SHA", async () => {
+    for (const [label, older, newer, status] of [
+      ["newer run passed", "failure", "success", 0],
+      ["newer run failed", "success", "failure", 1],
+    ] as const) {
+      for (const newestFirst of [true, false]) {
+        const fixture = await makeFixture();
+        const newerRun: GateRun = {
+          id: 150,
+          path: FIXTURE_PINS.verify!,
+          jobs: [{ id: 1501, name: "verify", status: "completed", conclusion: newer }],
+        };
+        const olderRun: GateRun = {
+          id: 100,
+          path: FIXTURE_PINS.verify!,
+          jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: older }],
+        };
+        const state = await writeGateState(fixture, "gate-two-runs", [
+          ...(newestFirst ? [newerRun, olderRun] : [olderRun, newerRun]),
+          { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+        ]);
+        const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+        expect(result.status, `${label}, newest first ${newestFirst}: ${result.stderr}`).toBe(status);
+        await rm(fixture.dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("waits as absent while the pinned run exists without the required job, then refuses at the deadline", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-job-absent", [
+      { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "setup", status: "completed", conclusion: "success" }] },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("deploy-gate (absent)");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
+  it("refuses immediately when any poll read fails", async () => {
+    for (const match of ["/check-runs", "/actions/runs?", "/jobs"]) {
+      const fixture = await makeFixture();
+      const result = await runDeploy(fixture, { GH_SHIM_FAIL_MATCH: match });
+
+      expect(result.status, `${match}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, match).toContain(FIXTURE_HASH);
+      const entries = await readLog(fixture.shimLog);
+      expect(entries.some((entry) => entry.cmd === "sleep"), match).toBe(false);
+      expectGateRefused(entries, match);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses when the required-checks read itself fails", async () => {
@@ -1062,7 +1399,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain(`Already serving ${realpathSync(fixture.prevDir)} (${FIXTURE_HASH})`);
     // Nothing after the fast-forward runs: the log is exactly the fence, the
     // fetch, the SHA resolution, the ancestry check, the cleanliness read, the
-    // two gate reads and the fast-forward itself.
+    // gate's reads and the fast-forward itself.
     const entries = await readLog(fixture.shimLog);
     expect(entries.map(describeEntry)).toEqual([
       `flock -w 900 9`,
@@ -1071,8 +1408,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
       `git config --get remote.origin.url`,
-      `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
-      `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+      ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
     ]);
     const grammarNames = (await readdir(fixture.tree)).filter((name) => RELEASE_GRAMMAR.test(name));
@@ -1250,7 +1586,10 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   run(origin, ["init", "-q", "-b", "main"]);
   await writeFile(path.join(origin, ".gitignore"), "/.next\n/.next-release-*\n");
   await writeFile(path.join(origin, "app.txt"), "stable\n");
-  run(origin, ["add", ".gitignore", "app.txt"]);
+  // The gate reads the pin map from the deployed commit itself.
+  await mkdir(path.join(origin, ".github"));
+  await writeFile(path.join(origin, MAP_PATH), await readFile(fixture.requiredChecks, "utf8"));
+  run(origin, ["add", ".gitignore", "app.txt", MAP_PATH]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -1286,9 +1625,11 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
 
   it("leaves HEAD where it was when a required check on the fetched commit concluded failure", async () => {
     const { fixture, behind, tip, git } = await makeGitFixture();
-    const failed = path.join(fixture.dir, "check-runs-failed.txt");
-    await writeFile(failed, "verify\tcompleted\tfailure\ndeploy-gate\tcompleted\tsuccess\n");
-    const result = await runDeploy(fixture, { ...HERMETIC_GIT_ENV, GH_SHIM_CHECKRUNS_SEQUENCE: failed }, realGit);
+    const failed = await writeCheckRuns(fixture, "gate-failed", [
+      ["verify", "completed", "failure"],
+      ["deploy-gate", "completed", "success"],
+    ]);
+    const result = await runDeploy(fixture, { ...HERMETIC_GIT_ENV, GH_SHIM_GATE_SEQUENCE: failed }, realGit);
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(`Required check verify concluded failure on ${tip}`);
@@ -1359,9 +1700,8 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(git("rev-parse", "HEAD")).toBe(tip);
     const entries = await readLog(fixture.shimLog);
-    expect(entries.map(describeEntry)).toContain(
-      `gh api repos/${FIXTURE_REPO}/commits/${tip}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
-    );
+    // Real git logs nothing; its pin-map read is proved by the gate passing.
+    expect(gateLog(entries)).toEqual(gateReads(tip).filter((line) => !line.startsWith("git ")));
     const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
     expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
