@@ -38,12 +38,13 @@ describe("POST /api/tokens", () => {
     const handler = createApiTokenPostHandler(signedInAs(userId, store));
 
     const response = await handler(mintRequest());
-    const body = (await response.json()) as { token: string; createdAt: string };
+    const body = (await response.json()) as { token: string; createdAt: string; expiresAt: string };
 
     expect(response.status).toBe(201);
     expect(body).toEqual({
       token: expect.stringMatching(/^ovf_[A-Za-z0-9_-]{43}$/),
       createdAt: issuedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
     });
     expect(store.calls).toEqual([{ userId, tokenHash: expect.any(Buffer) }]);
 
@@ -203,6 +204,7 @@ describe("POST /api/tokens", () => {
 });
 
 const issuedAt = new Date("2026-09-05T10:00:00.000Z");
+const expiresAt = new Date("2026-12-04T10:00:00.000Z");
 
 type RecordingStore = ApiTokenIssuer & {
   calls: { userId: string; tokenHash: Buffer }[];
@@ -226,7 +228,7 @@ function recordingStore(options: { failure?: boolean } = {}): RecordingStore {
       if (options.failure) {
         throw new Error("api_tokens upsert failed");
       }
-      return { createdAt: issuedAt };
+      return { createdAt: issuedAt, expiresAt };
     },
     async findAccountByTokenHash(tokenHash) {
       accountLookups.push(tokenHash);
