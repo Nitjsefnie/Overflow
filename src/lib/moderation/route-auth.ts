@@ -47,7 +47,10 @@ function errorResponse(status: number, code: string, message: string): Response 
  * 502 UPSTREAM_FAILURE answer, not a 500: a 500 marks the whole request a
  * handler failure and erases the distinction between an authorization-dependency
  * outage and a moderation-handler bug. Session-lookup and role-lookup failures
- * keep separate catch blocks so neither can swallow the other's window.
+ * keep separate catch blocks so neither can swallow the other's window, and
+ * each writes one console line naming this gate and its phase, with the error
+ * as the second argument. The message is a fixed string: no request,
+ * credential or user value is interpolated into it.
  */
 export async function requiredModeratorSession(
   request: Request,
@@ -56,7 +59,8 @@ export async function requiredModeratorSession(
   let credential: RouteCredentialSession | Response | null;
   try {
     credential = await resolveRouteCredential(request, dependencies);
-  } catch {
+  } catch (error) {
+    console.error("Moderator route gate: credential resolution failed.", error);
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
   }
   if (credential instanceof Response) {
@@ -69,7 +73,8 @@ export async function requiredModeratorSession(
   let currentRole: UserRole | null;
   try {
     currentRole = await dependencies.getCurrentRole(credential.user.id);
-  } catch {
+  } catch (error) {
+    console.error("Moderator route gate: role lookup failed.", error);
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to authorize the moderator request.");
   }
   if (currentRole !== "MODERATOR") {

@@ -32,11 +32,15 @@ export async function requireMemberPageSession(): Promise<MemberPageSession> {
   // Not the landing page: it sends any session carrying an id and a member role
   // straight back to /dashboard, so bouncing there on a JWT the ledger cannot
   // vouch for produces an endless /dashboard -> / -> /dashboard loop. /session
-  // is terminal and carries the sign-out that clears the JWT.
+  // is terminal and carries the sign-out that clears the JWT. A lookup failure
+  // is logged before that redirect, as one fixed line naming this gate and
+  // phase with the error as the second argument; the try wraps only the lookup,
+  // so a redirect thrown elsewhere is never logged.
   let currentRole: UserRole | null;
   try {
     currentRole = await getCurrentUserRole(user.id);
-  } catch {
+  } catch (error) {
+    console.error("Member page gate: role lookup failed.", error);
     redirect(`/session?reason=${SESSION_RECOVERY_REASONS.unavailable}`);
   }
   if (currentRole === null) {
