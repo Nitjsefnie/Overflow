@@ -218,9 +218,12 @@ export function assertValidSeedOptions(options: SeedOptions): void {
 }
 
 /**
- * The board row count a default /issues request (claimState OPEN) serves from
- * this world: every open issue on a solvent sponsor's repository, plus exactly
- * one repayment opening per underwater sponsor.
+ * The NO-DRIFT board row count for this world: every open issue on a solvent
+ * sponsor's repository, plus exactly one repayment opening per underwater
+ * sponsor. This helper does not replay credit limits, so at scales where the
+ * random settlement drift pushes extra owners under their limit the live
+ * board is SMALLER than this — at the default scale this seed serves 35,006
+ * rows (6 underwater owners), not the 45,002 a no-drift world would give.
  */
 export function expectedOpenBoardRows(options: SeedOptions): number {
   const base = Math.floor(options.openIssues / options.repositories);
