@@ -26,7 +26,7 @@ import {
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 
-const bodyLimitBytes = 1024 * 1024;
+const defaultMaxBodyBytes = 1024 * 1024;
 
 // Statuses the Response constructor refuses to pair with a body. 3xx never
 // gets this far: it is refused as a redirect.
@@ -104,11 +104,14 @@ type PublicFetchOptions = {
   lookup?: typeof dnsLookup;
   /** Test seam: decides which addresses may be connected to. */
   isPermittedAddress?: (address: string) => boolean;
+  /** The most response body read before refusing; 1 MiB unless the caller needs more. */
+  maxBodyBytes?: number;
 };
 
 export function createPublicFetch(options: PublicFetchOptions = {}): typeof fetch {
   const lookup = options.lookup ?? dnsLookup;
   const isPermittedAddress = options.isPermittedAddress ?? isPublicAddress;
+  const maxBodyBytes = options.maxBodyBytes ?? defaultMaxBodyBytes;
   // Agents of this transport's own, so a pooled keep-alive socket is only ever
   // one whose address this transport's guard approved.
   const httpAgent = new HttpAgent({ keepAlive: true });
@@ -208,7 +211,7 @@ export function createPublicFetch(options: PublicFetchOptions = {}): typeof fetc
         let received = 0;
         response.on("data", (chunk: Buffer) => {
           received += chunk.length;
-          if (received > bodyLimitBytes) {
+          if (received > maxBodyBytes) {
             fail(new DestinationRefusedError());
             return;
           }
