@@ -7,11 +7,12 @@ name: ratchet guard
 # `git show` inside scripts/check-ratchets.ts — no head code is checked out,
 # installed, built or executed. The `push` trigger covers the same story for
 # commits main itself lands: this repo merges with --rebase, so a merged SHA
-# is a brand-new commit that no pull_request run covered, and every SHA on
+# is a brand-new commit that no pull_request run covered, and every push to
 # main must carry a ratchet-guard run for the check to be required and for
-# the deploy gate (scripts/deploy-revision.sh) to pass on it. Under push the
-# executed script comes from the previous main tip (github.event.before) and
-# the pushed commit is read only as git objects.
+# the deploy gate (scripts/deploy-revision.sh) to pass on the tip it lands —
+# the gate checks only the fetched tip of main, which is always a pushed
+# tip. Under push the executed script comes from the previous main tip
+# (github.event.before) and the pushed commit is read only as git objects.
 on:
   pull_request_target:  # zizmor: ignore[dangerous-triggers]
     # main only: a PR retargeted to main (an edited event) gets no new run,
@@ -19,8 +20,8 @@ on:
     # contexts match by name on the head SHA
     branches: [main]
     types: [opened, synchronize, reopened]
-  # No paths filter: every main SHA must get its own run, or deploys of that
-  # SHA wait out `ratchet-guard (absent)` and refuse.
+  # No paths filter: every push to main must get its own run, or deploys of
+  # the tip it lands wait out `ratchet-guard (absent)` and refuse.
   push:
     branches: [main]
 
@@ -42,18 +43,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Under pull_request_target no effective ref input — the expression
-      # resolves to the empty string, which keeps actions/checkout's default
-      # (GitHub points GITHUB_REF at the default branch and GITHUB_SHA at its
-      # last commit, so the default checkout is the trusted base, never the
-      # merge ref, and actions/checkout's fork guard exempts exactly that).
-      # Under push it resolves to github.event.before, the previous main tip,
-      # whose copy of scripts/check-ratchets.ts executes. main provides
-      # scripts/check-ratchets.ts under both events; untrusted content
-      # contributes no byte of the executed code.
+      # Under pull_request_target no ref input at all: GitHub points
+      # GITHUB_REF at the default branch and GITHUB_SHA at its last commit,
+      # so the default checkout is the trusted base, never the merge ref,
+      # and actions/checkout's fork guard exempts exactly that. main
+      # provides scripts/check-ratchets.ts under both events; untrusted
+      # content contributes no byte of the executed code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request_target' }}
         with:
-          ref: ${{ github.event_name == 'push' && github.event.before || '' }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Under push the ref is github.event.before, the previous main tip,
+      # whose copy of scripts/check-ratchets.ts executes. The event-name
+      # gate replaces the `ref: A && B || ''` idiom, whose empty-string
+      # fallback would silently check out the pushed commit and run its
+      # script when `before` is empty.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'push' }}
+        with:
+          ref: ${{ github.event.before }}
           persist-credentials: false
           fetch-depth: 0
 
