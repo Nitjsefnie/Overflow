@@ -101,6 +101,8 @@ describe("API token expiry in the store", () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date("2000-01-01T00:00:00.000Z") });
     try {
       await expect(store.findAccountByTokenHash(tokenHash)).resolves.toBeNull();
+      // The panel's verdict reads the same clock as the refusal.
+      await expect(store.getTokenSummary(userId)).resolves.toMatchObject({ expired: true });
     } finally {
       vi.useRealTimers();
     }
