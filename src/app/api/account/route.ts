@@ -3,7 +3,14 @@ import { findLiveAccountIdentity } from "@/lib/accounts/self-service";
 import { isRecentSignIn } from "@/lib/auth/recent-sign-in";
 import { getSql } from "@/lib/db/client";
 import type { SqlClient } from "@/lib/db/types";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
+
+/**
+ * The DELETE body is one JSON object carrying a single short confirmation
+ * login, so 4 KiB bounds the read with room to spare (issue 661).
+ */
+const ACCOUNT_DELETE_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
 
 type Session = { user: { id: string; authenticatedAt: number | null } };
 type Identity = NonNullable<Awaited<ReturnType<typeof findLiveAccountIdentity>>>;
@@ -34,9 +41,18 @@ export function createAccountDeleteHandler(dependencies: AccountDeleteRouteDepen
       return errorResponse(403, "REAUTHENTICATION_REQUIRED", "Confirm your GitHub sign-in to delete your account.");
     }
 
+    let rawBody: Buffer | null;
+    try {
+      rawBody = await readBodyWithinLimit(request, ACCOUNT_DELETE_BODY_LIMIT_BYTES);
+    } catch {
+      return errorResponse(400, "INVALID_REQUEST", "A confirmation login is required.");
+    }
+    if (rawBody === null) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     let body: unknown;
     try {
-      body = await request.json();
+      body = JSON.parse(rawBody.toString("utf8"));
     } catch {
       return errorResponse(400, "INVALID_REQUEST", "A confirmation login is required.");
     }

@@ -9,8 +9,15 @@ import {
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import type { ForgeIdentityStore } from "@/lib/forge/identities";
 import type { UserRole } from "@/lib/db/types";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+
+/**
+ * The link and unlink bodies carry one instance URL and token, or one identity
+ * id, so 4 KiB bounds the read with room to spare (issue 661).
+ */
+const FORGE_IDENTITIES_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
 
 export type ForgeIdentitiesRouteSession = {
   user: { id: string; role: UserRole };
@@ -100,6 +107,9 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
       return liveAccountRefusal;
     }
     const input = await parseBody(request, linkSchema);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid forge identity link request.");
     }
@@ -136,6 +146,9 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
       return liveAccountRefusal;
     }
     const input = await parseBody(request, unlinkSchema);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid forge identity unlink request.");
     }
@@ -155,12 +168,23 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
   };
 }
 
+/**
+ * Reads the body through readBodyWithinLimit and parses it with the schema.
+ * Returns "tooLarge" when the body crosses the route's limit — the caller
+ * answers 413 — and null for an unparsable or schema-invalid body, exactly as
+ * request.json()'s rejection did before the bounded reader. A body read that
+ * itself fails also keeps the null answer.
+ */
 async function parseBody<T extends z.ZodTypeAny>(
   request: Request,
   schema: T,
-): Promise<z.infer<T> | null> {
+): Promise<z.infer<T> | "tooLarge" | null> {
   try {
-    const result = schema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, FORGE_IDENTITIES_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = schema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? (result.data as z.infer<T>) : null;
   } catch {
     return null;

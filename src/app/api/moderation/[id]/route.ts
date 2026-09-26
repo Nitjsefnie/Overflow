@@ -11,7 +11,16 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
+
+/**
+ * The audit body carries one reason capped at 2000 characters by reasonText();
+ * 2000 three-byte UTF-8 characters is ~6 KB, so the limit is 8 KiB rather than
+ * the 4 KiB the small single-field bodies get, and a legitimate max-length
+ * reason is never refused as oversize (issue 661).
+ */
+const MODERATION_AUDIT_BODY_LIMIT_BYTES = 8 * 1024; // 8 KiB
 
 export const auditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dismiss"), reason: reasonText() }).strict(),
@@ -42,6 +51,9 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
       return errorResponse(422, "INVALID_REQUEST", "Invalid moderation request.");
     }
     const input = await parseAuditAction(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid moderation request.");
     }
@@ -94,11 +106,22 @@ async function readAuditId(context: ModerationAuditRouteContext): Promise<string
   }
 }
 
+/**
+ * Reads the body through readBodyWithinLimit and parses it with the schema.
+ * Returns "tooLarge" when the body crosses the route's limit — the caller
+ * answers 413 — and null for an unparsable or schema-invalid body, exactly as
+ * request.json()'s rejection did before the bounded reader. A body read that
+ * itself fails also keeps the null answer.
+ */
 async function parseAuditAction(
   request: Request,
-): Promise<{ action: "dismiss" | "substantiate"; reason: string } | null> {
+): Promise<{ action: "dismiss" | "substantiate"; reason: string } | "tooLarge" | null> {
   try {
-    const result = auditActionSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, MODERATION_AUDIT_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = auditActionSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;

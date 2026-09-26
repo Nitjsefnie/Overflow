@@ -13,6 +13,7 @@ import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-stor
 import { getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { hashApiToken, readApiTokenCredential } from "@/lib/security/api-token";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import {
   rejectUnsupportedMediaType,
   rejectUntrustedRequest,
@@ -29,6 +30,13 @@ import {
   type RepositoryRegistrationInput,
   type RepositoryUnregisterInput,
 } from "@/lib/repositories/register";
+
+/**
+ * The registration body carries the label arrays — the one unbounded JSON
+ * surface the API takes — so 128 KiB bounds the read while carrying the
+ * catalogs sponsors submit (issue 661).
+ */
+const REPOSITORIES_BODY_LIMIT_BYTES = 128 * 1024; // 128 KiB
 
 const registrationSchema = z
   .object({
@@ -89,6 +97,9 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
     }
 
     const input = await parseInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid repository registration request.");
     }
@@ -161,6 +172,9 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
     }
 
     const input = await parseInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid repository registration request.");
     }
@@ -202,6 +216,9 @@ export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDepen
     }
 
     const input = await parseUnregisterInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid repository unregistration request.");
     }
@@ -368,9 +385,20 @@ export const DELETE = createRepositoryDeleteHandler({
   },
 });
 
-async function parseInput(request: Request): Promise<RepositoryRegistrationInput | null> {
+/**
+ * Each helper reads the body through readBodyWithinLimit and parses it with
+ * its schema. It returns "tooLarge" when the body crosses the route's limit —
+ * the caller answers 413 — and null for an unparsable or schema-invalid body,
+ * exactly as request.json()'s rejection did before the bounded reader. A body
+ * read that itself fails also keeps the null answer.
+ */
+async function parseInput(request: Request): Promise<RepositoryRegistrationInput | "tooLarge" | null> {
   try {
-    const result = registrationSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, REPOSITORIES_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = registrationSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;
@@ -389,9 +417,15 @@ const unregisterSchema = z
   })
   .strict();
 
-async function parseUnregisterInput(request: Request): Promise<RepositoryUnregisterInput | null> {
+async function parseUnregisterInput(
+  request: Request,
+): Promise<RepositoryUnregisterInput | "tooLarge" | null> {
   try {
-    const result = unregisterSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, REPOSITORIES_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = unregisterSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;

@@ -18,6 +18,13 @@ import type { ModerationActor } from "@/lib/moderation/service";
 import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
+
+/**
+ * The rederivation body is one repository id, so 32 KiB bounds the read with
+ * wide margin (issue 661).
+ */
+const REDERIVATION_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 const rederivationRequestSchema = z
   .object({
@@ -82,6 +89,9 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
     }
 
     const input = await parseRederivationRequest(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid re-derivation request.");
     }
@@ -110,9 +120,22 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
   };
 }
 
-async function parseRederivationRequest(request: Request): Promise<{ repositoryId: string } | null> {
+/**
+ * Reads the body through readBodyWithinLimit and parses it with the schema.
+ * Returns "tooLarge" when the body crosses the route's limit — the caller
+ * answers 413 — and null for an unparsable or schema-invalid body, exactly as
+ * request.json()'s rejection did before the bounded reader. A body read that
+ * itself fails also keeps the null answer.
+ */
+async function parseRederivationRequest(
+  request: Request,
+): Promise<{ repositoryId: string } | "tooLarge" | null> {
   try {
-    const result = rederivationRequestSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, REDERIVATION_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = rederivationRequestSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;

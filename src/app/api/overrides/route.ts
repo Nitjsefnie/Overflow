@@ -15,7 +15,14 @@ import {
   requiredMemberSession,
 } from "@/lib/security/member-route-auth";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
+
+/**
+ * The correction body is one target id plus a reason reasonText() caps at
+ * 2000 characters, so 32 KiB bounds the read with wide margin (issue 661).
+ */
+const OVERRIDES_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 // Strict on both sides of the union, so a body naming a settlement and a
 // calibration at once matches neither: one request corrects one priced outcome.
@@ -65,6 +72,9 @@ export function createSettlementOverridePostHandler(dependencies: SettlementOver
     }
 
     const input = await parseOverrideRequest(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid settlement correction request.");
     }
@@ -95,11 +105,22 @@ export function settlementOverrideErrorResponse(error: unknown): Response {
   }
 }
 
+/**
+ * Reads the body through readBodyWithinLimit and parses it with the schema.
+ * Returns "tooLarge" when the body crosses the route's limit — the caller
+ * answers 413 — and null for an unparsable or schema-invalid body, exactly as
+ * request.json()'s rejection did before the bounded reader. A body read that
+ * itself fails also keeps the null answer.
+ */
 async function parseOverrideRequest(
   request: Request,
-): Promise<{ target: SettlementOverrideTarget; reason: string } | null> {
+): Promise<{ target: SettlementOverrideTarget; reason: string } | "tooLarge" | null> {
   try {
-    const parsed = overrideRequestSchema.safeParse(await request.json());
+    const raw = await readBodyWithinLimit(request, OVERRIDES_BODY_LIMIT_BYTES);
+    if (raw === null) {
+      return "tooLarge";
+    }
+    const parsed = overrideRequestSchema.safeParse(JSON.parse(raw.toString("utf8")));
     if (!parsed.success) {
       return null;
     }
