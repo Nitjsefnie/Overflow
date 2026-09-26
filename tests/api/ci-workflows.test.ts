@@ -86,18 +86,15 @@ describe("GitHub Actions release gates", () => {
     // retargeted to main (an edited event, which gets no new run) from
     // carrying its stale green over. push covers the commits main itself
     // lands: the repo merges with --rebase, so a merged SHA is a brand-new
-    // commit no pull_request run covered, and every SHA on main must carry a
-    // ratchet-guard run for the check to be required and for the deploy gate
-    // (scripts/deploy-revision.sh) to pass on it. No paths filter: a push
-    // without one of the compared files still needs its own run, or deploys
-    // of that SHA hang on `(absent)`.
+    // commit no pull_request run covered, and every push to main must carry
+    // a ratchet-guard run for the check to be required and for the deploy
+    // gate (scripts/deploy-revision.sh) to pass on the tip it lands. No
+    // paths filter: a push without one of the compared files still needs its
+    // own run, or deploys of the tip it lands hang on `(absent)`.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
     });
-    expect(workflow.on.push).not.toHaveProperty("paths");
-    expect(workflow.on.push).not.toHaveProperty("paths-ignore");
-    expect(workflow.on.push).not.toHaveProperty("branches-ignore");
     expect(workflow.permissions).toEqual({ contents: "read" });
     // Pushes to main must never share a group: GitHub keeps only one PENDING
     // run per concurrency group and cancels the older pending one even with
@@ -109,12 +106,15 @@ describe("GitHub Actions release gates", () => {
       group: "ratchet-guard-${{ github.event.pull_request.number || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
-    // The whole job, exactly, in the dependency-audit style. Under
-    // pull_request_target the checkout's `with` resolves `ref` to an empty
-    // string, which keeps actions/checkout's default — main's last commit,
-    // the checkout its fork guard exempts; under push it resolves to
+    // The whole job, exactly, in the dependency-audit style. Two checkouts,
+    // each gated on the event name: under pull_request_target the checkout
+    // has no ref input at all — actions/checkout's default, main's last
+    // commit, the checkout its fork guard exempts; under push its ref is
     // github.event.before, the previous main tip, whose copy of
-    // scripts/check-ratchets.ts executes. No step installs or builds
+    // scripts/check-ratchets.ts executes. Gating the steps instead of
+    // resolving ref through the `&& ||` idiom leaves no empty-string
+    // fallback that would silently check out the pushed commit and run its
+    // script. No step installs or builds
     // anything: untrusted content enters only as git objects (refs/remotes/
     // pr/head under pull_request_target, FETCH_HEAD under push), and the
     // only script that runs is a main-side scripts/check-ratchets.ts reading
@@ -135,9 +135,18 @@ describe("GitHub Actions release gates", () => {
         "timeout-minutes": 10,
         steps: [
           {
+            if: "${{ github.event_name == 'pull_request_target' }}",
             uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             with: {
-              ref: "${{ github.event_name == 'push' && github.event.before || '' }}",
+              "persist-credentials": false,
+              "fetch-depth": 0,
+            },
+          },
+          {
+            if: "${{ github.event_name == 'push' }}",
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            with: {
+              ref: "${{ github.event.before }}",
               "persist-credentials": false,
               "fetch-depth": 0,
             },

@@ -637,7 +637,8 @@ Every required check must therefore report on a push to main: a check that
 runs only on pull requests never runs on the SHA a rebase merge lands, so the
 gate would wait it out as `<check> (absent)` and refuse. `ratchet-guard`
 reports on both — `pull_request_target` for pull requests and `push` for
-every commit main lands.
+the tip each push lands. The deploy gate checks only the fetched tip of
+main, which is always a pushed tip.
 A refused gate leaves `HEAD`, the index and the working tree untouched, so the
 tree stays on the commit it was on; only the refs the fetch wrote
 (`FETCH_HEAD`, `origin/main`) have moved.
