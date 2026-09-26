@@ -22,20 +22,32 @@ import type { Sql } from "postgres";
  *
  * Run against the server DATABASE_URL points at, never without; the variable
  * is read from the environment, so load it first, for example with
- * `set -a; . <env file>; set +a`. Run it only after the issue 659 fix is
- * deployed: while the bug is live, every pass records new no-op rows and the
- * counted and deleted totals can diverge. Deleting rows does not return the
- * space to the filesystem; afterwards run `VACUUM FULL reconciliation_changes`
- * (which takes an exclusive lock) when the space matters.
+ * `set -a; . <env file>; set +a`, or let node load it from a .env file with
+ * the --env-file-if-exists=.env flag the usage text shows. Run it only after
+ * the issue 659 fix is deployed: while the bug is live, every pass records
+ * new no-op rows and the counted and deleted totals can diverge. Deleting
+ * rows does not return the space to the filesystem; afterwards run
+ * `VACUUM FULL reconciliation_changes` (which takes an exclusive lock) when
+ * the space matters.
  *
  * Each --execute batch reads the next page of primary keys in id order and
- * deletes the matching ids in the same single statement, so every row is
- * evaluated exactly once and each batch is atomic. The full pass is one
- * linear scan of the table.
+ * deletes the matching ids in the same single statement, so each batch is
+ * atomic. Deleting in uuid order dirties heap pages in random order: expect
+ * on the order of three times the table's size in WAL over a full run,
+ * which matters only where WAL is retained — archived, or kept for a
+ * replication slot or replica.
  *
- *   node --experimental-transform-types --import ./scripts/register-path-aliases.ts \
+ * Every batch commits on its own. On a failure, the batch lines already
+ * printed stand (the last line's "total" is what was committed; a killed
+ * process can leave its in-flight batch to commit server-side, so the
+ * printed total can undercount by one), the cause is on the failure line,
+ * and rerunning the same command is safe and idempotent — a dry run
+ * afterwards is the source of truth, and reports "matched":0 once the
+ * prunable rows are gone.
+ *
+ *   node --env-file-if-exists=.env --experimental-transform-types --import ./scripts/register-path-aliases.ts \
  *     scripts/prune-noop-reconciliation-changes.ts              # dry run: counts only
- *   node --experimental-transform-types --import ./scripts/register-path-aliases.ts \
+ *   node --env-file-if-exists=.env --experimental-transform-types --import ./scripts/register-path-aliases.ts \
  *     scripts/prune-noop-reconciliation-changes.ts --execute             # delete in batches
  *   ... --execute --batch-size 2000   # rows per page (default 10000)
  *
@@ -125,11 +137,12 @@ function usage(): string {
   return [
     "Prunes the no-op reconciliation CHANGE rows recorded by the issue 659 bug (issue 665).",
     "",
-    "Usage:",
-    "  scripts/prune-noop-reconciliation-changes.ts                       dry run: print counts only",
-    "  scripts/prune-noop-reconciliation-changes.ts --execute             delete the rows in batches",
-    "  scripts/prune-noop-reconciliation-changes.ts --execute --batch-size N   rows per batch (default 10000)",
-    "  scripts/prune-noop-reconciliation-changes.ts --help                this usage",
+    "Usage, from the repository root (DATABASE_URL in the environment or .env):",
+    "  node --env-file-if-exists=.env --experimental-transform-types \\",
+    "    --import ./scripts/register-path-aliases.ts scripts/prune-noop-reconciliation-changes.ts",
+    "    [--execute] [--batch-size N]",
+    "",
+    "With no options: dry run, counts only. --help alone shows this usage.",
   ].join("\n");
 }
 
@@ -186,9 +199,11 @@ async function executePrune(client: Sql, write: (line: string) => void, batchSiz
       )
       select (select count(*) from page)::int as scanned,
              (select count(*) from pruned)::int as deleted,
-             -- uuid has no max aggregate; canonical uuid text order is the
-             -- same order the page was read in, so max(id::text) is the
-             -- page's last id.
+             -- uuid has no max aggregate. max(id::text) is the page's last
+             -- id because canonical uuids differ from their text form only
+             -- by hyphens at four fixed positions and lowercase hex, which
+             -- every collation orders before letters, so text order equals
+             -- uuid order whatever the database collation.
              (select max(id::text) from page) as last_id
     `;
     const scanned = row?.scanned ?? 0;

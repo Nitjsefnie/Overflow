@@ -154,6 +154,14 @@ const seeds: SeedRow[] = [
   { name: "a regex-shaped invalid date against its valid notation is a real difference", entityKind: "SETTLEMENT", changeKind: "CHANGE",
     before: settlementState({ settledRationaleCommentedAt: "2026-13-45T00:00:00Z" }),
     after: settlementState({ settledRationaleCommentedAt: "2026-13-45T00:00:00.000Z" }), spurious: false },
+  // Offset-notation pins (final review, Minor 1): a mutant casting to
+  // `timestamp` instead of `timestamptz` discards the offset, so these two
+  // flip direction — the same-instant row would be kept and the
+  // different-instant row deleted.
+  { name: "an offset notation naming the same instant as the Z form is no-op", entityKind: "SETTLEMENT", changeKind: "CHANGE",
+    before: settlementState(), after: settlementState({ mergedAt: "2026-09-01T14:00:00+02:00" }), spurious: true },
+  { name: "an offset notation at a different instant is a real difference", entityKind: "SETTLEMENT", changeKind: "CHANGE",
+    before: settlementState(), after: settlementState({ mergedAt: "2026-09-01T12:00:00+02:00" }), spurious: false },
 ];
 
 const keeperIds = (): string[] => seeds.filter((seed) => !seed.spurious).map((seed) => seed.id!).sort();
@@ -195,9 +203,9 @@ describe("pruning no-op reconciliation changes", () => {
     const exit = await runPruneNoopReconciliationChangesCli([], { write: (line) => lines.push(line), sql });
     expect(exit).toBe(0);
     expect(lines.map((line) => JSON.parse(line))).toEqual([
-      { entityKind: "SETTLEMENT", count: 4 },
+      { entityKind: "SETTLEMENT", count: 5 },
       { entityKind: "SELF_WORK_CALIBRATION", count: 3 },
-      { executed: false, deleted: 0, matched: 7 },
+      { executed: false, deleted: 0, matched: 8 },
     ]);
     expect(await allRows()).toHaveLength(seeds.length);
   });
@@ -210,20 +218,20 @@ describe("pruning no-op reconciliation changes", () => {
     expect(exit).toBe(0);
     const parsed = lines.map((line) => JSON.parse(line));
     const batchLines = parsed.slice(0, -1);
-    expect(parsed.at(-1)).toEqual({ executed: true, deleted: 7, matched: 7 });
-    // 28 seeded rows at batch size 2: fourteen full pages, then the empty
+    expect(parsed.at(-1)).toEqual({ executed: true, deleted: 8, matched: 8 });
+    // 30 seeded rows at batch size 2: fifteen full pages, then the empty
     // terminal page. Every row is scanned exactly once (keyset pagination).
-    expect(batchLines).toHaveLength(15);
+    expect(batchLines).toHaveLength(16);
     expect(batchLines.map((line) => line.batch)).toEqual(batchLines.map((_, index) => index + 1));
-    expect(batchLines.map((line) => line.scanned)).toEqual([...Array(14).fill(2), 0]);
+    expect(batchLines.map((line) => line.scanned)).toEqual([...Array(15).fill(2), 0]);
     let running = 0;
     for (const line of batchLines) {
       running += line.deleted;
       expect(line.total).toBe(running);
       expect(line.deleted).toBeLessThanOrEqual(line.scanned);
     }
-    expect(running).toBe(7);
-    expect(batchLines.at(-1)).toEqual({ batch: 15, scanned: 0, deleted: 0, total: 7 });
+    expect(running).toBe(8);
+    expect(batchLines.at(-1)).toEqual({ batch: 16, scanned: 0, deleted: 0, total: 8 });
     const remaining = await allRows();
     expect(remaining.map((row) => row.id).sort()).toEqual(keeperIds());
     expect(remaining).toEqual(before.filter((row) => keeperIds().includes(row.id)));
@@ -240,7 +248,7 @@ describe("pruning no-op reconciliation changes", () => {
       { batch: 2, scanned: 5, deleted: 0, total: 0 },
       { batch: 3, scanned: 5, deleted: 0, total: 0 },
       { batch: 4, scanned: 5, deleted: 0, total: 0 },
-      { batch: 5, scanned: 1, deleted: 0, total: 0 },
+      { batch: 5, scanned: 2, deleted: 0, total: 0 },
       { batch: 6, scanned: 0, deleted: 0, total: 0 },
       { executed: true, deleted: 0, matched: 0 },
     ]);
