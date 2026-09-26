@@ -446,6 +446,30 @@ describe("GET /api/repositories/labels (GitLab)", () => {
     expect(getForgeToken).not.toHaveBeenCalled();
   });
 
+  it("refuses an http instance as a structured 400 before any token lookup or outbound request", async () => {
+    readSession.mockResolvedValue(memberSession());
+    // Everything past the scheme gate is stubbed to succeed, so a missing
+    // refusal would read labels over http with the member's token.
+    stubLinkedIdentity("gitlab-pat");
+    stubGitLabGatewayLabels(["bug"]);
+    const outbound = vi.fn(async () => new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", outbound);
+
+    const response = await labelsRoute.GET(
+      labelsRequest("?provider=gitlab&instance=http%3A%2F%2Fgitlab.example&project=group%2Fproj"),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({
+      error: { code: "INVALID_REQUEST", message: "The instance URL must use https." },
+    });
+    expect(getForgeToken).not.toHaveBeenCalled();
+    expect(GitLabGateway).not.toHaveBeenCalled();
+    expect(listRepositoryLabels).not.toHaveBeenCalled();
+    expect(outbound).not.toHaveBeenCalled();
+  });
+
   it("answers a structured 503 when token encryption is not configured", async () => {
     readSession.mockResolvedValue(memberSession());
     // The pin controls the variable it pins: the verify job exports
