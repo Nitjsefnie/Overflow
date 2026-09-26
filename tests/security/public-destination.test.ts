@@ -135,7 +135,8 @@ async function expectRefusal(pending: Promise<unknown>, hidden: string[]): Promi
   // `inspect` with hidden properties reaches what the other two miss, such as
   // a non-enumerable ES2022 `cause`. The stack is left out: its frames are code
   // positions, whose line numbers could match a hidden port or status.
-  const { stack: _stack, ...properties } = Object.getOwnPropertyDescriptors(error);
+  const properties = Object.getOwnPropertyDescriptors(error);
+  Reflect.deleteProperty(properties, "stack");
   const hiddenView = inspect(Object.defineProperties({}, properties), { showHidden: true, depth: null });
   const exposed = `${String(error)} ${JSON.stringify(error)} ${hiddenView}`;
   for (const value of hidden) {
