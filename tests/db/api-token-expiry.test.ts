@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres, { type Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -86,6 +86,23 @@ describe("API token expiry in the store", () => {
       createdAt: issued.createdAt,
       expiresAt: lapsed.expires_at,
     });
+  });
+
+  it("decides expiry by the database clock, not the Node clock", async () => {
+    const sql = getSql();
+    const userId = await insertUser(sql);
+    const store = new PostgresApiTokenStore(sql);
+    const { tokenHash } = mintApiToken();
+    await store.issueToken(userId, tokenHash);
+    await expireTokenOf(sql, userId);
+
+    // A Node clock decades behind would read the lapsed expiry as the future.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2000-01-01T00:00:00.000Z") });
+    try {
+      await expect(store.findAccountByTokenHash(tokenHash)).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves no account for a token expiring at exactly the current instant", async () => {
