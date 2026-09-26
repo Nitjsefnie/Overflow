@@ -36,7 +36,7 @@ describe("account-data notice page", () => {
     expect(screen.getByRole("heading", { level: 1 })).toBe(heading);
 
     const sections = Array.from(main!.querySelectorAll("section.surface"));
-    expect(sections.length).toBe(6);
+    expect(sections.length).toBe(8);
     for (const section of sections) {
       const labelledBy = section.getAttribute("aria-labelledby");
       expect(labelledBy, "every section names the heading that labels it").toBeTruthy();
@@ -106,6 +106,42 @@ describe("account-data notice page", () => {
       controlsSection!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
       "the controls section names where to request deletion or an export",
     ).not.toBeNull();
+  });
+
+  it("reaches the request route from the non-member section", async () => {
+    await renderAccountDataPage();
+
+    const nonMemberSection = document.getElementById("account-data-non-member-heading")!.closest("section");
+    expect(nonMemberSection, "the non-member section exists").not.toBeNull();
+    expect(
+      nonMemberSection!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the non-member section names where to ask for removal",
+    ).not.toBeNull();
+  });
+
+  it("places the non-member and server-log sections between access and retention", async () => {
+    await renderAccountDataPage();
+
+    const sectionLabelledBy = (headingId: string): Element => {
+      const heading = document.getElementById(headingId);
+      expect(heading, `expected a heading with id "${headingId}"`).not.toBeNull();
+      const section = heading!.closest("section.surface");
+      expect(section, `expected "${headingId}" inside a section.surface`).not.toBeNull();
+      expect(section).toHaveAttribute("aria-labelledby", headingId);
+      return section!;
+    };
+    const follows = (earlier: Element, later: Element): boolean =>
+      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+    const access = sectionLabelledBy("account-data-access-heading");
+    const nonMember = sectionLabelledBy("account-data-non-member-heading");
+    const logs = sectionLabelledBy("account-data-logs-heading");
+    const retention = sectionLabelledBy("account-data-retention-heading");
+
+    expect(follows(access, nonMember), "the non-member section follows who can see it").toBe(true);
+    expect(follows(nonMember, logs), "the server-log section follows the non-member section").toBe(true);
+    expect(follows(logs, retention), "retention follows the server-log section").toBe(true);
+    expect(nonMember.nextElementSibling, "the server-log section comes immediately after").toBe(logs);
   });
 
   it("points the deletion description's authorization limit at GitHub's application settings", async () => {
