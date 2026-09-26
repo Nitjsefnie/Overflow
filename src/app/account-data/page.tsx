@@ -137,9 +137,9 @@ export function AccountDataNotice() {
           <li>
             a cache per registered repository holding every issue in it, not only tracked ones: each issue&apos;s
             title, description, author, assignee, and the history of who labelled and assigned it; every comment
-            on it, with its author&apos;s login, numeric user id, and text; and the title, description, author,
-            and diff of each pull request that closes it. The cache records pull request reviews without the
-            reviewer&apos;s login or text
+            on it, with its author&apos;s login, numeric user id, and text; and the title, description, and
+            author of each pull request that closes it. For each merged pull request in the registered
+            repository, the cache also keeps its diff and its reviews, without the reviewer&apos;s login or text
           </li>
           <li>a change log recording logins and titles as those records change</li>
           <li>moderation notes, which can name the account that applied a label</li>
@@ -147,9 +147,13 @@ export function AccountDataNotice() {
         <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
         <p>
           Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
-          members see a claim assignee&apos;s login and issue titles on the issues board, a sponsor sees the
-          assignee on its dashboard, and moderators see the moderation notes. Descriptions, comment text, the
-          cache, and the change log are displayed to no one. The site operator administers the database.
+          members see a claim assignee&apos;s login and issue titles on the issues board. A repository&apos;s
+          sponsor sees the claim assignees on its dashboard, and issue and pull request titles on its dashboard
+          and its settlement proof and calibration pages; a member credited with a settlement sees the same
+          titles on that settlement&apos;s proof page and their own dashboard. Moderators see the moderation
+          notes, and issue and pull request titles in the moderation queues and closure history. Descriptions,
+          comment text, the cache, and the change log are displayed to no one. The site operator administers the
+          database.
         </p>
         <p>How long it is kept:</p>
         <ul>
@@ -157,19 +161,25 @@ export function AccountDataNotice() {
             While the repository stays registered, reconciliation re-reads it. Every pass overwrites the stored
             logins and pull request fields from GitHub or GitLab, and an issue&apos;s title and description
             whenever the forge&apos;s copy is at least as new. An unattended sweep runs every six hours, and a pass
-            replaces the whole cache with a full re-read once six hours have passed since the last one, so an edit
-            or deletion on GitHub or GitLab normally reaches Overflow&apos;s copy within twelve hours. An issue or
-            pull request that a later pass no longer records is removed.
+            replaces the whole cache with a full re-read once six hours have passed since the last one, so while
+            the repository can still be read, an edit or deletion on GitHub or GitLab normally reaches
+            Overflow&apos;s copy within twelve hours. An issue or pull request that a later pass no longer records
+            is removed.
           </li>
           <li>
-            The change log is append-only: the logins and titles it recorded, including those of removed issues
-            and pull requests, are never pruned.
+            If the repository itself is deleted, made private, or can no longer be read with its sponsor&apos;s
+            token, the re-reads stop and nothing is deleted: the stored copy is kept, as after unregistering.
+          </li>
+          <li>
+            The change log is append-only: Overflow itself never deletes the logins and titles it recorded,
+            including those of removed issues and pull requests. The operator has a cleanup script, run by hand,
+            that removes only entries recording no actual change.
           </li>
           <li>
             Unregistering a repository deletes none of this. It stops the re-reads, so the copy stored for that
             repository is kept indefinitely.
           </li>
-          <li>The daily database backups described under How long it is kept hold this data too.</li>
+          <li>The daily database backups described in the How long it is kept section below hold this data too.</li>
         </ul>
         <p>
           To ask for data about you to be removed, open an issue at{" "}
@@ -190,7 +200,9 @@ export function AccountDataNotice() {
           The web server in front of Overflow logs every request: the client&apos;s IP address — the real address,
           restored from Cloudflare&apos;s forwarding header — the time, the requested path, the response status,
           the referring page, and the browser&apos;s user agent. That log is shared by every site on the host. It
-          is rotated daily and each rotated file is deleted after 14 rotations, about 15 days in all.
+          is rotated daily and each rotated file is deleted after 14 rotations, about 15 days in all. The web
+          server&apos;s error log also records the client&apos;s IP address for a request that hits an error; it
+          is rotated and deleted on the same schedule.
         </p>
         <p>
           Overflow&apos;s own output goes to the host&apos;s system journal. The journal has no time limit, only a
