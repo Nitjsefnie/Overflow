@@ -97,6 +97,23 @@ describe("policy violations are recorded when they newly appear", () => {
       .toEqual([mutated]);
   });
 
+  it("stores distinct violations that share a code or an issue as separate members", async () => {
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    // Siblings sharing a code across issues are the ordinary production shape,
+    // and one issue can carry both an opening and a settled-label violation.
+    // Each must be its own member of the set, or the one left out is recorded
+    // again on every run.
+    const siblings: FoldPolicyViolation[] = [
+      { code: "OPENING_LABEL_MUTATED", githubIssueId: 71_401 },
+      { code: "OPENING_LABEL_MUTATED", githubIssueId: 71_402 },
+      { code: "OPENING_LABEL_MISSING", githubIssueId: 71_403 },
+      { code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 71_403 },
+    ];
+
+    expect(await violationsRecordedBy(await reconcile(store, repositoryId, fold, siblings))).toEqual(siblings);
+    expect(await violationsRecordedBy(await reconcile(store, repositoryId, fold, siblings))).toEqual([]);
+  });
+
   it("records a violation larger than a btree index row once, and not again when it is unchanged", async () => {
     const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
     // Hash hex does not compress, so the stored jsonb stays over 4 kB: above the
