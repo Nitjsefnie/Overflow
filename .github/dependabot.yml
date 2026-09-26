@@ -15,10 +15,10 @@ updates:
       - dependency-name: "postgres"
     groups:
       # react-dom refuses to load beside any other react version ("Incompatible
-      # React versions"), and the @types pair peers the same way, so these four
-      # move together in one pull request or not at all. Exact names only: a
-      # wildcard such as `*react*` would also sweep in @vitejs/plugin-react and
-      # @testing-library/react.
+      # React versions"), and @types/react-dom peers on a matching @types/react
+      # range, so these four move together in one pull request. Exact names
+      # only: a wildcard such as `*react*` would also sweep in
+      # @vitejs/plugin-react and @testing-library/react.
       react:
         patterns:
           - "react"
