@@ -18,7 +18,9 @@ import { parse } from "yaml";
  * - the artifact is downloaded from the triggering run's id, not the latest;
  * - every untrusted triggering-event value reaches the shell through env,
  *   never through ${{ }} interpolation into a run block;
- * - the destination PR is resolved from the event's head branch only;
+ * - the destination PR is resolved from the event's head repository, head
+ *   branch and head SHA only (issue 656; the run blocks' behavior is
+ *   exercised in tests/ci/coverage-comment-behavior.test.ts);
  * - the comment is identified by one HTML-comment marker, updated in place;
  * - a body over the API's 65536-character limit is refused, never truncated;
  * - the check run reporting the outcome is named exactly "coverage comment".
@@ -133,14 +135,21 @@ describe("the coverage comment workflow", () => {
     ).toBe(true);
   });
 
-  it("resolves the destination PR from the event's head branch before anything else", () => {
+  it("resolves the destination PR from the event's head repository, branch and SHA before anything else", () => {
     const [resolve] = steps.filter((step) => step.name === "Resolve the destination pull request");
     expect(resolve, "the resolve step must exist and come first").toBeDefined();
     expect(steps[0]?.name).toBe("Resolve the destination pull request");
     expect(
-      resolve.env?.HEAD_BRANCH,
-      "the head branch is attacker-controlled and must enter the shell through env",
-    ).toBe("${{ github.event.workflow_run.head_branch }}");
+      resolve.env,
+      "the head branch is attacker-controlled and must enter the shell through env; the head repository and SHA bind the destination to the triggering run",
+    ).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      REPO_SLUG: "${{ github.repository }}",
+      HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
+      HEAD_OWNER: "${{ github.event.workflow_run.head_repository.owner.login }}",
+      HEAD_REPO: "${{ github.event.workflow_run.head_repository.full_name }}",
+      HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+    });
   });
 
   it("wires the not-measured substitution from the triggering run's conclusion", () => {
@@ -150,6 +159,7 @@ describe("the coverage comment workflow", () => {
       CONCLUSION: "${{ github.event.workflow_run.conclusion }}",
       HEAD_BRANCH: "${{ github.event.workflow_run.head_branch }}",
       PR_NUMBER: "${{ steps.pr.outputs.pr_number }}",
+      SAME_REPO: "${{ steps.pr.outputs.same_repo }}",
     });
   });
 
