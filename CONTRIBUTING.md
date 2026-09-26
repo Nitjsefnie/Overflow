@@ -310,19 +310,35 @@ inside it.
 
 ### Module size is ratcheted
 
-`node scripts/check-module-size.ts` enforces per-tree line ceilings — 800
-lines for `src/`, 2500 for `tests/` — against the committed baseline in
-`scripts/module-size.json`. The check fails when a baseline file grows past
-its recorded count, when an unlisted file crosses its ceiling, when a baseline
-file is deleted, when a baseline file shrinks below the ceiling and its entry
-has not been dropped, or when a baseline file shrinks below its recorded count
-while staying at or over its ceiling and the lower count has not been
-recorded. Run `node scripts/check-module-size.ts --tighten` to record
-shrinkage, in the same change that made it: it lowers counts and drops
-graduated or deleted entries, and it never writes an increase. There are
-exactly two remedies for an over-ceiling file: shrink it, or relocate code
-into a new module. Recorded counts are never raised by hand and entries are
-never added by hand.
+`node scripts/check-module-size.ts` enforces per-family line ceilings against
+the committed baseline in `scripts/module-size.json`. The measured families,
+each capped by the ceilings key of the same name, are:
+
+- `src` — TypeScript under `src/`, 800 lines;
+- `tests` — TypeScript under `tests/`, 2500 lines;
+- `tooling` — `scripts/*.ts`, `scripts/*.mjs`, `scripts/*.sh` and the
+  repository-root `*.ts` and `*.mjs` config modules, 800 lines;
+- `stylesheets` — CSS under `src/`, 800 lines;
+- `migrations` — `db/migrations/*.sql`, 400 lines.
+
+Every other tracked file is a recorded exclusion, listed with its reason in
+the script itself. A tracked file that is in no family and no exclusion fails
+the check as `unclassified`: add it to a family or record it as an exclusion
+there. A ceilings key that names no family also fails, and a family with no
+ceilings key is a configuration error.
+
+The check fails when a baseline file grows past its recorded count, when an
+unlisted file crosses its family's ceiling, when a baseline file is deleted,
+when a baseline file shrinks below the ceiling and its entry has not been
+dropped, or when a baseline file shrinks below its recorded count while
+staying at or over its ceiling and the lower count has not been recorded.
+Run `node scripts/check-module-size.ts --tighten` to record shrinkage, in the
+same change that made it: it lowers counts and drops graduated, deleted or
+unmeasured entries, and it never writes an increase. There are exactly two
+remedies for an over-ceiling file: shrink it, or relocate code into a new
+module. Recorded counts are never raised by hand. An entry is added only when
+a family starts being measured, at the file's current count, and the ratchet
+guard (`scripts/check-ratchets.ts`) verifies it against the merge base.
 
 ### Coverage is floored
 
