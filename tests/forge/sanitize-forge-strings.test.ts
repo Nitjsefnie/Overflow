@@ -34,4 +34,14 @@ describe("sanitizeForgeStrings", () => {
     expect(output).toEqual({ unchanged, changed: "x\uFFFDy" });
     expect(output.unchanged).toBe(unchanged);
   });
+
+  it("preserves a null prototype when replacing NUL in a plain object", () => {
+    const input = Object.assign(Object.create(null) as Record<string, string>, { body: "a\u0000b" });
+    const output = sanitizeForgeStrings(input);
+
+    expect(output).not.toBe(input);
+    expect(output.body).toBe("a\uFFFDb");
+    expect(Object.getPrototypeOf(output)).toBeNull();
+    expect(input.body).toBe("a\u0000b");
+  });
 });
