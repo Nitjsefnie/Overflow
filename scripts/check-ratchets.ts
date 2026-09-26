@@ -25,8 +25,9 @@
 // key must stay, except that a baseline entry may be dropped. Two additions
 // provably relax nothing and are accepted: a new ceiling that is a positive
 // integer, and a new baseline entry for a path that was a regular file at the
-// merge base, at or below that file's line count there (read as data with
-// `git show`, like the documents). Every other added key is a finding.
+// merge base, at or below that file's line count there (read as data, by
+// the blob id of the tree entry the key names). Every other added key is a
+// finding.
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -175,12 +176,12 @@ export type MergeBaseEntry = { lines: number } | { kind: string } | null;
 
 export type MergeBaseLookup = (path: string) => MergeBaseEntry;
 
-// Without a lookup nothing is known to exist at the merge base, so every
-// added baseline entry is refused.
-const NOTHING_AT_MERGE_BASE: MergeBaseLookup = () => null;
-
-// Adding a ceiling introduces a limit where there was none, so any positive
-// integer tightens.
+// A new ceilings key has no effect until check-module-size resolves it:
+// ceilingFor reads only the families named in its code, by exact key, so an
+// added key cannot shadow another key's files. That holds only while every
+// family is resolved by an exact name defined in code and an unknown
+// ceilings key fails the module-size check; extending the families must keep
+// both. Under that contract a positive integer adds a limit and loosens none.
 function addedCeiling(key: string, now: unknown): string[] {
   if (Number.isInteger(now) && (now as number) > 0) return [];
   return [finding(MODULE_SIZE_PATH, key, undefined, now, "ceiling added that is not a positive integer")];
@@ -197,11 +198,14 @@ function addedBaselineEntry(
   key: string,
   path: string,
   now: unknown,
-  atMergeBase: MergeBaseLookup,
+  atMergeBase: MergeBaseLookup | undefined,
 ): string[] {
   const refuse = (why: string) => [finding(MODULE_SIZE_PATH, key, undefined, now, why)];
   if (!Number.isInteger(now) || (now as number) < 0) {
     return refuse("entry added that is not a non-negative integer");
+  }
+  if (atMergeBase === undefined) {
+    return refuse("entry added and no merge-base lookup was supplied");
   }
   const entry = atMergeBase(path);
   if (entry === null) return refuse("entry added for a path absent at the merge base");
@@ -221,7 +225,7 @@ function integerMapRelaxations(
   section: "ceilings" | "module_size_baseline",
   base: unknown,
   head: unknown,
-  atMergeBase: MergeBaseLookup,
+  atMergeBase: MergeBaseLookup | undefined,
 ): string[] {
   const entriesMayBeRemoved = section === "module_size_baseline";
   if (!isObject(head)) {
@@ -256,10 +260,12 @@ function integerMapRelaxations(
   return out;
 }
 
+// Without `atMergeBase` nothing can be known about the merge base, so every
+// added baseline entry is refused.
 export function moduleSizeRelaxations(
   base: unknown,
   head: unknown,
-  atMergeBase: MergeBaseLookup = NOTHING_AT_MERGE_BASE,
+  atMergeBase?: MergeBaseLookup,
 ): string[] {
   if (base === null || base === undefined) return [];
   if (head === null || head === undefined) return [deleted(MODULE_SIZE_PATH)];
@@ -327,30 +333,43 @@ export function mergeBase(cwd: string, base: string, head: string): string {
 // through the link.
 export const REGULAR_FILE = "100644 blob";
 
-// "<mode> <type>" of the tree entry named exactly `path`, or null when there
-// is none. git ls-tree reads its argument as a pattern — "dir/" lists the
-// directory's children — so pathspec magic is off and only a record whose
-// name equals `path` counts. Baseline keys are the branch's own text.
-export function entryKind(cwd: string, commit: string, path: string): string | null {
+// The tree entry named exactly `path` — its "<mode> <type>" and object id —
+// or null when there is none. git ls-tree reads its argument as a pattern —
+// "dir/" lists the directory's children — so pathspec magic is off and only
+// a record whose name equals `path` counts. Baseline keys are the branch's
+// own text.
+function treeEntry(
+  cwd: string,
+  commit: string,
+  path: string,
+): { kind: string; object: string } | null {
   const listing = git(cwd, ["--literal-pathspecs", "ls-tree", "-z", commit, "--", path]);
   if (listing.status !== 0) throw new Error(`cannot list ${path} at ${commit}: ${listing.stderr}`);
   for (const record of listing.stdout.split("\0")) {
     const tab = record.indexOf("\t");
     if (tab === -1 || record.slice(tab + 1) !== path) continue;
-    const [mode, type] = record.slice(0, tab).split(" ", 2);
-    return `${mode} ${type}`;
+    const [mode, type, object] = record.slice(0, tab).split(" ", 3);
+    return { kind: `${mode} ${type}`, object: object ?? "" };
   }
   return null;
 }
 
+// "<mode> <type>" of the tree entry named exactly `path`, or null when there
+// is none.
+export function entryKind(cwd: string, commit: string, path: string): string | null {
+  return treeEntry(cwd, commit, path)?.kind ?? null;
+}
+
 // The merge-base lookup checkRatchets hands moduleSizeRelaxations: the
-// newline count of a regular file at `commit`, read as data like the
-// documents and counted the way check-module-size counts.
+// newline count of a regular file at `commit`, counted the way
+// check-module-size counts. The blob is read by the object id of the matched
+// tree entry, never by name: `git show <commit>:<key>` would parse a key
+// containing ".." as a revision range and print whatever that range shows.
 export function mergeBaseEntry(cwd: string, commit: string, path: string): MergeBaseEntry {
-  const kind = entryKind(cwd, commit, path);
-  if (kind === null) return null;
-  if (kind !== REGULAR_FILE) return { kind };
-  const blob = git(cwd, ["show", `${commit}:${path}`]);
+  const entry = treeEntry(cwd, commit, path);
+  if (entry === null) return null;
+  if (entry.kind !== REGULAR_FILE) return { kind: entry.kind };
+  const blob = git(cwd, ["cat-file", "blob", entry.object]);
   if (blob.status !== 0) throw new Error(`cannot read ${path} at ${commit}: ${blob.stderr}`);
   return { lines: countLines(blob.stdout) };
 }

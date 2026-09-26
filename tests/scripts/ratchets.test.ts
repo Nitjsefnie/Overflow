@@ -272,7 +272,7 @@ describe("module size ratchet relaxations", () => {
 
   it("refuses an added baseline entry when no merge-base lookup is supplied", () => {
     expect(moduleSizeRelaxations(moduleSize(), withNew(801))).toEqual([
-      expect.stringContaining("absent at the merge base"),
+      expect.stringContaining("entry added and no merge-base lookup was supplied"),
     ]);
   });
 
@@ -597,6 +597,42 @@ describe("ratchet check against a real git repository", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("ok");
+  });
+
+  it("counts the matched blob, never a baseline key re-parsed as a revision", () => {
+    // "src/a..:/inflate" is a real file of 2 lines. Read back by name,
+    // git show "<commit>:src/a..:/inflate" parses as the range from the blob
+    // "<commit>:src/a" to ":/inflate" (the newest commit whose message
+    // matches "inflate") and prints that commit with its whole diff, far more
+    // than 2 lines. An entry of 10 must be judged against the 2.
+    initRepo();
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    mkdirSync(join(root, "src", "a..:"), { recursive: true });
+    writeFileSync(join(root, "src", "a"), "a\n");
+    writeFileSync(join(root, "src", "a..:", "inflate"), "a\nb\n");
+    commit("inflate the count");
+    const fork = git("rev-parse", "HEAD");
+    const reparsed = spawnSync("git", ["show", `${fork}:src/a..:/inflate`], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(reparsed.status).toBe(0);
+    expect(reparsed.stdout.split("\n").length).toBeGreaterThan(11);
+    git("checkout", "-q", "-b", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, {
+        "src/big.ts": 900,
+        "tests/big.test.ts": 2600,
+        "src/a..:/inflate": 10,
+      }),
+    );
+    commit("baseline above the file's true size");
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("above the file's 2 lines at the merge base");
   });
 
   it("refuses baseline entries that name anything but a regular file at the merge base", () => {
