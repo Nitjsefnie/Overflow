@@ -131,10 +131,11 @@ describe("the server-action origin guard", () => {
  * next-auth call. A future server-action file that forgets the guard fails
  * here; a broken discovery fails on the two known files.
  * Anything discovery cannot exercise is refused outright: every file under src/
- * with a "use server" directive line anywhere — an inline function-level action,
- * or a module whose directive follows another one such as "use strict" — must
- * also be a discovered module, so an action cannot escape the check by where
- * it declares itself.
+ * whose text contains a "use server" directive anywhere — an inline
+ * function-level action, even one sharing a line with other code, or a module
+ * whose directive follows another one such as "use strict", on the same line or
+ * the next — must also be a discovered module, so an action cannot escape the
+ * check by where it declares itself.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -183,12 +184,12 @@ function discoverServerActionFiles(): string[] {
     .map((path) => path.slice(repositoryRoot.length));
 }
 
-const USE_SERVER_LINE = /^\s*["']use server["'];?\s*$/m;
+const USE_SERVER_DIRECTIVE = /["']use server["']/;
 
-/** Every file under src/ with a "use server" directive on a line of its own. */
-function filesWithUseServerLine(): string[] {
+/** Every file under src/ containing a "use server" directive anywhere in its text. */
+function filesContainingUseServer(): string[] {
   return typescriptFilesUnder(join(repositoryRoot, "src"))
-    .filter((path) => USE_SERVER_LINE.test(readFileSync(path, "utf8")))
+    .filter((path) => USE_SERVER_DIRECTIVE.test(readFileSync(path, "utf8")))
     .map((path) => path.slice(repositoryRoot.length));
 }
 
@@ -200,7 +201,7 @@ describe("coverage of the guard across every server action", () => {
 
   it("finds every \"use server\" directive in a module the guard check exercises", () => {
     const discovered = discoverServerActionFiles();
-    const declaring = filesWithUseServerLine();
+    const declaring = filesContainingUseServer();
     expect(declaring, "found no \"use server\" line under src/").toContain("src/lib/auth/sign-out-action.ts");
 
     for (const file of declaring) {
