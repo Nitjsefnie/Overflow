@@ -23,7 +23,7 @@ import {
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { getCoordinationSql, getSql } from "@/lib/db/client";
-import { decryptToken, encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, encryptToken, loadTokenKeySet, type TokenKeySet } from "@/lib/security/token-cipher";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { generateWebhookCredential, type WebhookCredentialRecord, type WebhookCredentialTarget } from "@/lib/webhooks/credentials";
 
@@ -45,6 +45,7 @@ type UnregisterLockRow = RepositoryStateRow & {
 };
 
 type OAuthTokenRow = {
+  github_user_id: string | number;
   encrypted_oauth_token: Buffer | null;
 };
 
@@ -71,7 +72,15 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public constructor(
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
+    private readonly previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
   ) {}
+
+  private tokenKeys(): TokenKeySet {
+    return loadTokenKeySet({
+      TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey,
+      TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey,
+    });
+  }
 
   public async findRepositoryProviderById(githubRepositoryId: number): Promise<string | null> {
     const [row] = await this.sql<{ provider: string | null }[]>`
@@ -116,7 +125,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       if (row === undefined) return null;
       if (row.webhook_credential_id !== null) return this.toWebhookCredential(row);
       const credential = generateWebhookCredential();
-      const encrypted = Buffer.from(encryptToken(credential.secret, this.tokenEncryptionKey ?? ""), "utf8");
+      const encrypted = Buffer.from(encryptToken(
+        credential.secret, this.tokenKeys().current, credentialBinding.webhookSecret(credential.id),
+      ), "utf8");
       await transaction`
         update registered_repositories set webhook_credential_id = ${credential.id},
           encrypted_webhook_secret = ${encrypted}, webhook_configured_at = null
@@ -151,7 +162,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     }
     return {
       repositoryId: row.id, credentialId: row.webhook_credential_id,
-      secret: decryptToken(Buffer.from(row.encrypted_webhook_secret).toString("utf8"), this.tokenEncryptionKey ?? ""),
+      secret: decryptToken(
+        Buffer.from(row.encrypted_webhook_secret).toString("utf8"),
+        this.tokenKeys(),
+        credentialBinding.webhookSecret(row.webhook_credential_id),
+      ),
       provider: row.provider,
       instanceUrl: row.instance_url === null ? null : normalizeInstanceUrl(row.instance_url),
       projectId: toSafeInteger(row.project_id), webhookId: toSafeInteger(row.github_webhook_id),
@@ -361,7 +376,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null> {
     const credential = repository.webhookCredential;
     const encryptedSecret = credential == null ? null : Buffer.from(
-      encryptToken(credential.secret, this.tokenEncryptionKey ?? ""), "utf8",
+      encryptToken(credential.secret, this.tokenKeys().current, credentialBinding.webhookSecret(credential.id)), "utf8",
     );
     try {
       // The registration and its first catalog version are one statement, so a
@@ -625,7 +640,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
     const [row] = await this.sql<OAuthTokenRow[]>`
-      select encrypted_oauth_token
+      select github_user_id, encrypted_oauth_token
       from users
       where id = ${userId}
       limit 1
@@ -634,12 +649,11 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       return null;
     }
 
-    const tokenEncryptionKey = this.tokenEncryptionKey;
-    if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
-      throw new Error("Token encryption key must be configured.");
-    }
-
-    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), tokenEncryptionKey);
+    return decryptToken(
+      Buffer.from(row.encrypted_oauth_token).toString("utf8"),
+      this.tokenKeys(),
+      credentialBinding.userOAuthToken(row.github_user_id),
+    );
   }
 
   // The abandoned-webhook cleanup surface (issue 451): the record written before

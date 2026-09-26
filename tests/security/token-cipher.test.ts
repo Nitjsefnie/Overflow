@@ -1,36 +1,215 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decryptToken, encryptToken } from "@/lib/security/token-cipher";
+import {
+  credentialBinding,
+  decryptToken,
+  encryptToken,
+  isEnvelopeCurrent,
+  loadTokenKeySet,
+} from "@/lib/security/token-cipher";
+import { legacyV1Envelope, legacyV1Key, legacyV1Plaintext } from "../support/legacy-token-envelope";
 
 const encryptionKey = randomBytes(32).toString("base64url");
+const otherKey = randomBytes(32).toString("base64url");
+const decryptionFailure = "Unable to decrypt stored credential.";
 
-describe("GitHub OAuth token cipher", () => {
-  it("round trips a token through a versioned authenticated envelope", () => {
-    const encrypted = encryptToken("oauth-token-for-test", encryptionKey);
+const oauthBinding = credentialBinding.userOAuthToken(4242);
+const forgeBinding = credentialBinding.forgeToken({
+  provider: "gitlab",
+  instanceUrl: "https://gitlab.example.com",
+  forgeUserId: 4242,
+});
+const webhookBinding = credentialBinding.webhookSecret("5b0f7a8e-2f3c-4d71-9a53-6c1d2e3f4a5b");
 
-    expect(encrypted).toMatch(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
-    expect(decryptToken(encrypted, encryptionKey)).toBe("oauth-token-for-test");
+function expectedKeyId(encodedKey: string): string {
+  return createHash("sha256")
+    .update(Buffer.concat([Buffer.from("overflow-token-key-id:v2:", "utf8"), Buffer.from(encodedKey, "base64url")]))
+    .digest()
+    .subarray(0, 8)
+    .toString("base64url");
+}
+
+function replacePart(envelope: string, index: number, replacement: (part: string) => string): string {
+  const parts = envelope.split(".");
+  parts[index] = replacement(parts[index]!);
+  return parts.join(".");
+}
+
+function flipFirstByte(part: string): string {
+  const bytes = Buffer.from(part, "base64url");
+  bytes[0] = bytes[0]! ^ 0x01;
+  return bytes.toString("base64url");
+}
+
+describe("stored credential cipher", () => {
+  it("round trips a credential through a key-identified, row-bound envelope", () => {
+    const encrypted = encryptToken("oauth-token-for-test", encryptionKey, oauthBinding);
+
+    expect(decryptToken(encrypted, encryptionKey, oauthBinding)).toBe("oauth-token-for-test");
+    expect(decryptToken(encrypted, { current: encryptionKey }, oauthBinding)).toBe("oauth-token-for-test");
+  });
+
+  it("writes a v2 envelope whose key id is derived from the current key", () => {
+    const encrypted = encryptToken("oauth-token-for-test", encryptionKey, oauthBinding);
+    const [version, keyId, iv, tag, ciphertext, ...extra] = encrypted.split(".");
+
+    expect(version).toBe("v2");
+    expect(keyId).toBe(expectedKeyId(encryptionKey));
+    expect(Buffer.from(iv!, "base64url")).toHaveLength(12);
+    expect(Buffer.from(tag!, "base64url")).toHaveLength(16);
+    expect(ciphertext).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(extra).toEqual([]);
   });
 
   it("uses a fresh initialization vector for each encryption", () => {
-    const first = encryptToken("same-token", encryptionKey);
-    const second = encryptToken("same-token", encryptionKey);
+    const first = encryptToken("same-token", encryptionKey, oauthBinding);
+    const second = encryptToken("same-token", encryptionKey, oauthBinding);
 
     expect(first).not.toBe(second);
   });
 
-  it("rejects a tampered authenticated envelope without revealing its contents", () => {
-    const encrypted = encryptToken("oauth-token-for-test", encryptionKey);
-    const tampered = `${encrypted.slice(0, -1)}${encrypted.endsWith("A") ? "B" : "A"}`;
+  it("refuses an envelope moved to another row, column or table", () => {
+    const oauth = encryptToken("secret", encryptionKey, oauthBinding);
+    const forge = encryptToken("secret", encryptionKey, forgeBinding);
+    const webhook = encryptToken("secret", encryptionKey, webhookBinding);
 
-    expect(() => decryptToken(tampered, encryptionKey)).toThrow("Unable to decrypt GitHub token.");
+    // Another row of the same column.
+    expect(() => decryptToken(oauth, encryptionKey, credentialBinding.userOAuthToken(4243))).toThrow(decryptionFailure);
+    expect(() => decryptToken(forge, encryptionKey, credentialBinding.forgeToken({
+      provider: "gitlab", instanceUrl: "https://gitlab.example.com", forgeUserId: 4243,
+    }))).toThrow(decryptionFailure);
+    expect(() => decryptToken(forge, encryptionKey, credentialBinding.forgeToken({
+      provider: "gitlab", instanceUrl: "https://other.example.com", forgeUserId: 4242,
+    }))).toThrow(decryptionFailure);
+    expect(() => decryptToken(webhook, encryptionKey,
+      credentialBinding.webhookSecret("00000000-0000-4000-8000-000000000000"))).toThrow(decryptionFailure);
+    // Another column/table carrying the same row key.
+    expect(() => decryptToken(oauth, encryptionKey, forgeBinding)).toThrow(decryptionFailure);
+    expect(() => decryptToken(forge, encryptionKey, webhookBinding)).toThrow(decryptionFailure);
+    expect(() => decryptToken(webhook, encryptionKey, oauthBinding)).toThrow(decryptionFailure);
+    // Identical row-key parts in different columns.
+    const sameKeyOAuth = encryptToken("secret", encryptionKey, credentialBinding.userOAuthToken(4242));
+    expect(() => decryptToken(sameKeyOAuth, encryptionKey, credentialBinding.webhookSecret("4242")))
+      .toThrow(decryptionFailure);
+  });
+
+  it("keeps multi-part row keys unambiguous", () => {
+    const encrypted = encryptToken("secret", encryptionKey, credentialBinding.forgeToken({
+      provider: "gitlab", instanceUrl: "https://a.example.com", forgeUserId: 1,
+    }));
+
+    for (const shifted of [
+      { provider: "gitlabhttps://a.example.com", instanceUrl: "" },
+      { provider: "gitlab,https://a.example.com", instanceUrl: "" },
+      { provider: "gitlab", instanceUrl: "https://a.example.com1" },
+    ]) {
+      expect(() => decryptToken(encrypted, encryptionKey, credentialBinding.forgeToken({ ...shifted, forgeUserId: 1 })))
+        .toThrow(decryptionFailure);
+    }
+  });
+
+  it("decrypts under the previous key once the current key has rotated", () => {
+    const encrypted = encryptToken("rotated-secret", encryptionKey, webhookBinding);
+
+    expect(decryptToken(encrypted, { current: otherKey, previous: encryptionKey }, webhookBinding))
+      .toBe("rotated-secret");
+  });
+
+  it("refuses a v2 envelope whose key id matches neither configured key", () => {
+    const encrypted = encryptToken("orphaned-secret", encryptionKey, webhookBinding);
+
+    expect(() => decryptToken(encrypted, otherKey, webhookBinding)).toThrow(decryptionFailure);
+    expect(() => decryptToken(encrypted, { current: otherKey, previous: randomBytes(32).toString("base64url") },
+      webhookBinding)).toThrow(decryptionFailure);
+  });
+
+  it("still decrypts a pre-change v1 envelope under the current or the previous key", () => {
+    expect(decryptToken(legacyV1Envelope, legacyV1Key, oauthBinding)).toBe(legacyV1Plaintext);
+    expect(decryptToken(legacyV1Envelope, { current: otherKey, previous: legacyV1Key }, oauthBinding))
+      .toBe(legacyV1Plaintext);
+    expect(() => decryptToken(legacyV1Envelope, otherKey, oauthBinding)).toThrow(decryptionFailure);
+  });
+
+  it("refuses a tampered iv, tag, ciphertext or key id", () => {
+    const encrypted = encryptToken("oauth-token-for-test", encryptionKey, oauthBinding);
+
+    for (const index of [1, 2, 3, 4]) {
+      const tampered = replacePart(encrypted, index, flipFirstByte);
+      expect(tampered).not.toBe(encrypted);
+      expect(() => decryptToken(tampered, { current: encryptionKey, previous: otherKey }, oauthBinding))
+        .toThrow(decryptionFailure);
+    }
+    expect(() => decryptToken(replacePart(encrypted, 0, () => "v3"), encryptionKey, oauthBinding))
+      .toThrow(decryptionFailure);
+    expect(() => decryptToken(`${encrypted}.extra`, encryptionKey, oauthBinding)).toThrow(decryptionFailure);
+  });
+
+  it("reports the same generic failure whatever went wrong", () => {
+    const encrypted = encryptToken("oauth-token-for-test", encryptionKey, oauthBinding);
+    const failures = [
+      () => decryptToken(encrypted, otherKey, oauthBinding),
+      () => decryptToken(encrypted, encryptionKey, forgeBinding),
+      () => decryptToken("not an envelope", encryptionKey, oauthBinding),
+    ].map((attempt) => {
+      try {
+        attempt();
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(failures).toEqual([decryptionFailure, decryptionFailure, decryptionFailure]);
   });
 
   it("requires a decoded 32-byte encryption key", () => {
     const tooShortKey = randomBytes(31).toString("base64url");
 
-    expect(() => encryptToken("oauth-token-for-test", tooShortKey)).toThrow(
+    expect(() => encryptToken("oauth-token-for-test", tooShortKey, oauthBinding)).toThrow(
       "Token encryption key must decode to exactly 32 bytes.",
     );
+  });
+
+  it("rejects a malformed previous key rather than ignoring it", () => {
+    const encrypted = encryptToken("secret", encryptionKey, oauthBinding);
+
+    expect(() => decryptToken(encrypted, { current: encryptionKey, previous: "not-a-key" }, oauthBinding)).toThrow(
+      "Previous token encryption key must decode to exactly 32 bytes.",
+    );
+  });
+});
+
+describe("token key set loading", () => {
+  it("reads the current key and treats an unset or empty previous key as none", () => {
+    expect(loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: encryptionKey })).toEqual({ current: encryptionKey });
+    expect(loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: encryptionKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: "" }))
+      .toEqual({ current: encryptionKey });
+    expect(loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: encryptionKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: otherKey }))
+      .toEqual({ current: encryptionKey, previous: otherKey });
+  });
+
+  it("refuses a missing current key", () => {
+    expect(() => loadTokenKeySet({})).toThrow("Token encryption key must be configured.");
+    expect(() => loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: "" })).toThrow("Token encryption key must be configured.");
+  });
+
+  it("refuses a malformed current or previous key", () => {
+    expect(() => loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: "short" })).toThrow(
+      "Token encryption key must decode to exactly 32 bytes.",
+    );
+    expect(() => loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: encryptionKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: "short" }))
+      .toThrow("Previous token encryption key must decode to exactly 32 bytes.");
+  });
+});
+
+describe("current-envelope detection", () => {
+  it("reports a v2 envelope under the current key as current", () => {
+    expect(isEnvelopeCurrent(encryptToken("secret", encryptionKey, oauthBinding), encryptionKey)).toBe(true);
+  });
+
+  it("reports a v2 envelope under another key, and any v1 envelope, as not current", () => {
+    expect(isEnvelopeCurrent(encryptToken("secret", otherKey, oauthBinding), encryptionKey)).toBe(false);
+    expect(isEnvelopeCurrent(legacyV1Envelope, legacyV1Key)).toBe(false);
+    expect(isEnvelopeCurrent("garbage", encryptionKey)).toBe(false);
   });
 });

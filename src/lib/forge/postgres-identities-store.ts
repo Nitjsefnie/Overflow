@@ -1,6 +1,6 @@
 import type { Sql } from "postgres";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
-import { decryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, loadTokenKeySet } from "@/lib/security/token-cipher";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
 
 type IdentityRow = {
@@ -22,10 +22,16 @@ type IdentityRow = {
 export class PostgresForgeIdentityStore implements ForgeIdentityStore {
   private readonly sql: Sql;
   private readonly tokenEncryptionKey: string | undefined;
+  private readonly previousTokenEncryptionKey: string | undefined;
 
-  public constructor(sql: Sql, tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY) {
+  public constructor(
+    sql: Sql,
+    tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
+    previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
+  ) {
     this.sql = sql;
     this.tokenEncryptionKey = tokenEncryptionKey;
+    this.previousTokenEncryptionKey = previousTokenEncryptionKey;
   }
 
   /**
@@ -41,8 +47,10 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
     if (this.tokenEncryptionKey === undefined || this.tokenEncryptionKey.length === 0) {
       throw new Error("Token encryption key must be configured.");
     }
-    const [row] = await this.sql<{ id: string; encrypted_token: Buffer }[]>`
-      select id, encrypted_token
+    const [row] = await this.sql<{
+      id: string; provider: string; instance_url: string; forge_user_id: string | number; encrypted_token: Buffer;
+    }[]>`
+      select id, provider, instance_url, forge_user_id, encrypted_token
       from user_forge_identities
       where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
         and encrypted_token is not null
@@ -53,7 +61,16 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
       return null;
     }
     return {
-      token: decryptToken(Buffer.from(row.encrypted_token).toString("utf8"), this.tokenEncryptionKey),
+      token: decryptToken(
+        Buffer.from(row.encrypted_token).toString("utf8"),
+        loadTokenKeySet({
+          TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey,
+          TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey,
+        }),
+        credentialBinding.forgeToken({
+          provider: row.provider, instanceUrl: row.instance_url, forgeUserId: row.forge_user_id,
+        }),
+      ),
       identityId: row.id,
     };
   }

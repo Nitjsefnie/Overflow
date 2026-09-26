@@ -9,7 +9,7 @@ import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { reconcileRepositoryAsSponsor } from "@/lib/fold/reconcile-as-sponsor";
 import type { GitHubIssue, GitHubIssueReference, GitHubPullRequest, GitHubPullRequestReview, GitHubSubject } from "@/lib/github/types";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { GitHubGateway } from "@/lib/github/client";
 import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -401,7 +401,7 @@ async function fixture() {
   const contributorGitHubId = externalId++;
   const githubRepositoryId = externalId++;
   const [sponsor] = await sql`insert into users (github_user_id, github_login, encrypted_oauth_token)
-    values (${sponsorGitHubId}, ${`sponsor-${sponsorGitHubId}`}, ${Buffer.from(encryptToken("test-token", encryptionKey), "utf8")}) returning id, github_login`;
+    values (${sponsorGitHubId}, ${`sponsor-${sponsorGitHubId}`}, ${Buffer.from(encryptToken("test-token", encryptionKey, credentialBinding.userOAuthToken(sponsorGitHubId)), "utf8")}) returning id, github_login`;
   const [repository] = await sql`insert into registered_repositories
     (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme, created_at)
     values (${githubRepositoryId}, ${`octo/repo-${githubRepositoryId}`}, ${sponsor.id}, 'PUBLIC', ${externalId++},

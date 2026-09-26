@@ -1,5 +1,5 @@
 import { identityLinkFetch } from "@/lib/security/identity-link-fetch";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 export type ForgeIdentityView = {
   id: string;
@@ -261,7 +261,9 @@ export async function linkForgeIdentity(
     clearTimeout(timeout);
   }
 
-  const encryptedToken = encryptToken(input.token, dependencies.tokenEncryptionKey);
+  const encryptedToken = encryptToken(input.token, dependencies.tokenEncryptionKey, credentialBinding.forgeToken({
+    provider: "gitlab", instanceUrl, forgeUserId: forgeUser.id,
+  }));
   const identity = await dependencies.store.upsertIdentity({
     userId: input.userId,
     provider: "gitlab",

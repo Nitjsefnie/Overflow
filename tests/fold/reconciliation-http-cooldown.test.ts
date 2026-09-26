@@ -8,7 +8,7 @@ import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -238,7 +238,7 @@ async function registeredRepository() {
   const ownerName = `${sponsorLogin}/repository`;
   const [{ id: sponsorId }] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login, encrypted_oauth_token)
-    values (${githubRepositoryId + 1}, ${sponsorLogin}, ${Buffer.from(encryptToken(token, key), "utf8")}) returning id
+    values (${githubRepositoryId + 1}, ${sponsorLogin}, ${Buffer.from(encryptToken(token, key, credentialBinding.userOAuthToken(githubRepositoryId + 1)), "utf8")}) returning id
   `;
   const [{ id: contributorId }] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login) values (${contributorGitHubId}, ${contributorLogin}) returning id

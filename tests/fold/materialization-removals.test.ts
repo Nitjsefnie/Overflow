@@ -7,7 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let container: StartedTestContainer | undefined;
@@ -352,7 +352,7 @@ async function registerRepository(input: {
   const sponsorId = await insertUser(input.sponsorLogin, input.sponsorGitHubUserId);
   await sql`
     update users
-    set encrypted_oauth_token = ${Buffer.from(encryptToken("removal-token", tokenEncryptionKey), "utf8")}
+    set encrypted_oauth_token = ${Buffer.from(encryptToken("removal-token", tokenEncryptionKey, credentialBinding.userOAuthToken(input.sponsorGitHubUserId)), "utf8")}
     where id = ${sponsorId}
   `;
   const [repository] = await sql<{ id: string }[]>`

@@ -4,7 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -236,7 +236,7 @@ async function insertUser(githubUserId: number, githubLogin: string, withToken: 
     values (
       ${githubUserId},
       ${githubLogin},
-      ${withToken ? Buffer.from(encryptToken("catalog-token", tokenEncryptionKey), "utf8") : null}
+      ${withToken ? Buffer.from(encryptToken("catalog-token", tokenEncryptionKey, credentialBinding.userOAuthToken(githubUserId)), "utf8") : null}
     )
     returning id
   `;

@@ -9,7 +9,7 @@ import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue, GitHubPullRequest, GitHubPullRequestReview } from "@/lib/github/types";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 
 let container: StartedTestContainer | undefined;
@@ -582,9 +582,14 @@ async function insertRepository(
  * sponsor without one never reaches the fold.
  */
 async function giveAccessToken(userId: string): Promise<void> {
+  const [{ github_user_id: githubUserId }] = await sql<{ github_user_id: string }[]>`
+    select github_user_id from users where id = ${userId}
+  `;
   await sql`
     update users
-    set encrypted_oauth_token = ${Buffer.from(encryptToken("override-token", tokenEncryptionKey), "utf8")}
+    set encrypted_oauth_token = ${Buffer.from(
+      encryptToken("override-token", tokenEncryptionKey, credentialBinding.userOAuthToken(githubUserId)), "utf8",
+    )}
     where id = ${userId}
   `;
 }
