@@ -18,6 +18,7 @@
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { round2 } from "./check-coverage-floor.ts";
 
 export const COVERAGE_PATH = "scripts/coverage.json";
 export const MODULE_SIZE_PATH = "scripts/module-size.json";
@@ -56,11 +57,12 @@ function deleted(file: string): string {
   return finding(file, "(document)", "present", undefined, "the document was deleted");
 }
 
-// Leaf values keyed by their path; a non-object anywhere (including the
-// document itself) is a leaf, so a subtree replaced by a scalar shows up as
-// its leaves removed and one key added.
+// Leaf values keyed by their path; a non-object or an empty object anywhere
+// (including the document itself) is a leaf, so a subtree replaced by a
+// scalar shows up as its leaves removed and one key added, and an added
+// empty object is still an added key.
 function leaves(value: unknown, parts: string[] = [], out = new Map<string, unknown>()) {
-  if (!isObject(value)) {
+  if (!isObject(value) || Object.keys(value).length === 0) {
     out.set(keyPath(parts), value);
     return out;
   }
@@ -69,6 +71,8 @@ function leaves(value: unknown, parts: string[] = [], out = new Map<string, unkn
 }
 
 // Direction in which each coverage leaf may move: "up" means it may only rise.
+// Direction alone is not enough for two of them, because of how
+// calibrate-coverage.ts uses them — see calibratorRelaxations.
 const COVERAGE_DIRECTIONS = new Map<string, "up" | "down">([
   ["languages.typescript.floor", "up"],
   ["languages.typescript.measured", "up"],
@@ -106,6 +110,47 @@ export function coverageRelaxations(base: unknown, head: unknown): string[] {
     } else if (direction === "down" && now > was) {
       out.push(finding(COVERAGE_PATH, key, was, now, "raised; it may only fall"));
     }
+  }
+  out.push(...calibratorRelaxations(before, after));
+  return out;
+}
+
+// The calibrator rewrites the document when round2(measured - recorded)
+// exceeds the hysteresis, setting floor = measured - gap. So a negative
+// hysteresis makes every run rewrite and the floor falls whenever coverage
+// dips, and a recorded measurement inflated above the floor it implies
+// freezes the ratchet. A genuine calibrate output meets the floor bound with
+// equality.
+function calibratorRelaxations(before: Map<string, unknown>, after: Map<string, unknown>) {
+  const out: string[] = [];
+  const hysteresis = after.get("hysteresis");
+  if (isFiniteNumber(hysteresis) && hysteresis < 0) {
+    out.push(
+      finding(COVERAGE_PATH, "hysteresis", before.get("hysteresis"), hysteresis, "negative"),
+    );
+  }
+  const measuredKey = "languages.typescript.measured";
+  const floorKey = "languages.typescript.floor";
+  const measured = after.get(measuredKey);
+  const floor = after.get(floorKey);
+  const gap = after.get("gap");
+  if (
+    !Object.is(before.get(measuredKey), measured) &&
+    isFiniteNumber(measured) &&
+    isFiniteNumber(floor) &&
+    isFiniteNumber(gap) &&
+    floor < round2(measured - gap)
+  ) {
+    out.push(
+      finding(
+        COVERAGE_PATH,
+        floorKey,
+        before.get(floorKey),
+        floor,
+        `below measured ${measured} minus gap ${gap} = ${round2(measured - gap)}; ` +
+          "a changed measurement must carry the floor it implies",
+      ),
+    );
   }
   return out;
 }
@@ -193,11 +238,26 @@ export function mergeBase(cwd: string, base: string, head: string): string {
   return sha;
 }
 
-// The parsed document at `commit`, or null when the path does not exist there.
-export function readDocument(cwd: string, commit: string, path: string): unknown {
+// The only tree entry a ratchet document may be. `git show` of a symlink
+// yields its target text, not the file it points at, while the checks read
+// through the link.
+export const REGULAR_FILE = "100644 blob";
+
+// "<mode> <type>" of the tree entry at `path`, or null when there is none.
+export function entryKind(cwd: string, commit: string, path: string): string | null {
   const listing = git(cwd, ["ls-tree", "-z", commit, "--", path]);
   if (listing.status !== 0) throw new Error(`cannot list ${path} at ${commit}: ${listing.stderr}`);
   if (listing.stdout === "") return null;
+  const [mode, type] = listing.stdout.split(/[ \t]/, 2);
+  return `${mode} ${type}`;
+}
+
+// The parsed document at `commit`, or null when the path does not exist
+// there. Anything but a regular file is an error.
+export function readDocument(cwd: string, commit: string, path: string): unknown {
+  const kind = entryKind(cwd, commit, path);
+  if (kind === null) return null;
+  if (kind !== REGULAR_FILE) throw new Error(`${path} at ${commit} is ${kind}, not a regular file`);
   const blob = git(cwd, ["show", `${commit}:${path}`]);
   if (blob.status !== 0) throw new Error(`cannot read ${path} at ${commit}: ${blob.stderr}`);
   try {
@@ -215,19 +275,22 @@ export function checkRatchets(
   const base = resolveCommit(cwd, baseRev);
   const head = resolveCommit(cwd, headRev);
   const fork = mergeBase(cwd, base, head);
-  return {
-    mergeBase: fork,
-    findings: [
-      ...coverageRelaxations(
-        readDocument(cwd, fork, COVERAGE_PATH),
-        readDocument(cwd, head, COVERAGE_PATH),
-      ),
-      ...moduleSizeRelaxations(
-        readDocument(cwd, fork, MODULE_SIZE_PATH),
-        readDocument(cwd, head, MODULE_SIZE_PATH),
-      ),
-    ],
-  };
+  const findings: string[] = [];
+  const documents = [
+    [COVERAGE_PATH, coverageRelaxations],
+    [MODULE_SIZE_PATH, moduleSizeRelaxations],
+  ] as const;
+  for (const [path, relaxations] of documents) {
+    // A non-regular entry at head is the branch's own change, refused like
+    // any relaxation (exit 1) whether or not the merge base had the file.
+    const kind = entryKind(cwd, head, path);
+    if (kind !== null && kind !== REGULAR_FILE) {
+      findings.push(finding(path, "(document)", REGULAR_FILE, kind, "not a regular file"));
+      continue;
+    }
+    findings.push(...relaxations(readDocument(cwd, fork, path), readDocument(cwd, head, path)));
+  }
+  return { mergeBase: fork, findings };
 }
 
 function main(): void {
