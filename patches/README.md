@@ -757,10 +757,22 @@ hunks with the array-type repair above.
 When the `pg_type` query a new connection sends before its first query failed,
 the query waiting on that connection was rejected with the server's error, and
 then the Node process exited with an unhandled promise rejection carrying the
-same error. Any failure of that query does it: a startup `statement_timeout`
-shorter than the query (`57014`), a role that cannot read `pg_catalog.pg_type`
-(`42501`), and by issue 719's account a cancellation or a backend termination.
-The connection it failed on was not closed either: it was handed to the pool
+same error. Measured on the build before this repair:
+
+- A server error in answer to the query crashes the process: a role that cannot
+  read `pg_catalog.pg_type` (`42501`), or a startup `statement_timeout` shorter
+  than the query (`57014`). The timeout is the server cancelling the query, and
+  any other cancellation takes the same route, an `ErrorResponse` followed by
+  `ReadyForQuery`.
+- A lost connection during the query crashes it only in some shapes. A backend
+  termination (`pg_terminate_backend`, a FATAL `57P01` and then the close) or a
+  clean FIN under a plain waiting query does not: `closed()`'s connect-phase
+  branch keeps `initial` and retries it, and the waiting query succeeds on the
+  next socket. Under a waiting reserve, the same termination or FIN leaves an
+  unhandled `CONNECTION_CLOSED`, and a reset (RST) leaves an unhandled
+  `ECONNRESET` under either.
+
+For the server-error causes, the connection it failed on was not closed either: it was handed to the pool
 with no array types, so the next `sql.array(...)::bigint[]` query on it failed
 with `malformed array literal` (`22P02`), the defect of the section above by
 another route. A waiting `reserve()` was granted that connection.
@@ -780,7 +792,7 @@ The cause, by line in stock 3.4.9 `src/`:
   (`connection.js:390-393`), and clears `initial`. It is the same error object,
   so its `query` property names the `pg_type` select rather than the caller's
   SQL: `queryError()` sets those properties only on an error that lacks them
-  (`connection.js:402`).
+  (`connection.js:403`).
 - With `initial` cleared, the same `ReadyForQuery` goes on to `onopen()`
   (`connection.js:587`) and hands the connection to the pool, with `needsTypes`
   false and no array types applied.
@@ -791,7 +803,7 @@ The cause, by line in stock 3.4.9 `src/`:
 The repair settles a failure on the connection, synchronously, as the array-type
 repair above settles a success. `fetchArrayTypes()` wraps the query's own
 `reject`: the wrapper sets `needsTypes` again and rejects a waiting reserve with
-the server's error, then rejects the query. `errored()` still rejects the
+the error the types query is rejected with, then rejects the query. `errored()` still rejects the
 waiting query with the server's error, unchanged, including the `query`
 property that names the `pg_type` select. `ReadyForQuery` then finds
 `needsTypes` set where it would have opened the connection, and closes it with
@@ -806,6 +818,17 @@ that persists, that is a reconnect loop that never settles the reserve: with
 the rejection removed and `pg_type` unreadable, one reserve produced 96 failed
 fetches in a five-second run. The reserve's own `reject` removes it from the pool's
 queue, as it does on every other route that refuses it.
+
+On a server error the reserve gets that error. On a connection lost during the
+fetch it gets the connection's error instead: `CONNECTION_CLOSED` after a
+backend termination or a clean FIN, and `ECONNRESET` after a reset. The FATAL's
+`57P01` is not what it receives, because `closed()` discards the held
+`errorResponse`. That is a behaviour change for a live caller,
+`coordinationSql.reserve()` in `src/lib/fold/postgres-store.ts`. Before this
+repair such a reserve was retried on a new socket and granted, while the process
+took the unhandled rejection. Now the process survives and the reserve is
+rejected. A plain waiting query under a termination or a clean FIN is still
+retried and succeeds, as before.
 
 The closing check reads `needsTypes`, so it would also close a connection that
 reached the end of its startup with no types fetched by another route. The one
