@@ -280,6 +280,7 @@ describe("initial PostgreSQL materialization", () => {
       "046_api_token_expiry.sql",
       "048_unregistered_webhook_credentials.sql",
       "049_reason_length_limits.sql",
+      "051_forge_identity_https_instance.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
