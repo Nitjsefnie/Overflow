@@ -86,6 +86,28 @@ describe("account-data notice page", () => {
     expect(external).toContain("https://github.com/Nitjsefnie/Overflow/issues");
   });
 
+  it("reaches the request route from the deletion description", async () => {
+    await renderAccountDataPage();
+
+    const deletionSection = document.getElementById("account-data-deletion-heading")!.closest("section");
+    expect(deletionSection, "the deletion section exists").not.toBeNull();
+    expect(
+      deletionSection!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the deletion description names where to request it",
+    ).not.toBeNull();
+  });
+
+  it("reaches the request route from the controls section too", async () => {
+    await renderAccountDataPage();
+
+    const controlsSection = document.getElementById("account-data-controls-heading")!.closest("section");
+    expect(controlsSection, "the controls section exists").not.toBeNull();
+    expect(
+      controlsSection!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the controls section names where to request deletion or an export",
+    ).not.toBeNull();
+  });
+
   it("offers nothing that submits or collects an email address", async () => {
     await renderAccountDataPage();
 

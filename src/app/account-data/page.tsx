@@ -141,6 +141,14 @@ export function AccountDataNotice() {
             failure time. Only linking and re-linking update the successful verification time.
           </li>
           <li>Unlinking immediately deletes the linked identity&apos;s fields and encrypted token.</li>
+          <li>
+            Deleting your account pseudonymises the account row rather than removing it. Nothing expires
+            automatically, before or after deletion.
+          </li>
+          <li>
+            Daily database backups taken before a deletion keep pre-deletion data for up to 14 days on the
+            same host as the database, and are pruned after that.
+          </li>
         </ul>
       </section>
 
@@ -179,29 +187,84 @@ export function AccountDataNotice() {
             causes Overflow to try to record the failure time on the identity whose token was used.
           </li>
           <li>
-            Request deletion of your account row, or an export of its stored fields, by opening an issue at{" "}
+            Request deletion of your account row, or an export of the data stored about it, by opening an
+            issue at{" "}
             <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
               github.com/Nitjsefnie/Overflow/issues
-            </a>{" "}
-            or by contacting the operator.
+            </a>
+            . That is the only route: no private channel exists.
+          </li>
+          <li>
+            An export contains the fields stored about your account — a stored secret appears only as
+            present or absent, never as its value — each linked GitLab identity without its token, your
+            API token&apos;s creation and expiry dates but never the token itself, and every record in the
+            database that refers to your account.
+          </li>
+          <li>
+            Because the tracker is public, the operator replies in your issue with the export only after
+            you accept a public reply there, and only when the export holds no records of you acting on
+            other accounts — no moderation action you took, no audit report you filed or decided, no role
+            change you made, no override decision you issued. Otherwise the export is held until a
+            self-service export exists.
           </li>
         </ul>
       </section>
 
       <section className="surface" aria-labelledby="account-data-deletion-heading">
         <h2 id="account-data-deletion-heading">What deletion means</h2>
-        <p>Deleting the account row removes the identity fields and the stored token.</p>
         <p>
-          Overflow cannot delete your account while it still holds a linked GitLab identity. Unlink every GitLab
-          identity before deleting your account.
+          Deletion is pseudonymisation: the account row survives with the identifiers the shared ledger
+          attributes work by, and nothing that would let anyone act as you survives with it.
         </p>
+        <p>Deletion removes:</p>
+        <ul>
+          <li>your GitHub login, replaced with the placeholder (deleted account)</li>
+          <li>your avatar URL</li>
+          <li>Overflow&apos;s stored access token for your GitHub account</li>
+          <li>your API token, if you have one</li>
+          <li>
+            each linked GitLab identity&apos;s personal access token and GitLab login, which the same
+            placeholder replaces
+          </li>
+        </ul>
+        <p>Deletion keeps, and why:</p>
+        <ul>
+          <li>
+            the account&apos;s internal id, your numeric GitHub id, and each GitLab identity&apos;s instance,
+            numeric GitLab id, and linked date — the shared ledger attributes work by them
+          </li>
+          <li>
+            every ledger record, including their copies of your public GitHub login, which later
+            reconciliations keep refreshing from GitHub
+          </li>
+        </ul>
+        <p>What happens afterwards:</p>
+        <ul>
+          <li>
+            your signed-in sessions end at their next request, and your API token stops working at once
+          </li>
+          <li>signing in with GitHub again registers the account again and re-links the retained history</li>
+        </ul>
+        <p>Preconditions and limits:</p>
+        <ul>
+          <li>
+            Overflow refuses to delete an account that still sponsors a registered repository. Unregister the
+            repository from your dashboard first.
+          </li>
+          <li>
+            Deletion does not revoke Overflow&apos;s authorization on GitHub. Revoke it yourself at{" "}
+            <a href="https://github.com/settings/applications" rel="noreferrer">
+              github.com/settings/applications
+            </a>
+            .
+          </li>
+        </ul>
         <p>
-          Historical ledger records that reference your GitHub identity — cooperative records of work on the
-          repositories involved — are part of the shared ledger. Deleting your account does not rewrite them.
-        </p>
-        <p>
-          Historical ledger records that reference your GitLab identity are also part of the shared ledger and
-          are not rewritten when you delete your account.
+          To request deletion, open an issue at{" "}
+          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
+            github.com/Nitjsefnie/Overflow/issues
+          </a>
+          .
         </p>
       </section>
     </main>
