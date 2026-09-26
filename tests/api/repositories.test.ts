@@ -69,6 +69,8 @@ afterEach(() => {
     }
   } finally {
     consoleOutputAllowed.clear();
+    // A test that pins Date and fails midway must not leave the next one on it.
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -1073,9 +1075,12 @@ describe("Overflow token registration", () => {
     vi.stubGlobal("fetch", fetchGitHub);
 
     const credentials: string[] = [];
+    // Minting needs a recent GitHub sign-in: each session completed one a
+    // minute before the pinned clock the route reads.
+    const mintedAt = new Date("2026-09-26T12:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date"], now: mintedAt });
     for (const [index, { account }] of identities.entries()) {
-      // Minting needs a recent GitHub sign-in; this session completed one just now.
-      readSession.mockResolvedValue({ user: { ...account, authenticatedAt: Math.floor(Date.now() / 1000) } });
+      readSession.mockResolvedValue({ user: { ...account, authenticatedAt: mintedAt.getTime() / 1000 - 60 } });
       const response = await mintToken(
         // Minting is a cookie-authenticated mutation, so it is same-origin only.
         new Request(`${requestHost}/api/tokens`, {
@@ -1090,6 +1095,7 @@ describe("Overflow token registration", () => {
       expect(issueToken).toHaveBeenNthCalledWith(index + 1, account.id,
         createHash("sha256").update(body.token).digest());
     }
+    vi.useRealTimers();
     expect(credentials[1]).not.toBe(credentials[0]);
     expect(issueToken).toHaveBeenCalledTimes(identities.length);
     readSession.mockClear();
