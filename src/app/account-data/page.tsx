@@ -105,7 +105,8 @@ export function AccountDataNotice() {
         <p>The site operator administers Overflow&apos;s database and the token&apos;s encryption key.</p>
         <p>
           Other signed-in members and moderators see your GitHub login — the member roster and the moderation
-          surfaces display it. Your avatar URL is stored but not displayed.
+          surfaces display it. Your avatar URL is stored and included in your account-data export (which only
+          you see); it is not displayed to other members.
         </p>
         <p>
           Your linked GitLab identities are shown only to you in your dashboard&apos;s forge-identities panel,
@@ -134,18 +135,22 @@ export function AccountDataNotice() {
             for work credited to someone with no Overflow account, a settlement holding that person&apos;s login
             and numeric user id
           </li>
-          <li>the titles and descriptions of the issues and pull requests it records</li>
+          <li>the titles, URLs, and states of the issues and pull requests it records</li>
           <li>
             a cache per registered repository holding every issue in it, not only tracked ones: each issue&apos;s
-            title, description, author, assignee, and the history of who labelled and assigned it; every comment
-            on it, with its author&apos;s login, numeric user id, and text; and the title, description, and
-            author of each pull request that closes it. For each of those closing pull requests that was merged
-            in the registered repository, the cache also keeps its diff and its reviews, without the
-            reviewer&apos;s login or text
+            title, author, assignee, and the history of who labelled and assigned it; every comment on it, with
+            its author&apos;s login and numeric user id; and the title and author of each pull request that
+            closes it. For each of those closing pull requests that was merged in the registered repository, the
+            cache also keeps its diff and its reviews — without the reviewer&apos;s login or text — because
+            settlement proofs are computed from them: the proof is a SHA-256 of the diff
           </li>
           <li>a change log recording logins and titles as those records change</li>
           <li>moderation notes, which can name the account that applied a label</li>
         </ul>
+        <p>
+          None of the free text is retained: a reconciliation pass writes no issue, pull request, or comment
+          body text, and unregistering a repository scrubs what earlier passes stored.
+        </p>
         <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
         <p>
           Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
