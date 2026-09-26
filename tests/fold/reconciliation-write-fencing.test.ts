@@ -10,7 +10,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -601,7 +601,12 @@ function gateway(ownerName: string): ReconciliationGateway {
 
 async function fixture() {
   const result = await materializeRepositoryFixture(sql);
-  await sql`update users set encrypted_oauth_token = ${Buffer.from(encryptToken("fencing-token", key))}
+  const [{ github_user_id: sponsorGitHubUserId }] = await sql<{ github_user_id: string }[]>`
+    select github_user_id from users
+    where id = (select sponsor_id from registered_repositories where id = ${result.repositoryId})`;
+  await sql`update users set encrypted_oauth_token = ${Buffer.from(
+    encryptToken("fencing-token", key, credentialBinding.userOAuthToken(sponsorGitHubUserId)),
+  )}
     where id = (select sponsor_id from registered_repositories where id = ${result.repositoryId})`;
   return result;
 }

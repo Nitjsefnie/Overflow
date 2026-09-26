@@ -13,7 +13,7 @@ import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reco
 import { createReconciliationBudgetGate } from "@/lib/fold/reconciliation-budget";
 import { createGitHubGraphqlBudgetStore } from "@/lib/github/rate-limit-budget";
 import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -742,7 +742,11 @@ describe("PostgreSQL reconciliation job queue", () => {
     const sponsorId = (await store.getRepository(expensive))!.sponsor.id;
     const encryptionKey = Buffer.alloc(32, 32).toString("base64url");
     await sql`update registered_repositories set sponsor_id = ${sponsorId} where id = ${cheap}`;
-    await sql`update users set encrypted_oauth_token = ${Buffer.from(encryptToken("test-token", encryptionKey), "utf8")}
+    const [{ github_user_id: sponsorGitHubUserId }] = await sql<{ github_user_id: string }[]>`
+      select github_user_id from users where id = ${sponsorId}`;
+    await sql`update users set encrypted_oauth_token = ${Buffer.from(
+      encryptToken("test-token", encryptionKey, credentialBinding.userOAuthToken(sponsorGitHubUserId)), "utf8",
+    )}
       where id = ${sponsorId}`;
     const foldingStore = new PostgresFoldStore(sql, encryptionKey);
     const admissionAt = new Date();

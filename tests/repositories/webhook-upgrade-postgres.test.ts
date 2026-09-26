@@ -10,7 +10,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { GitHubGateway } from "@/lib/github/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { POST } from "@/app/api/github/webhooks/route";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 
@@ -184,7 +184,7 @@ describe("upgrading actual persisted registrations", () => {
 
   it("decrypts each sponsor's credentials and persists one repair job per active repository across reruns", async () => {
     for (let index = 0; index < 2; index++) {
-      const encrypted = Buffer.from(encryptToken(`oauth-token-${index}`, key));
+      const encrypted = Buffer.from(encryptToken(`oauth-token-${index}`, key, credentialBinding.userOAuthToken(500 + index)));
       await sql`update users set encrypted_oauth_token = ${encrypted} where id = ${sponsorIds[index]!}`;
     }
     const registrations = new PostgresRepositoryStore(sql, key);

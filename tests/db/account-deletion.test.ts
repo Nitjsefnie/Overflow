@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
@@ -123,7 +123,8 @@ async function insertForgeIdentity(
       (user_id, provider, instance_url, forge_user_id, forge_login, encrypted_token)
     values (
       ${userId}, 'gitlab', ${instanceUrl}, ${forgeUserId}, 'gl-user',
-      ${Buffer.from(encryptToken("gitlab-pat-bytes", TEST_ENCRYPTION_KEY), "utf8")}
+      ${Buffer.from(encryptToken("gitlab-pat-bytes", TEST_ENCRYPTION_KEY,
+        credentialBinding.forgeToken({ provider: "gitlab", instanceUrl, forgeUserId })), "utf8")}
     )
   `;
   return { instanceUrl, forgeUserId };
@@ -484,7 +485,8 @@ describe("account deletion as pseudonymisation", () => {
     const secretBytes = [
       Buffer.from("github-oauth-token-bytes", "utf8"),
       seed.apiTokenHash,
-      Buffer.from(encryptToken("gitlab-pat-bytes", TEST_ENCRYPTION_KEY), "utf8"),
+      Buffer.from(encryptToken("gitlab-pat-bytes", TEST_ENCRYPTION_KEY,
+        credentialBinding.forgeToken({ provider: "gitlab", instanceUrl: "https://gitlab.example.com", forgeUserId: 777 })), "utf8"),
     ];
     for (const bytes of secretBytes) {
       expect(serialized).not.toContain(bytes.toString("utf8"));

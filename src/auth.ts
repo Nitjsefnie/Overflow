@@ -4,7 +4,7 @@ import type { UserRole } from "@/lib/db/types";
 import { getSql } from "@/lib/db/client";
 import { claimGitHubIdentity } from "@/lib/fold/postgres-store";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import {
   decideGitHubSignIn,
   readGitHubIdentity,
@@ -129,7 +129,9 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
   const role = normalizeModeratorGitHubUserIds(process.env.MODERATOR_GITHUB_USER_IDS).has(identity.githubUserId)
     ? "MODERATOR"
     : "MEMBER";
-  const encryptedAccessToken = Buffer.from(encryptToken(accessToken, tokenEncryptionKey), "utf8");
+  const encryptedAccessToken = Buffer.from(encryptToken(
+    accessToken, tokenEncryptionKey, credentialBinding.userOAuthToken(identity.githubUserId),
+  ), "utf8");
   const user = await upsertGitHubAccount({
     githubUserId: identity.githubUserId,
     login: identity.login,

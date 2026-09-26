@@ -16,7 +16,7 @@ import {
   RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { decryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken } from "@/lib/security/token-cipher";
 
 // The real store, migrations, and pool teardown must share this file's module
 // graph, not consumers that captured another file's database mock.
@@ -83,7 +83,8 @@ describe("registering a repository against the real registered_repositories cons
     `;
     expect(row.webhook_credential_id).toBe(submission.webhookCredential.id);
     expect(row.encrypted_webhook_secret).not.toEqual(Buffer.from(submission.webhookCredential.secret));
-    expect(decryptToken(row.encrypted_webhook_secret!.toString("utf8"), tokenEncryptionKey))
+    expect(decryptToken(row.encrypted_webhook_secret!.toString("utf8"), tokenEncryptionKey,
+      credentialBinding.webhookSecret(submission.webhookCredential.id)))
       .toBe(submission.webhookCredential.secret);
     expect(row.webhook_configured_at).toBeInstanceOf(Date);
     for (const value of [created, await store.findActiveRepositoryById(created!.id)]) {

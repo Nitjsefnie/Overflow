@@ -7,7 +7,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue } from "@/lib/github/types";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 
 // The real store, migrations, and pool teardown must share this file's module
@@ -370,7 +370,7 @@ async function insertSponsor(): Promise<string> {
     insert into users (github_user_id, github_login, encrypted_oauth_token)
     values (
       ${SPONSOR_GITHUB_USER_ID}, ${STORED_SPONSOR_LOGIN},
-      ${Buffer.from(encryptToken("sponsor-rename-token", tokenEncryptionKey), "utf8")}
+      ${Buffer.from(encryptToken("sponsor-rename-token", tokenEncryptionKey, credentialBinding.userOAuthToken(SPONSOR_GITHUB_USER_ID)), "utf8")}
     )
     returning id
   `;

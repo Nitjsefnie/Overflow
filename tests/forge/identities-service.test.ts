@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken } from "@/lib/security/token-cipher";
 import {
   ForgeIdentityError,
   linkForgeIdentity,
@@ -105,7 +105,9 @@ describe("linkForgeIdentity", () => {
     expect(upsert.forgeUserId).toBe(4242);
     expect(upsert.forgeLogin).toBe("tester");
     // The token round-trips through the cipher: decrypt(encrypt(x)) === x.
-    expect(decryptToken(upsert.encryptedToken, TEST_KEY)).toBe("glpat-live");
+    expect(decryptToken(upsert.encryptedToken, TEST_KEY, credentialBinding.forgeToken({
+      provider: "gitlab", instanceUrl: "https://gitlab.example.com", forgeUserId: 4242,
+    }))).toBe("glpat-live");
     expect(identity.forgeLogin).toBe("tester");
   });
 

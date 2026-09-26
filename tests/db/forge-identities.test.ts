@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresForgeIdentityStore } from "@/lib/forge/postgres-identities-store";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
@@ -329,7 +329,9 @@ describe("migration 041: token re-verification marking", () => {
       instanceUrl: "https://mark-test.example.com",
       forgeUserId: 7010,
       forgeLogin: "marker",
-      encryptedToken: encryptToken("normalized-token", TEST_ENCRYPTION_KEY),
+      encryptedToken: encryptToken("normalized-token", TEST_ENCRYPTION_KEY, credentialBinding.forgeToken({
+        provider: "gitlab", instanceUrl: "https://mark-test.example.com", forgeUserId: 7010,
+      })),
     });
     const elsewhere = await store.upsertIdentity({
       userId: user!.id,
@@ -434,10 +436,12 @@ describe("identity-scoped credentials", () => {
     const instanceUrl = `https://credentials-${nextUserId}.example.com`;
     const link = { userId: user!.id, provider: "gitlab", instanceUrl, forgeLogin: "tester" };
     const a = await store.upsertIdentity({
-      ...link, forgeUserId: 1, encryptedToken: encryptToken("token-a", TEST_ENCRYPTION_KEY),
+      ...link, forgeUserId: 1,
+      encryptedToken: encryptToken("token-a", TEST_ENCRYPTION_KEY, credentialBinding.forgeToken({ ...link, forgeUserId: 1 })),
     });
     const b = await store.upsertIdentity({
-      ...link, forgeUserId: 2, encryptedToken: encryptToken("token-b", TEST_ENCRYPTION_KEY),
+      ...link, forgeUserId: 2,
+      encryptedToken: encryptToken("token-b", TEST_ENCRYPTION_KEY, credentialBinding.forgeToken({ ...link, forgeUserId: 2 })),
     });
     await sql`update user_forge_identities set verified_at = '2026-09-01' where id = ${a!.id}`;
     await sql`update user_forge_identities set verified_at = '2026-09-02' where id = ${b!.id}`;

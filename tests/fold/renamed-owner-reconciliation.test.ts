@@ -8,7 +8,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import type { GitHubIssue } from "@/lib/github/types";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -265,10 +265,11 @@ function openedIssueRow(
 async function registeredRepository(ownerLogin: string) {
   const githubRepositoryId = externalId++;
   const ownerName = `renamed/repo-${githubRepositoryId}`;
+  const sponsorGitHubUserId = externalId++;
   const [{ id: sponsorId }] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login, encrypted_oauth_token)
-    values (${externalId++}, ${ownerLogin},
-      ${Buffer.from(encryptToken("rename-token", tokenEncryptionKey), "utf8")})
+    values (${sponsorGitHubUserId}, ${ownerLogin},
+      ${Buffer.from(encryptToken("rename-token", tokenEncryptionKey, credentialBinding.userOAuthToken(sponsorGitHubUserId)), "utf8")})
     returning id
   `;
   const difficultyScheme = {

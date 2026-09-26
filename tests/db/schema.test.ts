@@ -26,7 +26,7 @@ import {
   type RepositoryFoldSnapshot,
 } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubPullRequest } from "@/lib/github/types";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 let container: StartedTestContainer | undefined;
@@ -2615,7 +2615,7 @@ describe("initial PostgreSQL materialization", () => {
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     await sql`
       update users
-      set encrypted_oauth_token = ${Buffer.from(encryptToken("reconciliation-token", tokenEncryptionKey), "utf8")}
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("reconciliation-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")}
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
@@ -2811,7 +2811,7 @@ describe("initial PostgreSQL materialization", () => {
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     await sql`
       update users
-      set encrypted_oauth_token = ${Buffer.from(encryptToken("pool-token", tokenEncryptionKey), "utf8")}
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("pool-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")}
       where id = ${sponsorId}
     `;
     const githubRepositoryId = nextExternalId();
@@ -3060,7 +3060,7 @@ describe("initial PostgreSQL materialization", () => {
     const contributorId = await insertUserWithLogin(sql, contributorLogin);
     await sql`
       update users
-      set encrypted_oauth_token = ${Buffer.from(encryptToken("concurrency-token", tokenEncryptionKey), "utf8")}
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("concurrency-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")}
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
@@ -3154,7 +3154,7 @@ describe("initial PostgreSQL materialization", () => {
     const moderatorId = await insertUser(sql);
     await sql`
       update users
-      set encrypted_oauth_token = ${Buffer.from(encryptToken("history-token", tokenEncryptionKey), "utf8")}
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("history-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")}
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
@@ -3227,7 +3227,7 @@ describe("initial PostgreSQL materialization", () => {
       const moderatorId = await insertUser(sql);
       await sql`
         update users
-        set encrypted_oauth_token = ${Buffer.from(encryptToken("ineligible-token", tokenEncryptionKey), "utf8")},
+        set encrypted_oauth_token = ${Buffer.from(encryptToken("ineligible-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")},
             enforcement_state = ${state}
         where id = ${sponsorId}
       `;
@@ -3363,7 +3363,7 @@ describe("initial PostgreSQL materialization", () => {
     const tokenEncryptionKey = Buffer.alloc(32, 19).toString("base64url");
     await sql`
       update users
-      set encrypted_oauth_token = ${Buffer.from(encryptToken("late-registration-token", tokenEncryptionKey), "utf8")}
+      set encrypted_oauth_token = ${Buffer.from(encryptToken("late-registration-token", tokenEncryptionKey, await oauthBindingOf(sql, sponsorId)), "utf8")}
       where id = ${sponsorId}
     `;
     const repositoryId = await insertRepository(sql, sponsorId);
@@ -4551,6 +4551,10 @@ async function insertIdentity(
     returning id
   `;
   return { id: user.id, githubUserId };
+}
+
+async function oauthBindingOf(client: QueryableSql, userId: string) {
+  return credentialBinding.userOAuthToken((await client<{ github_user_id: string }[]>`select github_user_id from users where id = ${userId}`)[0]!.github_user_id);
 }
 
 async function insertUserWithLogin(client: QueryableSql, githubLogin: string): Promise<string> {

@@ -8,7 +8,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
-import { encryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;
@@ -191,10 +191,11 @@ async function jobs(repositoryId: string) {
 async function cooledRepository() {
   const githubRepositoryId = externalId++;
   const ownerName = `cooldown/repo-${githubRepositoryId}`;
+  const sponsorGitHubUserId = externalId++;
   const [{ id: sponsorId }] = await sql<{ id: string }[]>`
     insert into users (github_user_id, github_login, encrypted_oauth_token)
-    values (${externalId++}, ${`sponsor-${githubRepositoryId}`},
-      ${Buffer.from(encryptToken("cooldown-token", tokenEncryptionKey), "utf8")}) returning id
+    values (${sponsorGitHubUserId}, ${`sponsor-${githubRepositoryId}`},
+      ${Buffer.from(encryptToken("cooldown-token", tokenEncryptionKey, credentialBinding.userOAuthToken(sponsorGitHubUserId)), "utf8")}) returning id
   `;
   const difficultyScheme = {
     openingName: "Size", actualName: "Delivered",

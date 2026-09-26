@@ -51,7 +51,7 @@ import {
   applyGrantedSettlementOverride,
 } from "@/lib/overrides/apply";
 import type { WebhookDeliveryClaim, WebhookDeliveryStore } from "@/lib/webhooks/processor";
-import { decryptToken } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, loadTokenKeySet } from "@/lib/security/token-cipher";
 
 type RepositoryFoldRevisionCountsRow = {
   repository_id: string;
@@ -404,6 +404,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     private readonly sql: SqlClient = getSql(),
     private readonly tokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY,
     private readonly coordinationSql?: SqlClient,
+    private readonly previousTokenEncryptionKey: string | undefined = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS,
   ) {}
 
   /**
@@ -873,16 +874,15 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
   }
 
   public async getGitHubAccessToken(userId: string): Promise<string | null> {
-    const [row] = await this.sql<{ encrypted_oauth_token: Buffer | null }[]>`
-      select encrypted_oauth_token from users where id = ${userId} limit 1
+    const [row] = await this.sql<{ github_user_id: string | number; encrypted_oauth_token: Buffer | null }[]>`
+      select github_user_id, encrypted_oauth_token from users where id = ${userId} limit 1
     `;
     if (row === undefined || row.encrypted_oauth_token === null) {
       return null;
     }
-    if (this.tokenEncryptionKey === undefined || this.tokenEncryptionKey.length === 0) {
-      throw new Error("Token encryption key must be configured.");
-    }
-    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), this.tokenEncryptionKey);
+    const keys = { TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey, TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey };
+    return decryptToken(Buffer.from(row.encrypted_oauth_token).toString("utf8"), loadTokenKeySet(keys),
+      credentialBinding.userOAuthToken(row.github_user_id));
   }
 
   public async findUsersByGitHubUserIds(githubUserIds: readonly number[]): Promise<FoldUser[]> {
