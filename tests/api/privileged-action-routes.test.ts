@@ -57,6 +57,12 @@ type RouteCase = {
   result: unknown;
   /** A failure the route maps onto an error response. */
   failure: Error;
+  /**
+   * The service method takes an `onCommitted` callback: the stub must invoke it
+   * while resolving, the way the real service does the moment its queue write
+   * commits, for the route's journal line to be written at all.
+   */
+  mutationTakesOnCommitted?: boolean;
   subject: Record<string, string>;
   /** The route's handler factory; `never` admits every factory's own dependency and context types. */
   handler: (dependencies: never) => (request: Request, context: never) => Promise<Response>;
@@ -166,6 +172,7 @@ const routeCases: RouteCase[] = [
     serviceMethod: "requestRederivation",
     result: { repositoryId, ownerName: "owner", rederivationRequestedAt: "2026-09-26T00:00:00.000Z" },
     failure: new ModerationServiceError("NOT_FOUND", "No such repository."),
+    mutationTakesOnCommitted: true,
     subject: { repositoryId },
     handler: createRederivationPostHandler,
   },
@@ -224,7 +231,14 @@ function routeDependencies(
 ): { dependencies: Record<string, Mock>; mutation: Mock } {
   const mutation = options.fails
     ? vi.fn().mockRejectedValue(routeCase.failure)
-    : vi.fn().mockResolvedValue(routeCase.result);
+    : routeCase.mutationTakesOnCommitted
+      ? vi.fn(async (...args: unknown[]) => {
+          // The real service invokes this the instant the queue write commits,
+          // before anything that can still fail; the journal line depends on it.
+          (args[2] as (() => void) | undefined)?.();
+          return routeCase.result;
+        })
+      : vi.fn().mockResolvedValue(routeCase.result);
   const dependencies = {
     getSession: vi.fn().mockResolvedValue({ user: { id: moderatorId } }),
     findAccountByTokenHash: vi.fn().mockResolvedValue({ id: moderatorId, tokenId }),
@@ -308,6 +322,9 @@ describe.each(routeCases)("privileged action journal: $action", (routeCase) => {
   });
 
   it("logs nothing when the mutation itself fails", async () => {
+    // The rejecting stub never invokes its `onCommitted` callback, so this
+    // models a PRE-commit failure; a committed request always gets its line
+    // from the callback, however the service answers afterwards.
     const { dependencies, mutation } = routeDependencies(routeCase, { fails: true });
 
     const response = await drive(routeCase, dependencies, routeRequest(routeCase, "bearer token"));

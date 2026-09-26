@@ -79,6 +79,14 @@ export class RepositoryRederivationService {
    * a database error. A deactivated repository answers the same way: it is not
    * on this route's surface, and a pass over it does no fold work.
    *
+   * `onCommitted` is invoked exactly once, the moment the queue write has
+   * committed and before anything that can still fail. The caller records its
+   * privileged-action journal line there rather than after the whole method
+   * resolves, because the read-back can still strand a committed request: if
+   * the repository is deactivated or the read fails after the commit, the
+   * request stands but the method answers NOT_FOUND or throws. A refusal that
+   * precedes the commit never reaches it, so a refused request writes no line.
+   *
    * The stored timestamp is read back rather than assumed, because the store
    * keeps the later of the existing request and this one: a moderator whose
    * clock is behind an outstanding request must be shown the request that
@@ -87,6 +95,7 @@ export class RepositoryRederivationService {
   public async requestRederivation(
     actor: ModerationActor,
     repositoryId: string,
+    onCommitted: () => void,
   ): Promise<OutstandingRederivationRequest> {
     requireModerator(actor);
     const target = await this.store.findRepositoryRederivationRequest(repositoryId);
@@ -95,6 +104,7 @@ export class RepositoryRederivationService {
     }
 
     await this.store.requestRepositoryRederivation(repositoryId, this.now());
+    onCommitted();
 
     const outstanding = await this.store.findRepositoryRederivationRequest(repositoryId);
     if (outstanding === null) {

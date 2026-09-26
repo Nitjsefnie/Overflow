@@ -30,6 +30,7 @@ export type RederivationRouteService = {
   requestRederivation(
     actor: ModerationActor,
     repositoryId: string,
+    onCommitted: () => void,
   ): Promise<OutstandingRederivationRequest>;
 };
 
@@ -86,17 +87,22 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
     }
 
     try {
+      // The journal line is written by the service the moment the queue write
+      // commits, not after the response is certain: the read-back that follows
+      // the commit can still fail (a concurrent deactivation, a dropped
+      // connection) and strand a committed request without its line.
       const requested = await (await dependencies.createService()).requestRederivation(
         session.user,
         input.repositoryId,
+        () =>
+          logPrivilegedAction({
+            action: "repository.rederivation-request",
+            actorId: session.user.id,
+            credential: session.credential,
+            clientAddress: readClientAddress(request),
+            subject: { repositoryId: input.repositoryId },
+          }),
       );
-      logPrivilegedAction({
-        action: "repository.rederivation-request",
-        actorId: session.user.id,
-        credential: session.credential,
-        clientAddress: readClientAddress(request),
-        subject: { repositoryId: input.repositoryId },
-      });
       return Response.json({ request: requested });
     } catch (error) {
       return moderationErrorResponse(error);

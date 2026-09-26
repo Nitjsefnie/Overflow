@@ -260,9 +260,13 @@ describe("fold re-derivation status API", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ request: outstandingRequest });
+    // The third argument is the service's committed-callback seam: the route
+    // hands over the journal write that must fire the moment the queue write
+    // commits, so a post-commit failure cannot strand the request without it.
     expect(requestRederivation).toHaveBeenCalledWith(
       { id: moderatorSession.user.id, role: "MODERATOR" },
       repositoryId,
+      expect.any(Function),
     );
   });
 
@@ -309,7 +313,11 @@ describe("the rederivation gate's bearer credential", () => {
 
     expect(response.status).toBe(200);
     expect(deps.getSession).not.toHaveBeenCalled();
-    expect(requestRederivation).toHaveBeenCalledWith({ id: ownerId, role: "MODERATOR" }, repositoryId);
+    expect(requestRederivation).toHaveBeenCalledWith(
+      { id: ownerId, role: "MODERATOR" },
+      repositoryId,
+      expect.any(Function),
+    );
   });
 
   it.each(["GET", "POST"] as const)(
@@ -459,8 +467,9 @@ describe("fold re-derivation service reached through its route", () => {
     const store = storeHarness();
     const service = new RepositoryRederivationService(store, () => requestedAt);
 
-    await expect(service.requestRederivation({ id: memberSession.user.id, role: "MEMBER" }, repositoryId))
-      .rejects.toThrow(ModerationServiceError);
+    await expect(
+      service.requestRederivation({ id: memberSession.user.id, role: "MEMBER" }, repositoryId, () => {}),
+    ).rejects.toThrow(ModerationServiceError);
     expect(store.requestRepositoryRederivation).not.toHaveBeenCalled();
   });
 
