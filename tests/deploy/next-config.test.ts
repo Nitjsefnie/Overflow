@@ -301,10 +301,6 @@ describe("NEXT_DIST_DIR", () => {
 });
 
 describe("framing-protection headers", () => {
-  const frameProtectionHeaders = [
-    { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
-    { key: "X-Frame-Options", value: "DENY" },
-  ];
   const framedRoutes = ["/", "/repositories/new", "/api/mcp", "/_next/static/chunks/x.js"];
 
   async function importHeaderRules() {
@@ -313,13 +309,47 @@ describe("framing-protection headers", () => {
     return (await config.headers?.()) ?? [];
   }
 
+  // Computes the effective header map for one route the way Next does when
+  // serving headers(): every rule in order, each source matched with
+  // getPathMatch configured exactly as buildCustomRoute("header") configures
+  // it in node_modules/next/dist/server/lib/router-utils/filesystem.js —
+  // strict, unnamed params removed, case-insensitive, and
+  // modifyRouteRegex's optional trailing slash (no basePath). A rule with a
+  // condition (`has`/`missing`) never applies unconditionally and is
+  // skipped; a later matching rule's value for a key overwrites an earlier
+  // one. Asserting on this map — not on the raw rule list — fails the suite
+  // if the framing headers stop applying to a route, depend on a condition,
+  // or get overridden by a later rule.
+  async function effectiveHeaders(route: string) {
+    const rules = await importHeaderRules();
+    const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match");
+    const { modifyRouteRegex } = await import("next/dist/lib/redirect-status");
+    const effective: Record<string, string> = {};
+    for (const rule of rules) {
+      if (rule.has || rule.missing) continue;
+      const matched = getPathMatch(rule.source, {
+        strict: true,
+        removeUnnamedParams: true,
+        regexModifier: (regex) => modifyRouteRegex(regex),
+        sensitive: false,
+      })(route);
+      if (!matched) continue;
+      for (const { key, value } of rule.headers) effective[key] = value;
+    }
+    return effective;
+  }
+
+  async function expectRouteFramed(route: string) {
+    const effective = await effectiveHeaders(route);
+    expect(effective["Content-Security-Policy"], route).toBe("frame-ancestors 'none'");
+    expect(effective["X-Frame-Options"], route).toBe("DENY");
+  }
+
   it("frames every route with NEXT_DIST_DIR unset", async () => {
     delete process.env.NEXT_DIST_DIR;
     vi.resetModules();
 
-    const rules = await importHeaderRules();
-
-    expect(rules.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
+    for (const route of framedRoutes) await expectRouteFramed(route);
   });
 
   it("frames every route with NEXT_DIST_DIR set to a prepared release dir", async () => {
@@ -327,26 +357,16 @@ describe("framing-protection headers", () => {
     process.env.NEXT_DIST_DIR = ".next-release-20260907T101500Z-abc1234";
     vi.resetModules();
 
-    const rules = await importHeaderRules();
-
-    expect(rules.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
+    for (const route of framedRoutes) await expectRouteFramed(route);
   });
 
-  it.each([
-    ["/", {}],
-    ["/repositories/new", { path: ["repositories", "new"] }],
-    ["/api/mcp", { path: ["api", "mcp"] }],
-    ["/_next/static/chunks/x.js", { path: ["_next", "static", "chunks", "x.js"] }],
-  ])("covers %s with Next's own header matcher", async (route, params) => {
-    delete process.env.NEXT_DIST_DIR;
-    vi.resetModules();
+  it.each(framedRoutes)(
+    "applies the framing headers unconditionally to %s in the effective header map",
+    async (route) => {
+      delete process.env.NEXT_DIST_DIR;
+      vi.resetModules();
 
-    const rules = await importHeaderRules();
-    const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match");
-    const covering = rules.filter((rule) => framedRoutes.every((r) => getPathMatch(rule.source)(r)));
-
-    expect(covering.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
-    // The matcher returns the route's captured params on a hit and false on a miss.
-    expect(getPathMatch(covering[0]!.source)(route)).toEqual(params);
-  });
+      await expectRouteFramed(route);
+    },
+  );
 });
