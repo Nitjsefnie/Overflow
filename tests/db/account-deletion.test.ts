@@ -382,6 +382,10 @@ describe("account deletion as pseudonymisation", () => {
   it("case 6: refuses a sponsor until every registration is unregistered", async () => {
     const blockedSeed = await seedDeletionCandidate();
     const sponsor = blockedSeed.sponsor;
+    // Baselines BEFORE the refused call, so the "unchanged" assertions below
+    // compare against the true pre-call state.
+    const sponsorBefore = await usersRow(sponsor.id);
+    const registrationBefore = await rowJson("registered_repositories", blockedSeed.repositoryId);
 
     const outcome = await deleteAccount(sql, sponsor.githubUserId, { confirm: true });
     expect(outcome.kind).toBe("SPONSOR_BLOCKED");
@@ -390,9 +394,9 @@ describe("account deletion as pseudonymisation", () => {
         { ownerName: blockedSeed.ownerName, provider: "github", instanceUrl: null },
       ]);
     }
-    // The refusal writes nothing to the sponsor's row.
-    const sponsorBefore = await usersRow(sponsor.id);
+    // The refusal writes nothing to the sponsor's row or registration.
     expect(await usersRow(sponsor.id)).toEqual(sponsorBefore);
+    expect(await rowJson("registered_repositories", blockedSeed.repositoryId)).toEqual(registrationBefore);
 
     // A moderation-deactivated registration (active=false, unregistered_at
     // null) still blocks: it can be reactivated by moderation.
