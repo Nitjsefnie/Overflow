@@ -81,9 +81,9 @@ host, because it is what the Auth.js configuration trusts for sign-in: Auth.js
 itself never reads `APP_URL` — its own derivation trusts a host only from
 `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES` — so the configuration
 in `src/auth.ts` derives its trust from `APP_URL`, the same origin the origin
-guard enforces. `[auth][error] UntrustedHost` on every sign-in route therefore
-indicates a missing or malformed `APP_URL`, or an operator `AUTH_URL` mis-set
-to a blank value; a parseable but wrong `APP_URL` passes the sign-in routes
+guard enforces. A missing or malformed `APP_URL` logs `[auth][error] UntrustedHost` on
+every sign-in route, and so does an operator `AUTH_URL` mis-set to a blank
+value; a parseable but wrong `APP_URL` passes the sign-in routes
 and fails later, at GitHub's OAuth redirect.
 
 ## Decisions
