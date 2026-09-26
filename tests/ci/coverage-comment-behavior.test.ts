@@ -32,6 +32,8 @@ const EVENT_SHA = "1111111111111111111111111111111111111111";
 const OTHER_SHA = "2222222222222222222222222222222222222222";
 const MARKER = "<!-- overflow:coverage-comment -->";
 
+type IssueComment = { id: number; user: { login: string } | null; body: string };
+
 type Candidate = {
   number: number;
   head: { ref: string; label: string; sha: string; repo: { full_name: string } | null };
@@ -52,6 +54,7 @@ function candidate(number: number, owner: string, repo: string | null, sha: stri
 describe("the coverage comment workflow's run blocks", () => {
   let resolveRun = "";
   let bodyRun = "";
+  let upsertRun = "";
   let tempRoot = "";
   let tempCounter = 0;
 
@@ -62,8 +65,10 @@ describe("the coverage comment workflow's run blocks", () => {
     const steps = workflow.jobs?.comment?.steps ?? [];
     resolveRun = steps.find((step) => step.name === "Resolve the destination pull request")?.run ?? "";
     bodyRun = steps.find((step) => step.name === "Determine the comment body")?.run ?? "";
+    upsertRun = steps.find((step) => step.name === "Post or update the marker-identified comment")?.run ?? "";
     expect(resolveRun, "the resolve step's run block must exist").not.toBe("");
     expect(bodyRun, "the body step's run block must exist").not.toBe("");
+    expect(upsertRun, "the upsert step's run block must exist").not.toBe("");
     tempRoot = join(tmpdir(), `coverage-comment-${process.pid}-${Date.now()}`);
     await mkdir(tempRoot, { recursive: true });
   });
@@ -82,7 +87,7 @@ describe("the coverage comment workflow's run blocks", () => {
   async function runBlock(
     script: string,
     env: Record<string, string>,
-    options: { pulls?: Candidate[]; artifact?: unknown } = {},
+    options: { pulls?: Candidate[]; artifact?: unknown; comments?: IssueComment[]; bodyFile?: string } = {},
   ): Promise<RunOutcome> {
     tempCounter += 1;
     const dir = join(tempRoot, `case-${tempCounter}`);
@@ -95,6 +100,10 @@ describe("the coverage comment workflow's run blocks", () => {
     await writeFile(argvLog, "", "utf8");
     await writeFile(outputFile, "", "utf8");
     await writeFile(join(dir, "pulls.json"), JSON.stringify(options.pulls ?? []), "utf8");
+    await writeFile(join(dir, "comments.json"), JSON.stringify(options.comments ?? []), "utf8");
+    if (options.bodyFile !== undefined) {
+      await writeFile(join(work, "comment-body.md"), options.bodyFile, "utf8");
+    }
     if (options.artifact !== undefined) {
       await mkdir(join(work, "patch-coverage"), { recursive: true });
       // A string is written as raw JSON text, for literals JSON.stringify
@@ -106,8 +115,10 @@ describe("the coverage comment workflow's run blocks", () => {
       );
     }
     // Records each call's argv (one argument per line, each call closed by a
-    // sentinel line) and answers the two pull-request list
-    // shapes as GitHub would; anything else exits 3 so a mis-wired call fails.
+    // sentinel line) and answers as GitHub would: the two pull-request list
+    // shapes, the issue-comment list (applying the caller's --jq to the canned
+    // comments, as gh does), and a comment PATCH or POST. Anything else exits
+    // 3 so a mis-wired call fails.
     const stub = join(stubDir, "gh");
     await writeFile(
       stub,
@@ -115,13 +126,19 @@ describe("the coverage comment workflow's run blocks", () => {
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'printf \'%s\\n\' "$@" "--end-of-call--" >> "$STUB_ARGV_LOG"',
-        'label=""; ref=""; prev=""',
+        'label=""; ref=""; filter=""; method=""; path=""; prev=""',
         'for a in "$@"; do',
-        '  case "$a" in head=*) label="${a#head=}" ;; esac',
+        '  case "$a" in head=*) label="${a#head=}" ;; repos/*) path="$a" ;; esac',
         '  if [ "$prev" = "--head" ]; then ref="$a"; fi',
+        '  if [ "$prev" = "--jq" ]; then filter="$a"; fi',
+        '  if [ "$prev" = "-X" ]; then method="$a"; fi',
         '  prev="$a"',
         "done",
-        'if [ -n "$label" ]; then',
+        'if [ "$method" = "PATCH" ] || [ "$method" = "POST" ]; then',
+        "  echo '{}'",
+        'elif [[ "$path" == */issues/*/comments && -n "$filter" ]]; then',
+        '  jq -r "$filter" "$STUB_COMMENTS"',
+        'elif [ -n "$label" ]; then',
         '  jq -c --arg l "$label" \'[.[] | select(.head.label == $l)]\' "$STUB_PULLS"',
         'elif [ -n "$ref" ]; then',
         '  jq -c --arg r "$ref" \'[.[] | select(.head.ref == $r) | {number}]\' "$STUB_PULLS"',
@@ -141,7 +158,7 @@ describe("the coverage comment workflow's run blocks", () => {
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
     for (const key of [
       "GH_TOKEN", "REPO_SLUG", "HEAD_BRANCH", "HEAD_OWNER", "HEAD_REPO", "HEAD_SHA",
-      "CONCLUSION", "PR_NUMBER", "SAME_REPO",
+      "CONCLUSION", "PR_NUMBER", "SAME_REPO", "RUN_EVENT",
     ]) {
       delete childEnv[key];
     }
@@ -149,6 +166,7 @@ describe("the coverage comment workflow's run blocks", () => {
       GITHUB_OUTPUT: outputFile,
       STUB_ARGV_LOG: argvLog,
       STUB_PULLS: join(dir, "pulls.json"),
+      STUB_COMMENTS: join(dir, "comments.json"),
       ...env,
     });
     // The stub answers for gh: its directory goes ahead of PATH so a step can
@@ -195,6 +213,7 @@ describe("the coverage comment workflow's run blocks", () => {
       HEAD_OWNER: head.owner,
       HEAD_REPO: head.repo,
       HEAD_SHA: head.sha ?? EVENT_SHA,
+      RUN_EVENT: "pull_request",
     };
   }
 
@@ -290,6 +309,69 @@ describe("the coverage comment workflow's run blocks", () => {
       expect(outcome.argv, "no owner means no query can be scoped, so none is sent").toHaveLength(0);
     });
 
+    it.each(["workflow_dispatch", "push"])(
+      "exits silently without querying when the ci run was triggered by %s, not pull_request",
+      async (event) => {
+        const outcome = await runBlock(
+          resolveRun,
+          { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: event },
+          { pulls: [candidate(90, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
+        );
+
+        expect(outcome.result.status, log(outcome)).toBe(0);
+        expect(outcome.outputs.found).toBe("false");
+        expect(outcome.outputs.pr_number).toBeUndefined();
+        expect(outcome.argv, "a run that is not a pull_request run must not look up a pull request").toHaveLength(0);
+      },
+    );
+
+    it("proceeds for a pull_request-triggered ci run", async () => {
+      const outcome = await runBlock(
+        resolveRun,
+        { ...resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), RUN_EVENT: "pull_request" },
+        { pulls: [candidate(91, BASE_OWNER, REPO_SLUG, EVENT_SHA)] },
+      );
+
+      expect(outcome.result.status, log(outcome)).toBe(0);
+      expect(outcome.outputs.found).toBe("true");
+      expect(outcome.outputs.pr_number).toBe("91");
+      expect(outcome.argv).toHaveLength(1);
+    });
+
+    it("treats another repository of the base owner as a fork end to end — its markdown never reaches the body", async () => {
+      const copy = `${BASE_OWNER}/Overflow-copy`;
+      const resolved = await runBlock(resolveRun, resolveEnv({ owner: BASE_OWNER, repo: copy }), {
+        pulls: [candidate(92, BASE_OWNER, copy, EVENT_SHA)],
+      });
+
+      expect(resolved.result.status, log(resolved)).toBe(0);
+      expect(resolved.outputs.found).toBe("true");
+      expect(resolved.outputs.pr_number).toBe("92");
+      expect(
+        resolved.outputs.same_repo,
+        "same_repo compares full repository names, never owners — an owner's second repository is not this one",
+      ).toBe("false");
+
+      const sentinel = "SENTINEL-656-same-owner-copy";
+      const body = await runBlock(
+        bodyRun,
+        { CONCLUSION: "success", HEAD_BRANCH: BRANCH, PR_NUMBER: "92", SAME_REPO: resolved.outputs.same_repo },
+        {
+          artifact: {
+            measured: true,
+            total_added: 4,
+            total_covered: 1,
+            files: [],
+            markdown: `@someone ${sentinel}\n`,
+          },
+        },
+      );
+      expect(body.result.status, log(body)).toBe(0);
+      const rendered = renderMarkdown({ total_added: 4, total_covered: 1, files: [] });
+      expect(body.body?.startsWith(`${MARKER}\n\n${rendered}`), body.body).toBe(true);
+      expect(body.body).not.toContain(sentinel);
+    });
+
     it("fails loudly when more than one pull request matches the event's head", async () => {
       const outcome = await runBlock(resolveRun, resolveEnv({ owner: BASE_OWNER, repo: REPO_SLUG }), {
         pulls: [candidate(80, BASE_OWNER, REPO_SLUG, EVENT_SHA), candidate(81, BASE_OWNER, REPO_SLUG, EVENT_SHA)],
@@ -352,6 +434,21 @@ describe("the coverage comment workflow's run blocks", () => {
       expect(outcome.body).not.toContain("|");
     });
 
+    it.each([
+      ["unset", undefined],
+      ["empty", ""],
+    ])("takes the fork path when SAME_REPO is %s, never the verbatim markdown", async (_label, sameRepo) => {
+      const env: Record<string, string> = { CONCLUSION: "success", HEAD_BRANCH: BRANCH, PR_NUMBER: "21" };
+      if (sameRepo !== undefined) env.SAME_REPO = sameRepo;
+      const outcome = await runBlock(bodyRun, env, { artifact: artifact() });
+
+      expect(outcome.result.status, log(outcome)).toBe(0);
+      const rendered = renderMarkdown({ total_added: 3, total_covered: 2, files: [] });
+      expect(outcome.body?.startsWith(`${MARKER}\n\n${rendered}`), outcome.body).toBe(true);
+      expect(outcome.body).not.toContain(SENTINEL);
+      expect(outcome.body).not.toContain(EVIL_PATH);
+    });
+
     it("renders a fork's zero-added report the way the renderer does", async () => {
       const outcome = await runBlock(bodyRun, bodyEnv("false"), {
         artifact: artifact({ total_added: 0, total_covered: 0 }),
@@ -392,6 +489,41 @@ describe("the coverage comment workflow's run blocks", () => {
       const expected = await notMeasurableBody("false");
       expect(expected?.startsWith(`${MARKER}\n\n`)).toBe(true);
       expect(outcome.body).toBe(expected);
+    });
+  });
+
+  describe("posting or updating the marker-identified comment", () => {
+    const BOT = "github-actions[bot]";
+    const upsertEnv = { GH_TOKEN: "stub-token", REPO_SLUG, PR_NUMBER: "21" };
+    const planted: IssueComment = { id: 501, user: { login: "someone" }, body: `quoting ${MARKER} here` };
+    const own: IssueComment = { id: 502, user: { login: BOT }, body: `${MARKER}\n\nold report` };
+
+    const writes = (outcome: RunOutcome): string[][] =>
+      outcome.argv.filter((call) => call.includes("PATCH") || call.includes("POST"));
+
+    it("posts a new comment when the only marker-carrying comment is someone else's", async () => {
+      const outcome = await runBlock(upsertRun, upsertEnv, {
+        comments: [planted, { id: 503, user: { login: BOT }, body: "unrelated bot comment" }],
+        bodyFile: `${MARKER}\n\nnew report\n`,
+      });
+
+      expect(outcome.result.status, log(outcome)).toBe(0);
+      expect(writes(outcome), "exactly one write").toHaveLength(1);
+      const [write] = writes(outcome);
+      expect(write).toEqual(expect.arrayContaining(["-X", "POST", `repos/${REPO_SLUG}/issues/21/comments`]));
+      expect(write.some((arg) => arg.includes("/issues/comments/501"))).toBe(false);
+    });
+
+    it("updates the bot's own comment in place, never a planted marker listed before it", async () => {
+      const outcome = await runBlock(upsertRun, upsertEnv, {
+        comments: [planted, own],
+        bodyFile: `${MARKER}\n\nnew report\n`,
+      });
+
+      expect(outcome.result.status, log(outcome)).toBe(0);
+      expect(writes(outcome), "exactly one write").toHaveLength(1);
+      const [write] = writes(outcome);
+      expect(write).toEqual(expect.arrayContaining(["-X", "PATCH", `repos/${REPO_SLUG}/issues/comments/502`]));
     });
   });
 });

@@ -149,6 +149,7 @@ describe("the coverage comment workflow", () => {
       HEAD_OWNER: "${{ github.event.workflow_run.head_repository.owner.login }}",
       HEAD_REPO: "${{ github.event.workflow_run.head_repository.full_name }}",
       HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+      RUN_EVENT: "${{ github.event.workflow_run.event }}",
     });
   });
 
