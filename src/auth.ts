@@ -13,6 +13,12 @@ import {
 } from "@/lib/auth/sign-in-decision";
 import { requestGitHubPublicIdentity } from "@/lib/auth/github-userinfo";
 import {
+  findGitHubAccount,
+  findSessionAccountState,
+  refreshSessionToken,
+  upsertGitHubAccount,
+} from "@/lib/auth/account-store";
+import {
   GITHUB_CONTRIBUTOR_SCOPE,
   GITHUB_REPOSITORY_REGISTRATION_SCOPE,
   grantsWebhookAdministration,
@@ -69,11 +75,18 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
 
       const identity = readGitHubIdentity(profile);
       if (identity === null) {
-        return token;
+        // Every non-sign-in call lands here. The token survives only while its
+        // account row is not DELETED: a pseudonymised account's session ends
+        // at the next jwt refresh, which is the single choke point covering
+        // every session-user resolution site. (The intersection cast is the
+        // framework's `JWT` record meeting the store's token shape.)
+        return await refreshSessionToken(token as typeof token & { userId?: unknown }, (id) =>
+          findSessionAccountState(id),
+        );
       }
 
       try {
-        const user = await findGitHubUser(identity.githubUserId);
+        const user = await findGitHubAccount(identity.githubUserId);
         if (user !== null) {
           token.userId = user.id;
           token.role = user.role;
@@ -117,51 +130,15 @@ async function upsertGitHubIdentity(identity: GitHubIdentity, accessToken: strin
     ? "MODERATOR"
     : "MEMBER";
   const encryptedAccessToken = Buffer.from(encryptToken(accessToken, tokenEncryptionKey), "utf8");
-  const [user] = await getSql()<PersistedGitHubUser[]>`
-    insert into users (
-      github_user_id,
-      github_login,
-      avatar_url,
-      role,
-      encrypted_oauth_token
-    )
-    values (
-      ${identity.githubUserId},
-      ${identity.login},
-      ${identity.avatarUrl},
-      ${role},
-      ${encryptedAccessToken}
-    )
-    on conflict (github_user_id) do update
-    set
-      github_login = excluded.github_login,
-      avatar_url = excluded.avatar_url,
-      -- A FLOOR, never an override. Writing excluded.role unconditionally meant
-      -- a moderator granted inside the product was demoted at their next
-      -- sign-in, which is what made the role ungrantable. See resolveSignInRole.
-      role = case
-        when excluded.role = 'MODERATOR' or users.role = 'MODERATOR' then 'MODERATOR'
-        else 'MEMBER'
-      end::user_role,
-      encrypted_oauth_token = excluded.encrypted_oauth_token,
-      updated_at = now()
-    returning id, role
-  `;
-  if (user === undefined) {
-    throw new Error("GitHub identity upsert returned no user.");
-  }
+  const user = await upsertGitHubAccount({
+    githubUserId: identity.githubUserId,
+    login: identity.login,
+    avatarUrl: identity.avatarUrl,
+    role,
+    encryptedAccessToken,
+  });
 
   await claimGitHubIdentity(getSql(), user.id, identity.githubUserId);
 
   return user;
-}
-
-async function findGitHubUser(githubUserId: number): Promise<PersistedGitHubUser | null> {
-  const [user] = await getSql()<PersistedGitHubUser[]>`
-    select id, role
-    from users
-    where github_user_id = ${githubUserId}
-    limit 1
-  `;
-  return user ?? null;
 }

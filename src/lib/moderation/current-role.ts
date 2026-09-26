@@ -6,7 +6,7 @@ export async function getCurrentUserRole(
   sql: SqlClient = getSql(),
 ): Promise<UserRole | null> {
   const [row] = await sql<{ role: UserRole }[]>`
-    select role from users where id = ${userId} limit 1
+    select role from users where id = ${userId} and deleted_at is null limit 1
   `;
   return row?.role ?? null;
 }
