@@ -378,9 +378,13 @@ ps -o user=,pid=,args= -p "$(systemctl show overflow.service -p MainPID --value)
 ```
 
 Expected: `active`; `200` from curl — the readiness endpoint answers `200` only
-when PostgreSQL is reachable (a bounded probe: at most a few seconds, ~3 s worst
-case), so a `200` here is a real dependency check, not a bare port probe; the
-two `MainPID` values differ and the current
+when PostgreSQL is reachable and every migration this build bundles is recorded
+applied in `schema_migrations` (a bounded probe: at most a few seconds, ~3 s
+worst case), so a `200` here is a real dependency check, not a bare port probe.
+The schema half of the check is one-sided: a database ahead of the build —
+carrying rows from a newer migration set, the state a rollback to an older
+release runs against — still answers `200`; only a schema missing a migration
+the build bundles fails here. The two `MainPID` values differ and the current
 one is not `0`; `User=overflow`, `Group=overflow`, `NoNewPrivileges=yes`,
 `ProtectSystem=strict`; one `ps` line, owned by `overflow` and never `root`.
 
@@ -550,6 +554,13 @@ there. `curl -f` treats `404` as a failure, so the verification fails —
 readiness unknown rather than confirmed — and that is the intended fail-safe:
 never report a rollback healthy on a signal that cannot see the database. The
 caveat goes moot once every retained release postdates the endpoint.
+
+The endpoint is also one-sided about the schema, which is what makes it a
+usable rollback signal: a database migrated past the retained release answers
+`200` — a rollback never undoes migrations, and an older build needs no
+migration it does not bundle — while a database missing a migration the
+release bundles answers `503`. A `200` after a rollback certifies the release
+against the schema as it stands, not the schema against the release.
 
 This rolls back the build, not the revision. The checkout and `node_modules`
 are shared with the current revision, and database migrations are not undone.
