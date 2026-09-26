@@ -1,6 +1,6 @@
 import type { Sql } from "postgres";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
-import { credentialBinding, decryptToken, loadTokenKeySet } from "@/lib/security/token-cipher";
+import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 import type { ForgeIdentityStore, ForgeIdentityView } from "@/lib/forge/identities";
 
 type IdentityRow = {
@@ -63,10 +63,7 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
     return {
       token: decryptToken(
         Buffer.from(row.encrypted_token).toString("utf8"),
-        loadTokenKeySet({
-          TOKEN_ENCRYPTION_KEY: this.tokenEncryptionKey,
-          TOKEN_ENCRYPTION_KEY_PREVIOUS: this.previousTokenEncryptionKey,
-        }),
+        tokenKeySetFrom(this.tokenEncryptionKey, this.previousTokenEncryptionKey),
         credentialBinding.forgeToken({
           provider: row.provider, instanceUrl: row.instance_url, forgeUserId: row.forge_user_id,
         }),

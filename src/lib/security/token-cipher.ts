@@ -62,8 +62,9 @@ export const credentialBinding = {
       String(identity.forgeUserId),
     ]);
   },
+  /** The id is a Postgres uuid, which reads back lowercase, so it binds lowercase. */
   webhookSecret(webhookCredentialId: string): CredentialBinding {
-    return bind("registered_repositories", "encrypted_webhook_secret", [webhookCredentialId]);
+    return bind("registered_repositories", "encrypted_webhook_secret", [webhookCredentialId.toLowerCase()]);
   },
 } as const;
 
@@ -83,6 +84,11 @@ export function loadTokenKeySet(env: Readonly<Record<string, string | undefined>
   }
   decodeKey(previous, previousKeyFailure);
   return { current, previous };
+}
+
+/** The key set a store holds as its current and previous key parameters, read like the environment. */
+export function tokenKeySetFrom(current: string | undefined, previous: string | undefined): TokenKeySet {
+  return loadTokenKeySet({ TOKEN_ENCRYPTION_KEY: current, TOKEN_ENCRYPTION_KEY_PREVIOUS: previous });
 }
 
 export function encryptToken(plaintext: string, currentKey: string, binding: CredentialBinding): string {
