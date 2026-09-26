@@ -2748,7 +2748,7 @@ function nullableTimestampToIso(value: string | Date | null): string | null {
   }
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.valueOf())) {
-    throw new Error("Database timestamp was invalid.");
+    throw new Error("Timestamp was invalid.");
   }
   return date.toISOString();
 }
