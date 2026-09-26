@@ -18,6 +18,7 @@ import {
   rejectUntrustedRequest,
 } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenAccount } from "@/lib/tokens/postgres-store";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { plural } from "@/lib/plural";
 import {
   changeRepositoryCatalog,
@@ -64,6 +65,13 @@ export type RepositoryRouteSession = {
 export type RepositoryRouteDependencies = {
   getSession: () => Promise<RepositoryRouteSession | null>;
   findAccountByTokenHash: (hash: Buffer) => Promise<ApiTokenAccount | null>;
+  /**
+   * The account's role read live at request time — the single role authority
+   * for both credential paths. A session JWT outlives the account it was
+   * issued for and a token's account row is only as fresh as the moment it
+   * was read (issue 733): a null here is a deleted (or missing) account.
+   */
+  getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createRegistrationDependencies: (
     session: RepositoryRouteSession,
     input: Partial<RepositoryRegistrationInput>,
@@ -240,6 +248,7 @@ async function authorizeRepositoryRequest(
   }
 
   try {
+    let resolved: RepositoryRouteSession;
     if (credential !== null) {
       const hash = hashApiToken(credential);
       if (hash === null) {
@@ -249,15 +258,37 @@ async function authorizeRepositoryRequest(
       if (account === null) {
         return errorResponse(401, "UNAUTHENTICATED", "The supplied API token was not accepted.");
       }
-      return { user: { id: account.id, role: account.role } };
+      resolved = { user: { id: account.id, role: account.role } };
+    } else {
+      const session = await dependencies.getSession();
+      if (session === null) {
+        return null;
+      }
+      resolved = session;
     }
-    return await dependencies.getSession();
+
+    // The live-account gate both credential paths run (issue 733): a session
+    // outlives the account it was issued for, and a token's account row is
+    // only as fresh as the moment it was read, so the route re-reads the
+    // account's role — the single role authority — before the request acts on
+    // the account. A null role is a deleted (or missing) account.
+    let role: UserRole | null;
+    try {
+      role = await dependencies.getCurrentRole(resolved.user.id);
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
+    }
+    if (role === null) {
+      return errorResponse(403, "FORBIDDEN", "A member account is required.");
+    }
+    return resolved;
   } catch {
     return errorResponse(502, "UPSTREAM_FAILURE", "Unable to initialize repository registration.");
   }
 }
 
 export const POST = createRepositoryPostHandler({
+  getCurrentRole: getCurrentUserRole,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },
@@ -286,6 +317,7 @@ export const POST = createRepositoryPostHandler({
 });
 
 export const PATCH = createRepositoryPatchHandler({
+  getCurrentRole: getCurrentUserRole,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },
@@ -311,6 +343,7 @@ export const PATCH = createRepositoryPatchHandler({
 });
 
 export const DELETE = createRepositoryDeleteHandler({
+  getCurrentRole: getCurrentUserRole,
   async findAccountByTokenHash(hash) {
     return new PostgresApiTokenStore().findAccountByTokenHash(hash);
   },

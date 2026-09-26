@@ -95,6 +95,7 @@ async function register(instanceUrl: string): Promise<{ status: number; body: st
   const handler = createRepositoryPostHandler({
     findAccountByTokenHash: async () => null,
     getSession: async () => ({ user: { id: "sponsor-id", role: "MEMBER" } }),
+    getCurrentRole: async () => "MEMBER",
     async createRegistrationDependencies(): Promise<RepositoryRegistrationDependencies> {
       // No forgeFetch: the gateway runs on its production default.
       return {
