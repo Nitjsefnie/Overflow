@@ -401,10 +401,11 @@ describe("GitHub webhook route", () => {
     }
   });
 
-  // repository.full_name is trimmed but otherwise free text, so a hostile
-  // name reaches the failure line; the line must stay one bounded line with
-  // no terminal escape in it.
-  it("encodes and bounds a hostile repository name in the failure line", async () => {
+  // repository.full_name is trimmed but otherwise free text, and the
+  // delivery id is a header value that may carry ESC, so both identifiers on
+  // the failure line can be hostile; the line must stay one bounded line with
+  // each identifier as its own encoded token.
+  it("encodes and bounds hostile identifiers in the failure line", async () => {
     const fullName = `octo\n\u001b[2J${"a".repeat(5_000)}`;
     const rootCause = new Error("upstream connection refused");
     const processWebhookMock = vi.fn().mockRejectedValue(rootCause);
@@ -413,19 +414,21 @@ describe("GitHub webhook route", () => {
     try {
       const response = await route(request(JSON.stringify({ ...JSON.parse(rawPayload), repository: { id: 42, full_name: fullName } }), {
         "x-github-event": "pull_request",
-        "x-github-delivery": "delivery-hostile",
+        "x-github-delivery": "delivery\u001b[1mz",
       }));
 
       expect(response.status).toBe(503);
-      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({ repositoryFullName: fullName }), expect.anything());
+      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({
+        deliveryId: "delivery\u001b[1mz", repositoryFullName: fullName,
+      }), expect.anything());
       expect(logged).toHaveBeenCalledTimes(1);
       const [message, loggedError] = logged.mock.calls[0] ?? [];
       expect(typeof message).toBe("string");
       expect(message).not.toContain("\n");
       expect(message).not.toContain("\u001b");
       expect((message as string).length).toBeLessThan(1_024);
-      expect(message).toContain("\"octo\\u000a\\u001b[2J");
-      expect(message).toContain("delivery-hostile");
+      expect(message).toContain("delivery \"delivery\\u001b[1mz\" (");
+      expect(message).toContain(`repository "octo\\u000a\\u001b[2J${"a".repeat(247)}"… (+4753 more),`);
       expect(loggedError).toBe(rootCause);
     } finally {
       logged.mockRestore();
