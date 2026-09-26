@@ -30,6 +30,14 @@ export type GitHubWebhookDelivery = {
    * alone.
    */
   forge?: { provider: "gitlab"; instanceUrl: string };
+  /**
+   * True only when the payload itself asserts the repository is not public:
+   * GitHub's `repository.private`, or a GitLab `project.visibility_level`
+   * below its public level (internal=10 refuses too, matching registration,
+   * which maps internal to PRIVATE and refuses). Absent when the payload does
+   * not say — absence is unknown, and the payload alone never refuses.
+   */
+  repositoryPrivate?: boolean;
 };
 
 export type GitHubWebhookParseResult =
@@ -53,6 +61,7 @@ const payloadSchema = z
     repository: z.object({
       id: z.number().int().positive(),
       full_name: z.string().trim().min(1),
+      private: z.boolean().optional(),
     }),
   })
   .passthrough();
@@ -132,6 +141,7 @@ export function parseGitHubWebhookDeliveryDetailed(
       repositoryFullName: parsed.data.repository.full_name,
       subject: { kind, ...subject.data },
       ...(issue === undefined ? {} : { issue }),
+      ...(parsed.data.repository.private === true ? { repositoryPrivate: true } : {}),
     },
   };
 }
