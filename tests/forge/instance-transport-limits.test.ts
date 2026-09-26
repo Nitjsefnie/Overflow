@@ -13,10 +13,11 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 // The body caps and the redirect refusal, proved at the seams that apply them:
 // the identity link route and a GitLab gateway built with no transport, each
 // running on its production default. The only change to that default is the
-// address predicate — every transport this file's modules create treats the
-// IPv4 loopback as public, so a loopback listener can stand in for a public
-// GitLab. Each cap is whatever the module under test asked for; nothing here
-// supplies one.
+// address predicate: the mock wraps the factory, so every transport a module
+// builds by calling it treats the IPv4 loopback as public, and a loopback
+// listener can stand in for a public GitLab. The mock passes each caller's
+// options through untouched and builds no transport of its own, so each cap
+// is the one the production module asked for.
 
 // Release modules evaluated with this file's permissive transport.
 vi.hoisted(() => { vi.resetModules(); });
@@ -28,7 +29,7 @@ vi.mock("@/lib/security/public-destination", async (importOriginal) => {
     address === "127.0.0.1" || actual.isPublicAddress(address);
   const createPublicFetch: typeof actual.createPublicFetch = (options = {}) =>
     actual.createPublicFetch({ ...options, isPermittedAddress: loopbackPermitted });
-  return { ...actual, createPublicFetch, publicFetch: createPublicFetch() };
+  return { ...actual, createPublicFetch };
 });
 
 useTrustedOrigin();

@@ -7,10 +7,12 @@ import {
   createPublicFetch,
   DestinationRefusedError,
   isPublicAddress,
-  publicFetch,
 } from "@/lib/security/public-destination";
 
 const bodyLimit = 1024 * 1024;
+
+/** A transport as production builds one: no seams, the default body cap. */
+const publicFetch = createPublicFetch();
 
 type RecordedRequest = { method: string; url: string; headers: IncomingMessage["headers"]; body: string };
 
