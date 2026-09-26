@@ -1,9 +1,12 @@
-// A webhook delivery's identifiers — the receipt key, the execution UUID, the
-// repository's full name — are request-derived text, and a parser accepts
-// them with internal line breaks, terminal escapes and unbounded length. This
-// helper turns one such string into a single bounded token for a log line, so
-// an identifier can neither forge a second line, drive the operator's
-// terminal, visually reorder the line, nor flood it.
+// A webhook delivery's identifiers are request-derived text. The repository's
+// full name comes from the payload, and the parsers accept it with internal
+// line breaks, terminal escapes and at any length. The receipt key and the
+// execution UUID come from headers, so they cannot carry a line feed and the
+// parsers cap them at 255 characters, but they can still carry ESC and other
+// control or bidi characters. This helper turns one such string into a single
+// bounded token for a log line, so an identifier can neither forge a second
+// line, drive the operator's terminal, visually reorder the line, nor flood
+// it.
 //
 // The token is a JSON string literal of the kept prefix: `"` and `\` are
 // backslash-escaped, and every code unit that could break or disguise the
