@@ -19,23 +19,31 @@ export const RECONCILIATION_EVIDENCE_FORMAT = 3;
 export const CACHED_COMMENT_BODY_PLACEHOLDER = "[body removed]";
 
 /**
+ * A cached pull request as the narrowing leaves it: its own body is gone.
+ */
+export type NarrowedCachedPullRequest = Omit<GitHubPullRequest, "body">;
+
+/**
  * A cached issue as the narrowing leaves it: comment bodies are kept as
  * placeholder-or-empty strings, and the issue's and its nested pull requests'
  * own bodies are gone.
  */
 export type NarrowedCachedIssue = Omit<GitHubIssue, "body" | "closingPullRequests"> & {
   comments: GitHubIssueComment[];
-  closingPullRequests: Array<Omit<GitHubPullRequest, "body">>;
+  closingPullRequests: NarrowedCachedPullRequest[];
 };
 
 /**
- * Anything shaped like a cached issue, tolerating already-narrowed input: every
- * body may be absent, which is what the narrowing itself produces.
+ * Anything shaped like a cached issue, tolerating already-narrowed input: the
+ * issue's body may be absent, which is what the narrowing itself produces. The
+ * nested pull requests are opaque records here — already-narrowed ones carry no
+ * body to match, so demanding `{ body? }` would reject exactly the input the
+ * narrowing is idempotent over.
  */
 type BodyBearingCachedIssue = {
   body?: string | undefined;
   comments: Array<{ body?: string | undefined }>;
-  closingPullRequests: Array<{ body?: string | undefined }>;
+  closingPullRequests: Array<object>;
 };
 
 /** `Issue` with the body fields removed and the comment bodies re-typed as present strings. */
@@ -93,7 +101,7 @@ export type ReconciliationEvidence = {
   formatVersion: number;
   checkpoint: Date;
   lastFullPassAt: Date;
-  issues: GitHubIssue[];
+  issues: NarrowedCachedIssue[];
   pullRequests: ReconciliationPullRequestEvidence[];
 };
 
@@ -101,7 +109,8 @@ export type ReconciliationSynchronization = {
   expectedVersion: number | null;
   scanStartedAt: Date;
   full: boolean;
-  issues: GitHubIssue[];
+  /** Fresh upstream reads still carry their body; retained cached issues do not. */
+  issues: Array<GitHubIssue | NarrowedCachedIssue>;
   pullRequests: ReconciliationPullRequestEvidence[];
   dirtySubjects: DirtyReconciliationSubject[];
 };

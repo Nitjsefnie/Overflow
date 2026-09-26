@@ -15,6 +15,7 @@ import type { ReconciliationCostCharge, ReconciliationFairnessAssessment } from 
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type DirtyReconciliationSubject,
+  type NarrowedCachedPullRequest,
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
 } from "@/lib/fold/reconciliation-evidence";
@@ -514,7 +515,9 @@ async function collectPullRequestEvidence(
   github: ReconciliationGateway,
   reference: GitHubRepositoryReference,
   registered: ReconciliationRepository,
-  pullRequests: readonly GitHubPullRequest[],
+  // Bodyless cached pull requests mix with fresh reads here: the narrowing
+  // (issue 681) leaves them without a body, and nothing below reads one.
+  pullRequests: ReadonlyArray<GitHubPullRequest | NarrowedCachedPullRequest>,
   discardUnresolvableSubject: (
     failure: unknown,
     kind: DirtyReconciliationSubject["kind"],

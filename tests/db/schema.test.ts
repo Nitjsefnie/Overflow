@@ -2033,7 +2033,7 @@ describe("initial PostgreSQL materialization", () => {
       )
       values (
         ${githubIssueId}, ${repositoryId}, ${authoritativeIssue.number}, ${authoritativeIssue.title},
-        ${authoritativeIssue.body}, ${authoritativeIssue.url}, ${authoritativeIssue.state},
+        ${"Legacy issue body the fold must leave alone"}, ${authoritativeIssue.url}, ${authoritativeIssue.state},
         ${"L"}, 8, 8
       )
     `;
@@ -4591,7 +4591,6 @@ function materializationSnapshot(input: {
         id: githubIssueId,
         number: 1,
         title: "A materialized issue",
-        body: "Issue body",
         url: "https://github.com/example/materialized/issues/1",
         state: "CLOSED",
         stateReason: "COMPLETED",
@@ -4642,7 +4641,6 @@ function materializationSnapshot(input: {
             id: githubPullRequestId,
             number: 11,
             title: "A materialized pull request",
-            body: "Pull request body",
             url: "https://github.com/example/materialized/pull/11",
             state: "MERGED",
             mergedAt: "2026-09-01T12:00:00.000Z",
@@ -4888,7 +4886,9 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     id: issue.id,
     number: issue.number,
     title: issue.title,
-    body: issue.body,
+    // The snapshot carries no body text (issue 681), and the fold reads none;
+    // the gateway's forge shape still demands the field.
+    body: "",
     url: issue.url,
     state: issue.state,
     stateReason: issue.stateReason,
@@ -4905,7 +4905,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
       id: pullRequest.id,
       number: pullRequest.number,
       title: pullRequest.title,
-      body: pullRequest.body,
+      body: "",
       url: pullRequest.url,
       state: pullRequest.state,
       mergedAt: pullRequest.mergedAt,

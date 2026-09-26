@@ -112,7 +112,7 @@ describe("scrubbing free text when a repository is unregistered", () => {
 
   it("leaves the evidence cache untouched while a fresh merge is inside the settlement evidence window", async () => {
     const repository = await registeredRepository();
-    const { pullRequestId } = await materializedRows(repository.repositoryId, {
+    await materializedRows(repository.repositoryId, {
       mergedAt: new Date(Date.now() - 5 * 60 * 1000),
     });
     const before = await seedWideEvidenceCache(repository.repositoryId);
