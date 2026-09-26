@@ -309,24 +309,26 @@ describe("framing-protection headers", () => {
     return (await config.headers?.()) ?? [];
   }
 
-  // Computes the effective header map for one route the way Next does when
-  // serving headers(): every rule in order, each source matched with
-  // getPathMatch configured exactly as buildCustomRoute("header") configures
-  // it in node_modules/next/dist/server/lib/router-utils/filesystem.js —
-  // strict, unnamed params removed, case-insensitive, and
-  // modifyRouteRegex's optional trailing slash (no basePath). A rule with a
-  // condition (`has`/`missing`) never applies unconditionally and is
-  // skipped; a later matching rule's value for a key overwrites an earlier
-  // one. Asserting on this map — not on the raw rule list — fails the suite
-  // if the framing headers stop applying to a route, depend on a condition,
-  // or get overridden by a later rule.
-  async function effectiveHeaders(route: string) {
+  const framingHeaderNames = ["content-security-policy", "x-frame-options"];
+
+  // Models the headers Next serves one route from headers(). Each rule's
+  // source is matched with getPathMatch configured as buildCustomRoute("header")
+  // configures it in node_modules/next/dist/server/lib/router-utils/filesystem.js
+  // — strict, unnamed params removed, case-insensitive, and modifyRouteRegex's
+  // optional trailing slash (no basePath). Matching rules without `has` or
+  // `missing` apply in order, a later value overwriting an earlier one; names
+  // are lowercased because Node's setHeader is case-insensitive. A matching
+  // rule with `has` or `missing` is not evaluated against any request: the
+  // framing-header names it sets are collected instead, because some request
+  // would satisfy its condition. Param substitution in header keys and values
+  // is not modelled.
+  async function routeHeaders(route: string) {
     const rules = await importHeaderRules();
     const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match");
     const { modifyRouteRegex } = await import("next/dist/lib/redirect-status");
     const effective: Record<string, string> = {};
+    const conditionedFramingHeaders: string[] = [];
     for (const rule of rules) {
-      if (rule.has || rule.missing) continue;
       const matched = getPathMatch(rule.source, {
         strict: true,
         removeUnnamedParams: true,
@@ -334,22 +336,30 @@ describe("framing-protection headers", () => {
         sensitive: false,
       })(route);
       if (!matched) continue;
-      for (const { key, value } of rule.headers) effective[key] = value;
+      const conditioned = Boolean(rule.has || rule.missing);
+      for (const { key, value } of rule.headers) {
+        const name = key.toLowerCase();
+        if (!conditioned) effective[name] = value;
+        else if (framingHeaderNames.includes(name)) conditionedFramingHeaders.push(name);
+      }
     }
-    return effective;
+    return { effective, conditionedFramingHeaders };
   }
 
+  // Fails unless the route's unconditioned map carries exactly the framing
+  // values, and unless no matching conditioned rule sets a framing header.
   async function expectRouteFramed(route: string) {
-    const effective = await effectiveHeaders(route);
-    expect(effective["Content-Security-Policy"], route).toBe("frame-ancestors 'none'");
-    expect(effective["X-Frame-Options"], route).toBe("DENY");
+    const { effective, conditionedFramingHeaders } = await routeHeaders(route);
+    expect(effective["content-security-policy"], route).toBe("frame-ancestors 'none'");
+    expect(effective["x-frame-options"], route).toBe("DENY");
+    expect(conditionedFramingHeaders, route).toEqual([]);
   }
 
-  it("frames every route with NEXT_DIST_DIR unset", async () => {
+  it.each(framedRoutes)("frames %s with NEXT_DIST_DIR unset", async (route) => {
     delete process.env.NEXT_DIST_DIR;
     vi.resetModules();
 
-    for (const route of framedRoutes) await expectRouteFramed(route);
+    await expectRouteFramed(route);
   });
 
   it("frames every route with NEXT_DIST_DIR set to a prepared release dir", async () => {
@@ -359,14 +369,4 @@ describe("framing-protection headers", () => {
 
     for (const route of framedRoutes) await expectRouteFramed(route);
   });
-
-  it.each(framedRoutes)(
-    "applies the framing headers unconditionally to %s in the effective header map",
-    async (route) => {
-      delete process.env.NEXT_DIST_DIR;
-      vi.resetModules();
-
-      await expectRouteFramed(route);
-    },
-  );
 });
