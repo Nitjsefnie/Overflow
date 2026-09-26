@@ -159,13 +159,14 @@ export function AccountDataNotice() {
         <p>How long it is kept:</p>
         <ul>
           <li>
-            While the repository stays registered, reconciliation re-reads it. Every pass overwrites the stored
-            logins and pull request fields from GitHub or GitLab, and an issue&apos;s title and description
-            whenever the forge&apos;s copy is at least as new. An unattended sweep runs every six hours, and a pass
-            replaces the whole cache with a full re-read once six hours have passed since the last one, so while
-            the repository can still be read, an edit or deletion on GitHub or GitLab normally reaches
-            Overflow&apos;s copy within twelve hours. An issue or pull request that a later pass no longer records
-            is removed.
+            While the repository stays registered, reconciliation re-reads it. A pass re-reads from GitHub or
+            GitLab only the issues updated since the last pass and takes the rest from the cache; a full re-read
+            replaces the whole cache. Each pass overwrites the stored logins and pull request fields from that
+            copy, and an issue&apos;s title and description whenever the forge&apos;s copy is at least as new. An
+            unattended sweep runs every six hours, and a pass does a full re-read once six hours have passed since
+            the last one, so while the repository can still be read, an edit or deletion on GitHub or GitLab
+            normally reaches Overflow&apos;s copy within twelve hours. An issue or pull request that a later pass
+            no longer records is removed.
           </li>
           <li>
             If the repository itself is deleted, made private, or can no longer be read with its sponsor&apos;s
@@ -209,8 +210,10 @@ export function AccountDataNotice() {
         <p>
           Overflow&apos;s own output goes to the host&apos;s system journal. The journal has no time limit, only a
           size limit shared with every other service on the host, so how long an entry lasts depends on how much
-          the host logs overall. Overflow does not log client IP addresses or comment text. Its log lines can
-          include a repository&apos;s owner and name, which may be a person&apos;s username, and error details.
+          the host logs overall. Overflow does not log client IP addresses. Its log lines can include a
+          repository&apos;s owner and name, which may be a person&apos;s username, and error details; a database
+          or forge error can quote part of the record being written or read, such as an issue description or
+          comment text.
         </p>
       </section>
 
