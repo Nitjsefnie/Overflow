@@ -30,10 +30,13 @@ log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 # Completed + success passes; completed + any other conclusion refuses
 # immediately; a status that is not completed is pending and waits; an absent
 # job (GitHub has not created the run yet — the normal state in the first
-# minute after a merge) waits too, listed as `<check> (absent)`. The
-# OVERFLOW_DEPLOY_CI_TIMEOUT deadline bounds the wait, so a job that never
-# registers — a renamed job, a path-filtered workflow — still refuses at the
-# deadline, named with the same marker.
+# minute after a merge) waits too, listed as `<check> (absent)`. A check-run
+# bearing a required name whose id is none of the pinned workflow's jobs of
+# that name waits as `<check> (unattributed check-run <id>)`, so the gate
+# never passes while one exists. The OVERFLOW_DEPLOY_CI_TIMEOUT deadline
+# bounds the wait, so a job that never registers — a renamed job, a
+# path-filtered workflow — or a check-run that never becomes attributable
+# still refuses at the deadline, named with its marker.
 #
 # Why job records and not check-run names: protection matches a required
 # check by name and app alone, and every workflow here posts through the one
@@ -41,11 +44,13 @@ log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 # job with checks: write creates through the Checks API, satisfies it. An
 # Actions job's id is its check-run's id, and a job record cannot be created
 # through the Checks API, so the gate trusts only the pinned workflow's job
-# records, and refuses outright when a check-run bearing a required name has
-# an id that is not one of them.
+# records. An unattributed check-run waits rather than refusing at once
+# because GitHub documents no read-after-write consistency between the
+# check-run, run and job listings: just after a merge, a legitimate job's
+# check-run can be listed before its run is.
 required_checks_gate() {
   local remote_url repo required pins check pin unmapped check_runs runs run_id run_path run_jobs jobs
-  local job_run job_path job_id job_name job_attempt job_status job_conclusion
+  local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
   local cr_id cr_name producer_ids status conclusion decided_run decided_attempt pending timeout deadline
   remote_url=$(git config --get remote.origin.url)
   repo=
@@ -86,8 +91,10 @@ required_checks_gate() {
   timeout="${OVERFLOW_DEPLOY_CI_TIMEOUT:-900}"
   deadline=$((SECONDS + timeout))
   while :; do
-    # Check-runs first: every check-run read here already has its job, so
-    # the job reads that follow cannot miss the producer of one seen here.
+    # Check-runs first, so a check-run's job has had the longest time to be
+    # listed by the reads that follow. GitHub documents no consistency
+    # between these listings, so a check-run whose job is not listed yet
+    # waits as unattributed rather than refusing.
     if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100" --paginate \
         --jq '.check_runs[] | [.id, .name] | @tsv'); then
       printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
@@ -109,41 +116,24 @@ required_checks_gate() {
         printf 'Could not read the jobs of workflow run %s for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
         exit 1
       fi
-      while IFS= read -r job_id; do
-        if [ -n "$job_id" ]; then
-          jobs+="$run_id"$'\t'"$run_path"$'\t'"$job_id"$'\n'
+      while IFS= read -r job_line; do
+        if [ -n "$job_line" ]; then
+          jobs+="$run_id"$'\t'"$run_path"$'\t'"$job_line"$'\n'
         fi
       done <<<"$run_jobs"
     done <<<"$runs"
-    # Second producer, checked before any waiting: every check-run bearing a
-    # required name must be one of the pinned workflow's jobs of that name.
-    while IFS= read -r check; do
-      [ -n "$check" ] || continue
-      pin=$(pin_for "$check")
-      producer_ids=$'\n'
-      while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
-        if [ "$job_path" = "$pin" ] && [ "$job_name" = "$check" ]; then
-          producer_ids+="$job_id"$'\n'
-        fi
-      done <<<"$jobs"
-      while IFS=$'\t' read -r cr_id cr_name; do
-        [ "$cr_name" = "$check" ] || continue
-        if [[ "$producer_ids" != *$'\n'"$cr_id"$'\n'* ]]; then
-          printf 'Required check %s has check-run %s on %s that was not produced by the pinned workflow file %s; refusing to deploy.\n' "$check" "$cr_id" "$full_sha" "$pin" >&2
-          exit 1
-        fi
-      done <<<"$check_runs"
-    done <<<"$required"
     pending=
     while IFS= read -r check; do
       [ -n "$check" ] || continue
       pin=$(pin_for "$check")
-      # The newest run decides, and within it the latest attempt. On equal
-      # keys (two same-named jobs in one attempt) a non-success replaces a
-      # success, so a tie can only hold the deploy back.
-      decided_run=0 decided_attempt=0 status='' conclusion=''
+      # The check's producers are the pinned workflow's jobs named for it, in
+      # any run and attempt. The newest run decides, and within it the latest
+      # attempt. On equal keys (two same-named jobs in one attempt) a
+      # non-success replaces a success, so a tie can only hold the deploy back.
+      producer_ids=$'\n' decided_run=0 decided_attempt=0 status='' conclusion=''
       while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
         [ "$job_path" = "$pin" ] && [ "$job_name" = "$check" ] || continue
+        producer_ids+="$job_id"$'\n'
         if [ "$job_run" -gt "$decided_run" ] \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -gt "$decided_attempt" ]; } \
           || { [ "$job_run" -eq "$decided_run" ] && [ "$job_attempt" -eq "$decided_attempt" ] \
@@ -153,16 +143,20 @@ required_checks_gate() {
       done <<<"$jobs"
       if [ -z "$status" ]; then
         pending+="${pending:+, }$check (absent)"
-        continue
-      fi
-      if [ "$status" != completed ]; then
+      elif [ "$status" != completed ]; then
         pending+="${pending:+, }$check ($status)"
-        continue
-      fi
-      if [ "$conclusion" != success ]; then
+      elif [ "$conclusion" != success ]; then
         printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "$conclusion" "$full_sha" >&2
         exit 1
       fi
+      # A check-run bearing the name that none of those producers accounts
+      # for keeps the check pending, whatever the pinned job concluded.
+      while IFS=$'\t' read -r cr_id cr_name; do
+        [ "$cr_name" = "$check" ] || continue
+        if [[ "$producer_ids" != *$'\n'"$cr_id"$'\n'* ]]; then
+          pending+="${pending:+, }$check (unattributed check-run $cr_id)"
+        fi
+      done <<<"$check_runs"
     done <<<"$required"
     [ -z "$pending" ] && break
     if [ "$SECONDS" -ge "$deadline" ]; then

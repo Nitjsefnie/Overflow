@@ -980,12 +980,12 @@ describe("scripts/deploy-revision.sh", () => {
     expectGateRefused(entries);
   });
 
-  it("refuses a second producer of a required check-run without waiting, whatever the pinned job's state", async () => {
+  it("never passes beside a same-named check-run no pinned job produced, and refuses at the deadline naming it", async () => {
     for (const [status, conclusion] of [["completed", "success"], ["in_progress", undefined]] as const) {
       const fixture = await makeFixture();
       const state = await writeGateState(
         fixture,
-        "gate-second-producer",
+        "gate-unattributed",
         [
           { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status, conclusion }] },
           { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
@@ -993,16 +993,70 @@ describe("scripts/deploy-revision.sh", () => {
         // A check-run created through the Checks API: no job record carries its id.
         [[9999, "verify"]],
       );
-      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
 
       expect(result.status, `${status}: ${result.stderr}`).toBe(1);
-      expect(result.stderr, status).toContain("verify");
-      expect(result.stderr, status).toContain("9999");
-      const entries = await readLog(fixture.shimLog);
-      expect(entries.some((entry) => entry.cmd === "sleep"), status).toBe(false);
-      expectGateRefused(entries, status);
+      expect(result.stderr, status).toContain("verify (unattributed check-run 9999)");
+      expectGateRefused(await readLog(fixture.shimLog), status);
       await rm(fixture.dir, { recursive: true, force: true });
     }
+  });
+
+  it("passes once an unattributed check-run disappears or its pinned run appears on a later poll", async () => {
+    for (const label of ["disappears", "run appears"]) {
+      const fixture = await makeFixture();
+      const deployGate: GateRun = {
+        id: 200,
+        path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }],
+      };
+      const olderVerify: GateRun = {
+        id: 100,
+        path: FIXTURE_PINS.verify!,
+        jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }],
+      };
+      const newerVerify: GateRun = {
+        id: 150,
+        path: FIXTURE_PINS.verify!,
+        jobs: [{ id: 1501, name: "verify", status: "completed", conclusion: "success" }],
+      };
+      // First poll: check-run 1501 is listed but no listed run carries its job.
+      const first = await writeGateState(fixture, "gate-unattributed-first", [olderVerify, deployGate], [[1501, "verify"]]);
+      const second =
+        label === "disappears"
+          ? await writeGateState(fixture, "gate-unattributed-gone", [olderVerify, deployGate])
+          : await writeGateState(fixture, "gate-unattributed-attributed", [newerVerify, olderVerify, deployGate]);
+      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: `${first}:${second}` });
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(0);
+      const entries = await readLog(fixture.shimLog);
+      const checkRunsReads = entries.filter(
+        (entry) => entry.cmd === "gh" && entry.args.some((arg) => arg.includes("check-runs?filter=all&per_page=100")),
+      );
+      expect(checkRunsReads, label).toHaveLength(2);
+      expect(entries.some((entry) => entry.args[0] === "release:switch"), label).toBe(true);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not count a same-named job of a different pinned workflow as the check's producer", async () => {
+    const fixture = await makeFixture();
+    const state = await writeGateState(fixture, "gate-pinned-impostor", [
+      { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      {
+        id: 200,
+        path: FIXTURE_PINS["deploy-gate"]!,
+        jobs: [
+          { id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" },
+          { id: 2002, name: "verify", status: "completed", conclusion: "success" },
+        ],
+      },
+    ]);
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("2002");
+    expectGateRefused(await readLog(fixture.shimLog));
   });
 
   it("refuses immediately, naming it, when a required check has no pin in the map", async () => {
@@ -1038,6 +1092,9 @@ describe("scripts/deploy-revision.sh", () => {
       expect(result.status, `${label}: ${result.stderr}`).toBe(1);
       expect(result.stderr, label).toContain(MAP_PATH);
       expect(result.stderr, label).toContain(FIXTURE_HASH);
+      // The map refusal itself, not the unmapped-context refusal a map read
+      // as empty or as the wrong keys would reach: no required check is named.
+      for (const check of Object.keys(FIXTURE_PINS)) expect(result.stderr, label).not.toContain(check);
       const entries = await readLog(fixture.shimLog);
       expect(gateLog(entries), label).toEqual(gateReads(FIXTURE_HASH).slice(0, 2));
       expectGateRefused(entries, label);
