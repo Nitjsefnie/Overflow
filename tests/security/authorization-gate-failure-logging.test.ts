@@ -23,6 +23,8 @@ import { requiredMemberSession } from "@/lib/security/member-route-auth";
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
+const sessionTokenId = "00000000-0000-4000-8000-00000000e1d5";
+
 // Distinctive values that must never reach a log line. The route gates resolve
 // the credential for real, so the bearer token has the minted token's shape.
 const bearerToken = `ovf_${"S".repeat(20)}ecretBearerValue${"x".repeat(7)}`;
@@ -50,11 +52,17 @@ const routeGates = [
     gate: "member route gate",
     run: requiredMemberSession,
     message: "Unable to authorize the member request.",
+    authorized: { user: { id: sessionUserId, role: "MODERATOR" } },
   },
   {
     gate: "moderator route gate",
     run: requiredModeratorSession,
     message: "Unable to authorize the moderator request.",
+    // The moderator gate also names the credential behind the action (issue 682).
+    authorized: {
+      user: { id: sessionUserId, role: "MODERATOR" },
+      credential: { kind: "token", tokenId: sessionTokenId },
+    },
   },
 ] as const;
 
@@ -115,7 +123,7 @@ function expectNoSecretLogged(): void {
   }
 }
 
-describe.each(routeGates)("$gate lookup failures", ({ gate, run, message }) => {
+describe.each(routeGates)("$gate lookup failures", ({ gate, run, message, authorized }) => {
   it.each(phases.flatMap((phase) => credentials.map((credential) => ({ phase, credential }))))(
     "answers 502 and logs one line naming the gate and $phase for a $credential",
     async ({ phase, credential }) => {
@@ -137,11 +145,11 @@ describe.each(routeGates)("$gate lookup failures", ({ gate, run, message }) => {
   it("logs nothing when the gate authorizes the request", async () => {
     const result = await run(gatedRequest("bearer token"), {
       getSession: vi.fn(),
-      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: sessionUserId }),
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: sessionUserId, tokenId: sessionTokenId }),
       getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
     });
 
-    expect(result).toEqual({ user: { id: sessionUserId, role: "MODERATOR" } });
+    expect(result).toEqual(authorized);
     expect(consoleError).not.toHaveBeenCalled();
   });
 });
