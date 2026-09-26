@@ -7,6 +7,7 @@ import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 import { logField } from "@/lib/webhooks/log-field";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 
 export type GitLabWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
@@ -46,18 +47,12 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       return new Response(null, { status: 401 });
     }
 
-    const contentLength = request.headers.get("content-length");
-    if (contentLength !== null) {
-      const declaredBytes = Number(contentLength);
-      if (
-        Number.isSafeInteger(declaredBytes) && declaredBytes >= 0
-        && declaredBytes > GITLAB_WEBHOOK_BODY_LIMIT_BYTES
-      ) {
-        return new Response(null, { status: 413 });
-      }
-    }
-
-    const rawBody = await readBodyWithinLimit(request);
+    // The reader carries the Content-Length pre-check the route used to make
+    // itself: a declared oversize answers 413 here without a byte read, and a
+    // stream that crosses the limit is cancelled mid-read, so response
+    // ordering and the 413 semantics are unchanged. The token check above is
+    // still ahead of any Content-Length consultation and any body read.
+    const rawBody = await readBodyWithinLimit(request, GITLAB_WEBHOOK_BODY_LIMIT_BYTES);
     if (rawBody === null) {
       return new Response(null, { status: 413 });
     }
@@ -127,33 +122,6 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       return new Response(null, { status: 503 });
     }
   };
-}
-
-// Reads the request body chunk by chunk under the webhook body limit,
-// returning the concatenated bytes, or null once the running count crosses
-// the limit. The reader is cancelled on the crossing chunk — never drained to
-// completion — so a missing, unparsable, or inaccurate Content-Length cannot
-// bypass the ceiling, and an oversized delivery never forces more than LIMIT
-// plus one chunk into memory.
-async function readBodyWithinLimit(request: Request): Promise<Buffer | null> {
-  if (request.body === null) {
-    return Buffer.alloc(0);
-  }
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  let read = await reader.read();
-  while (!read.done) {
-    const chunk = read.value;
-    totalBytes += chunk.byteLength;
-    if (totalBytes > GITLAB_WEBHOOK_BODY_LIMIT_BYTES) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(chunk);
-    read = await reader.read();
-  }
-  return Buffer.concat(chunks);
 }
 
 export async function POST(request: Request): Promise<Response> {

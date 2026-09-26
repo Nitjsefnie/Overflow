@@ -224,6 +224,9 @@ src/lib/github/*
 !src/lib/github/*.ts
 !src/lib/github/graphql-request-budget.ts
 !src/lib/github/graphql-cost.ts
+!src/lib/http/
+src/lib/http/*
+!src/lib/http/request-body.ts
 !src/lib/mcp/
 src/lib/mcp/*
 !src/lib/mcp/*.ts
