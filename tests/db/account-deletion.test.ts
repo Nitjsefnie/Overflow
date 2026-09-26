@@ -454,6 +454,10 @@ describe("account deletion as pseudonymisation", () => {
 
     expect(exported.apiToken).not.toBeNull();
     expect(new Date(exported.apiToken!.createdAt).toISOString()).toEqual(exported.apiToken!.createdAt);
+    // Main's 046 migration gave every token a bounded lifetime; the export
+    // carries the expiry alongside the creation instant, never the hash.
+    expect(new Date(exported.apiToken!.expiresAt).toISOString()).toEqual(exported.apiToken!.expiresAt);
+    expect(Object.keys(exported.apiToken!).sort()).toEqual(["createdAt", "expiresAt"]);
 
     expect(exported.forgeIdentities).toHaveLength(1);
     expect(exported.forgeIdentities[0]!.forgeUserId).toBe(777);

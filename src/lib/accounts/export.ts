@@ -24,7 +24,7 @@ export type AccountExportAccount = {
   hasStoredGitHubToken: boolean;
 };
 
-export type AccountExportApiToken = { createdAt: string };
+export type AccountExportApiToken = { createdAt: string; expiresAt: string };
 
 export type AccountExportForgeIdentity = {
   id: string;
@@ -247,10 +247,12 @@ async function loadForgeIdentities(
 }
 
 async function loadApiToken(sql: ExportClient, userId: string): Promise<AccountExportApiToken | null> {
-  const [row] = await sql<{ created_at: Date }[]>`
-    select created_at from api_tokens where user_id = ${userId}
+  const [row] = await sql<{ created_at: Date; expires_at: Date }[]>`
+    select created_at, expires_at from api_tokens where user_id = ${userId}
   `;
-  return row === undefined ? null : { createdAt: iso(row.created_at) };
+  return row === undefined
+    ? null
+    : { createdAt: iso(row.created_at), expiresAt: iso(row.expires_at) };
 }
 
 function setSection(document: AccountExport, path: string, rows: AccountExportRow[]): void {
