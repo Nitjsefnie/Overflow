@@ -48,6 +48,6 @@ export async function recordNewPolicyViolations(
   await sql`
     insert into repository_policy_violations (repository_id, violation)
     select ${repositoryId}, value from jsonb_array_elements(${current}::jsonb)
-    on conflict do nothing
+    on conflict (repository_id, violation_digest) do nothing
   `;
 }
