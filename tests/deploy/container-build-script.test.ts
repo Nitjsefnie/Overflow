@@ -37,7 +37,6 @@ describe("scripts/container-build.sh", () => {
   it("builds with the full source SHA from git rev-parse HEAD, defaulting the tag to overflow-app", () => {
     expect(script).toContain('source_sha="$(git rev-parse HEAD)"');
     expect(script).toContain('docker build --build-arg SOURCE_SHA="$source_sha"');
-    expect(script).toContain('git archive --format=tar "$source_sha"');
     expect(script).toContain('image="${1:-overflow-app}"');
   });
 

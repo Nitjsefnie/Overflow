@@ -189,7 +189,7 @@ async function writeCheckRuns(
 const RELEASE_GRAMMAR = /^\.next-release-\d{8}T\d{6}Z-[a-f0-9]{7,40}$/;
 const LISTING_REGEX = String.raw`.*/\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}`;
 /** The ignored-files gate's read, as the shim log records it. */
-const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-standard --directory";
+const IGNORED_LISTING = "git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory";
 /**
  * Every ignored untracked entry production's tree legitimately holds, in the
  * shape `git ls-files --others --ignored --directory` prints it: directories
@@ -228,6 +228,22 @@ const NEAR_MISS_IGNORED = [
   ".nextx",
   "src/app/zz-probe/",
 ];
+
+/**
+ * The offending paths the ignored-files refusal lists: the run of lines
+ * directly above its message, each indented by exactly two spaces (%q escapes
+ * a leading space, so a path never starts with one). A real git fetch writes
+ * its ref updates to the same stream just before, indented further.
+ */
+function listedOffenders(stderr: string): string[] {
+  const lines = stderr.split("\n");
+  const offenders: string[] = [];
+  for (let at = lines.findIndex((line) => line.startsWith("The tree in ")) - 1; at >= 0; at--) {
+    if (!/^ {2}\S/.test(lines[at]!)) break;
+    offenders.unshift(lines[at]!.slice(2));
+  }
+  return offenders;
+}
 
 async function makeRelease(tree: string, name: string): Promise<string> {
   const directory = path.join(tree, name);
@@ -1481,14 +1497,6 @@ describe("scripts/deploy-revision.sh", () => {
     return entries.map((entry) => `${entry}\\0`).join("");
   }
 
-  /** The offending paths the ignored-files refusal lists, one per indented stderr line. */
-  function listedOffenders(stderr: string): string[] {
-    return stderr
-      .split("\n")
-      .filter((line) => line.startsWith("  "))
-      .map((line) => line.slice(2));
-  }
-
   function expectIgnoredRefusal(stderr: string, tree: string, label: string): void {
     expect(stderr, label).toContain(`The tree in ${tree} holds the ignored untracked files above`);
     expect(stderr, label).toContain("ignored untracked files that git status does not show");
@@ -1706,7 +1714,7 @@ describe("scripts/deploy-revision.sh", () => {
       expect(status()).toBe("");
       // Invisible to status, yet all present: the ignored-files gate's listing
       // yields each in exactly the shape its allowlist names.
-      const ignored = git("ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+      const ignored = git("ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory")
         .split("\0")
         .filter((entry) => entry !== "");
       expect(ignored.sort()).toEqual(
@@ -1739,7 +1747,9 @@ describe("scripts/deploy-revision.sh", () => {
     const atSha = source.indexOf("full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')");
     const atAncestry = source.indexOf('git merge-base --is-ancestor HEAD "$full_sha"');
     const atGate = source.indexOf("git status --porcelain=v1 -uall");
-    const atIgnoredGate = source.indexOf("git ls-files -z --others --ignored --exclude-standard --directory");
+    const atIgnoredGate = source.indexOf(
+      "git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory",
+    );
     const atCiGate = source.indexOf('case "${OVERFLOW_DEPLOY_CI_GATE:-}"');
     const atMerge = source.indexOf('git merge --ff-only "$full_sha"');
     const atEsac = source.lastIndexOf("esac", atMerge);
@@ -1799,6 +1809,8 @@ describe("scripts/deploy-revision.sh", () => {
  * alike, so a host setting (pull.rebase, say) cannot decide the outcome.
  */
 const HERMETIC_GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+/** The one tracked source file makeGitFixture commits under src/. */
+const SOURCE_PATH = "src/app/page.tsx";
 
 async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip: string; git: (...args: string[]) => string }> {
   const fixture = await makeFixture();
@@ -1816,10 +1828,14 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   run(origin, ["init", "-q", "-b", "main"]);
   await writeFile(path.join(origin, ".gitignore"), "/.next\n/.next-release-*\n");
   await writeFile(path.join(origin, "app.txt"), "stable\n");
+  // Tracked source under src/app/, as production's tree has: without it git
+  // reports an ignored path planted there as src/ itself, beside the path.
+  await mkdir(path.join(origin, "src", "app"), { recursive: true });
+  await writeFile(path.join(origin, SOURCE_PATH), "export default function Page() { return null; }\n");
   // The gate reads the pin map from the deployed commit itself.
   await mkdir(path.join(origin, ".github"));
   await writeFile(path.join(origin, MAP_PATH), await readFile(fixture.requiredChecks, "utf8"));
-  run(origin, ["add", ".gitignore", "app.txt", MAP_PATH]);
+  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -1958,7 +1974,9 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
 
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("src/app/zz-probe/");
+    // The planted directory is the only offender: the tracked src/app/page.tsx
+    // keeps git from reporting src/ itself, so nothing else can carry the refusal.
+    expect(listedOffenders(result.stderr)).toEqual(["src/app/zz-probe/"]);
     expect(result.stderr).toContain(`The tree in ${fixture.tree} holds the ignored untracked files above`);
     expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
     expect(git("rev-parse", "HEAD")).toBe(behind);
@@ -1981,7 +1999,8 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     await writeFile(path.join(fixture.tree, "node_modules", "x", "y"), "y");
     await writeFile(path.join(fixture.tree, "next-env.d.ts"), "regenerated\n");
     // The premise: every allowlist shape is really present in the listing.
-    const listed = git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory").split("\n");
+    const listed = git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory")
+      .split("\n");
     expect(listed.sort()).toEqual(
       [
         ".next",
@@ -2010,11 +2029,24 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
       const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
 
       expect(result.status, `${nearMiss}: ${result.stderr}`).toBe(1);
-      expect(result.stderr, nearMiss).toContain(`  ${nearMiss}/\n`);
+      expect(listedOffenders(result.stderr), nearMiss).toEqual([`${nearMiss}/`]);
       expect(git("rev-parse", "HEAD"), nearMiss).toBe(behind);
       expect((await readLog(fixture.shimLog)).some((entry) => entry.cmd === "gh"), nearMiss).toBe(false);
       await rm(fixture.dir, { recursive: true, force: true });
     }
+  });
+
+  it("deploys past an ignored empty directory, since nothing in it can be compiled", async () => {
+    const { fixture, tip, git } = await makeGitFixture();
+    await denyByDefault(fixture.tree, git);
+    const empty = path.join(fixture.tree, "src", "app", "empty");
+    await mkdir(empty);
+    // The premise: git does report it to a listing that keeps empty directories.
+    expect(git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory")).toContain("src/app/empty/");
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
   });
 });
 
