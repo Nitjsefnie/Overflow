@@ -70,12 +70,13 @@ required_checks_gate() {
     exit 1
   fi
   # The pin map as `check<TAB>workflow path` lines. A missing file, invalid
-  # JSON, anything but an object of .github/workflows/*.yml paths, or an
-  # absent jq all fail here.
-  if ! pins=$(git show "$full_sha:.github/required-checks.json" | jq -r '
-      if type == "object" and all(.[]; type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z"))
-      then to_entries[] | [.key, .value] | @tsv
-      else error("not an object of .github/workflows/*.yml paths") end'); then
+  # JSON, anything but exactly one object of .github/workflows/*.yml paths,
+  # or an absent jq all fail here.
+  if ! pins=$(git show "$full_sha:.github/required-checks.json" | jq -rs '
+      if length == 1 and (.[0] | type == "object"
+          and all(.[]; type == "string" and test("\\A\\.github/workflows/[^/]+\\.ya?ml\\z")))
+      then .[0] | to_entries[] | [.key, .value] | @tsv
+      else error("not exactly one object of .github/workflows/*.yml paths") end'); then
     printf 'Could not read a valid .github/required-checks.json at %s (a JSON object mapping each required check to a .github/workflows/*.yml path); refusing to deploy.\n' "$full_sha" >&2
     exit 1
   fi
@@ -106,13 +107,15 @@ required_checks_gate() {
       exit 1
     fi
     # Every job of every run of a pinned workflow, one per line:
-    # run, path, job id, name, attempt, status, conclusion.
+    # run, path, job id, name, attempt, status, conclusion. Tab is IFS
+    # whitespace, so an empty field would shift the ones after it: the jobs
+    # projection fills every field but the last.
     jobs=
     while IFS=$'\t' read -r run_id run_path; do
       [ -n "$run_id" ] || continue
       is_pinned_path "$run_path" || continue
       if ! run_jobs=$(gh api "repos/$repo/actions/runs/$run_id/jobs?filter=all&per_page=100" --paginate \
-          --jq '.jobs[] | [.id, .name, .run_attempt, .status, (.conclusion // "")] | @tsv' </dev/null); then
+          --jq '.jobs[] | [.id, (if (.name // "") == "" then "(unnamed)" else .name end), (.run_attempt // 0), (.status // "unknown"), (.conclusion // "")] | @tsv' </dev/null); then
         printf 'Could not read the jobs of workflow run %s for %s on %s; refusing to deploy.\n' "$run_id" "$repo" "$full_sha" >&2
         exit 1
       fi
