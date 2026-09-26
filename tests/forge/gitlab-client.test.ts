@@ -276,6 +276,17 @@ describe("GitLab collection pagination", () => {
     expect(requests.map((request) => new URL(request.url).search)).toEqual(["?per_page=100&page=1", "?per_page=100&page=2"]);
   });
 
+  it("reads the chronologically latest commit across mixed UTC offsets", async () => {
+    // 10:00+02:00 is 08:00Z — EARLIER than 09:30Z, though it sorts later as a
+    // string. The lexical maximum would pick 08:00Z; the chronological
+    // maximum must pick 09:30Z.
+    const { client } = collectionClient(`${projectPath}/merge_requests/17/commits`, () => json([
+      { committed_date: "2026-09-26T10:00:00+02:00" },
+      { committed_date: "2026-09-26T09:30:00Z" },
+    ]));
+    expect((await client.getPullRequest(repository, 17)).finalCommitAt).toBe("2026-09-26T09:30:00.000Z");
+  });
+
   it("uses offset pagination for closes_issues", async () => {
     const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/closes_issues`, (_, hit) => hit === 1
       ? json([{ id: 6_600_001, iid: 12, project_id: 278964 }], { "x-next-page": "2" })
@@ -389,11 +400,13 @@ describe("GitLab collection pagination", () => {
     expect(requests).toHaveLength(2);
   });
 
-  it("leaves finalCommitAt null when commit pagination fails", async () => {
+  // Issue 695: a failed commit read propagates instead of degrading to null —
+  // credential failures must reach the credential-failure handling.
+  it("propagates a failure from commit pagination", async () => {
     const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/commits`, (_, hit) => hit === 1
       ? json([{ committed_date: "2026-09-11T08:00:00.000Z" }], { "x-next-page": "2" })
       : new Response("unavailable", { status: 503 }));
-    expect((await client.getPullRequest(repository, 17)).finalCommitAt).toBeNull();
+    await expect(client.getPullRequest(repository, 17)).rejects.toMatchObject({ name: "GitLabApiError", status: 503 });
     expect(requests).toHaveLength(2);
   });
 });
@@ -535,7 +548,10 @@ describe("GitLabGateway", () => {
   });
 
   it("captures the merge evidence and all three SHAs from the MR object", async () => {
+    // The merged fixture triggers the commit read; before issue 695 the
+    // missing commits route was masked by the swallowed error.
     const client = gateway(jsonRouter([
+      ["/merge_requests/17/commits", [{ committed_date: "2026-09-11T09:45:00.000Z" }]],
       ["/merge_requests/17", mergeRequest],
     ]));
     const pullRequest = await client.getPullRequest(
@@ -559,6 +575,29 @@ describe("GitLabGateway", () => {
     // Timestamp normalization happens once, at the gateway boundary: the
     // fixtures above carry all three GitLab timestamp shapes and come back ISO UTC.
     expect(pullRequest.mergedAt).toBe("2026-09-11T10:00:00.000Z");
+  });
+
+  // Route order matters in jsonRouter: "/merge_requests/17" is a prefix of
+  // the commits URL, so the commits route is listed first.
+  it.each([401, 403, 500] as const)(
+    "propagates a %d from the commit read of a merged merge request",
+    async (status) => {
+      const client = gateway(jsonRouter([
+        ["/merge_requests/17/commits", { message: "refused" }, status],
+        ["/merge_requests/17", mergeRequest],
+      ]));
+      await expect(client.getPullRequest({ owner: "gitlab-org", name: "gitlab" }, 17))
+        .rejects.toMatchObject({ name: "GitLabApiError", status });
+    },
+  );
+
+  it("leaves finalCommitAt null when a successful commit read carries no commits", async () => {
+    const client = gateway(jsonRouter([
+      ["/merge_requests/17/commits", []],
+      ["/merge_requests/17", mergeRequest],
+    ]));
+    const pullRequest = await client.getPullRequest({ owner: "gitlab-org", name: "gitlab" }, 17);
+    expect(pullRequest.finalCommitAt).toBeNull();
   });
 
   it("maps issues with null state_reason, embedded labels and normalized timestamps", async () => {
@@ -929,7 +968,10 @@ describe("GitLabGateway", () => {
   });
 
   it("reads closing issues and closing merge requests through the live-verified endpoints", async () => {
+    // The merged closed_by fixture triggers a commit read per merge request;
+    // before issue 695 the missing commits route was masked by the swallowed error.
     const client = gateway(jsonRouter([
+      ["/merge_requests/17/commits", [{ committed_date: "2026-09-11T09:45:00.000Z" }]],
       ["/closes_issues", [{ id: 6_600_001, iid: 12, project_id: 278964 }]],
       ["/closed_by", [mergeRequest]],
     ]));
