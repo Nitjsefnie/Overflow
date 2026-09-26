@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
+import { hashApiToken } from "@/lib/security/api-token";
 import {
   DEFAULT_SEED_OPTIONS,
   benchApiToken,
@@ -60,6 +61,14 @@ describe("seed world planning", () => {
     expect(expectedOpenBoardRows({ ...SMALL_WORLD, underwaterRepos: 0 })).toBe(40);
   });
 
+  it("counts the round-robin remainder repository when its sponsor is solvent", () => {
+    // 41 open issues over 4 repositories: repository 0 holds 11, the rest 10.
+    // Repository 3's owner is underwater, so the solvent remainder
+    // repository's extra issue must still appear: 11 + 10 + 10 + 1 repayment.
+    const uneven = { ...SMALL_WORLD, openIssues: 41, underwaterRepos: 1 };
+    expect(expectedOpenBoardRows(uneven)).toBe(32);
+  });
+
   it("refuses underwater sponsors beyond the repositories or a sponsor set too small to spare a solvent creditor", () => {
     expect(() => planSeedWorld({ ...SMALL_WORLD, underwaterRepos: 5 })).toThrow(RangeError);
     expect(() => planSeedWorld({ ...SMALL_WORLD, sponsors: 3, underwaterRepos: 2 })).toThrow(RangeError);
@@ -104,6 +113,13 @@ describe("session cookie minting", () => {
 
   it("names the cookie the production session strategy reads", () => {
     expect(benchSessionCookieName()).toBe("authjs.session-token");
+  });
+
+  it("mints a bearer token the app's own reader accepts, hashing to the stored credential", () => {
+    const { token, tokenHash } = benchApiToken();
+    const readerHash = hashApiToken(token);
+    expect(readerHash).not.toBeNull();
+    expect(Buffer.from(readerHash!).equals(tokenHash)).toBe(true);
   });
 });
 
