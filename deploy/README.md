@@ -951,7 +951,7 @@ token (`user_forge_identities.encrypted_token`) and each registration's webhook
 secret (`registered_repositories.encrypted_webhook_secret`). Every value written
 in the current format names the key that sealed it and is bound to its own row;
 values stored before that format carry neither until they are re-sealed (see
-"Credentials stored before key identifiers" below).
+"Re-sealing without changing the key" below).
 
 **This section is the only sanctioned way to change `TOKEN_ENCRYPTION_KEY`.**
 Replacing the value in the environment file any other way leaves every stored
@@ -1030,9 +1030,10 @@ ownership and mode. It refuses, changing nothing, unless:
 - step 2's file holds a 43-character key;
 - the environment file ends with a newline, so the appended line cannot be
   glued onto the last one;
-- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`. `.env.example` ships an empty
-  `TOKEN_ENCRYPTION_KEY_PREVIOUS=` line; delete such a line before running the
-  block;
+- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`, comments included. A file
+  copied from `.env.example` carries its commented
+  `# TOKEN_ENCRYPTION_KEY_PREVIOUS=` line and its explanation; delete both, and
+  any empty `TOKEN_ENCRYPTION_KEY_PREVIOUS=` line, before running the block;
 - exactly one line names `TOKEN_ENCRYPTION_KEY` at all, comments included (the
   pre-restart rollback counts the same way, so a file this block accepts is one
   the rollback accepts), and that line holds the bare value and nothing else: no
@@ -1293,13 +1294,40 @@ key-identified credential format reads no `TOKEN_ENCRYPTION_KEY_PREVIOUS` and
 cannot open any credential written or re-sealed in that format, whichever key
 sealed it.
 
-### Credentials stored before key identifiers
+### Re-sealing without changing the key
 
-Right after the release that introduced key identifiers, `--check` counts every
-credential stored before it as not current and exits 1, with no rotation under
-way. Those rows still open under the current key. The first rotation re-seals
-them; steps 1, 4 and 5 alone, with no key change, re-seal them under the
-current key.
+Every credential stored before the release that introduced key identifiers
+stays in the old format until something re-seals it. Such a value names no key
+and is bound to no row, so it still opens if it is copied into another row, and
+`--check` counts it as not current and exits 1 with no rotation under way. The
+service reads both formats, so nothing is broken; the row binding simply does
+not cover those rows yet. Nothing re-seals them on its own. Run this pass once,
+after that release is deployed.
+
+**When:** only once the release is settled and no section 9 rollback to a
+release older than it is intended. An older release accepts only the old format
+and refuses every re-sealed value. The same is already true, with or without
+this pass, of every value the new release writes on its own: a sign-in, a
+forge relink, a registration and a webhook upgrade all store the new format. So
+a rollback past this release leaves those rows unreadable too. The remedy then
+is to clear each such row's credential as step 5 does, by id, and have its user
+sign in again, relink the forge identity, or register the repository again.
+
+**How:** with no key change and no restart, since the service already holds the
+key the pass seals under:
+
+1. Take step 1's backup. That dump holds the old format, which an older release
+   can still read.
+2. Run step 4's block. The environment file names only `TOKEN_ENCRYPTION_KEY`,
+   so the script opens each old-format value with it and re-seals it under the
+   same key, bound to its row.
+3. Repair any row it reports undecryptable as step 5 describes, and run step
+   4's block again until both statuses are 0.
+
+After that, `--check` exits 0 until a rotation starts. It reads only which key
+sealed each row, so it cannot see a row sealed under the current key but bound
+to another row; the service refuses such a value, and step 5's remedy for its
+table applies.
 
 ### Webhook secrets of unregistered repositories
 
