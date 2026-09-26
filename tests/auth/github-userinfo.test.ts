@@ -58,7 +58,9 @@ describe("requestGitHubPublicIdentity", () => {
 
     const profile = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } });
 
-    expect(profile).toEqual(profileWithoutEmail);
+    // The projection keeps exactly the public identity fields; the display
+    // name field is dropped even when it is null.
+    expect(profile).toEqual({ login: "octocat", id: 4242, avatar_url: "https://avatars.example/octocat.png" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestedUrls(fetchMock)).toEqual([GITHUB_USER_URL]);
     expect(requestedUrls(fetchMock).some((url) => url.startsWith(GITHUB_USER_EMAILS_URL))).toBe(false);
@@ -77,19 +79,28 @@ describe("requestGitHubPublicIdentity", () => {
     expect(headers.get("user-agent")).toBe("authjs");
   });
 
-  it("passes an email through unchanged without querying the email endpoint when one exists", async () => {
+  it("projects /user to exactly the public identity: the display name, the e-mail, and every other field are dropped", async () => {
     const profileWithEmail = {
       login: "octocat",
       id: 4242,
       avatar_url: "https://avatars.example/octocat.png",
       email: "octocat@example.com",
+      name: "The Octocat",
+      type: "User",
+      site_admin: false,
+      url: "https://api.github.com/users/octocat",
+      created_at: "2011-01-25T18:44:36Z",
     };
     const fetchMock = fetchMockReturning(profileWithEmail);
     vi.stubGlobal("fetch", fetchMock);
 
     const profile = await requestGitHubPublicIdentity({ tokens: { access_token: secretAccessToken } });
 
-    expect(profile).toEqual(profileWithEmail);
+    expect(profile).toEqual({
+      id: 4242,
+      login: "octocat",
+      avatar_url: "https://avatars.example/octocat.png",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestedUrls(fetchMock)).toEqual([GITHUB_USER_URL]);
     expect(requestedUrls(fetchMock).some((url) => url.startsWith(GITHUB_USER_EMAILS_URL))).toBe(false);

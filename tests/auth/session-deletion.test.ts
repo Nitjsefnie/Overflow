@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NextAuthConfig, Profile } from "next-auth";
-import { refreshSessionToken, type SessionAccountState } from "@/lib/auth/account-store";
+import { refreshSessionToken, type SessionAccountSnapshot } from "@/lib/auth/account-store";
 import type { PersistedGitHubUser } from "@/lib/auth/sign-in-decision";
 
 // Dynamic auth imports retain this file's mocks until the graph is cleared.
@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   claimGitHubIdentity: vi.fn(),
   upsertGitHubAccount: vi.fn<(...args: unknown[]) => Promise<PersistedGitHubUser>>(),
   findGitHubAccount: vi.fn<(githubUserId: number) => Promise<PersistedGitHubUser | null>>(),
-  findSessionAccountState: vi.fn<(id: string) => Promise<SessionAccountState>>(),
+  findSessionAccountState: vi.fn<(id: string) => Promise<SessionAccountSnapshot>>(),
 }));
 
 vi.mock("next-auth", () => ({ default: mocks.nextAuth }));
@@ -41,11 +41,11 @@ vi.mock("@/lib/auth/account-store", async (importOriginal) => {
   };
 });
 
-type Lookup = (id: string) => Promise<SessionAccountState>;
+type Lookup = (id: string) => Promise<SessionAccountSnapshot>;
 
 describe("refreshSessionToken", () => {
   it("returns the token and never looks up when the token carries no string userId", async () => {
-    const lookup: Lookup = vi.fn().mockResolvedValue("DELETED");
+    const lookup: Lookup = vi.fn().mockResolvedValue({ state: "DELETED", githubLogin: null });
 
     await expect(refreshSessionToken({}, lookup)).resolves.toEqual({});
     await expect(refreshSessionToken({ userId: 4242 }, lookup)).resolves.toEqual({ userId: 4242 });
@@ -53,7 +53,7 @@ describe("refreshSessionToken", () => {
   });
 
   it("returns null when the account is DELETED", async () => {
-    const lookup: Lookup = vi.fn().mockResolvedValue("DELETED");
+    const lookup: Lookup = vi.fn().mockResolvedValue({ state: "DELETED", githubLogin: null });
 
     await expect(
       refreshSessionToken({ userId: "u1", role: "MEMBER" }, lookup),
@@ -61,15 +61,21 @@ describe("refreshSessionToken", () => {
     expect(lookup).toHaveBeenCalledExactlyOnceWith("u1");
   });
 
-  it("keeps the token when the account is LIVE", async () => {
-    const lookup: Lookup = vi.fn().mockResolvedValue("LIVE");
+  it("keeps the token when the account is LIVE and names it with the row's login", async () => {
+    const lookup: Lookup = vi.fn().mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row" });
     const token = { userId: "u1", role: "MEMBER" };
 
-    await expect(refreshSessionToken(token, lookup)).resolves.toBe(token);
+    // A pre-fix token's display name leaves here: the refreshed token's name
+    // is the row's login, and nothing else about the token moves.
+    await expect(refreshSessionToken(token, lookup)).resolves.toEqual({
+      userId: "u1",
+      role: "MEMBER",
+      name: "octocat-row",
+    });
   });
 
   it("keeps the token when the account is MISSING, preserving the stale-session route", async () => {
-    const lookup: Lookup = vi.fn().mockResolvedValue("MISSING");
+    const lookup: Lookup = vi.fn().mockResolvedValue({ state: "MISSING", githubLogin: null });
     const token = { userId: "u1", role: "MEMBER" };
 
     await expect(refreshSessionToken(token, lookup)).resolves.toBe(token);
@@ -106,39 +112,50 @@ describe("jwt callback wiring", () => {
 
   it("ends the session of a deleted account: the refreshed token is null", async () => {
     const jwt = await jwtCallback();
-    mocks.findSessionAccountState.mockResolvedValue("DELETED");
+    mocks.findSessionAccountState.mockResolvedValue({ state: "DELETED", githubLogin: null });
     const token = { userId: "u1", role: "MEMBER" };
 
     await expect(jwt({ token } as never)).resolves.toBeNull();
     expect(mocks.findSessionAccountState).toHaveBeenCalledExactlyOnceWith("u1");
   });
 
-  it("keeps the token of a live account on a refresh call", async () => {
+  it("keeps the token of a live account on a refresh call, named with the row's login", async () => {
     const jwt = await jwtCallback();
-    mocks.findSessionAccountState.mockResolvedValue("LIVE");
-    const token = { userId: "u1", role: "MEMBER" };
+    mocks.findSessionAccountState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row" });
+    const token = { userId: "u1", role: "MEMBER", name: "Display Name" };
 
-    await expect(jwt({ token } as never)).resolves.toBe(token);
+    // Issue 678's refresh leg: the display name a pre-fix token carries is
+    // replaced by the row's login at the next refresh.
+    await expect(jwt({ token } as never)).resolves.toEqual({
+      userId: "u1",
+      role: "MEMBER",
+      name: "octocat-row",
+    });
   });
 
   it("applies the deletion check to a token that already carries authenticatedAt", async () => {
     // The integration pin: main's sign-in instant rides in every token, and
     // this branch's deleted-session check must still see it. A token holding
     // both userId and authenticatedAt is signed out when its account is
-    // DELETED, and carried through untouched — instant included — when LIVE.
-    // The recorded instant is an hour before the fake clock, so a mutant
-    // that rewrites authenticatedAt on every refresh call instead of only
-    // on the OAuth callback changes it and fails the LIVE leg.
+    // DELETED, and carried through — instant included — with only its name
+    // replaced by the row's login when LIVE. The recorded instant is an hour
+    // before the fake clock, so a mutant that rewrites authenticatedAt on
+    // every refresh call instead of only on the OAuth callback changes it
+    // and fails the LIVE leg.
     const jwt = await jwtCallback();
     const recordedAt = signedInAtSeconds - 3600;
     const token = { userId: "u1", role: "MEMBER", authenticatedAt: recordedAt };
 
-    mocks.findSessionAccountState.mockResolvedValue("DELETED");
+    mocks.findSessionAccountState.mockResolvedValue({ state: "DELETED", githubLogin: null });
     await expect(jwt({ token } as never)).resolves.toBeNull();
 
-    mocks.findSessionAccountState.mockResolvedValue("LIVE");
-    await expect(jwt({ token } as never)).resolves.toBe(token);
-    expect(token.authenticatedAt).toBe(recordedAt);
+    mocks.findSessionAccountState.mockResolvedValue({ state: "LIVE", githubLogin: "octocat-row" });
+    await expect(jwt({ token } as never)).resolves.toEqual({
+      userId: "u1",
+      role: "MEMBER",
+      authenticatedAt: recordedAt,
+      name: "octocat-row",
+    });
   });
 
   it("resolves the account inline on the sign-in branch and never consults the session state", async () => {
@@ -146,7 +163,7 @@ describe("jwt callback wiring", () => {
     // The mock's role differs from the token's input role, so a result still
     // carrying MEMBER proves the token took the account's role, not its own.
     mocks.findGitHubAccount.mockResolvedValue({ id: "user-uuid", role: "MODERATOR" });
-    const token = { userId: "u1", role: "MEMBER" };
+    const token = { userId: "u1", role: "MEMBER", name: "Stale Display Name", email: "stale@example.com" };
 
     await expect(jwt({
       token,
@@ -155,6 +172,9 @@ describe("jwt callback wiring", () => {
     } as never)).resolves.toEqual({
       userId: "user-uuid",
       role: "MODERATOR",
+      // The sign-in path names the token with the profile's login and leaves
+      // no e-mail behind, whatever the token carried in.
+      name: "octocat",
       canAdministerWebhooks: false,
       // Main's sign-in instant, recorded only on the OAuth callback.
       authenticatedAt: signedInAtSeconds,

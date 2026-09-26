@@ -29,8 +29,12 @@
  *
  * The object the provider passes in and the raw profile returned match the
  * `userinfo.request` shape in `@auth/core`'s `providers/oauth.ts`
- * (`UserinfoEndpointHandler`); the result is consumed unchanged by the
- * provider's default `profile()`.
+ * (`UserinfoEndpointHandler`). A 2xx body is projected to exactly the public
+ * identity fields (`id`, `login`, `avatar_url`) before it is returned, so the
+ * provider's default `profile()` — which maps `name: profile.name ??
+ * profile.login` and `email: profile.email` — names the session with the
+ * login and never sees a display name or an e-mail address. The jwt callback
+ * keeps the cookie free of both (`src/auth.ts`).
  */
 import type { Profile } from "next-auth";
 import { SIGN_IN_REFUSAL_REASONS } from "@/lib/auth/sign-in-decision";
@@ -98,7 +102,7 @@ export async function requestGitHubPublicIdentity({
     if (!response.ok) {
       throw await refuseUpstreamFailure(response);
     }
-    return await response.json();
+    return projectPublicIdentity(await response.json());
   } catch (error) {
     // A deadline expiry the transport honored surfaces here as an abort
     // rejection; one that ignored it surfaces as the deadline's own
@@ -114,6 +118,25 @@ export async function requestGitHubPublicIdentity({
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * The projection sign-in keeps from GitHub's /user body: exactly the public
+ * identity fields — the numeric user id, the login, and the avatar URL — so
+ * the display name, the e-mail address, and every other field GitHub answers
+ * with never reach the profile, the session cookie the sign-in mints, or
+ * anywhere else. Overflow reads no email anywhere.
+ */
+function projectPublicIdentity(profile: unknown): Profile {
+  if (typeof profile !== "object" || profile === null) {
+    return profile as Profile;
+  }
+  const { id, login, avatar_url } = profile as {
+    id?: unknown;
+    login?: unknown;
+    avatar_url?: unknown;
+  };
+  return { id, login, avatar_url } as Profile;
 }
 
 /**
