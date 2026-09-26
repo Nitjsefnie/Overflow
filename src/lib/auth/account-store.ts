@@ -140,6 +140,9 @@ export async function refreshSessionToken<T extends { userId?: unknown }>(
     if (snapshot.state === "DELETED") {
       return null;
     }
+    // The non-empty guard is defense in depth over the schema's
+    // `check (length(trim(github_login)) > 0)` on users.github_login
+    // (db/migrations/001_initial.sql), not a reachable branch.
     if (snapshot.state === "LIVE" && typeof snapshot.githubLogin === "string" && snapshot.githubLogin.length > 0) {
       return { ...token, name: snapshot.githubLogin };
     }

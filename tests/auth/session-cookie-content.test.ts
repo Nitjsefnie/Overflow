@@ -303,11 +303,13 @@ describe("the session cookie the real sign-in handshake mints", () => {
 describe("a session cookie minted before the change, refreshed", () => {
   it("loses the display name and the e-mail at the next session read, and the stripped token is what persists", async () => {
     // The pre-fix token, encoded the way the old handshake left it: the
-    // profile's display name as the name and the e-mail claim present.
+    // profile's display name as the name and the e-mail claim present. The
+    // sub is a UUID literal because that is what @auth/core puts there — a
+    // per-sign-in random UUID, never the numeric GitHub id.
     const preFixToken = {
       name: "Display Name",
       email: "member@example.com",
-      sub: String(githubUserId),
+      sub: "0189d1a6-1c2e-7f3b-9f4a-2f6b8f1c9e55",
       userId,
       role: "MEMBER",
       picture: avatarUrl,
