@@ -2,6 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ORIGIN_MISCONFIGURED_MESSAGE,
+  ORIGIN_REFUSED_MESSAGE,
+} from "@/lib/security/server-action-origin";
 import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 // Dynamic auth imports retain this file's mocks until the graph is cleared.
@@ -41,8 +45,6 @@ vi.mock("next-auth/providers/github", () => ({ default: mocks.github }));
 
 useTrustedOrigin();
 
-const REFUSAL_MESSAGE = "The request origin is not allowed.";
-
 function givenRequestHeaders(headers: Record<string, string>): void {
   headerState.current = new Headers(headers);
 }
@@ -71,7 +73,7 @@ describe("the server-action origin guard", () => {
       "x-forwarded-host": "attacker.example",
     });
 
-    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
   });
 
   it.each([
@@ -81,26 +83,33 @@ describe("the server-action origin guard", () => {
   ])("refuses %s", async (_case, origin) => {
     givenRequestHeaders({ origin, host: "overflow.internal" });
 
-    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
   });
 
   it("refuses a request carrying no origin header", async () => {
     givenRequestHeaders({ host: "overflow.internal" });
 
-    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
   });
 
   it("refuses the literal null origin", async () => {
     givenRequestHeaders({ origin: "null", host: "overflow.internal" });
 
-    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
   });
 
-  it("refuses when APP_URL is unset even when Origin is what APP_URL would have been", async () => {
+  it("refuses as misconfigured when APP_URL is unset even when Origin is what APP_URL would have been", async () => {
     givenRequestHeaders({ origin: trustedOrigin, host: "overflow.internal" });
     vi.stubEnv("APP_URL", undefined);
 
-    await expect(guard()).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_MISCONFIGURED_MESSAGE);
+  });
+
+  it("refuses as misconfigured when APP_URL is not a URL", async () => {
+    givenRequestHeaders({ origin: trustedOrigin, host: "overflow.internal" });
+    vi.stubEnv("APP_URL", "not a url");
+
+    await expect(guard()).rejects.toHaveProperty("message", ORIGIN_MISCONFIGURED_MESSAGE);
   });
 
   it("resolves the production proxy shape", async () => {
@@ -227,7 +236,7 @@ describe("coverage of the guard across every server action", () => {
         await expect(
           (freshModule[name] as () => Promise<unknown>)(),
           `${file}: export ${name} did not refuse a foreign origin`,
-        ).rejects.toHaveProperty("message", REFUSAL_MESSAGE);
+        ).rejects.toHaveProperty("message", ORIGIN_REFUSED_MESSAGE);
         expect(mocks.nextAuth, `${file}: export ${name} loaded @/auth`).not.toHaveBeenCalled();
         expect(mocks.signIn, `${file}: export ${name} reached next-auth`).not.toHaveBeenCalled();
         expect(mocks.signOut, `${file}: export ${name} reached next-auth`).not.toHaveBeenCalled();
