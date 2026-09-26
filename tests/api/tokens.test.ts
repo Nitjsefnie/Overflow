@@ -21,6 +21,15 @@ import {
   type ApiTokenRouteDependencies,
 } from "@/app/api/tokens/route";
 
+// Rebind cached consumers to this file's mocks when workers are shared
+// (isolate:false), both ways: a previous file's real or mocked db-client
+// record would otherwise win over this file's mock (its production-wiring
+// tests would answer 502 through the real getSql), and this file's records
+// would leak its stub into the next file's production wiring. Same pattern as
+// tests/api/reconciliation-wiring.test.ts.
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
+
 // The production wiring reads the live role through `getSql()` (issue 733),
 // and the unit tests here run without a database: the stub answers one live
 // MEMBER role row. The container suite below passes its own sql to
