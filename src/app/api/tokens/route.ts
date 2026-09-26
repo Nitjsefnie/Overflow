@@ -2,6 +2,9 @@ import type { UserRole } from "@/lib/db/types";
 import { mintApiToken } from "@/lib/security/api-token";
 import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgres-store";
+import { isRecentSignIn } from "@/lib/auth/recent-sign-in";
+
+export { REAUTHENTICATION_WINDOW_MS, AUTHENTICATION_CLOCK_SKEW_MS } from "@/lib/auth/recent-sign-in";
 
 /**
  * Mints the Overflow-issued API token an account uses to drive Overflow from a
@@ -26,18 +29,6 @@ import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgr
  * panel offers that sign-in beside this refusal, requesting no scope. So
  * minting a credential that outlives the session asks for that round trip.
  */
-
-/** How recent the session's GitHub sign-in must be to mint a token. */
-export const REAUTHENTICATION_WINDOW_MS = 10 * 60 * 1000;
-
-/**
- * How far a recorded sign-in may sit ahead of this server's clock and still
- * count. The instant is written by the jwt callback on an Overflow server and
- * floored to whole seconds, so on one host it is never ahead at all; the
- * allowance covers only a small disagreement between servers' clocks, and
- * anything further ahead is a claim no sign-in produced.
- */
-export const AUTHENTICATION_CLOCK_SKEW_MS = 60 * 1000;
 
 export type ApiTokenRouteSession = {
   /** `authenticatedAt`: the last GitHub sign-in, epoch seconds; null when the JWT records none. */
@@ -124,14 +115,6 @@ export const POST = createApiTokenPostHandler({
     return new PostgresApiTokenStore();
   },
 });
-
-function isRecentSignIn(authenticatedAt: number | null, nowMs: number): boolean {
-  if (authenticatedAt === null) {
-    return false;
-  }
-  const ageMs = nowMs - authenticatedAt * 1000;
-  return ageMs >= -AUTHENTICATION_CLOCK_SKEW_MS && ageMs <= REAUTHENTICATION_WINDOW_MS;
-}
 
 function errorResponse(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });

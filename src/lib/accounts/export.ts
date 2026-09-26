@@ -74,6 +74,11 @@ export type AccountExport = {
 
 export const ACCOUNT_EXPORT_FORMAT_VERSION = 1 as const;
 
+/** The shared representation used by the operator CLI and member download. */
+export function formatAccountExport(document: AccountExport): string {
+  return JSON.stringify(document, null, 2);
+}
+
 /**
  * The declared coverage of the export: one entry per foreign key to
  * `users`, naming the referencing table, the referencing column, the export
