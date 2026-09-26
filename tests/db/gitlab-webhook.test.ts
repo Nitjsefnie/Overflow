@@ -230,4 +230,32 @@ describe("GitLab webhook delivery materialization", () => {
     expect(await sql`select id from repository_reconciliation_jobs where repository_id = ${repositoryId}`).toEqual([]);
     expect(await sql`select github_subject_id from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}`).toEqual([]);
   });
+
+  it("projects a registration row through both webhook finders, preserving a null and a set unavailability reason", async () => {
+    const projectId = externalId++;
+    const instanceUrl = "https://finder.example.com";
+    const repositoryId = await insertGitLabRepository({ instanceUrl, projectId });
+    const store = new PostgresFoldStore();
+    const [row] = await sql<{ github_repository_id: string }[]>`
+      select github_repository_id from registered_repositories where id = ${repositoryId}
+    `;
+
+    // Both resolution primitives return the same shape; while the column is
+    // null the reason stays null rather than collapsing to a word.
+    const githubRepositoryId = Number(row!.github_repository_id);
+    expect(await store.findRepositoryByGitHubId(githubRepositoryId))
+      .toEqual({ id: repositoryId, active: true, unavailableReason: null });
+    expect(await store.findRepositoryByForgeIdentity("gitlab", instanceUrl, projectId))
+      .toEqual({ id: repositoryId, active: true, unavailableReason: null });
+
+    // The unavailability word and its since-timestamp are constrained to be
+    // set together.
+    await sql`update registered_repositories
+      set active = false, unavailable_reason = 'NOT_PUBLIC', unavailable_since = now()
+      where id = ${repositoryId}`;
+    expect(await store.findRepositoryByGitHubId(githubRepositoryId))
+      .toEqual({ id: repositoryId, active: false, unavailableReason: "NOT_PUBLIC" });
+    expect(await store.findRepositoryByForgeIdentity("gitlab", instanceUrl, projectId))
+      .toEqual({ id: repositoryId, active: false, unavailableReason: "NOT_PUBLIC" });
+  });
 });

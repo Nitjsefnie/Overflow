@@ -258,9 +258,9 @@ describe("GitLab webhook delivery classification", () => {
 
 describe("GitLab webhook repository visibility", () => {
   // GitLab exposes visibility as an integer level: 0 private, 10 internal,
-  // 20 public. Any present level below public is a non-public word — internal
-  // matches registration, which maps internal to PRIVATE and refuses — and
-  // silence is unknown, so the payload alone never refuses.
+  // 20 public. Any present level other than public is a non-public word —
+  // internal matches registration, which maps internal to PRIVATE and refuses
+  // — and silence is unknown, so the payload alone never refuses.
   it.each([
     { name: "private (0)", visibility_level: 0 },
     { name: "internal (10)", visibility_level: 10 },
