@@ -18,6 +18,8 @@ The optional container route — an alternative to section 10's host procedure, 
 
 Backing the production database up and restoring it — the least-privilege backup role, the daily `overflow-backup.timer`, the exact restore steps and the drill procedure — lives in [backup-restore.md](backup-restore.md).
 
+Containing and scoping an incident, preserving evidence and recording the maintainer's decisions — [incident-response.md](incident-response.md).
+
 Values used throughout: deployment tree `/srv/overflow`, service account
 `overflow:overflow`, Node 24.17.0 at `/usr/local/lib/nodejs/node-v24.17.0`,
 secrets in `/etc/overflow/overflow.env`, listener `127.0.0.1:3000` behind nginx.
