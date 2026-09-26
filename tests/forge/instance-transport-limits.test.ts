@@ -27,7 +27,7 @@ vi.mock("@/lib/security/public-destination", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/security/public-destination")>();
   const loopbackPermitted = (address: string): boolean =>
     address === "127.0.0.1" || actual.isPublicAddress(address);
-  const createPublicFetch: typeof actual.createPublicFetch = (options = {}) =>
+  const createPublicFetch: typeof actual.createPublicFetch = (options) =>
     actual.createPublicFetch({ ...options, isPermittedAddress: loopbackPermitted });
   return { ...actual, createPublicFetch };
 });

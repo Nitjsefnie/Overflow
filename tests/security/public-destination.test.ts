@@ -11,8 +11,8 @@ import {
 
 const bodyLimit = 1024 * 1024;
 
-/** A transport as production builds one: no seams, the default body cap. */
-const publicFetch = createPublicFetch();
+/** A transport with no test seams, so it judges addresses as production does, and a 1 MiB cap. */
+const publicFetch = createPublicFetch({ maxBodyBytes: bodyLimit });
 
 type RecordedRequest = { method: string; url: string; headers: IncomingMessage["headers"]; body: string };
 
@@ -313,7 +313,7 @@ describe("judging the address the socket connects to", () => {
   it("connects where an injected lookup points a hostname, when that address is permitted", async () => {
     const listener = await listen("127.0.0.1");
     const { lookup } = scriptedLookup([["127.0.0.1"]]);
-    const guardedFetch = createPublicFetch({ lookup, isPermittedAddress: loopbackPermitted });
+    const guardedFetch = createPublicFetch({ lookup, isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
 
     const response = await guardedFetch(`http://gitlab.rebind.test:${listener.port}/`);
 
@@ -327,7 +327,7 @@ describe("judging the address the socket connects to", () => {
     async (scheme) => {
       const listener = await listen("127.0.0.1");
       const { lookup, calls } = scriptedLookup([["8.8.8.8"], ["127.0.0.1"]]);
-      const guardedFetch = createPublicFetch({ lookup });
+      const guardedFetch = createPublicFetch({ lookup, maxBodyBytes: bodyLimit });
 
       // What a validate-then-fetch check would see: a public answer.
       const checked = await new Promise<string>((resolve, reject) => {
@@ -352,7 +352,7 @@ describe("judging the address the socket connects to", () => {
     async (scheme) => {
       const listener = await listen("127.0.0.1");
       const { lookup, calls } = scriptedLookup([["8.8.8.8", "127.0.0.1"]]);
-      const guardedFetch = createPublicFetch({ lookup });
+      const guardedFetch = createPublicFetch({ lookup, maxBodyBytes: bodyLimit });
 
       await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), [
         "127.0.0.1",
@@ -368,7 +368,7 @@ describe("judging the address the socket connects to", () => {
     async (scheme) => {
       const listener = await listen("127.0.0.1");
       const { lookup, calls } = scriptedLookup([[]]);
-      const guardedFetch = createPublicFetch({ lookup });
+      const guardedFetch = createPublicFetch({ lookup, maxBodyBytes: bodyLimit });
 
       await expectRefusal(guardedFetch(`${scheme}://gitlab.rebind.test:${listener.port}/`), []);
       expect(calls).toEqual([{ hostname: "gitlab.rebind.test", all: true }]);
@@ -384,7 +384,7 @@ describe("judging the address the socket connects to", () => {
     async (scheme) => {
       const listener = await listen("127.0.0.1");
       const { lookup, calls } = scriptedLookup([["127.0.0.1"]]);
-      const guardedFetch = createPublicFetch({ lookup });
+      const guardedFetch = createPublicFetch({ lookup, maxBodyBytes: bodyLimit });
       const previous = getDefaultAutoSelectFamily();
       setDefaultAutoSelectFamily(false);
       try {
@@ -407,7 +407,7 @@ describe("following no redirects", () => {
         response.writeHead(status, { location: `http://127.0.0.1:${target.port}/` });
         response.end();
       });
-      const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
+      const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
 
       await expectRefusal(guardedFetch(`http://127.0.0.1:${origin.port}/`), [
         String(status),
@@ -424,14 +424,14 @@ describe("following no redirects", () => {
       response.writeHead(status);
       response.end();
     });
-    const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
+    const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
 
     await expectRefusal(guardedFetch(`http://127.0.0.1:${origin.port}/`), [String(status)]);
   });
 });
 
 describe("reading the response", () => {
-  const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
+  const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
 
   it("returns the status, headers and body of a permitted answer intact", async () => {
     const body = JSON.stringify({ id: 7, username: "octo", note: "ünïcödé" });
@@ -562,7 +562,7 @@ describe("reading the response", () => {
     ]);
   });
 
-  it("bounds the body at a lower cap its creator sets", async () => {
+  it("bounds the body at a small cap its creator sets", async () => {
     const capped = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: 16 });
     const exact = await listen("127.0.0.1", (_request, response) => {
       response.end("a".repeat(16));
@@ -575,7 +575,7 @@ describe("reading the response", () => {
     await expectRefusal(capped(`http://127.0.0.1:${over.port}/`), ["16", String(over.port)]);
   });
 
-  it("reads past 1 MiB up to a higher cap its creator sets", async () => {
+  it("reads past 1 MiB up to a larger cap its creator sets", async () => {
     const capped = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: 2 * bodyLimit });
     const exact = await listen("127.0.0.1", (_request, response) => {
       response.end(Buffer.alloc(2 * bodyLimit, 0x61));
@@ -592,7 +592,7 @@ describe("reading the response", () => {
 });
 
 describe("honouring the abort signal", () => {
-  const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted });
+  const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
 
   it("rejects without connecting when the signal is already aborted", async () => {
     const listener = await listen("127.0.0.1");
