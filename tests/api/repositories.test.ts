@@ -1045,7 +1045,10 @@ describe("Overflow token registration", () => {
     const issueToken = vi.spyOn(PostgresApiTokenStore.prototype, "issueToken")
       .mockImplementation(async (userId, hash) => {
         issuedHashes.set(userId, hash);
-        return { createdAt: new Date("2026-09-05T10:00:00.000Z") };
+        return {
+          createdAt: new Date("2026-09-05T10:00:00.000Z"),
+          expiresAt: new Date("2026-12-04T10:00:00.000Z"),
+        };
       });
     const bearerLookup = vi.spyOn(PostgresApiTokenStore.prototype, "findAccountByTokenHash")
       .mockImplementation(async (hash) =>
