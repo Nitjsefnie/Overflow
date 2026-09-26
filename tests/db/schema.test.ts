@@ -277,6 +277,7 @@ describe("initial PostgreSQL materialization", () => {
       "043_repository_webhook_credentials.sql",
       "044_completed_work_credit_limits.sql",
       "046_api_token_expiry.sql",
+      "049_reason_length_limits.sql",
     ].map((name) => ({ name, count: 1 })));
   });
 
