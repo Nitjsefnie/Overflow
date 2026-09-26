@@ -59,6 +59,12 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       // nothing here and reads as not capable.
       if (account?.provider === "github") {
         token.canAdministerWebhooks = grantsWebhookAdministration(parseGrantedScopes(account.scope));
+        // When the holder last completed a GitHub sign-in, in whole epoch
+        // seconds. Written here and nowhere else: only the OAuth callback
+        // carries an account, so a session read or update carries the
+        // instant forward and holding the cookie never refreshes it. Minting
+        // an API token requires it to be recent (src/app/api/tokens/route.ts).
+        token.authenticatedAt = Math.floor(Date.now() / 1000);
       }
 
       const identity = readGitHubIdentity(profile);
@@ -88,6 +94,12 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
         (session.user as typeof session.user & { role?: UserRole }).role = token.role;
         (session.user as typeof session.user & { canAdministerWebhooks?: boolean }).canAdministerWebhooks =
           token.canAdministerWebhooks === true;
+        // A JWT issued before the claim existed carries none, and reads as a
+        // sign-in too old to mint a token.
+        if (typeof token.authenticatedAt === "number" && Number.isFinite(token.authenticatedAt)) {
+          (session.user as typeof session.user & { authenticatedAt?: number }).authenticatedAt =
+            token.authenticatedAt;
+        }
       }
       return session;
     },
