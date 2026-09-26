@@ -83,7 +83,26 @@ describe("normalizeInstanceUrl", () => {
     expect(() => normalizeInstanceUrl("gitlab.example.com")).toThrow(ForgeIdentityError);
     expect(() => normalizeInstanceUrl("https://")).toThrow(ForgeIdentityError);
   });
+
+  it.each(["http://gitlab.example", "HTTP://GitLab.Example.com:8080/", "ftp://gitlab.example", "javascript:alert(1)"])(
+    "refuses %j as INVALID_INPUT, since only https carries the credential",
+    (value) => {
+      const refusal = captureError(() => normalizeInstanceUrl(value));
+      expect(refusal).toBeInstanceOf(ForgeIdentityError);
+      expect((refusal as ForgeIdentityError).code).toBe("INVALID_INPUT");
+      expect((refusal as ForgeIdentityError).message).toBe("The instance URL must use https.");
+    },
+  );
 });
+
+function captureError(action: () => unknown): unknown {
+  try {
+    action();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to throw");
+}
 
 describe("linkForgeIdentity", () => {
   it("verifies the token against /api/v4/user and its scopes, encrypts it, and upserts on the triple", async () => {

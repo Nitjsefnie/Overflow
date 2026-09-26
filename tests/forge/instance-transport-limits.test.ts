@@ -12,12 +12,18 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 
 // The body caps and the redirect refusal, proved at the seams that apply them:
 // the identity link route and a GitLab gateway built with no transport, each
-// running on its production default. The only change to that default is the
-// address predicate: the mock wraps the factory, so every transport a module
-// builds by calling it treats the IPv4 loopback as public, and a loopback
-// listener can stand in for a public GitLab. The mock passes each caller's
-// options through untouched and builds no transport of its own, so each cap
-// is the one the production module asked for.
+// running on its production default. The mock wraps the factory, so every
+// transport a module builds by calling it treats the IPv4 loopback as public,
+// and a loopback listener can stand in for a public GitLab. The mock passes
+// each caller's options through untouched and builds no transport of its own,
+// so each cap is the one the production module asked for.
+//
+// The link route accepts only an https instance, and the listeners here have
+// no certificate, so the wrapped transport carries a request for an
+// `https://127.0.0.1` URL to that address over plain http. That is the mock's
+// one other change, and it is below everything under test: the route, the
+// scheme gate and the service see the https URL, and the caps and the
+// redirect refusal are the real transport's, applied to the response.
 
 // Release modules evaluated with this file's permissive transport.
 vi.hoisted(() => { vi.resetModules(); });
@@ -27,8 +33,18 @@ vi.mock("@/lib/security/public-destination", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/security/public-destination")>();
   const loopbackPermitted = (address: string): boolean =>
     address === "127.0.0.1" || actual.isPublicAddress(address);
-  const createPublicFetch: typeof actual.createPublicFetch = (options) =>
-    actual.createPublicFetch({ ...options, isPermittedAddress: loopbackPermitted });
+  const overLoopbackHttp = (input: string | URL | Request): string | URL | Request => {
+    if (input instanceof Request) return input;
+    const url = new URL(input);
+    if (url.protocol !== "https:" || url.hostname !== "127.0.0.1") return input;
+    url.protocol = "http:";
+    return url;
+  };
+  const createPublicFetch: typeof actual.createPublicFetch = (options) => {
+    const guarded = actual.createPublicFetch({ ...options, isPermittedAddress: loopbackPermitted });
+    return ((input: string | URL | Request, init?: RequestInit) =>
+      guarded(overLoopbackHttp(input), init)) as typeof fetch;
+  };
   return { ...actual, createPublicFetch };
 });
 
@@ -141,8 +157,9 @@ describe("the identity link route's default transport", () => {
   it("links through a permitted instance, so the refusals below are not destination refusals", async () => {
     const listener = await listen("127.0.0.1", gitlab());
 
-    const answer = await link(`http://127.0.0.1:${listener.port}`);
+    const answer = await link(`https://127.0.0.1:${listener.port}`);
 
+    expect(listener.paths).toEqual(["/api/v4/user", "/api/v4/personal_access_tokens/self"]);
     expect(answer.status).toBe(201);
     expect(answer.writes).toEqual(["upsertIdentity"]);
   });
@@ -154,7 +171,7 @@ describe("the identity link route's default transport", () => {
     }));
     const expected = await unreachableAnswer();
 
-    const answer = await link(`http://127.0.0.1:${listener.port}`);
+    const answer = await link(`https://127.0.0.1:${listener.port}`);
 
     expect(listener.paths).toEqual(["/api/v4/user"]);
     expect(answer.writes).toEqual([]);
@@ -164,12 +181,12 @@ describe("the identity link route's default transport", () => {
   it("refuses a redirect without following it, answering as for an unreachable host", async () => {
     const target = await listen("127.0.0.1", gitlab());
     const origin = await listen("127.0.0.1", gitlab((response) => {
-      response.writeHead(302, { location: `http://127.0.0.1:${target.port}/api/v4/user` });
+      response.writeHead(302, { location: `https://127.0.0.1:${target.port}/api/v4/user` });
       response.end();
     }));
     const expected = await unreachableAnswer();
 
-    const answer = await link(`http://127.0.0.1:${origin.port}`);
+    const answer = await link(`https://127.0.0.1:${origin.port}`);
 
     expect(origin.paths).toEqual(["/api/v4/user"]);
     expect(target.connections).toBe(0);
