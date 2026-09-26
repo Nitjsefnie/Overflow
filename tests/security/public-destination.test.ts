@@ -435,6 +435,31 @@ describe("keeping its connection pool to itself", () => {
   });
 });
 
+describe("releasing idle connections", () => {
+  it(
+    "closes a pooled connection left idle, even to a server that would keep it open forever",
+    async () => {
+      const listener = await listen("127.0.0.1");
+      // The server never closes an idle connection of its own accord.
+      listener.server.keepAliveTimeout = 0;
+      const guardedFetch = createPublicFetch({ isPermittedAddress: loopbackPermitted, maxBodyBytes: bodyLimit });
+
+      const response = await guardedFetch(`http://127.0.0.1:${listener.port}/`);
+      expect(await response.text()).toBe("reached");
+      expect(listener.sockets).toHaveLength(1);
+      const [socket] = listener.sockets;
+      if (!socket!.closed) {
+        await once(socket!, "close");
+      }
+
+      expect(listener.sockets.filter((open) => !open.closed)).toEqual([]);
+    },
+    // An unbounded pool never closes it; fail rather than wait for the suite
+    // default. The transport's own idle bound is well inside this.
+    15_000,
+  );
+});
+
 describe("following no redirects", () => {
   it.each([[301], [302], [303], [307], [308]])(
     "refuses a %i to another listener and never reaches it",

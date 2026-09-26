@@ -26,6 +26,10 @@ import {
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 
+// How long a pooled connection may sit idle before this side closes it; the
+// global fetch's own idle bound is of the same order.
+const idleSocketTimeoutMs = 4_000;
+
 // Statuses the Response constructor refuses to pair with a body. 3xx never
 // gets this far: it is refused as a redirect.
 const nullBodyStatuses = new Set([204, 205]);
@@ -111,9 +115,14 @@ export function createPublicFetch(options: PublicFetchOptions): typeof fetch {
   const isPermittedAddress = options.isPermittedAddress ?? isPublicAddress;
   const { maxBodyBytes } = options;
   // Agents of this transport's own, so a pooled keep-alive socket is only ever
-  // one whose address this transport's guard approved.
-  const httpAgent = new HttpAgent({ keepAlive: true });
-  const httpsAgent = new HttpsAgent({ keepAlive: true });
+  // one whose address this transport's guard approved. An idle pooled socket
+  // is closed after a few seconds rather than whenever the remote chooses:
+  // the member picks the host, and one that never closes would otherwise hold
+  // our descriptors open indefinitely. Node applies this only to idle sockets;
+  // a request in flight is bounded by its caller's signal.
+  const agentOptions = { keepAlive: true, timeout: idleSocketTimeoutMs };
+  const httpAgent = new HttpAgent(agentOptions);
+  const httpsAgent = new HttpsAgent(agentOptions);
 
   async function guardedFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
     if (input instanceof Request) {
