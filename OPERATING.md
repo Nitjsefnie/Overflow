@@ -159,9 +159,11 @@ has confirmed in that issue that they accept a public reply, and every export
 section that records the account acting on other accounts is empty —
 `moderationEvents.asActor`, `calibrationAudits.asReporter`,
 `calibrationAudits.asModerator`, `moderatorRoleChanges.asActor`, and
-`settlementOverrideRequests.asDecider`. Those rows carry the rationale,
-decision and reason text written about other people, which the requester's
-consent cannot cover. The confirmation matters on its own too: the export
+`settlementOverrideRequests.asDecider` — and `calibrationAudits.asAccount`,
+the audit reports filed about the account, is empty too: those rows identify
+the reporter. The acting-on-others rows carry the rationale, decision and
+reason text written about other people, which the requester's consent cannot
+cover. The confirmation matters on its own too: the export
 also includes the account's own enforcement state and the reasons recorded on
 moderation events targeting it. If either condition fails, hold the export
 until self-service export ships (issue 664).
@@ -180,7 +182,9 @@ node --experimental-transform-types --import ./scripts/register-path-aliases.ts 
 
 Each command writes its JSON document to standard output and reports its
 outcome through an exit code. The export covers every table with a foreign
-key to the account: encrypted tokens appear only as presence booleans
+key to the account — not every record that mentions the person: rows naming
+the person only by GitHub login or id, with no foreign key to the account,
+are not exported. Encrypted tokens appear only as presence booleans
 (`hasStoredGitHubToken`, `hasStoredToken`), while the API-token hash and the
 webhook secrets are omitted entirely; API-token metadata is `createdAt` and
 `expiresAt`, never the hash. The first
@@ -226,8 +230,11 @@ does not revoke the OAuth grant on GitHub; the person revokes that at
 
 ### Backups
 
-Database dumps taken before the deletion keep the pre-deletion data for up to
-14 days; see [backup retention](deploy/backup-restore.md#d-backup-location-and-retention).
+Database dumps taken before the deletion keep the pre-deletion data until each
+dump is pruned once it is more than 14 days old — in practice about 15 days.
+Pruning runs only after a later backup succeeds, so dumps taken before a
+deletion can be kept longer while backups are failing; see
+[backup retention](deploy/backup-restore.md#d-backup-location-and-retention).
 
 ## Continuous integration
 

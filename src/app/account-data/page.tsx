@@ -116,7 +116,10 @@ export function AccountDataNotice() {
       <section className="surface" aria-labelledby="account-data-retention-heading">
         <h2 id="account-data-retention-heading">How long it is kept</h2>
         <ul>
-          <li>The account row persists while your account exists; nothing expires automatically.</li>
+          <li>
+            The account row persists while your account exists, and deleting your account pseudonymises
+            the row rather than removing it; the row never expires automatically.
+          </li>
           <li>
             Signed-in state is a signed JWT cookie, and Overflow keeps no server-side session rows. Besides your
             identity, the cookie records whether the permissions GitHub granted at sign-in include webhook
@@ -127,7 +130,11 @@ export function AccountDataNotice() {
             Revoking the authorization on GitHub makes the stored token unusable at its next use. It does not delete
             your account row.
           </li>
-          <li>Your linked GitLab identities persist while your account exists; nothing expires automatically.</li>
+          <li>
+            Your linked GitLab identities persist while your account exists, and deletion keeps them; they
+            never expire automatically.
+          </li>
+          <li>An API token expires 90 days after it is issued; deletion removes it at once.</li>
           <li>
             Revoking a personal access token on its GitLab instance makes Overflow&apos;s stored copy unusable at
             its next use. It does not delete the linked identity. Only rejected background reconciliation reads —
@@ -142,12 +149,9 @@ export function AccountDataNotice() {
           </li>
           <li>Unlinking immediately deletes the linked identity&apos;s fields and encrypted token.</li>
           <li>
-            Deleting your account pseudonymises the account row rather than removing it. Nothing expires
-            automatically, before or after deletion.
-          </li>
-          <li>
-            Daily database backups taken before a deletion keep pre-deletion data for up to 14 days on the
-            same host as the database, and are pruned after that.
+            Daily database backups taken before a deletion keep pre-deletion data on the same host as the
+            database. Each backup is pruned once it is more than 14 days old — in practice about 15 days —
+            and pruning happens only after a later backup succeeds, so failing backups keep them longer.
           </li>
         </ul>
       </section>
@@ -187,25 +191,28 @@ export function AccountDataNotice() {
             causes Overflow to try to record the failure time on the identity whose token was used.
           </li>
           <li>
-            Request deletion of your account row, or an export of the data stored about it, by opening an
-            issue at{" "}
+            Request deletion of your account, or an export of the data stored about it, by opening an issue
+            at{" "}
             <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
               github.com/Nitjsefnie/Overflow/issues
             </a>
-            . That is the only route: no private channel exists.
+            . That is the only route: no private channel exists. Open the issue from the GitHub account the
+            request is about.
           </li>
           <li>
             An export contains the fields stored about your account — a stored secret appears only as
             present or absent, never as its value — each linked GitLab identity without its token, your
             API token&apos;s creation and expiry dates but never the token itself, and every record in the
-            database that refers to your account.
+            database that holds a link to your account. Records that name you only by your GitHub login or
+            numeric id — issue assignments and pull-request authorship copied from GitHub, for example —
+            are not part of the export.
           </li>
           <li>
             Because the tracker is public, the operator replies in your issue with the export only after
             you accept a public reply there, and only when the export holds no records of you acting on
             other accounts — no moderation action you took, no audit report you filed or decided, no role
-            change you made, no override decision you issued. Otherwise the export is held until a
-            self-service export exists.
+            change you made, no override decision you issued — and no audit reports filed about your
+            account. Otherwise the export is held until a self-service export exists.
           </li>
         </ul>
       </section>
@@ -230,8 +237,14 @@ export function AccountDataNotice() {
         <p>Deletion keeps, and why:</p>
         <ul>
           <li>
-            the account&apos;s internal id, your numeric GitHub id, and each GitLab identity&apos;s instance,
-            numeric GitLab id, and linked date — the shared ledger attributes work by them
+            the account&apos;s internal id, your numeric GitHub id, and each GitLab identity&apos;s instance
+            and numeric GitLab id — the shared ledger attributes work by them — and the date you linked
+            each identity
+          </li>
+          <li>
+            your role and standing: the enforcement state and confirmed-miscalibration count moderation
+            uses, the row&apos;s timestamps, and the stamp deletion writes. A moderator stays a moderator
+            unless the role is revoked
           </li>
           <li>
             every ledger record, including their copies of your public GitHub login, which later
@@ -243,7 +256,10 @@ export function AccountDataNotice() {
           <li>
             your signed-in sessions end at their next request, and your API token stops working at once
           </li>
-          <li>signing in with GitHub again registers the account again and re-links the retained history</li>
+          <li>
+            signing in with GitHub again registers the account again and re-links the retained history;
+            each GitLab identity must then be linked again from your dashboard
+          </li>
         </ul>
         <p>Preconditions and limits:</p>
         <ul>
