@@ -204,8 +204,8 @@ export function AccountDataNotice() {
             present or absent, never as its value — each linked GitLab identity without its token, your
             API token&apos;s creation and expiry dates but never the token itself, and every record in the
             database that holds a link to your account. Records that name you only by your GitHub login or
-            numeric id — issue assignments and pull-request authorship copied from GitHub, for example —
-            are not part of the export.
+            numeric id — issue claim assignments and who labelled an issue or wrote its rationale, for
+            example — are not part of the export.
           </li>
           <li>
             Because the tracker is public, the operator replies in your issue with the export only after
@@ -243,7 +243,7 @@ export function AccountDataNotice() {
           </li>
           <li>
             your role and standing: the enforcement state and confirmed-miscalibration count moderation
-            uses, the row&apos;s timestamps, and the stamp deletion writes. A moderator stays a moderator
+            uses, the row&apos;s creation timestamp, and the stamp deletion writes. A moderator stays a moderator
             unless the role is revoked
           </li>
           <li>
