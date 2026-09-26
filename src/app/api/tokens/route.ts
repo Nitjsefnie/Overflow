@@ -22,8 +22,9 @@ import { PostgresApiTokenStore, type ApiTokenSummary } from "@/lib/tokens/postgr
  * The session must also carry a GitHub sign-in completed within the last
  * {@link REAUTHENTICATION_WINDOW_MS}. A session stays valid long after the
  * sign-in that issued it, and a client holding only the session cookie cannot
- * complete a GitHub OAuth round trip; the account's owner can, in one click.
- * So minting a credential that outlives the session asks for that round trip.
+ * complete a GitHub OAuth round trip; the account's owner can, and the token
+ * panel offers that sign-in beside this refusal, requesting no scope. So
+ * minting a credential that outlives the session asks for that round trip.
  */
 
 /** How recent the session's GitHub sign-in must be to mint a token. */

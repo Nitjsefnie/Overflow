@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getTokenSummary: vi.fn(),
   requireMemberPageSession: vi.fn(),
   signInForRepositoryRegistration: vi.fn(),
+  confirmSignInForApiToken: vi.fn(),
   redirect: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -23,6 +24,7 @@ vi.mock("@/lib/dashboard/session", () => ({
 }));
 vi.mock("@/lib/auth/sign-in-actions", () => ({
   signInForRepositoryRegistration: mocks.signInForRepositoryRegistration,
+  confirmSignInForApiToken: mocks.confirmSignInForApiToken,
 }));
 
 function memberSession(canAdministerWebhooks: boolean) {

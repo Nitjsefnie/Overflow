@@ -50,6 +50,17 @@ describe("sign-in server actions", () => {
     );
   });
 
+  // Minting an API token needs a recent sign-in, not a wider grant: this one
+  // requests no scope. GitHub answers an already-authorized account with the
+  // union of what it granted, so nothing already granted is lost.
+  it("re-confirms a member's sign-in for an API token with the empty scope and returns to repository registration", async () => {
+    const { confirmSignInForApiToken } = await import("@/lib/auth/sign-in-actions");
+
+    await confirmSignInForApiToken();
+
+    expect(mocks.signIn).toHaveBeenCalledExactlyOnceWith("github", { redirectTo: "/repositories/new" }, { scope: "" });
+  });
+
   it("does not construct NextAuth merely by being imported", async () => {
     await import("@/lib/auth/sign-in-actions");
 

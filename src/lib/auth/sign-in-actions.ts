@@ -6,7 +6,7 @@ import {
 } from "@/lib/auth/github-oauth-scopes";
 
 /**
- * The two GitHub sign-ins (issue 599). Each names its scope per call, which
+ * The GitHub sign-ins (issue 599). Each names its scope per call, which
  * overrides the provider default; the provider default is itself the
  * contributor's empty scope, so an unlabelled `signIn("github")` anywhere
  * else stays least-privilege.
@@ -27,4 +27,16 @@ export async function signInAsContributor(): Promise<void> {
 export async function signInForRepositoryRegistration(): Promise<void> {
   const { signIn } = await import("@/auth");
   await signIn("github", { redirectTo: "/repositories/new" }, { scope: GITHUB_REPOSITORY_REGISTRATION_SCOPE });
+}
+
+/**
+ * Re-confirms a signed-in member's identity so the session may mint an API
+ * token (src/app/api/tokens/route.ts), without requesting any scope; lands
+ * back on the registration page that holds the token panel. GitHub returns an
+ * already-authorized account with the union of the scopes it granted, so a
+ * member who already granted webhook administration keeps it.
+ */
+export async function confirmSignInForApiToken(): Promise<void> {
+  const { signIn } = await import("@/auth");
+  await signIn("github", { redirectTo: "/repositories/new" }, { scope: GITHUB_CONTRIBUTOR_SCOPE });
 }

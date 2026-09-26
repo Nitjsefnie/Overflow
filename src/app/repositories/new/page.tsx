@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { ApiTokenPanel } from "@/components/api-token-panel";
 import { RepositoryForm } from "@/components/repository-form";
-import { signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
+import { confirmSignInForApiToken, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
@@ -16,7 +16,7 @@ export default async function NewRepositoryPage() {
       />
       <RepositoryForm variant="catalog-change" />
       <ApiTokenPanel
-        reauthenticateAction={signInForRepositoryRegistration}
+        reauthenticateAction={confirmSignInForApiToken}
         summary={tokenSummary
           ? {
             createdAt: tokenSummary.createdAt.toISOString(),
