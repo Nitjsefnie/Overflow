@@ -33,8 +33,9 @@ echo "Building $image from revision $source_sha ..."
 # by default, so an untracked file under an ignored path is invisible to the
 # git status check above, yet a `.` context would copy it into an image
 # labelled with this SHA. `git archive` holds exactly the commit's tracked
-# files; .dockerignore still applies to a tar context. pipefail makes a
-# failed export fail the script instead of building whatever arrived.
+# files. Docker does not apply .dockerignore to a tar context on stdin, so
+# the export is the only filter on this path. pipefail makes a failed export
+# fail the script instead of building whatever arrived.
 git archive --format=tar "$source_sha" \
   | docker build --build-arg SOURCE_SHA="$source_sha" -t "$image" -
 

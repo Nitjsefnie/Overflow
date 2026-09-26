@@ -113,6 +113,12 @@ const FIXTURE_GITIGNORE = [
 
 const PROBE = "src/app/zz-probe/page.tsx";
 
+// The fixture's second commit rewrites this tracked file, so the context
+// must carry HEAD's content, not an earlier commit's.
+const PAGE = "src/app/page.tsx";
+const PAGE_AT_ROOT = "export default function Page() { return null; }\n";
+const PAGE_AT_HEAD = "export default function Page() { return 'head'; }\n";
+
 interface BuildFixture {
   dir: string;
   repo: string;
@@ -121,8 +127,18 @@ interface BuildFixture {
   head: string;
 }
 
-async function makeBuildFixture(): Promise<BuildFixture> {
+// Runs body against a fresh fixture and removes the fixture directory
+// afterwards, including when building the fixture itself fails.
+async function withBuildFixture(body: (fixture: BuildFixture) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), "overflow-container-build-"));
+  try {
+    await body(await makeBuildFixture(dir));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function makeBuildFixture(dir: string): Promise<BuildFixture> {
   const repo = path.join(dir, "repo");
   const shimDir = path.join(dir, "shim");
   const bin = path.join(dir, "bin");
@@ -142,9 +158,12 @@ async function makeBuildFixture(): Promise<BuildFixture> {
   await copyFile(scriptPath, path.join(repo, "scripts", "container-build.sh"));
   await chmod(path.join(repo, "scripts", "container-build.sh"), 0o755);
   await mkdir(path.join(repo, "src", "app", "zz-probe"), { recursive: true });
-  await writeFile(path.join(repo, "src", "app", "page.tsx"), "export default function Page() { return null; }\n");
-  git("add", ".gitignore", "Dockerfile", "scripts/container-build.sh", "src/app/page.tsx");
-  git("commit", "-q", "-m", "fixture");
+  await writeFile(path.join(repo, PAGE), PAGE_AT_ROOT);
+  git("add", ".gitignore", "Dockerfile", "scripts/container-build.sh", PAGE);
+  git("commit", "-q", "-m", "fixture root");
+  await writeFile(path.join(repo, PAGE), PAGE_AT_HEAD);
+  git("add", PAGE);
+  git("commit", "-q", "-m", "fixture head");
   await writeFile(path.join(repo, PROBE), "export default function Probe() { return null; }\n");
   // The premise of issue 648: the ignored probe leaves git status clean,
   // so the dirty-tree refusal cannot catch it.
@@ -169,8 +188,7 @@ function runBuild(fixture: BuildFixture, extraPath: string[] = []) {
 
 describe("scripts/container-build.sh build context (issue 648)", () => {
   it("builds from an export of the commit on stdin, so an ignored untracked file never enters the image", async () => {
-    const fixture = await makeBuildFixture();
-    try {
+    await withBuildFixture(async (fixture) => {
       const result = runBuild(fixture);
       expect(result.status, result.stderr).toBe(0);
 
@@ -181,20 +199,22 @@ describe("scripts/container-build.sh build context (issue 648)", () => {
       expect(listing.status, listing.stderr).toBe(0);
       const entries = listing.stdout.split("\n").filter(Boolean);
       expect(entries).toEqual(
-        expect.arrayContaining([".gitignore", "Dockerfile", "scripts/container-build.sh", "src/app/page.tsx"]),
+        expect.arrayContaining([".gitignore", "Dockerfile", "scripts/container-build.sh", PAGE]),
       );
       expect(entries.filter((entry) => entry.includes("zz-probe"))).toEqual([]);
 
+      // The exported content is HEAD's, the commit the label names.
+      const page = spawnSync("tar", ["-xOf", path.join(fixture.shimDir, "context.tar"), PAGE], { encoding: "utf8" });
+      expect(page.status, page.stderr).toBe(0);
+      expect(page.stdout).toBe(PAGE_AT_HEAD);
+
       expect(await readFile(path.join(fixture.shimDir, "source-sha"), "utf8")).toBe(fixture.head);
       expect(result.stdout).toContain(`revision:    ${fixture.head}`);
-    } finally {
-      await rm(fixture.dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails when the export of the commit fails, rather than building whatever arrived", async () => {
-    const fixture = await makeBuildFixture();
-    try {
+    await withBuildFixture(async (fixture) => {
       const shimBin = path.join(fixture.dir, "git-shim");
       await mkdir(shimBin);
       await writeFile(path.join(shimBin, "git"), FAILING_ARCHIVE_GIT_SHIM.replace("$REAL_GIT", realGitPath()));
@@ -204,9 +224,7 @@ describe("scripts/container-build.sh build context (issue 648)", () => {
       expect(result.status, result.stdout).not.toBe(0);
       expect(result.stderr).toContain("git shim: archive failed");
       expect(result.stdout).not.toContain("Provenance record");
-    } finally {
-      await rm(fixture.dir, { recursive: true, force: true });
-    }
+    });
   });
 });
 

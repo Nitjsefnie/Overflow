@@ -35,17 +35,22 @@ the revision label actually landed on the image, and prints the immutable
 provenance record — revision, image ID, RepoDigests, created timestamp. Keep
 that record with the deployment notes: it is what rollback selects.
 
-The image is built from an export of that commit (`git archive`), streamed to
-`docker build` as its context, never from the working directory. So untracked
+The script builds from an export of that commit (`git archive`), streamed to
+`docker build` as its context, not from the working directory. So untracked
 and ignored files never enter the context — including ones `git status` cannot
 see because the repository's `.gitignore` denies by default — and the image
-holds exactly the source its revision label names.
+holds exactly the source its revision label names. Docker does not apply
+`.dockerignore` to a context on stdin; the export is the only filter.
 
 Or let compose build it and bring up the database and app together:
 
 ```console
 SOURCE_SHA="$(git rev-parse HEAD)" docker compose --profile app up --build
 ```
+
+Compose builds from the working tree, filtered only by `.dockerignore`, so its
+image can carry ignored untracked files while its label names HEAD. Use the
+script whenever the image's revision label must be attested.
 
 Both paths build from digest-pinned bases —
 `node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532` for the application image and
@@ -86,8 +91,10 @@ platform's restart policy, not replicas, absorb failures.
 no files for configuration: everything arrives through the environment, the
 same variables the host path keeps in `/etc/overflow/overflow.env`. A container
 built from this repository can be inspected, shared and re-tagged without
-leaking a secret, and `.dockerignore` keeps `.env` and `.env.*` out of the
-build context entirely (only the placeholder `.env.example` remains).
+leaking a secret. `.env` and `.env.*` stay out of the build context on both
+paths (only the tracked placeholder `.env.example` enters): on the script path
+because they are untracked and `git archive` exports tracked files only, on
+the compose path because `.dockerignore` excludes them.
 
 **The image builds in-image on `node:24.17.0-bookworm-slim`.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and
