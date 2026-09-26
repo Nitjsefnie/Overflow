@@ -346,6 +346,46 @@ describe("ratchet check against a real git repository", () => {
     expect(result.stdout).toContain("ok");
   });
 
+  // The push shape (issue 701): the previous tip of main is a direct
+  // ancestor of the pushed head, so the merge base is the previous tip
+  // itself and the comparison is the pushed commit against the main it
+  // replaced. The base is passed as a resolved SHA, the way the workflow
+  // passes github.event.before.
+  const seedLinear = (onHead: () => void) => {
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "ratchets@example.test");
+    git("config", "user.name", "Ratchets Test");
+    git("config", "commit.gpgsign", "false");
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    commit("base documents");
+    onHead();
+    commit("pushed commit");
+    return git("rev-parse", "HEAD~1");
+  };
+
+  it("exits 1 when a pushed commit relaxes against its direct parent", () => {
+    const base = seedLinear(() => writeDoc(COVERAGE_PATH, coverage({ floor: 90.5 })));
+    const result = run(base, "HEAD");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain("languages.typescript.floor");
+    expect(result.stdout).toContain("91.89");
+    expect(result.stdout).toContain("90.5");
+  });
+
+  it("exits 0 when a pushed commit only tightens against its direct parent", () => {
+    const base = seedLinear(() => {
+      writeDoc(COVERAGE_PATH, coverage({ measured: 93.5, floor: 92.5 }));
+      writeDoc(MODULE_SIZE_PATH, moduleSize({ src: 800, tests: 2500 }, { "src/big.ts": 880 }));
+    });
+    const result = run(base, "HEAD");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ok");
+  });
+
   it("exits 1 and names the finding when the branch lowers the floor", () => {
     seed(() => writeDoc(COVERAGE_PATH, coverage({ floor: 90.5 })));
     const result = run("main", "feature");
