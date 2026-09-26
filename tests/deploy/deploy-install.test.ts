@@ -8,6 +8,7 @@ const otherPnpmShapes = [
   /^NEXT_DIST_DIR="\$release" pnpm build$/,
   /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)" --expect-current (?:absent|"\$expected_serving")$/,
   /^pnpm release:prune \/srv\/overflow --keep [1-9][0-9]*$/,
+  /^pnpm credentials:reencrypt(?: --check)?$/,
 ];
 
 // This is a closed vocabulary, not a shell interpreter. Every logical shell
@@ -105,6 +106,14 @@ const otherShellLines = new Set([
   "rm -rf -- node_modules",
   "set -o pipefail",
   "LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1   -type d -regex '.*/\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'   -printf '%f\\n' | LC_ALL=C sort -r",
+  // Section 11's key rotation: the pre-rotation dump, key generation, and the
+  // credential repairs run through the service's own DATABASE_URL.
+  "bash scripts/db-backup.sh",
+  "node -p \"require('node:crypto').randomBytes(32).toString('base64url')\"",
+  "row_id='REPLACE-WITH-REPORTED-ID'",
+  "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null\"",
+  "psql \"$DATABASE_URL\" -tAc \"select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null\"",
+  "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null\"",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 function mentionsPnpm(text: string) {
