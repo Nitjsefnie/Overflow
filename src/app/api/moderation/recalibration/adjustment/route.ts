@@ -10,6 +10,7 @@ import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresRecalibrationCreditStore } from "@/lib/moderation/credit-adjustment-store";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { AccountModerationService } from "@/lib/moderation/service";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { reasonText } from "@/lib/validation/reason";
@@ -53,6 +54,13 @@ export function createModerationAdjustmentPostHandler(dependencies: ModerationCr
         input.reason,
         session.credential,
       );
+      logPrivilegedAction({
+        action: "credit-adjustment.create",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { adjustmentId: adjustment.id, targetAccountId: input.targetAccountId },
+      });
       return Response.json({ adjustment }, { status: 201 });
     } catch (error) {
       return moderationErrorResponse(error);
