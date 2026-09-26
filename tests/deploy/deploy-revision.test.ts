@@ -1182,6 +1182,27 @@ describe("scripts/deploy-revision.sh", () => {
     expectGateRefused(await readLog(fixture.shimLog));
   });
 
+  it("refuses when two same-named pinned jobs in one attempt split, one failed and one passed", async () => {
+    const failed: GateJob = { id: 1001, name: "verify", attempt: 1, status: "completed", conclusion: "failure" };
+    const passed: GateJob = { id: 1002, name: "verify", attempt: 1, status: "completed", conclusion: "success" };
+    for (const [label, jobs] of [
+      ["failed first", [failed, passed]],
+      ["passed first", [passed, failed]],
+    ] as const) {
+      const fixture = await makeFixture();
+      const state = await writeGateState(fixture, "gate-tie", [
+        { id: 100, path: FIXTURE_PINS.verify!, jobs: [...jobs] },
+        { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+      ]);
+      const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state });
+
+      expect(result.status, `${label}: ${result.stderr}`).toBe(1);
+      expect(result.stderr, label).toContain("failure");
+      expectGateRefused(await readLog(fixture.shimLog), label);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   it("lets the newest run of the pinned workflow decide when it ran more than once on the SHA", async () => {
     for (const [label, older, newer, status] of [
       ["newer run passed", "failure", "success", 0],
