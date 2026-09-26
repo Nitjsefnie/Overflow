@@ -32,7 +32,9 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
    * The normalized instance's decrypted PAT and supplying identity id. Prefer
    * un-failed credentials, then the oldest failure stamp; equal failure stamps
    * (including null) prefer the most recently verified identity. Failed-only
-   * sets still resolve; null means the user has no identity on that instance.
+   * sets still resolve; null means the user has no usable identity on that
+   * instance — none at all, or one scrubbed by account deletion (a null
+   * encrypted_token is never selected, so it is never decrypted).
    */
   public async getForgeToken(userId: string, instanceUrl: string): Promise<{ token: string; identityId: string } | null> {
     const normalized = normalizeInstanceUrl(instanceUrl);
@@ -43,6 +45,7 @@ export class PostgresForgeIdentityStore implements ForgeIdentityStore {
       select id, encrypted_token
       from user_forge_identities
       where user_id = ${userId} and provider = 'gitlab' and instance_url = ${normalized}
+        and encrypted_token is not null
       order by token_failed_at asc nulls first, verified_at desc
       limit 1
     `;
