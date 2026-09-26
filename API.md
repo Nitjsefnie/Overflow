@@ -42,8 +42,8 @@ scripts.
 The panel calls `POST /api/tokens` with the signed-in browser session cookie and
 no request body. An API token alone cannot mint or regenerate a token, and the
 session must carry a GitHub sign-in completed within the last 10 minutes; when
-it does not, the panel offers the GitHub sign-in, and minting succeeds once it
-completes. Because
+it does not, the panel offers the GitHub sign-in, which returns to the same page;
+then generate the token again. Because
 the session cookie is the only credential, the endpoint is same-origin only: the
 request must carry an `Origin` header equal to the origin of `APP_URL` (its
 scheme, host and port; any path is ignored), and it must either send no body or
