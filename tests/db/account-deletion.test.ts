@@ -706,4 +706,28 @@ describe("account deletion as pseudonymisation", () => {
     expect(exported.forgeIdentities[0]!.hasStoredToken).toBe(true);
     expect(exported.apiToken).not.toBeNull();
   });
+
+  it("case 10: resolves no account for a token row that outlives its deleted account", async () => {
+    const user = await insertUser("deleted-token-resolver");
+    const store = new PostgresApiTokenStore(sql);
+    const hash = tokenHash(nextSeedNumber());
+    await store.issueToken(user.id, hash);
+
+    // Sanity, live case: the token resolves its account before deletion.
+    await expect(store.findAccountByTokenHash(hash)).resolves.toEqual({
+      id: user.id,
+      tokenId: expect.any(String),
+      role: "MEMBER",
+      enforcementState: "ACTIVE",
+    });
+
+    await deleteAccount(sql, user.githubUserId, { confirm: true });
+
+    // The deletion removed the token row itself (case 1 pins that), so one is
+    // replanted behind the deleted row: a mint by a release still serving the
+    // previous code, or any path the route gates do not cover. The store must
+    // refuse on the account row's deleted_at alone.
+    await sql`insert into api_tokens (user_id, token_hash) values (${user.id}, ${hash})`;
+    await expect(store.findAccountByTokenHash(hash)).resolves.toBeNull();
+  });
 });
