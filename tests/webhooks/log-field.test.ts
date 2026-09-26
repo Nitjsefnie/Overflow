@@ -3,13 +3,14 @@ import { logField } from "@/lib/webhooks/log-field";
 
 // Every code point the token must never carry literally: C0, DEL, C1, the two
 // Unicode line/paragraph separators, and the bidi controls that can reorder
-// what an operator reads on a terminal.
+// what an operator reads on a terminal, the Arabic letter mark among them.
 const forbiddenClasses: Array<{ name: string; from: number; to: number }> = [
   { name: "C0 controls", from: 0x00, to: 0x1f },
   { name: "DEL", from: 0x7f, to: 0x7f },
   { name: "C1 controls", from: 0x80, to: 0x9f },
   { name: "line separator", from: 0x2028, to: 0x2028 },
   { name: "paragraph separator", from: 0x2029, to: 0x2029 },
+  { name: "Arabic letter mark", from: 0x061c, to: 0x061c },
   { name: "bidi marks", from: 0x200e, to: 0x200f },
   { name: "bidi embeddings and overrides", from: 0x202a, to: 0x202e },
   { name: "bidi isolates", from: 0x2066, to: 0x2069 },
@@ -62,7 +63,7 @@ describe("logField", () => {
   });
 
   it("decodes back to the input as a JSON string when nothing is truncated", () => {
-    const input = "ns\n\u001b[2J\"\\ ‮\u0085\uD800x";
+    const input = "ns\n\u001b[2J\"\\\u2028\u202e\u061c\u0085\uD800x";
     expect(JSON.parse(logField(input))).toBe(input);
   });
 
@@ -74,7 +75,7 @@ describe("logField", () => {
   it("bounds the token even when every kept code unit needs an escape", () => {
     const output = logField("\n".repeat(10_000));
     // 256 six-character escapes, the two quotes and the marker.
-    expect(output.length).toBeLessThanOrEqual(256 * 6 + 2 + " (+9744 more)…".length);
+    expect(output.length).toBeLessThanOrEqual(256 * 6 + 2 + "… (+9744 more)".length);
     expect(output.endsWith("… (+9744 more)")).toBe(true);
     expect(forbiddenCodeUnitsIn(output)).toEqual([]);
   });

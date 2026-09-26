@@ -41,6 +41,7 @@ function mustEscape(unit: number): boolean {
   return unit <= 0x1f // C0 controls
     || (unit >= 0x7f && unit <= 0x9f) // DEL and C1 controls
     || unit === 0x2028 || unit === 0x2029 // line and paragraph separators
+    || unit === 0x061c // Arabic letter mark, a bidi mark
     || unit === 0x200e || unit === 0x200f // bidi marks
     || (unit >= 0x202a && unit <= 0x202e) // bidi embeddings and overrides
     || (unit >= 0x2066 && unit <= 0x2069) // bidi isolates
