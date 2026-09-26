@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isDocsOnly, isDocsPath, parseNulList } from "../../scripts/docs-only.ts";
+import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
 
 const script = fileURLToPath(
   new URL("../../scripts/docs-only.ts", import.meta.url),
@@ -75,15 +76,6 @@ describe("NUL-delimited lists", () => {
  * range and an undecidable base are all decided by what git actually reports.
  */
 describe("docs-only CLI against a git repository", () => {
-  const gitEnv = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "docs-only test",
-    GIT_AUTHOR_EMAIL: "docs-only@example.invalid",
-    GIT_COMMITTER_NAME: "docs-only test",
-    GIT_COMMITTER_EMAIL: "docs-only@example.invalid",
-  };
   let root = "";
 
   beforeAll(async () => {
@@ -94,29 +86,11 @@ describe("docs-only CLI against a git repository", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  function git(repo: string, ...args: string[]): string {
-    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: gitEnv });
-    if (result.status !== 0) {
-      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-    }
-    return result.stdout.trim();
-  }
-
-  async function commit(repo: string, files: Record<string, string>, message: string): Promise<string> {
-    for (const [path, content] of Object.entries(files)) {
-      await mkdir(dirname(join(repo, path)), { recursive: true });
-      await writeFile(join(repo, path), content);
-    }
-    git(repo, "add", "--all");
-    git(repo, "commit", "--quiet", "--message", message);
-    return git(repo, "rev-parse", "HEAD");
-  }
-
   /** A repository whose root commit holds one code file and one doc. */
   async function scratchRepo(): Promise<string> {
     const repo = await mkdtemp(join(root, "repo-"));
     git(repo, "init", "--quiet", "--initial-branch=main");
-    await commit(
+    await commitFiles(
       repo,
       {
         "src/lib/format-signed.ts": "export const formatSigned = (n: number) => `${n}`;\n",
@@ -128,7 +102,7 @@ describe("docs-only CLI against a git repository", () => {
   }
 
   const classify = (repo: string, ...args: string[]) =>
-    spawnSync(process.execPath, [script, ...args], { cwd: repo, encoding: "utf8", env: gitEnv });
+    spawnSync(process.execPath, [script, ...args], { cwd: repo, encoding: "utf8", env: scratchGitEnv });
 
   it("classifies a code file renamed to a doc by its source path", async () => {
     const repo = await scratchRepo();
@@ -142,7 +116,7 @@ describe("docs-only CLI against a git repository", () => {
 
   it("prints true for a change that only edits a doc", async () => {
     const repo = await scratchRepo();
-    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+    await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
 
     const result = classify(repo, "HEAD^1");
     expect(result.status).toBe(0);
@@ -153,8 +127,8 @@ describe("docs-only CLI against a git repository", () => {
   it("covers every commit between the base and HEAD", async () => {
     const repo = await scratchRepo();
     const before = git(repo, "rev-parse", "HEAD");
-    await commit(repo, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
-    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+    await commitFiles(repo, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
+    await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
 
     const result = classify(repo, before);
     expect(result.status).toBe(0);
@@ -163,7 +137,7 @@ describe("docs-only CLI against a git repository", () => {
 
   it("prints false for an undecidable base and still exits 0", async () => {
     const repo = await scratchRepo();
-    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+    await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
     const outputPath = join(repo, "option-output");
 
     for (const base of [
