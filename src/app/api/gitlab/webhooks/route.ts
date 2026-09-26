@@ -88,9 +88,11 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this message's lease and may yet
-        // fail, so the retry is not acknowledged: an empty 503 makes GitLab
-        // retry. Not a processing failure, so one fixed-template line naming
-        // only the receipt key and this execution's UUID.
+        // fail, so the retry is not acknowledged: an empty 503 records the
+        // execution as failed on GitLab's side, so a later retry or resend of
+        // the message processes it. Not a processing failure, so one
+        // fixed-template line naming only the receipt key and this
+        // execution's UUID.
         console.warn(
           `Webhook delivery ${delivery.deliveryId} (execution ${delivery.executionId})`
             + " is still being processed by an earlier attempt; answered 503 so it is retried.",

@@ -175,6 +175,32 @@ describe("scoped webhook receipts", () => {
     expect(await sql`select * from webhook_deliveries where github_delivery_id = ${delivery.deliveryId}`).toEqual(legacyBefore);
   });
 
+  it.each([
+    { other: "another registration under the same provider", provider: "github", otherRegistration: true },
+    { other: "the same registration id under the other provider", provider: "gitlab", otherRegistration: false },
+  ] as const)("does not let a processed receipt for $other turn an in-flight claim into a duplicate", async ({ provider, otherRegistration }) => {
+    const fixture = await materializeRepositoryFixture(sql);
+    const delivery = await deliveryFor(fixture, randomUUID());
+    const scope = { provider: "github" as const, registrationId: fixture.repositoryId };
+    const otherScope = {
+      provider, registrationId: otherRegistration ? (await materializeRepositoryFixture(sql)).repositoryId : fixture.repositoryId,
+    };
+    const store = new PostgresFoldStore(sql);
+    const processed = await store.claimDelivery(delivery, otherScope);
+    if (processed.status !== "CLAIMED") throw new Error("Expected the other scope to claim its own receipt");
+    expect(await store.markProcessed(processed.receiptId, processed.leaseToken)).toBe(true);
+    expect((await store.claimDelivery(delivery, scope)).status).toBe("CLAIMED");
+    const before = [await receiptRows(scope, delivery.deliveryId), await receiptRows(otherScope, delivery.deliveryId)];
+    expect(before).toEqual([
+      [expect.objectContaining({ processing_state: "PENDING" })],
+      [expect.objectContaining({ processing_state: "PROCESSED" })],
+    ]);
+
+    await expect(store.claimDelivery({ ...delivery, executionId: "retry" }, scope)).resolves.toEqual({ status: "IN_PROGRESS" });
+
+    expect([await receiptRows(scope, delivery.deliveryId), await receiptRows(otherScope, delivery.deliveryId)]).toEqual(before);
+  });
+
   it("does not let a processed legacy receipt with the same key turn an in-flight scoped claim into a duplicate", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     const delivery = await deliveryFor(fixture, randomUUID());

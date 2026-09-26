@@ -86,8 +86,9 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
       const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
       if (processed.status === "IN_PROGRESS") {
         // An earlier attempt still holds this delivery's lease and may yet
-        // fail, so the redelivery is not acknowledged: an empty 503 makes
-        // GitHub retry. Not a processing failure, so one fixed-template line
+        // fail, so the redelivery is not acknowledged: an empty 503 leaves it
+        // marked failed in GitHub's delivery log, and a later redelivery
+        // retries it. Not a processing failure, so one fixed-template line
         // naming only the delivery id.
         console.warn(`Webhook delivery ${delivery.deliveryId} is still being processed by an earlier attempt; answered 503 so it is retried.`);
         return new Response(null, { status: 503 });
