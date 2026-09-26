@@ -57,9 +57,11 @@ jobs:
 
       # Under push the ref is github.event.before, the previous main tip,
       # whose copy of scripts/check-ratchets.ts executes. The event-name
-      # gate replaces the `ref: A && B || ''` idiom, whose empty-string
-      # fallback would silently check out the pushed commit and run its
-      # script when `before` is empty.
+      # gate splits the checkout in two: the pull_request_target step above
+      # has no ref input at all, so it is visibly the default checkout
+      # (main's tip, exempt from checkout's fork guard) without evaluating
+      # an expression, and this step visibly pins the previous main tip.
+      # On a push GitHub always sets `before` to a 40-hex SHA.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'push' }}
         with:
@@ -108,11 +110,11 @@ jobs:
         run: git fetch --no-tags origin "$PUSHED_SHA"
 
       # The base is HEAD — the checked-out previous main tip
-      # (github.event.before), a direct ancestor of the pushed SHA, so the
-      # merge base is the previous tip itself and the comparison is exactly
-      # "did this push relax a ratchet document relative to the main it
-      # replaced". If the pushed SHA were somehow unreachable, the script
-      # exits 2 and the run fails.
+      # (github.event.before), which for a non-forced push is a direct
+      # ancestor of the pushed SHA, so the merge base is the previous tip
+      # itself and the comparison is exactly "did this push relax a ratchet
+      # document relative to the main it replaced". If the pushed SHA were
+      # somehow unreachable, the script exits 2 and the run fails.
       - name: Ratchet documents against the previous main
         if: ${{ github.event_name == 'push' }}
         env:
