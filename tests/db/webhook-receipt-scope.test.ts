@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -8,7 +8,7 @@ import { createGitHubWebhookPostHandler } from "@/app/api/github/webhooks/route"
 import { createGitLabWebhookPostHandler } from "@/app/api/gitlab/webhooks/route";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { GitHubWebhookDelivery } from "@/lib/github/webhook-schema";
-import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
+import { processWebhook, type WebhookDeliveryClaim, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -214,6 +214,51 @@ describe("scoped webhook receipts", () => {
     await expect(store.claimDelivery({ ...delivery, executionId: "retry" }, scope)).resolves.toEqual({ status: "IN_PROGRESS" });
   });
 
+  // The two claims below run while another transaction holds the conflicting
+  // row, so the claim's snapshot predates that row's final state: it must
+  // still answer IN_PROGRESS, never DUPLICATE, since nothing it can see proves
+  // the other attempt's work durable.
+  it("answers in progress when the conflicting receipt is inserted and committed while the claim waits", async () => {
+    const scope = { provider: "github" as const, registrationId: randomUUID() };
+    const key = randomUUID();
+    const store = new PostgresFoldStore(sql);
+
+    const result = await claimWhileHeld(
+      (tx) => tx`insert into webhook_deliveries (provider, registration_id, delivery_key, execution_id, event_name,
+          processing_state, processing_lease_token, lease_expires_at, attempt_count)
+        values (${scope.provider}, ${scope.registrationId}, ${key}, 'first', 'issues',
+          'PENDING', ${randomUUID()}, now() + interval '5 minutes', 1)`,
+      () => store.claimDelivery(raceDelivery(key), scope),
+    );
+
+    expect(result).toEqual({ status: "IN_PROGRESS" });
+  });
+
+  it("answers in progress when another attempt reclaims a FAILED receipt while the claim waits, and keeps that lease", async () => {
+    const scope = { provider: "github" as const, registrationId: randomUUID() };
+    const key = randomUUID();
+    await sql`insert into webhook_deliveries (provider, registration_id, delivery_key, execution_id, event_name,
+        processing_state, attempt_count, error_message, processed_at)
+      values (${scope.provider}, ${scope.registrationId}, ${key}, 'first', 'issues',
+        'FAILED', 1, 'Webhook processing failed.', now())`;
+    const store = new PostgresFoldStore(sql);
+    const otherToken = randomUUID();
+
+    const result = await claimWhileHeld(
+      (tx) => tx`update webhook_deliveries
+        set processing_state = 'PENDING', processing_lease_token = ${otherToken},
+            lease_expires_at = now() + interval '5 minutes', attempt_count = attempt_count + 1,
+            error_message = null, processed_at = null
+        where registration_id = ${scope.registrationId} and delivery_key = ${key}`,
+      () => store.claimDelivery(raceDelivery(key), scope),
+    );
+
+    expect(result).toEqual({ status: "IN_PROGRESS" });
+    expect(await sql`select processing_state, processing_lease_token::text, attempt_count, execution_id from webhook_deliveries
+      where registration_id = ${scope.registrationId} and delivery_key = ${key}`)
+      .toEqual([{ processing_state: "PENDING", processing_lease_token: otherToken, attempt_count: 2, execution_id: "first" }]);
+  });
+
   it.each(["github", "gitlab"] as const)(
     "asks %s to retry while the first attempt holds the lease, then processes the retry once that attempt fails",
     async (provider) => {
@@ -338,6 +383,51 @@ function routeSender(
   return (execution: string) => route(new Request(url, { method: "POST", body, headers: {
     "x-gitlab-event": "Issue Hook", "x-gitlab-token": secret, "x-gitlab-webhook-uuid": execution, "Idempotency-Key": key,
   } }));
+}
+
+function raceDelivery(key: string): GitHubWebhookDelivery {
+  return { deliveryId: key, executionId: "retry", event: "issues", action: "reopened",
+    repositoryGitHubId: 1, repositoryFullName: "owner/project", subject: { kind: "ISSUE", id: 1, number: 1 } };
+}
+
+/**
+ * Runs `claim` while a transaction holding `hold`'s row change is still open,
+ * commits that transaction only once the claim is queued behind it on a row
+ * lock, and returns the claim's answer. The wait has no deadline: it ends when
+ * Postgres reports the claim blocked by the holder, or fails when the claim
+ * settles without ever blocking, since the race was then never staged. The
+ * transaction always ends, commit or rollback, so a failure cannot leave the
+ * claim queued behind it.
+ */
+async function claimWhileHeld(
+  hold: (tx: TransactionSql) => Promise<unknown>,
+  claim: () => Promise<WebhookDeliveryClaim>,
+): Promise<WebhookDeliveryClaim> {
+  let pending: Promise<WebhookDeliveryClaim> | undefined;
+  try {
+    await sql.begin(async (tx) => {
+      await hold(tx);
+      const [holder] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      let settled = false;
+      const started = claim();
+      pending = started;
+      started.then(() => { settled = true; }, () => { settled = true; });
+      while (!settled) {
+        const [queued] = await sql<{ blocked: boolean }[]>`
+          select exists (
+            select 1 from pg_stat_activity
+            where ${holder.pid}::int = any(pg_blocking_pids(pid)) and wait_event_type = 'Lock'
+          ) as blocked`;
+        if (queued.blocked) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error("The claim settled without queueing behind the held receipt");
+    });
+  } finally {
+    await pending?.catch(() => undefined);
+  }
+  if (pending === undefined) throw new Error("The claim never started");
+  return pending;
 }
 
 function deliver(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope) {

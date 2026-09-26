@@ -59,6 +59,7 @@ export async function claimDelivery(
   if (row?.status === "CLAIMED" && row.id !== null && row.processing_lease_token !== null) {
     return { status: "CLAIMED", receiptId: row.id, leaseToken: row.processing_lease_token };
   }
+  // A missing row cannot occur against a real database; if it ever does, it must stay IN_PROGRESS, the retry side.
   return { status: row?.status === "DUPLICATE" ? "DUPLICATE" : "IN_PROGRESS" };
 }
 
