@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isDocsOnly, isDocsPath, parseNulList } from "../../scripts/docs-only.ts";
 
 const script = fileURLToPath(
@@ -65,28 +69,122 @@ describe("NUL-delimited lists", () => {
   });
 });
 
-describe("docs-only CLI", () => {
-  const run = (stdin: string) =>
-    spawnSync(process.execPath, [script], {
-      encoding: "utf8",
-      input: stdin,
-    });
+/**
+ * The CLI takes the base revision and runs the diff itself, so these cases run
+ * it inside real scratch repositories: a rename's source path, a multi-commit
+ * range and an undecidable base are all decided by what git actually reports.
+ */
+describe("docs-only CLI against a git repository", () => {
+  const gitEnv = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "docs-only test",
+    GIT_AUTHOR_EMAIL: "docs-only@example.invalid",
+    GIT_COMMITTER_NAME: "docs-only test",
+    GIT_COMMITTER_EMAIL: "docs-only@example.invalid",
+  };
+  let root = "";
 
-  it("prints true for a docs-only diff and exits 0", () => {
-    const result = run("README.md\0LICENSE\0");
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "docs-only-cli-"));
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function git(repo: string, ...args: string[]): string {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: gitEnv });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return result.stdout.trim();
+  }
+
+  async function commit(repo: string, files: Record<string, string>, message: string): Promise<string> {
+    for (const [path, content] of Object.entries(files)) {
+      await mkdir(dirname(join(repo, path)), { recursive: true });
+      await writeFile(join(repo, path), content);
+    }
+    git(repo, "add", "--all");
+    git(repo, "commit", "--quiet", "--message", message);
+    return git(repo, "rev-parse", "HEAD");
+  }
+
+  /** A repository whose root commit holds one code file and one doc. */
+  async function scratchRepo(): Promise<string> {
+    const repo = await mkdtemp(join(root, "repo-"));
+    git(repo, "init", "--quiet", "--initial-branch=main");
+    await commit(
+      repo,
+      {
+        "src/lib/format-signed.ts": "export const formatSigned = (n: number) => `${n}`;\n",
+        "README.md": "# scratch\n",
+      },
+      "root",
+    );
+    return repo;
+  }
+
+  const classify = (repo: string, ...args: string[]) =>
+    spawnSync(process.execPath, [script, ...args], { cwd: repo, encoding: "utf8", env: gitEnv });
+
+  it("classifies a code file renamed to a doc by its source path", async () => {
+    const repo = await scratchRepo();
+    git(repo, "mv", "src/lib/format-signed.ts", "src/lib/format-signed.md");
+    git(repo, "commit", "--quiet", "--message", "rename");
+
+    const result = classify(repo, "HEAD^1");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("false\n");
+  });
+
+  it("prints true for a change that only edits a doc", async () => {
+    const repo = await scratchRepo();
+    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+
+    const result = classify(repo, "HEAD^1");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("true\n");
     expect(result.stderr).toBe("");
   });
 
-  it("prints false when a code path is present", () => {
-    const result = run("README.md\0src/index.ts\0");
+  it("covers every commit between the base and HEAD", async () => {
+    const repo = await scratchRepo();
+    const before = git(repo, "rev-parse", "HEAD");
+    await commit(repo, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
+    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+
+    const result = classify(repo, before);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("false\n");
   });
 
-  it("prints false for an empty diff", () => {
-    const result = run("");
+  it("prints false for an undecidable base and still exits 0", async () => {
+    const repo = await scratchRepo();
+    await commit(repo, { "README.md": "# scratch, edited\n" }, "docs");
+    const outputPath = join(repo, "option-output");
+
+    for (const base of [
+      [],
+      [""],
+      ["0000000000000000000000000000000000000000"],
+      ["1234567890abcdef1234567890abcdef12345678"],
+      ["no-such-branch"],
+      ["HEAD"],
+      [`--output=${outputPath}`],
+    ]) {
+      const result = classify(repo, ...base);
+      expect(result.status, `base ${JSON.stringify(base)}`).toBe(0);
+      expect(result.stdout, `base ${JSON.stringify(base)}`).toBe("false\n");
+    }
+    expect(existsSync(outputPath)).toBe(false);
+  });
+
+  it("prints false outside a git repository", async () => {
+    const outside = await mkdtemp(join(root, "not-a-repo-"));
+    const result = classify(outside, "HEAD^1");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("false\n");
   });
