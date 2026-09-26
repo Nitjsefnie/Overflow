@@ -51,12 +51,7 @@ import {
   applyGrantedSelfWorkCalibrationOverride,
   applyGrantedSettlementOverride,
 } from "@/lib/overrides/apply";
-import type {
-  WebhookDeliveryClaim,
-  WebhookDeliveryStore,
-  WebhookReceiptScope,
-  WebhookRepositoryRegistration,
-} from "@/lib/webhooks/processor";
+import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope, WebhookRepositoryRegistration } from "@/lib/webhooks/processor";
 import * as webhookReceipts from "@/lib/webhooks/postgres-receipts";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
@@ -1193,8 +1188,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
   public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<WebhookRepositoryRegistration | null> {
     const [row] = await this.sql<{ id: string; active: boolean; unavailable_reason: string | null }[]>`
-      select id, active, unavailable_reason
-      from registered_repositories where github_repository_id = ${githubRepositoryId} limit 1
+      select id, active, unavailable_reason from registered_repositories where github_repository_id = ${githubRepositoryId} limit 1
     `;
     return row === undefined ? null : { id: row.id, active: row.active, unavailableReason: row.unavailable_reason };
   }
