@@ -95,7 +95,8 @@ describe("the verify workflow's page-geometry step", () => {
 
 /**
  * The verify job's "Ratchet documents" step is the pull_request half of the
- * issue 647 gate: it runs main's scripts/check-ratchets.ts against the merge
+ * issue 647 gate: it runs the merge ref's copy of scripts/check-ratchets.ts
+ * (which the pull request can edit; only ratchet-guard.yml runs main's) against the merge
  * ref's parents — HEAD^1 the base tip, HEAD^2 the pull request head — after
  * completing the history of both sides, because the checkout is shallow at
  * that point and a shallow history can hand git merge-base a wrong base
