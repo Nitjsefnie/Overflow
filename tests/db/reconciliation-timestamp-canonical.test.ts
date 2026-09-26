@@ -95,7 +95,7 @@ describe("reconciliation compares timestamps as instants", () => {
 
   it.each([
     {
-      entity: "SETTLEMENT", issueIndex: 0,
+      entity: "SETTLEMENT", table: "settlements", issueIndex: 0,
       change: (fold: FoldResult) => {
         fold.settlements[0] = { ...fold.settlements[0]!, settledLabel: "delivered/7", settledPoints: 7, credits: 7 };
       },
@@ -103,15 +103,16 @@ describe("reconciliation compares timestamps as instants", () => {
       after: { settledLabel: "delivered/7", settledPoints: 7 },
     },
     {
-      entity: "SELF_WORK_CALIBRATION", issueIndex: 1,
+      entity: "SELF_WORK_CALIBRATION", table: "self_work_calibrations", issueIndex: 1,
       change: (fold: FoldResult) => {
         fold.selfWorkCalibrations[0] = { ...fold.selfWorkCalibrations[0]!, actualLabel: "delivered/7", actualPoints: 7 };
       },
       before: { actualLabel: "delivered/6", actualPoints: 6 },
       after: { actualLabel: "delivered/7", actualPoints: 7 },
     },
-  ] as const)("records exactly one CHANGE for a $entity whose settled label changed", async ({ entity, issueIndex, change, before, after }) => {
+  ] as const)("records exactly one CHANGE for a $entity whose settled label changed", async ({ entity, table, issueIndex, change, before, after }) => {
     const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    const versions = await derivedRowVersions(repositoryId);
     const changed = withGitHubTimestamps(fold);
     changed.issues[issueIndex] = { ...changed.issues[issueIndex]!, settledLabel: "delivered/7" };
     change(changed);
@@ -125,23 +126,28 @@ describe("reconciliation compares timestamps as instants", () => {
       before_state: expect.objectContaining({ ...before, mergedAt: "2026-09-01T12:00:00.000Z" }),
       after_state: expect.objectContaining({ ...after, mergedAt: "2026-09-01T12:00:00.000Z" }),
     }]);
+    // The recorded change is also written: only the changed row is rewritten,
+    // and it now stores the new points.
+    const rewritten = await rewrittenRows(versions, repositoryId);
+    expect(rewritten.map(({ kind, points }) => ({ kind, points }))).toEqual([{ kind: table, points: 7 }]);
   });
 
   it.each([
     {
-      entity: "SETTLEMENT", pullRequestIndex: 0,
+      entity: "SETTLEMENT", table: "settlements", pullRequestIndex: 0,
       move: (fold: FoldResult, mergedAt: string) => {
         fold.settlements[0] = { ...fold.settlements[0]!, mergedAt };
       },
     },
     {
-      entity: "SELF_WORK_CALIBRATION", pullRequestIndex: 1,
+      entity: "SELF_WORK_CALIBRATION", table: "self_work_calibrations", pullRequestIndex: 1,
       move: (fold: FoldResult, mergedAt: string) => {
         fold.selfWorkCalibrations[0] = { ...fold.selfWorkCalibrations[0]!, mergedAt };
       },
     },
-  ] as const)("records exactly one CHANGE for a $entity whose merge moved to another instant", async ({ entity, pullRequestIndex, move }) => {
+  ] as const)("records exactly one CHANGE for a $entity whose merge moved to another instant", async ({ entity, table, pullRequestIndex, move }) => {
     const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    const versions = await derivedRowVersions(repositoryId);
     const moved = withGitHubTimestamps(fold);
     const mergedAt = "2026-09-01T12:00:01Z";
     moved.pullRequests[pullRequestIndex] = { ...moved.pullRequests[pullRequestIndex]!, mergedAt };
@@ -155,6 +161,7 @@ describe("reconciliation compares timestamps as instants", () => {
       before_state: expect.objectContaining({ mergedAt: "2026-09-01T12:00:00.000Z" }),
       after_state: expect.objectContaining({ mergedAt: "2026-09-01T12:00:01.000Z" }),
     }]);
+    expect((await rewrittenRows(versions, repositoryId)).map(({ kind }) => kind)).toEqual([table]);
   });
 });
 
@@ -185,11 +192,19 @@ function changesFor(runId: string) {
 
 function derivedRowVersions(repositoryId: string) {
   return sql`
-    select 'settlements' as kind, derived.id, derived.xmin::text as version from settlements as derived
+    select 'settlements' as kind, derived.id, derived.xmin::text as version, derived.settled_points as points
+    from settlements as derived
     join issues on issues.id = derived.issue_id where issues.repository_id = ${repositoryId}
     union all
-    select 'self_work_calibrations', derived.id, derived.xmin::text from self_work_calibrations as derived
+    select 'self_work_calibrations', derived.id, derived.xmin::text, derived.actual_points
+    from self_work_calibrations as derived
     join issues on issues.id = derived.issue_id where issues.repository_id = ${repositoryId}
     order by kind
   `;
+}
+
+/** The derived rows whose tuple was written since `before` was read. */
+async function rewrittenRows(before: readonly Record<string, unknown>[], repositoryId: string) {
+  const versionBefore = new Map(before.map((row) => [row.id, row.version]));
+  return (await derivedRowVersions(repositoryId)).filter((row) => versionBefore.get(row.id) !== row.version);
 }
