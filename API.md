@@ -10,6 +10,12 @@ after that, repositories can be registered over the API. The existing web form
 remains unchanged and available — programmatic registration is an additional way
 to submit the same repository and catalogs.
 
+Registration is not the limit of what the token can do. It authenticates as the
+account that generated it and carries that account's full role authority: every
+action the owner's role permits over the API. That includes unregistering the
+repositories the account sponsors and, for a moderator, moderation and override
+decisions. Treat it as equivalent to the signed-in account.
+
 ### Get or replace a token
 
 Sign in, open **Register a repository** (`/repositories/new`), and use **Generate
@@ -22,13 +28,22 @@ and invalidates the previous one in the same step. Use regeneration if you lose
 the token or it leaks, and replace the credential in your scripts. Keep the token
 private; do not commit it.
 
+A token expires 90 days after it is generated. Regenerating issues a new token
+with a fresh 90-day lifetime; nothing extends an existing token. The panel shows
+when the current token expires, and marks it once it has expired. An expired
+token is refused exactly like one Overflow never issued: HTTP `401` with code
+`UNAUTHENTICATED` and message `The supplied API token was not accepted.` on every
+route that accepts a bearer token. Regenerate the token and replace it in your
+scripts.
+
 The panel calls `POST /api/tokens` with the signed-in browser session cookie and
 no request body. An API token alone cannot mint or regenerate a token. Because
 the session cookie is the only credential, the endpoint is same-origin only: the
 request must carry an `Origin` header equal to the origin of `APP_URL` (its
 scheme, host and port; any path is ignored), and it must either send no body or
 declare `Content-Type: application/json`. Success is HTTP `201` with
-`{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>" }`.
+`{ "token": "<new-token>", "createdAt": "<ISO-8601 timestamp>", "expiresAt": "<ISO-8601 timestamp>" }`,
+where `expiresAt` is 90 days after `createdAt`.
 Failures use `{ "error": { "code": "...", "message": "..." } }`:
 
 | HTTP | Code | Exact message | Meaning / next step |
