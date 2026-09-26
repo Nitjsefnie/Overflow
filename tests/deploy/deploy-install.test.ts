@@ -130,6 +130,7 @@ const otherShellLines = new Set([
   "printf 'Re-encryption exit status: %s\\nCheck exit status: %s\\n' \"$reencrypt_status\" \"$check_status\"",
   "row_id='REPLACE-WITH-REPORTED-ID'",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update users set encrypted_oauth_token = null where id = '$row_id'\"",
+  "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update user_forge_identities set encrypted_token = null where id = '$row_id'\"",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null\"",
   "sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env",
   "sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env",

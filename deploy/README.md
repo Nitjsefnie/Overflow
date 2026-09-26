@@ -1143,9 +1143,26 @@ webhook upgrade reports `CREDENTIALS_FAILED` for their registrations. Each of
 those already failed while the token was unreadable. Signing in does not need
 the stored token, and it writes a new one.
 
-**`user_forge_identities`.** The user links the forge identity again, which
-replaces the stored token. Until they do, `--check` keeps exiting 1 and step 6
-waits.
+**`user_forge_identities`.** The user's next link of the same forge identity
+stores a fresh token in the same row. Without waiting for that, clear the
+reported row's token; never delete the row:
+
+```bash
+set -a; . /etc/overflow/overflow.env; set +a
+row_id='REPLACE-WITH-REPORTED-ID'
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update user_forge_identities set encrypted_token = null where id = '$row_id'"
+```
+
+Expect `UPDATE 1`; `UPDATE 0` means no identity has that id. The row keeps its
+provider, instance and forge user id, which is what GitLab authorship resolves
+through, so the user's GitLab work stays attributed to them; deleting the row
+would lose that. A NULL token is never selected for use and the re-encryption
+skips it, the same state account deletion leaves. Until the user links the
+identity again, everything that needs their GitLab token on that instance
+fails as it would with no identity linked: reconciling the GitLab repositories
+they sponsor there, registering or unregistering a repository there, reading
+its labels, and the webhook upgrade for those registrations. Each of those
+already failed while the token was unreadable.
 
 **`registered_repositories`.** The sponsor unregisters and registers the
 repository again, or you clear the row's credential and let the webhook
