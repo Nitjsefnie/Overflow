@@ -39,7 +39,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
         lookups.push([selector, expectedProvider]);
         return credential;
       },
-      processWebhook: async (delivery) => { deliveries.push(delivery); },
+      processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     })(request());
     expect(response.status).toBe(202);
     expect(lookups).toEqual([[webhookSelector, provider]]);
@@ -61,7 +61,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
       const accesses: string[] = [];
       const response = await factory({
         lookupCredential: async () => { accesses.push("lookup"); return credential; },
-        processWebhook: async () => { accesses.push("process"); },
+        processWebhook: async () => { accesses.push("process"); return { status: "PROCESSED" as const }; },
       })(request(query));
       expect(response.status).toBe(401);
       expect(accesses).toEqual([]);
@@ -74,7 +74,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
       const deliveries: unknown[] = [];
       const response = await factory({
         lookupCredential: async () => null,
-        processWebhook: async (delivery) => { deliveries.push(delivery); },
+        processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
       })(request());
       expect(response.status).toBe(401);
       expect(deliveries).toEqual([]);
@@ -87,7 +87,7 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
     const deliveries: unknown[] = [];
     const response = await factory({
       lookupCredential: async () => { throw new Error("synthetic private credential details"); },
-      processWebhook: async (delivery) => { deliveries.push(delivery); },
+      processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     })(request());
     expect(response.status).toBe(503);
     expect(await response.text()).toBe("");

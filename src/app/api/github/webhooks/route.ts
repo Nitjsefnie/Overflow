@@ -4,13 +4,13 @@ import {
 } from "@/lib/github/webhook-schema";
 import { verifyGitHubWebhookSignature } from "@/lib/github/webhook-signature";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { processWebhook, type WebhookReceiptScope } from "@/lib/webhooks/processor";
+import { processWebhook, type WebhookProcessingResult, type WebhookReceiptScope } from "@/lib/webhooks/processor";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import { githubPayloadRepositoryId, webhookSelector, type WebhookCredentialLookup } from "@/lib/webhooks/credentials";
 
 export type GitHubWebhookRouteDependencies = {
   lookupCredential: WebhookCredentialLookup;
-  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<unknown>;
+  processWebhook(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope): Promise<WebhookProcessingResult>;
 };
 
 // GitHub documents webhook payloads as capped at 25 MB. 25 MiB (26,214,400)
@@ -83,7 +83,15 @@ export function createGitHubWebhookPostHandler(dependencies: GitHubWebhookRouteD
     const delivery = result.delivery;
 
     try {
-      await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      const processed = await dependencies.processWebhook(delivery, { provider: credential.provider, registrationId: credential.repositoryId });
+      if (processed.status === "IN_PROGRESS") {
+        // An earlier attempt still holds this delivery's lease and may yet
+        // fail, so the redelivery is not acknowledged: an empty 503 makes
+        // GitHub retry. Not a processing failure, so one fixed-template line
+        // naming only the delivery id.
+        console.warn(`Webhook delivery ${delivery.deliveryId} is still being processed by an earlier attempt; answered 503 so it is retried.`);
+        return new Response(null, { status: 503 });
+      }
       return new Response(null, { status: 202 });
     } catch (error) {
       // GitHub sees only an empty 503 and the store persists the sanitized

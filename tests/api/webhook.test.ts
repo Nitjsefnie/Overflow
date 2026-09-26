@@ -37,7 +37,7 @@ describe("GitHub webhook route", () => {
         secret, provider: "github" as const, instanceUrl: null, projectId: 99,
         webhookId: 501, configuredAt: null,
       }),
-      processWebhook: async (delivery: unknown) => { deliveries.push(delivery); },
+      processWebhook: async (delivery: unknown) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
     };
     const route = createGitHubWebhookPostHandler(dependencies);
     const response = await route(request(JSON.stringify({
@@ -50,7 +50,7 @@ describe("GitHub webhook route", () => {
   it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201, number: "11" }])(
     "rejects comment delivery without a valid issue subject, even if it contains a PR subject: %j", async (issue) => {
       const deliveries: unknown[] = [];
-      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); } });
+      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
       const response = await route(request(JSON.stringify({ action: "created",
         repository: { id: 42, full_name: "octo/example" }, issue, pull_request: { id: 201, number: 11 },
       }), { "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment-subject" }));
@@ -114,7 +114,7 @@ describe("GitHub webhook route", () => {
     { event: "pull_request_review", action: "dismissed", key: "pull_request", kind: "PULL_REQUEST" },
   ])("preserves stable subject identity for $event/$action", async ({ event, action, key, kind }) => {
     const deliveries: unknown[] = [];
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); } });
+    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
     const response = await route(request(JSON.stringify({ action,
       repository: { id: 42, full_name: "octo/example" }, [key]: { id: 201, number: 11, merged: true,
         state: "closed", updated_at: "2026-09-08T10:00:00Z", title: "Issue", body: null,
@@ -130,7 +130,7 @@ describe("GitHub webhook route", () => {
     { id: Number.MAX_SAFE_INTEGER + 1, number: 11 }, { id: 201, number: "11" }])(
     "rejects an invalid subject %j before processing", async (subject) => {
       const deliveries: unknown[] = [];
-      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); } });
+      const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
       const response = await route(request(JSON.stringify({ action: "closed",
         repository: { id: 42, full_name: "octo/example" }, pull_request: subject,
       }), { "x-github-event": "pull_request", "x-github-delivery": "invalid-subject" }));
@@ -147,7 +147,7 @@ describe("GitHub webhook route", () => {
     { repository: { id: 42, full_name: "octo/example" } },
   ])("rejects unsupported or malformed comment envelopes before queueing: %j", async (payload) => {
     const processed: unknown[] = [];
-    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => processed.push(delivery) });
+    const route = createGitHubWebhookPostHandler({ lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { processed.push(delivery); return { status: "PROCESSED" as const }; } });
     const response = await route(request(JSON.stringify({ issue: { id: 201, number: 11 }, ...payload }), {
       "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment",
     }));
@@ -334,6 +334,36 @@ describe("GitHub webhook route", () => {
       expect(response.status).toBe(503);
     } finally {
       logged.mockRestore();
+    }
+  });
+
+  it.each([
+    { status: "IN_PROGRESS", answer: 503 },
+    { status: "DUPLICATE", answer: 202 },
+    { status: "PROCESSED", answer: 202 },
+  ] as const)("answers the $status processing result with $answer", async ({ status, answer }) => {
+    const route = createGitHubWebhookPostHandler({
+      lookupCredential: async () => webhookCredential("github", secret),
+      processWebhook: vi.fn().mockResolvedValue({ status }),
+    });
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failed = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await route(request(rawPayload, {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-in-flight",
+      }));
+
+      expect(response.status).toBe(answer);
+      expect(await response.text()).toBe("");
+      expect(failed).not.toHaveBeenCalled();
+      // An in-flight redelivery is not a processing failure: at most one
+      // line, carrying the delivery id and nothing from the payload.
+      expect(warned.mock.calls).toEqual(status === "IN_PROGRESS" ? [[expect.stringContaining("delivery-in-flight")]] : []);
+      expect(JSON.stringify(warned.mock.calls)).not.toContain("octo/example");
+    } finally {
+      warned.mockRestore();
+      failed.mockRestore();
     }
   });
 

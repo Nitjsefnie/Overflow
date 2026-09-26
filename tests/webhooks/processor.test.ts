@@ -18,7 +18,7 @@ describe("processWebhook", () => {
     expect(dependencies.store.markProcessed).toHaveBeenCalledWith("receipt-1", "lease-1");
   });
 
-  it("does not schedule a fold for a delivery still leased by an interrupted worker", async () => {
+  it("does not schedule a fold for a delivery whose receipt is already processed", async () => {
     const dependencies = processorDependencies({ claimDelivery: { status: "DUPLICATE" } });
 
     const result = await processWebhook(dependencies, delivery(), scope);
@@ -26,6 +26,21 @@ describe("processWebhook", () => {
     expect(result).toEqual({ status: "DUPLICATE" });
     expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
     expect(dependencies.store.markProcessed).not.toHaveBeenCalled();
+  });
+
+  it("answers a delivery an earlier attempt still leases as in progress and touches nothing else", async () => {
+    const dependencies = processorDependencies({ claimDelivery: { status: "IN_PROGRESS" } });
+
+    const result = await processWebhook(dependencies, delivery(), scope);
+
+    expect(result).toEqual({ status: "IN_PROGRESS" });
+    expect(dependencies.store.claimDelivery).toHaveBeenCalledExactlyOnceWith(delivery(), scope);
+    expect(dependencies.store.findRepositoryByGitHubId).not.toHaveBeenCalled();
+    expect(dependencies.store.findRepositoryByForgeIdentity).not.toHaveBeenCalled();
+    expect(dependencies.store.applyIssueView).not.toHaveBeenCalled();
+    expect(dependencies.enqueueReconciliation).not.toHaveBeenCalled();
+    expect(dependencies.store.markProcessed).not.toHaveBeenCalled();
+    expect(dependencies.store.markFailed).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -221,7 +236,8 @@ function processorDependencies(
 
 type DeliveryClaim =
   | { status: "CLAIMED"; receiptId: string; leaseToken: string }
-  | { status: "DUPLICATE" };
+  | { status: "DUPLICATE" }
+  | { status: "IN_PROGRESS" };
 
 function claimedLease(leaseToken: string): DeliveryClaim {
   return { status: "CLAIMED", receiptId: "receipt-1", leaseToken };
