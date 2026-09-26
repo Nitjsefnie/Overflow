@@ -157,6 +157,7 @@ describe("resolveRouteCredential", () => {
     const credential = await resolveRouteCredential(tokenRequest(), { getSession, findAccountByTokenHash });
 
     expect(credential).toEqual({ ...session, credential: { kind: "session" } });
+    expect(session).toEqual({ user: { id: memberId, role: "MEMBER" } });
     expect(findAccountByTokenHash).not.toHaveBeenCalled();
   });
 
