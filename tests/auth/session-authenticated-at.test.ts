@@ -76,7 +76,9 @@ describe("session authentication time", () => {
 
   it.each([
     { label: "a session read", trigger: undefined },
-    { label: "a session update", trigger: "update" as const },
+    // An update carries whatever the caller put in `session`, so a fresh
+    // instant offered there must not be taken as a sign-in.
+    { label: "a session update offering a fresh instant", trigger: "update" as const },
   ])("carries the recorded instant through $label without refreshing it", async ({ trigger }) => {
     const { jwt } = await callbacks();
     const recorded = signedInAtSeconds - 3600;
@@ -84,7 +86,9 @@ describe("session authentication time", () => {
     const token = await jwt!({
       token: { authenticatedAt: recorded },
       user: { id: "4242" },
-      ...(trigger === undefined ? {} : { trigger }),
+      ...(trigger === undefined
+        ? {}
+        : { trigger, session: { user: { authenticatedAt: signedInAtSeconds } } }),
     } as never);
 
     expect(token?.authenticatedAt).toBe(recorded);
