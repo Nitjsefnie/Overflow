@@ -232,7 +232,7 @@ export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SE
  *
  * This row is the only moderator-facing record — the fold emits it and
  * `recordNewPolicyViolations` writes it to `reconciliation_changes` when it
- * first appears — so each variant has to carry what a moderator needs from it.
+ * newly appears — so each variant has to carry what a moderator needs from it.
  * The unauthorized one is an accusation, so it answers "which label, and who
  * applied it". The unattributable one has no account to accuse: an
  * opening-catalog application WAS made, but no account was ever compared

@@ -11,9 +11,11 @@
 --
 -- The key is an md5 digest of the violation, not the violation itself: a btree
 -- index row holds at most about 2.7 kB, and a violation carries prose that can
--- exceed it, which would abort every publication for that repository. jsonb's
--- text form is canonical (key order and whitespace normalised), so equal
--- violations share a digest. Lookups still compare the jsonb values.
+-- exceed it, which would abort every publication for that repository.
+-- Violations whose jsonb text is equal share a digest. jsonb `=` also equates
+-- spellings whose text differs, such as 1.0 and 1, so lookups and deletes
+-- compare with jsonb `=` rather than the digest; the fold's violations arrive
+-- through JSON.stringify, which never emits such spellings.
 --
 -- The table starts empty. The first run after this migration records each
 -- repository's current set once, which is bounded by that set's size, rather
