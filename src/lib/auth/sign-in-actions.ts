@@ -4,6 +4,7 @@ import {
   GITHUB_CONTRIBUTOR_SCOPE,
   GITHUB_REPOSITORY_REGISTRATION_SCOPE,
 } from "@/lib/auth/github-oauth-scopes";
+import { assertTrustedServerActionOrigin } from "@/lib/security/server-action-origin";
 
 /**
  * The GitHub sign-ins (issue 599). Each names its scope per call, which
@@ -14,6 +15,7 @@ import {
 
 /** Public identity only; lands on the member destination. */
 export async function signInAsContributor(): Promise<void> {
+  await assertTrustedServerActionOrigin();
   const { signIn } = await import("@/auth");
   await signIn("github", { redirectTo: "/dashboard" }, { scope: GITHUB_CONTRIBUTOR_SCOPE });
 }
@@ -25,6 +27,7 @@ export async function signInAsContributor(): Promise<void> {
  * with the union of scopes, so the same account continues after callback.
  */
 export async function signInForRepositoryRegistration(): Promise<void> {
+  await assertTrustedServerActionOrigin();
   const { signIn } = await import("@/auth");
   await signIn("github", { redirectTo: "/repositories/new" }, { scope: GITHUB_REPOSITORY_REGISTRATION_SCOPE });
 }
@@ -37,6 +40,7 @@ export async function signInForRepositoryRegistration(): Promise<void> {
  * member who already granted webhook administration keeps it.
  */
 export async function confirmSignInForApiToken(): Promise<void> {
+  await assertTrustedServerActionOrigin();
   const { signIn } = await import("@/auth");
   await signIn("github", { redirectTo: "/repositories/new" }, { scope: GITHUB_CONTRIBUTOR_SCOPE });
 }
