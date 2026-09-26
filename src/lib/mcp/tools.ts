@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import type { ToolCallResult, ToolDefinition } from "@/lib/mcp/protocol";
+import { reasonText } from "@/lib/validation/reason";
 
 const MCP_REQUEST_ORIGIN = "http://mcp.internal";
 
@@ -66,20 +67,20 @@ const auditOpenSchema = z
     repositoryId: z.string().uuid().optional(),
     sampleStartedAt: z.string(),
     sampleEndedAt: z.string(),
-    reason: z.string(),
+    reason: reasonText(),
   })
   .strict();
 
 const auditDecideSchema = z.discriminatedUnion("action", [
-  z.object({ id: z.string().uuid(), action: z.literal("dismiss"), reason: z.string() }).strict(),
+  z.object({ id: z.string().uuid(), action: z.literal("dismiss"), reason: reasonText() }).strict(),
   z
-    .object({ id: z.string().uuid(), action: z.literal("substantiate"), reason: z.string() })
+    .object({ id: z.string().uuid(), action: z.literal("substantiate"), reason: reasonText() })
     .strict(),
 ]);
 
 const correctionOpenSchema = z.union([
-  z.object({ settlementId: z.string().uuid(), reason: z.string().trim().min(1) }).strict(),
-  z.object({ calibrationId: z.string().uuid(), reason: z.string().trim().min(1) }).strict(),
+  z.object({ settlementId: z.string().uuid(), reason: reasonText() }).strict(),
+  z.object({ calibrationId: z.string().uuid(), reason: reasonText() }).strict(),
 ]);
 
 const correctionDecideSchema = z.discriminatedUnion("action", [
@@ -88,11 +89,11 @@ const correctionDecideSchema = z.discriminatedUnion("action", [
       id: z.string().uuid(),
       action: z.literal("grant"),
       settledPoints: z.number().int().min(1).max(10),
-      reason: z.string().trim().min(1),
+      reason: reasonText(),
     })
     .strict(),
   z
-    .object({ id: z.string().uuid(), action: z.literal("decline"), reason: z.string().trim().min(1) })
+    .object({ id: z.string().uuid(), action: z.literal("decline"), reason: reasonText() })
     .strict(),
 ]);
 

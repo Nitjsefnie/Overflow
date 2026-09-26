@@ -18,16 +18,17 @@ import {
 } from "@/lib/overrides/service";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 export const decisionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("grant"),
       settledPoints: z.number().int().min(1).max(10),
-      reason: z.string().trim().min(1),
+      reason: reasonText(),
     })
     .strict(),
-  z.object({ action: z.literal("decline"), reason: z.string().trim().min(1) }).strict(),
+  z.object({ action: z.literal("decline"), reason: reasonText() }).strict(),
 ]);
 
 export type SettlementOverrideDecisionContext = {

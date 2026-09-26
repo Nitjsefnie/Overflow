@@ -12,11 +12,12 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { AccountModerationService } from "@/lib/moderation/service";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 const reversalSchema = z
   .object({
     adjustmentId: z.string().uuid(),
-    reason: z.string(),
+    reason: reasonText(),
   })
   .strict();
 
