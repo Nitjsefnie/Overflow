@@ -51,7 +51,12 @@ import {
   applyGrantedSelfWorkCalibrationOverride,
   applyGrantedSettlementOverride,
 } from "@/lib/overrides/apply";
-import type { WebhookDeliveryClaim, WebhookDeliveryStore, WebhookReceiptScope } from "@/lib/webhooks/processor";
+import type {
+  WebhookDeliveryClaim,
+  WebhookDeliveryStore,
+  WebhookReceiptScope,
+  WebhookRepositoryRegistration,
+} from "@/lib/webhooks/processor";
 import * as webhookReceipts from "@/lib/webhooks/postgres-receipts";
 import { credentialBinding, decryptToken, tokenKeySetFrom } from "@/lib/security/token-cipher";
 
@@ -1186,29 +1191,30 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     return webhookReceipts.claimDelivery(this.sql, delivery, scope);
   }
 
-  public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<{ id: string; active: boolean } | null> {
-    const [row] = await this.sql<{ id: string; active: boolean }[]>`
-      select id, active from registered_repositories where github_repository_id = ${githubRepositoryId} limit 1
+  public async findRepositoryByGitHubId(githubRepositoryId: number): Promise<WebhookRepositoryRegistration | null> {
+    const [row] = await this.sql<{ id: string; active: boolean; unavailable_reason: string | null }[]>`
+      select id, active, unavailable_reason
+      from registered_repositories where github_repository_id = ${githubRepositoryId} limit 1
     `;
-    return row ?? null;
+    return row === undefined ? null : { id: row.id, active: row.active, unavailableReason: row.unavailable_reason };
   }
 
   public async findRepositoryByForgeIdentity(
     provider: string,
     instanceUrl: string,
     forgeProjectId: number,
-  ): Promise<{ id: string; active: boolean } | null> {
+  ): Promise<WebhookRepositoryRegistration | null> {
     // The forge triple is the resolution primitive for GitLab deliveries: a
     // numeric id alone could match a GitHub registration holding the same
     // number, so the provider and the normalized instance URL decide (issue
     // 547). The partial unique index from migration 038 keeps the triple
     // unique across non-GitHub registrations.
-    const [row] = await this.sql<{ id: string; active: boolean }[]>`
-      select id, active from registered_repositories
+    const [row] = await this.sql<{ id: string; active: boolean; unavailable_reason: string | null }[]>`
+      select id, active, unavailable_reason from registered_repositories
       where provider = ${provider} and instance_url = ${instanceUrl} and forge_project_id = ${forgeProjectId}
       limit 1
     `;
-    return row ?? null;
+    return row === undefined ? null : { id: row.id, active: row.active, unavailableReason: row.unavailable_reason };
   }
 
   public async applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void> {

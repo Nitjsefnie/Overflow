@@ -33,7 +33,7 @@ vi.mock("@/lib/fold/postgres-store", () => ({
       return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "lease-1" };
     }
     async findRepositoryByGitHubId() {
-      return { id: "repository-from-webhook", active: true };
+      return { id: "repository-from-webhook", active: true, unavailableReason: null };
     }
     async markProcessed() {
       return true;
@@ -231,7 +231,7 @@ function createQueueingStore() {
       return { status: "CLAIMED" as const, receiptId: "receipt-1", leaseToken: "delivery-lease" };
     },
     async findRepositoryByGitHubId() {
-      return { id: "repository-from-webhook", active: true };
+      return { id: "repository-from-webhook", active: true, unavailableReason: null };
     },
     async findRepositoryByForgeIdentity() {
       return null;

@@ -384,7 +384,9 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
   it("answers a tracked GitLab repository's delivery with a scheduled fold and none of the fold", async () => {
     const enqueued: string[] = [];
     const reconciled: string[] = [];
-    const findRepositoryByForgeIdentity = vi.fn().mockResolvedValue({ id: "gitlab-repository", active: true });
+    const findRepositoryByForgeIdentity = vi.fn().mockResolvedValue(
+      { id: "gitlab-repository", active: true, unavailableReason: null },
+    );
     const findRepositoryByGitHubId = vi.fn().mockResolvedValue(null);
     const dependencies: WebhookProcessorDependencies & {
       reconcileRepository(repositoryId: string): Promise<void>;

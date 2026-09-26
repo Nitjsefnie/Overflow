@@ -789,6 +789,7 @@ export async function listEligibleIssues(
       where issues.state = 'OPEN'
         and issues.claim_assignee_github_login is null
         and repositories.active = true
+        and repositories.unavailable_reason is null
         and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
         and coalesce(sponsor_balances.balance, 0) <= -coalesce(sponsor_credit_limits.credit_limit, 10)
       order by repositories.sponsor_id,
@@ -827,6 +828,7 @@ export async function listEligibleIssues(
     left join repayment_issues on repayment_issues.id = issues.id
     where issues.state = 'OPEN'
       and repositories.active = true
+      and repositories.unavailable_reason is null
       and sponsors.id <> ${accountId}
       and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
       and (

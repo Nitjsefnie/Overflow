@@ -1702,6 +1702,69 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
     const ambiguousClaim = dashboard.openClaims.find((claim) => claim.id === "ambiguous");
     expect(ambiguousClaim?.assigneeGitHubLogin).toBe(AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN);
   });
+
+  it("keeps an unavailable repository's issue off the board and returns it when the repository recovers", async () => {
+    // NOT_PUBLIC leaves active = true on purpose — flipping active would end
+    // the sweep's crawl and with it the automatic recovery — so the board
+    // filters on the unavailability word itself. Clearing it (the sweep does
+    // this when the repository verifies public again) returns the issue,
+    // simulated here with the direct update.
+    await sql.unsafe(`
+      insert into registered_repositories (id, github_repository_id, owner_name, sponsor_id, active, visibility, unavailable_reason, difficulty_scheme)
+      values ('repo-unavailable', 921001, 'co-op/private-harbour', 'sponsor', true, 'PRIVATE', 'NOT_PUBLIC',
+        '{"openingName":"Promise band","actualName":"Delivered band"}')
+    `);
+    await sql.unsafe(`
+      insert into issues (id, repository_id, issue_number, title, url, state, opening_label,
+        opening_comparison_points, opening_reserve_points, claim_assignee_github_login,
+        claim_assignee_github_user_id, created_at)
+      values ('unavailable-open', 'repo-unavailable', 10, 'Private harbour work',
+        'https://github.com/co-op/private-harbour/issues/10', 'OPEN', 'delta', 3, 4, null, null, '2026-09-01T00:00:00Z')
+    `);
+
+    const boardWhileUnavailable = await listEligibleIssues("member", {}, { sql: sql as unknown as DashboardSql });
+    expect(boardWhileUnavailable.map((row) => row.id)).toEqual(["open"]);
+
+    await sql.unsafe(`update registered_repositories set unavailable_reason = null where id = 'repo-unavailable'`);
+
+    const boardAfterRecovery = await listEligibleIssues("member", {}, { sql: sql as unknown as DashboardSql });
+    expect(boardAfterRecovery.map((row) => row.id)).toEqual(["open", "unavailable-open"]);
+  });
+
+  it("does not spend an exhausted sponsor's repayment slot on an unavailable repository's issue", async () => {
+    // The repayment CTE nominates before the presentation filters, so the
+    // unavailability exclusion has to sit inside the CTE: otherwise an
+    // unavailable repository's issue takes the one slot an exhausted sponsor
+    // has and displaces the issue that should have been nominated.
+    await sql.unsafe(`insert into users values ('exhausted', 'sol', 903, 'ACTIVE')`);
+    await sql.unsafe(`insert into balances values ('exhausted', -50)`);
+    await sql.unsafe(`
+      insert into registered_repositories (id, github_repository_id, owner_name, sponsor_id, active, visibility, unavailable_reason, difficulty_scheme)
+      values
+        ('repo-repayment-available', 921002, 'co-op/open-bay', 'exhausted', true, 'PUBLIC', null,
+          '{"openingName":"Promise band","actualName":"Delivered band"}'),
+        ('repo-repayment-unavailable', 921003, 'co-op/closed-bay', 'exhausted', true, 'PRIVATE', 'NOT_PUBLIC',
+          '{"openingName":"Promise band","actualName":"Delivered band"}')
+    `);
+    await sql.unsafe(`
+      insert into issues (id, repository_id, issue_number, title, url, state, opening_label,
+        opening_comparison_points, opening_reserve_points, claim_assignee_github_login,
+        claim_assignee_github_user_id, created_at)
+      values
+        ('repayment-unavailable', 'repo-repayment-unavailable', 11, 'Closed bay work',
+          'https://github.com/co-op/closed-bay/issues/11', 'OPEN', 'delta', 3, 2, null, null, '2026-08-31T00:00:00Z'),
+        ('repayment-available', 'repo-repayment-available', 12, 'Open bay work',
+          'https://github.com/co-op/open-bay/issues/12', 'OPEN', 'delta', 3, 5, null, null, '2026-09-01T00:00:00Z')
+    `);
+
+    const board = await listEligibleIssues("member", {}, { sql: sql as unknown as DashboardSql });
+
+    // The available repository's issue takes the repayment slot (reserve 5
+    // beats nothing else nominated); the unavailable repository's issue stays
+    // off the board outright.
+    expect(board.map((row) => row.id)).toContain("repayment-available");
+    expect(board.map((row) => row.id)).not.toContain("repayment-unavailable");
+  });
 });
 
 /** The five dashboard responses, carrying one failing repository whose failure time is the argument. */
