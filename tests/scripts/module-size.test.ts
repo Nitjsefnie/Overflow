@@ -98,9 +98,44 @@ describe("module size ratchet", () => {
     expect(collectViolations(files, doc)).toEqual([]);
   });
 
-  it("accepts shrinkage that remains above the ceiling", () => {
+  it("reports only shrunk for a listed file below its recorded count but over its ceiling", () => {
     const files = filesWithLines({ "src/big.ts": 850 });
-    expect(collectViolations(files, document({ "src/big.ts": 900 }))).toEqual([]);
+    expect(collectViolations(files, document({ "src/big.ts": 900 }))).toEqual([
+      {
+        kind: "shrunk",
+        path: "src/big.ts",
+        detail: "shrank to 850 lines (recorded 900)",
+        remedy: "record it: node scripts/check-module-size.ts --tighten",
+      },
+    ]);
+  });
+
+  it("reports shrunk for a listed file shrunk to exactly its ceiling", () => {
+    const files = filesWithLines({ "tests/big.test.ts": 2500 });
+    expect(collectViolations(files, document({ "tests/big.test.ts": 2600 }))).toMatchObject([
+      { kind: "shrunk", path: "tests/big.test.ts" },
+    ]);
+  });
+
+  it("reports graduated rather than shrunk once a listed file drops under its ceiling", () => {
+    const files = filesWithLines({ "src/big.ts": 799 });
+    expect(collectViolations(files, document({ "src/big.ts": 900 }))).toMatchObject([
+      { kind: "graduated", path: "src/big.ts" },
+    ]);
+  });
+
+  it("clears a shrunk violation once the baseline is tightened", () => {
+    const files = filesWithLines({ "src/big.ts": 850, "src/kept.ts": 900 });
+    const doc = document({ "src/big.ts": 900, "src/kept.ts": 900 });
+    expect(collectViolations(files, doc)).toMatchObject([
+      { kind: "shrunk", path: "src/big.ts" },
+    ]);
+    const tightened = applyTighten(files, doc).doc;
+    expect(tightened.module_size_baseline).toEqual({
+      "src/big.ts": 850,
+      "src/kept.ts": 900,
+    });
+    expect(collectViolations(files, tightened)).toEqual([]);
   });
 
   it("leaves an already tight baseline unchanged", () => {

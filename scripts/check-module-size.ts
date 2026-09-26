@@ -11,6 +11,10 @@
 // hand. The only remedies for an over-ceiling file are shrinking it or
 // relocating code into a new module. The baseline was seeded once from the
 // tree that introduced this script; --tighten is the only writer afterwards.
+//
+// Each recorded count must equal its file's current count, so a shrink is
+// recorded with --tighten in the same change that made it. A recorded count
+// above the current one is headroom the file could silently regrow into.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -40,7 +44,7 @@ export function ceilingFor(path: string, doc: ModuleSizeDoc): number {
 }
 
 export interface Violation {
-  kind: "over" | "grown" | "missing" | "graduated";
+  kind: "over" | "grown" | "missing" | "graduated" | "shrunk";
   path: string;
   detail: string;
   remedy: string;
@@ -80,6 +84,15 @@ export function collectViolations(
         kind: "graduated",
         path,
         detail: `shrank to ${current} lines, under the ${ceiling}-line ceiling`,
+        remedy: `record it: node ${SCRIPT_PATH} --tighten`,
+      });
+      continue;
+    }
+    if (current < recorded) {
+      out.push({
+        kind: "shrunk",
+        path,
+        detail: `shrank to ${current} lines (recorded ${recorded})`,
         remedy: `record it: node ${SCRIPT_PATH} --tighten`,
       });
     }
@@ -199,7 +212,7 @@ function main(): void {
   }
   console.log(
     `module size check: ${violations.length} violation(s); ` +
-      `the only remedies are shrinking the file or relocating code into a new module`,
+      `apply the remedy named on each line; a recorded count is never raised by hand`,
   );
   process.exit(1);
 }
