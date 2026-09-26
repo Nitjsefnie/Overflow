@@ -6,7 +6,7 @@ import type { SqlClient } from "../src/lib/db/types.ts";
 
 export type AccountCliDependencies = { sql: SqlClient; write(line: string): void };
 
-const usageLine = "Usage: node scripts/account.ts export|delete --github-user-id <github-user-id> [--confirm]";
+const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]";
 
 type ParsedCommand =
   | { command: "export"; githubUserId: number }

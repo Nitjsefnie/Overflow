@@ -16,16 +16,39 @@ import { startPostgresContainer, type StartedPostgres } from "../support/postgre
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const operating = readFileSync(new URL("../../OPERATING.md", import.meta.url), "utf8");
 
-const usageLine = "Usage: node scripts/account.ts export|delete --github-user-id <github-user-id> [--confirm]";
+const usageLine = "Usage: account.ts export --github-user-id <id> | delete --github-user-id <id> [--confirm]";
 
 /**
  * An sql client that fails the case the moment anything reaches for the
- * database, so a grammar violation can never hide a database round trip
- * behind a plausible outcome.
+ * database, on ANY property access or call, so a grammar violation can never
+ * hide a database round trip behind a plausible outcome — and so the failure
+ * itself carries this message instead of a generic shape mismatch.
  */
-const refusingSql = (() => {
-  throw new Error("must not touch the database");
-}) as unknown as SqlClient;
+const refusingSql = new Proxy((() => undefined) as unknown as SqlClient, {
+  get() {
+    throw new Error("must not touch the database");
+  },
+  apply() {
+    throw new Error("must not touch the database");
+  },
+});
+
+/**
+ * An sql client whose every member rejects with a connection string, so the
+ * sanitized-failure cases exercise exactly the error they name instead of a
+ * stray TypeError about a missing method.
+ */
+function leakingSql(): SqlClient {
+  const connectionError = () => new Error("postgres://private:password@db");
+  return new Proxy((() => undefined) as unknown as SqlClient, {
+    get() {
+      return () => Promise.reject(connectionError());
+    },
+    apply() {
+      throw connectionError();
+    },
+  });
+}
 
 function fixture(sql: SqlClient): { lines: string[]; dependencies: AccountCliDependencies } {
   const lines: string[] = [];
@@ -67,12 +90,12 @@ describe("account CLI grammar", () => {
     expect(lines).toEqual(['{"failure":"ACCOUNT_COMMAND_FAILED"}']);
   });
 
-  it("sanitizes a database failure instead of printing the connection string", async () => {
-    const leakingSql = (() => {
-      throw new Error("postgres://private:password@db");
-    }) as unknown as SqlClient;
-    const { lines, dependencies } = fixture(leakingSql);
-    expect(await runAccountCli(["delete", "--github-user-id", "1", "--confirm"], dependencies)).toBe(1);
+  it.each([
+    { command: "export", arguments: ["export", "--github-user-id", "1"] },
+    { command: "delete", arguments: ["delete", "--github-user-id", "1", "--confirm"] },
+  ])("sanitizes a failing $command instead of printing the connection string", async ({ arguments: argumentsList }) => {
+    const { lines, dependencies } = fixture(leakingSql());
+    expect(await runAccountCli(argumentsList, dependencies)).toBe(1);
     expect(lines).toEqual(['{"failure":"ACCOUNT_COMMAND_FAILED"}']);
     expect(lines.join("\n")).not.toContain("password");
   });
