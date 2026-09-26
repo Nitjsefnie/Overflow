@@ -117,7 +117,8 @@ failure. Avoid concurrent manual hook edits.
 Migration 043 must run before the scoped receivers start. Legacy hooks are rejected
 until upgraded; there is no shared-secret fallback. Run the upgrade promptly and
 complete the queued full reconciliation to recover gaps. Retire the previous
-shared credential after all registrations migrate; keep `TOKEN_ENCRYPTION_KEY`.
+shared credential after all registrations migrate; keep `TOKEN_ENCRYPTION_KEY`,
+and change it only by the [key rotation procedure](deploy/README.md#11-rotating-the-credential-encryption-key).
 
 Each JSON outcome identifies the registration by its local ID, reports
 `subscription` separately from `queue`, and names a sanitized failure stage.
@@ -250,6 +251,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `AUTH_SECRET` | Auth.js session signing secret |
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
+| `TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional decrypt-only previous key, set only while rotating `TOKEN_ENCRYPTION_KEY` by [deploy/README.md section 11](deploy/README.md#11-rotating-the-credential-encryption-key); unset or empty means none, a malformed value is an error |
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
 | `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
