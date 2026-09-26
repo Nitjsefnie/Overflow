@@ -12,7 +12,15 @@ import {
 import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
+
+/**
+ * Every moderation body is a small JSON document whose free-text fields
+ * reasonText() caps at 2000 characters, so 32 KiB bounds the read with wide
+ * margin (issue 661).
+ */
+const MODERATION_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 export const openAccountAuditSchema = z
   .object({
@@ -77,6 +85,9 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
     }
 
     const input = await parseOpenAccountAuditInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid moderation request.");
     }
@@ -114,6 +125,9 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
     }
 
     const input = await parseCloseRecalibrationInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid moderation request.");
     }
@@ -167,9 +181,22 @@ export async function getProductionSession(): Promise<ModerationRouteSession | n
   return { user: { id: user.id } };
 }
 
-async function parseOpenAccountAuditInput(request: Request): Promise<OpenAccountAuditInput | null> {
+/**
+ * Each helper reads the body through readBodyWithinLimit and parses it with
+ * its schema. It returns "tooLarge" when the body crosses the route's limit —
+ * the caller answers 413 — and null for an unparsable or schema-invalid body,
+ * exactly as request.json()'s rejection did before the bounded reader. A body
+ * read that itself fails also keeps the null answer.
+ */
+async function parseOpenAccountAuditInput(
+  request: Request,
+): Promise<OpenAccountAuditInput | "tooLarge" | null> {
   try {
-    const result = openAccountAuditSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, MODERATION_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = openAccountAuditSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;
@@ -178,9 +205,13 @@ async function parseOpenAccountAuditInput(request: Request): Promise<OpenAccount
 
 async function parseCloseRecalibrationInput(
   request: Request,
-): Promise<{ targetAccountId: string; plan: string } | null> {
+): Promise<{ targetAccountId: string; plan: string } | "tooLarge" | null> {
   try {
-    const result = closeRecalibrationSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, MODERATION_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = closeRecalibrationSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;

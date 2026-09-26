@@ -13,7 +13,14 @@ import { AccountModerationService } from "@/lib/moderation/service";
 import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { reasonText } from "@/lib/validation/reason";
+
+/**
+ * The reversal body is one adjustment id plus a reason reasonText() caps at
+ * 2000 characters, so 32 KiB bounds the read with wide margin (issue 661).
+ */
+const MODERATION_REVERSAL_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 const reversalSchema = z
   .object({
@@ -39,6 +46,9 @@ export function createModerationReversalPostHandler(dependencies: ModerationCred
     }
 
     const input = await parseReversalInput(request);
+    if (input === "tooLarge") {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     if (input === null) {
       return errorResponse(422, "INVALID_REQUEST", "Invalid moderation request.");
     }
@@ -77,11 +87,22 @@ export const POST = createModerationReversalPostHandler({
   },
 });
 
+/**
+ * Reads the body through readBodyWithinLimit and parses it with the schema.
+ * Returns "tooLarge" when the body crosses the route's limit — the caller
+ * answers 413 — and null for an unparsable or schema-invalid body, exactly as
+ * request.json()'s rejection did before the bounded reader. A body read that
+ * itself fails also keeps the null answer.
+ */
 async function parseReversalInput(
   request: Request,
-): Promise<{ adjustmentId: string; reason: string } | null> {
+): Promise<{ adjustmentId: string; reason: string } | "tooLarge" | null> {
   try {
-    const result = reversalSchema.safeParse(await request.json());
+    const body = await readBodyWithinLimit(request, MODERATION_REVERSAL_BODY_LIMIT_BYTES);
+    if (body === null) {
+      return "tooLarge";
+    }
+    const result = reversalSchema.safeParse(JSON.parse(body.toString("utf8")));
     return result.success ? result.data : null;
   } catch {
     return null;

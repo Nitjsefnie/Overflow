@@ -12,6 +12,13 @@ import {
 import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential, type RouteCredentialReference } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { readBodyWithinLimit } from "@/lib/http/request-body";
+
+/**
+ * The role-change body is one account id and a boolean, so 32 KiB bounds the
+ * read with wide margin (issue 661).
+ */
+const MODERATOR_ROLE_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
 const roleChangeSchema = z
   .object({
@@ -69,9 +76,18 @@ export function createModeratorPostHandler(dependencies: ModeratorRouteDependenc
       return session;
     }
 
+    let rawBody: Buffer | null;
+    try {
+      rawBody = await readBodyWithinLimit(request, MODERATOR_ROLE_BODY_LIMIT_BYTES);
+    } catch {
+      return errorResponse(422, "INVALID_REQUEST", "Invalid moderator role request.");
+    }
+    if (rawBody === null) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
     let input: { targetAccountId: string; moderator: boolean };
     try {
-      const parsed = roleChangeSchema.safeParse(await request.json());
+      const parsed = roleChangeSchema.safeParse(JSON.parse(rawBody.toString("utf8")));
       if (!parsed.success) {
         return errorResponse(422, "INVALID_REQUEST", "Invalid moderator role request.");
       }

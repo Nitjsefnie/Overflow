@@ -1,3 +1,4 @@
+import { readBodyWithinLimit } from "@/lib/http/request-body";
 import { dispatchJsonRpc } from "@/lib/mcp/protocol";
 import {
   defineMcpTools,
@@ -163,6 +164,13 @@ export type McpRouteDependencies = MemberRouteDependencies & {
 };
 
 /**
+ * One JSON-RPC message per POST, whose params can carry anything the HTTP
+ * routes take — the registration catalog among them — so 1 MiB bounds the raw
+ * read while carrying every legitimate request (issue 661).
+ */
+const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024; // 1 MiB
+
+/**
  * The MCP transport: one JSON-RPC request per POST, gated exactly like the
  * routes it fronts. The credential guard runs first (a bearer request is
  * exempt from the origin check, a cookie request is not), then the member
@@ -231,12 +239,16 @@ export function createMcpPostHandler(dependencies: McpRouteDependencies) {
       return new Response(session.body, { status: session.status, headers });
     }
 
-    let raw: string;
+    let rawBody: Buffer | null;
     try {
-      raw = await request.text();
+      rawBody = await readBodyWithinLimit(request, MCP_REQUEST_BODY_LIMIT_BYTES);
     } catch {
       return errorResponse(400, "INVALID_REQUEST", "Unable to read the request body.");
     }
+    if (rawBody === null) {
+      return errorResponse(413, "PAYLOAD_TOO_LARGE", "The request body is too large.");
+    }
+    const raw = rawBody.toString("utf8");
 
     const outcome = await dispatchJsonRpc(raw, dependencies.defineTools(request.headers));
     if (outcome === null || outcome.status === 202) {
