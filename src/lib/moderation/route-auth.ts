@@ -1,7 +1,8 @@
 import type { UserRole } from "@/lib/db/types";
 import {
   resolveRouteCredential,
-  type RouteCredentialSession,
+  type ResolvedRouteCredential,
+  type RouteCredentialReference,
 } from "@/lib/security/route-credential";
 
 /**
@@ -14,6 +15,7 @@ export type ModerationRouteSession = {
 
 export type AuthorizedModerationRouteSession = {
   user: { id: string; role: "MODERATOR" };
+  credential: RouteCredentialReference;
 };
 
 /**
@@ -22,7 +24,7 @@ export type AuthorizedModerationRouteSession = {
  */
 export type ModerationSessionDependencies = {
   getSession: () => Promise<ModerationRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
 };
 
@@ -56,7 +58,7 @@ export async function requiredModeratorSession(
   request: Request,
   dependencies: ModerationSessionDependencies,
 ): Promise<AuthorizedModerationRouteSession | Response> {
-  let credential: RouteCredentialSession | Response | null;
+  let credential: ResolvedRouteCredential | Response | null;
   try {
     credential = await resolveRouteCredential(request, dependencies);
   } catch (error) {
@@ -81,5 +83,5 @@ export async function requiredModeratorSession(
     return errorResponse(403, "FORBIDDEN", "Moderator authorization is required.");
   }
 
-  return { user: { id: credential.user.id, role: currentRole } };
+  return { user: { id: credential.user.id, role: currentRole }, credential: credential.credential };
 }

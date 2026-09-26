@@ -16,6 +16,8 @@ import {
 } from "@/lib/moderation/service";
 import { normalizeModeratorGitHubUserIds } from "@/lib/moderation/roles";
 import { deriveSubstantiatedState } from "@/lib/moderation/transitions";
+import { credentialKind, credentialTokenId } from "@/lib/moderation/writer-credential";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 
 type UserRow = {
   id: string;
@@ -143,6 +145,7 @@ export class PostgresModerationStore implements ModerationStore {
         reason: input.reason,
         cohort: input.cohort,
         recalibrationPlan: null,
+        credential: input.credential,
       });
       return {
         kind: "ok",
@@ -155,6 +158,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     return this.sql.begin(async (transaction) => {
       const locked = await lockTargetAndAudit(transaction, input.auditId);
@@ -189,6 +193,7 @@ export class PostgresModerationStore implements ModerationStore {
         reason: input.reason,
         cohort,
         recalibrationPlan: null,
+        credential: input.credential,
       });
       return {
         kind: "ok",
@@ -205,6 +210,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     return this.sql.begin(async (transaction) => {
       const locked = await lockTargetAndAudit(transaction, input.auditId);
@@ -248,6 +254,7 @@ export class PostgresModerationStore implements ModerationStore {
         reason: input.reason,
         cohort,
         recalibrationPlan: null,
+        credential: input.credential,
       });
       return {
         kind: "ok",
@@ -264,6 +271,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     targetAccountId: string;
     plan: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<RecalibrationClosure>> {
     return this.sql.begin(async (transaction) => {
       const [target] = await transaction<UserRow[]>`
@@ -312,6 +320,7 @@ export class PostgresModerationStore implements ModerationStore {
         reason: input.plan,
         cohort,
         recalibrationPlan: input.plan,
+        credential: input.credential,
       });
       return {
         kind: "ok",
@@ -342,6 +351,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     targetAccountId: string;
     moderator: boolean;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<ModeratorRoleChange>> {
     return this.sql.begin(async (transaction) => {
       // Serialization boundary, taken before any row lock: every moderator role
@@ -378,8 +388,20 @@ export class PostgresModerationStore implements ModerationStore {
         returning updated_at
       `;
       await transaction`
-        insert into moderator_role_changes (target_account_id, actor_id, new_role)
-        values (${input.targetAccountId}, ${input.actorId}, ${newRole})
+        insert into moderator_role_changes (
+          target_account_id,
+          actor_id,
+          new_role,
+          credential_kind,
+          credential_token_id
+        )
+        values (
+          ${input.targetAccountId},
+          ${input.actorId},
+          ${newRole},
+          ${credentialKind(input.credential)},
+          ${credentialTokenId(input.credential)}
+        )
       `;
 
       return {
@@ -477,6 +499,7 @@ async function insertModerationEvent(
     reason: string;
     cohort: CalibrationCohortSnapshot;
     recalibrationPlan: string | null;
+    credential?: RouteCredentialReference | null;
   },
 ): Promise<void> {
   await sql`
@@ -489,7 +512,9 @@ async function insertModerationEvent(
       reason,
       cohort_definition,
       cohort_statistics,
-      recalibration_plan
+      recalibration_plan,
+      credential_kind,
+      credential_token_id
     )
     values (
       ${input.targetUserId},
@@ -500,7 +525,9 @@ async function insertModerationEvent(
       ${input.reason},
       ${sql.json(input.cohort as unknown as JSONValue)},
       ${sql.json(input.cohort.comparison as unknown as JSONValue)},
-      ${input.recalibrationPlan}
+      ${input.recalibrationPlan},
+      ${credentialKind(input.credential)},
+      ${credentialTokenId(input.credential)}
     )
   `;
 }

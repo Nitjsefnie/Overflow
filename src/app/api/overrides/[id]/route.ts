@@ -45,7 +45,7 @@ export type SettlementOverrideDecisionService = {
 
 export type SettlementOverrideDecisionDependencies = {
   getSession: () => Promise<SettlementOverrideRouteSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideDecisionService>;
 };

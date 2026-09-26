@@ -20,6 +20,7 @@ import type {
 } from "@/lib/moderation/credit-adjustment-store";
 import type { EnforcementState, UserRole } from "@/lib/db/types";
 import { normalizeRecalibrationPlan } from "@/lib/moderation/transitions";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 
 export type ModerationActor = {
   id: string;
@@ -85,6 +86,12 @@ export type OpenAccountAuditStoreInput = {
   repositoryId: string | null;
   reason: string;
   cohort: CalibrationCohortSnapshot;
+  /**
+   * The credential reference behind the action, persisted on the moderation
+   * event. Absent for a writer with no HTTP request behind it, which the store
+   * records as NULL for both columns.
+   */
+  credential?: RouteCredentialReference | null;
 };
 
 export type ModerationStoreResult<T> =
@@ -138,22 +145,26 @@ export type ModerationStore = {
     actorId: string;
     auditId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>>;
   substantiateAccountAudit(input: {
     actorId: string;
     auditId: string;
     reason: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>>;
   closeRecalibration(input: {
     actorId: string;
     targetAccountId: string;
     plan: string;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<RecalibrationClosure>>;
   listModerators(): Promise<ModeratorSummary[]>;
   setModeratorRole(input: {
     actorId: string;
     targetAccountId: string;
     moderator: boolean;
+    credential?: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<ModeratorRoleChange>>;
 };
 
@@ -198,6 +209,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     moderator: boolean,
+    credential?: RouteCredentialReference | null,
   ): Promise<ModeratorRoleChange> {
     requireModerator(actor);
     if (!moderator && actor.id === targetAccountId) {
@@ -208,13 +220,19 @@ export class AccountModerationService {
     }
 
     return unwrapStoreResult(
-      await this.store.setModeratorRole({ actorId: actor.id, targetAccountId, moderator }),
+      await this.store.setModeratorRole({
+        actorId: actor.id,
+        targetAccountId,
+        moderator,
+        credential,
+      }),
     );
   }
 
   public async openAccountAudit(
     actor: ModerationActor,
     input: OpenAccountAuditInput,
+    credential?: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     const { reason, ...window } = normalizeOpenInput(input);
@@ -241,6 +259,7 @@ export class AccountModerationService {
           outsiderSettlementPairs: [...loaded.outsiderSettlementPairs],
           comparison,
         },
+        credential,
       }),
     );
   }
@@ -274,6 +293,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     auditId: string,
     reason: string,
+    credential?: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     return unwrapStoreResult(
@@ -281,6 +301,7 @@ export class AccountModerationService {
         actorId: actor.id,
         auditId: normalizeIdentifier(auditId, "Audit identifier"),
         reason: normalizeReason(reason),
+        credential,
       }),
     );
   }
@@ -289,6 +310,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     auditId: string,
     reason: string,
+    credential?: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     return unwrapStoreResult(
@@ -296,6 +318,7 @@ export class AccountModerationService {
         actorId: actor.id,
         auditId: normalizeIdentifier(auditId, "Audit identifier"),
         reason: normalizeReason(reason),
+        credential,
       }),
     );
   }
@@ -304,6 +327,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     plan: string,
+    credential?: RouteCredentialReference | null,
   ): Promise<RecalibrationClosure> {
     requireModerator(actor);
     let normalizedPlan: string;
@@ -317,6 +341,7 @@ export class AccountModerationService {
         actorId: actor.id,
         targetAccountId: normalizeIdentifier(targetAccountId, "Target account identifier"),
         plan: normalizedPlan,
+        credential,
       }),
     );
   }
@@ -359,6 +384,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     reason: string,
+    credential?: RouteCredentialReference | null,
   ): Promise<CreditAdjustmentRecord> {
     requireModerator(actor);
     const creditStore = this.requireCreditStore();
@@ -367,6 +393,7 @@ export class AccountModerationService {
         actorId: actor.id,
         targetAccountId: normalizeIdentifier(targetAccountId, "Target account identifier"),
         reason: normalizeReason(reason),
+        credential,
       }),
     );
   }
@@ -384,6 +411,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     adjustmentId: string,
     reason: string,
+    credential?: RouteCredentialReference | null,
   ): Promise<CreditAdjustmentRecord> {
     requireModerator(actor);
     const creditStore = this.requireCreditStore();
@@ -392,6 +420,7 @@ export class AccountModerationService {
         actorId: actor.id,
         adjustmentId: normalizeIdentifier(adjustmentId, "Adjustment identifier"),
         reason: normalizeReason(reason),
+        credential,
       }),
     );
   }

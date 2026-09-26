@@ -37,9 +37,29 @@ export type RouteCredentialSession = {
   user: { id: string };
 };
 
+/**
+ * Which credential authorized the request, in a form safe to persist: a
+ * session kind alone (JWT sessions have no stored id), or a token kind naming
+ * the api_tokens issuance — one id per issuance, rotated on regeneration. It
+ * deliberately carries no secret: never the bearer token, its hash, or a
+ * session cookie value.
+ */
+export type RouteCredentialReference =
+  | { kind: "session" }
+  | { kind: "token"; tokenId: string };
+
+/**
+ * The resolved session together with the reference naming how it was
+ * authenticated, so a caller can record the credential behind the action
+ * without re-deriving it.
+ */
+export type ResolvedRouteCredential = RouteCredentialSession & {
+  credential: RouteCredentialReference;
+};
+
 export type RouteCredentialDependencies = {
   getSession: () => Promise<RouteCredentialSession | null>;
-  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string } | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
 };
 
 /**
@@ -61,10 +81,11 @@ export type RouteCredentialDependencies = {
 export async function resolveRouteCredential(
   request: Request,
   dependencies: RouteCredentialDependencies,
-): Promise<RouteCredentialSession | Response | null> {
+): Promise<ResolvedRouteCredential | Response | null> {
   const credential = readApiTokenCredential(request);
   if (credential === null) {
-    return await dependencies.getSession();
+    const session = await dependencies.getSession();
+    return session === null ? null : { ...session, credential: { kind: "session" } };
   }
 
   const hash = hashApiToken(credential);
@@ -75,7 +96,7 @@ export async function resolveRouteCredential(
   if (account === null) {
     return credentialRejection();
   }
-  return { user: { id: account.id } };
+  return { user: { id: account.id }, credential: { kind: "token", tokenId: account.tokenId } };
 }
 
 function credentialRejection(): Response {

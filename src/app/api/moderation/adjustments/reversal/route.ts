@@ -47,6 +47,7 @@ export function createModerationReversalPostHandler(dependencies: ModerationCred
         session.user,
         input.adjustmentId,
         input.reason,
+        session.credential,
       );
       return Response.json({ reversal }, { status: 201 });
     } catch (error) {

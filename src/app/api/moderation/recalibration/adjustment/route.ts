@@ -51,6 +51,7 @@ export function createModerationAdjustmentPostHandler(dependencies: ModerationCr
         session.user,
         input.targetAccountId,
         input.reason,
+        session.credential,
       );
       return Response.json({ adjustment }, { status: 201 });
     } catch (error) {

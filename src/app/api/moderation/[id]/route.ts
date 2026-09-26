@@ -49,8 +49,8 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
       const service = await dependencies.createService();
       const audit =
         input.action === "dismiss"
-          ? await service.dismissAccountAudit(session.user, auditId, input.reason)
-          : await service.substantiateAccountAudit(session.user, auditId, input.reason);
+          ? await service.dismissAccountAudit(session.user, auditId, input.reason, session.credential)
+          : await service.substantiateAccountAudit(session.user, auditId, input.reason, session.credential);
       return Response.json({ audit });
     } catch (error) {
       return moderationErrorResponse(error);
