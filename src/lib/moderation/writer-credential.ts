@@ -8,10 +8,10 @@ import type { RouteCredentialReference } from "@/lib/security/route-credential";
  * reference type carries none — not a bearer token, not its hash, not a session
  * cookie value.
  */
-export function credentialKind(credential?: RouteCredentialReference | null): string | null {
+export function credentialKind(credential: RouteCredentialReference | null): string | null {
   return credential?.kind ?? null;
 }
 
-export function credentialTokenId(credential?: RouteCredentialReference | null): string | null {
+export function credentialTokenId(credential: RouteCredentialReference | null): string | null {
   return credential?.kind === "token" ? credential.tokenId : null;
 }

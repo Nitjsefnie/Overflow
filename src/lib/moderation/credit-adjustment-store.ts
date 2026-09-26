@@ -103,13 +103,13 @@ export type RecalibrationCreditStore = {
     actorId: string;
     targetAccountId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult>;
   reverseModerationCreditAdjustment(input: {
     actorId: string;
     adjustmentId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult>;
   listCreditAdjustments(targetAccountId: string): Promise<CreditAdjustmentRecord[]>;
 };
@@ -176,7 +176,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     targetAccountId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.applyRecalibrationCreditAdjustmentInTransaction(input).catch((error) => {
       // Two applies racing past the same audit are separated by the partial
@@ -194,7 +194,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     targetAccountId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.sql.begin(async (transaction) => {
       const [target] = await transaction<{ id: string; enforcement_state: EnforcementState }[]>`
@@ -254,7 +254,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
           ${target.enforcement_state}, ${target.enforcement_state}, ${input.reason},
           ${transaction.json(cohortDefinition as unknown as JSONValue)},
           ${transaction.json(comparison as unknown as JSONValue)},
-          ${null},
+          null,
           ${credentialKind(input.credential)},
           ${credentialTokenId(input.credential)}
         )
@@ -319,7 +319,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     adjustmentId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.reverseModerationCreditAdjustmentInTransaction(input).catch((error) => {
       // Two reversals racing for the same original are separated by the
@@ -337,7 +337,7 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
     actorId: string;
     adjustmentId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     return this.sql.begin(async (transaction) => {
       const [original] = await transaction<AdjustmentCoreRow[]>`

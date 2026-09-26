@@ -40,27 +40,27 @@ describe("granting and revoking moderator status", () => {
     const harness = createHarness();
 
     await expect(
-      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "member-id", true),
+      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "member-id", true, null),
     ).resolves.toMatchObject({ targetAccountId: "member-id", role: "MODERATOR", actorId: "moderator-id" });
 
-    expect(harness.calls).toEqual([{ actorId: "moderator-id", targetAccountId: "member-id", moderator: true }]);
+    expect(harness.calls).toEqual([{ actorId: "moderator-id", targetAccountId: "member-id", moderator: true, credential: null }]);
   });
 
   it("revokes a moderator and records who did it", async () => {
     const harness = createHarness();
 
     await expect(
-      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "other-id", false),
+      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "other-id", false, null),
     ).resolves.toMatchObject({ targetAccountId: "other-id", role: "MEMBER" });
 
-    expect(harness.calls).toEqual([{ actorId: "moderator-id", targetAccountId: "other-id", moderator: false }]);
+    expect(harness.calls).toEqual([{ actorId: "moderator-id", targetAccountId: "other-id", moderator: false, credential: null }]);
   });
 
   it("refuses a member who is not a moderator", async () => {
     const harness = createHarness();
 
     await expect(
-      harness.service.setModeratorRole({ id: "member-id", role: "MEMBER" }, "other-id", true),
+      harness.service.setModeratorRole({ id: "member-id", role: "MEMBER" }, "other-id", true, null),
     ).rejects.toBeInstanceOf(ModerationServiceError);
     expect(harness.calls).toEqual([]);
   });
@@ -69,7 +69,7 @@ describe("granting and revoking moderator status", () => {
     const harness = createHarness();
 
     await expect(
-      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "moderator-id", false),
+      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "moderator-id", false, null),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(harness.calls).toEqual([]);
   });
@@ -78,7 +78,7 @@ describe("granting and revoking moderator status", () => {
     const harness = createHarness({ result: { kind: "invalid_state" } });
 
     await expect(
-      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "other-id", false),
+      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "other-id", false, null),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
@@ -86,7 +86,7 @@ describe("granting and revoking moderator status", () => {
     const harness = createHarness({ result: { kind: "not_found" } });
 
     await expect(
-      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "ghost-id", true),
+      harness.service.setModeratorRole({ id: "moderator-id", role: "MODERATOR" }, "ghost-id", true, null),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
