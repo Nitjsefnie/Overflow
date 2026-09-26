@@ -15,7 +15,7 @@ index f09c61c7e998f411560b95c9a8e1ed6a97972c11..93fae6d0b0c111c7e4e8d8f2fe2f0a3b
  const fs = require('fs')
  
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..39f388ee23a54be6aacd968f83ba858f7c4ddeee 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..772ce992513267703818d1a69cd54fce3c3b33f1 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -96,6 +96,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -181,8 +181,15 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..39f388ee23a54be6aacd968f83ba858f
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -564,9 +649,16 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
-         return fetchArrayTypes()
+@@ -560,16 +645,32 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+       }
+ 
+       if (needsTypes) {
+-        initial.reserve && (initial = null)
+-        return fetchArrayTypes()
++        const reserve = initial.reserve ? initial : null
++        reserve && (initial = null)
++        return fetchArrayTypes(reserve)
        }
  
 -      initial && !initial.reserve && execute(initial)
@@ -199,16 +206,30 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..39f388ee23a54be6aacd968f83ba858f
        return
      }
  
-@@ -767,7 +859,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
++    // A connection that still needs its array types never reaches the pool: with an empty
++    // typeArrayMap, sql.array() binds as its scalar element type. A failed fetch sets needsTypes
++    // again (see fetchArrayTypes()) after errored() has rejected the query that was waiting, so
++    // the connection is closed here instead of being opened, and the pool's next connection
++    // fetches the types afresh. Overflow issue 719.
++    if (needsTypes)
++      return terminate()
++
+     while (sent.length && (query = sent.shift()) && (query.active = true, query.cancelled))
+       Connection(options).cancel(query.state, query.cancelled.resolve, query.cancelled.reject)
  
-   async function fetchArrayTypes() {
+@@ -765,9 +866,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     backend.secret = x.readUInt32BE(9)
+   }
+ 
+-  async function fetchArrayTypes() {
++  async function fetchArrayTypes(reserve) {
      needsTypes = false
 -    const types = await new Query([`
 +    const query = new Query([`
        select b.oid, b.typarray
        from pg_catalog.pg_type a
        left join pg_catalog.pg_type b on b.oid = a.typelem
-@@ -775,7 +867,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -775,7 +876,20 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        group by b.oid, b.typarray
        order by b.oid
      `], [], execute)
@@ -218,7 +239,15 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..39f388ee23a54be6aacd968f83ba858f
 +    // inside resolve(), as fetchState() applies its result, and never in an await continuation.
 +    const resolve = query.resolve
 +    query.resolve = types => (types.forEach(({ oid, typarray }) => addArrayType(oid, typarray)), resolve(types))
-+    await query
++    // A failure is settled on the connection, synchronously, as the success is: errored() rejects
++    // the waiting query with the server's error, a waiting reserve -- taken out of `initial` above
++    // so that it is not executed -- is rejected here with the same error, and needsTypes is set
++    // again so that ReadyForQuery closes the connection rather than opening it without types.
++    // Nothing is left for this promise to report, and stock discards it, so its rejection went
++    // unhandled and terminated the process. Overflow issue 719, porsager/postgres issue 1192.
++    const reject = query.reject
++    query.reject = err => (needsTypes = true, reserve && reserve.reject(err), reject(err))
++    await query.catch(() => { /* settled on the connection by query.reject above */ })
    }
  
    function addArrayType(oid, typarray) {
