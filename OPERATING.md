@@ -231,10 +231,10 @@ moderator: if removing the moderator role is intended, revoke it first.
 
 A deletion from the dashboard signs that browser out at once. Other signed-in
 sessions end at their next request whose account lookup succeeds; until then
-every member page and member API refuses the deleted account. API tokens stop
-at once. A later GitHub sign-in re-registers the account and re-links its
-history. Deletion does not revoke the OAuth grant on GitHub; the person
-revokes that at <https://github.com/settings/applications>.
+member pages and the member routes that re-read the account from the database
+refuse it. API tokens stop at once. A later GitHub sign-in re-registers the
+account and re-links its history. Deletion does not revoke the OAuth grant on
+GitHub; the person revokes that at <https://github.com/settings/applications>.
 
 ### Backups
 

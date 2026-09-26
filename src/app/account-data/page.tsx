@@ -366,8 +366,9 @@ export function AccountDataNotice() {
         <ul>
           <li>
             a deletion from your dashboard signs that browser out at once; any other signed-in session
-            ends at its next request whose account lookup succeeds, and until then every member page and
-            member API refuses the deleted account. Your API token stops working at once
+            ends at its next request whose account lookup succeeds, and until then member pages and the
+            member routes that re-read the account from the database refuse it. Your API token stops working
+            at once
           </li>
           <li>
             signing in with GitHub again registers the account again and re-links the retained history;
