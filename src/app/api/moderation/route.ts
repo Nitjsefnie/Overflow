@@ -9,6 +9,7 @@ import {
   type OpenAccountAuditInput,
   type RecalibrationClosure,
 } from "@/lib/moderation/service";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { reasonText } from "@/lib/validation/reason";
@@ -86,6 +87,13 @@ export function createModerationPostHandler(dependencies: ModerationRouteDepende
         input,
         session.credential,
       );
+      logPrivilegedAction({
+        action: "audit.open",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { auditId: audit.id, targetAccountId: input.targetAccountId },
+      });
       return Response.json({ audit }, { status: 201 });
     } catch (error) {
       return moderationErrorResponse(error);
@@ -117,6 +125,13 @@ export function createModerationClosePatchHandler(dependencies: ModerationRouteD
         input.plan,
         session.credential,
       );
+      logPrivilegedAction({
+        action: "recalibration.close",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { targetAccountId: input.targetAccountId },
+      });
       return Response.json({ recalibration });
     } catch (error) {
       return moderationErrorResponse(error);

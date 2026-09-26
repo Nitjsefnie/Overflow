@@ -15,6 +15,7 @@ import {
   type RederivationOverview,
 } from "@/lib/moderation/rederivation-service";
 import type { ModerationActor } from "@/lib/moderation/service";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
@@ -89,6 +90,13 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
         session.user,
         input.repositoryId,
       );
+      logPrivilegedAction({
+        action: "repository.rederivation-request",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { repositoryId: input.repositoryId },
+      });
       return Response.json({ request: requested });
     } catch (error) {
       return moderationErrorResponse(error);

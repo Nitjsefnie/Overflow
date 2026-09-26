@@ -8,6 +8,7 @@ import { requiredModeratorSession, type ModerationRouteSession } from "@/lib/mod
 import { AccountModerationService } from "@/lib/moderation/service";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { reasonText } from "@/lib/validation/reason";
@@ -51,6 +52,13 @@ export function createModerationAuditPatchHandler(dependencies: ModerationRouteD
         input.action === "dismiss"
           ? await service.dismissAccountAudit(session.user, auditId, input.reason, session.credential)
           : await service.substantiateAccountAudit(session.user, auditId, input.reason, session.credential);
+      logPrivilegedAction({
+        action: input.action === "dismiss" ? "audit.dismiss" : "audit.substantiate",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { auditId, targetAccountId: audit.targetAccountId },
+      });
       return Response.json({ audit });
     } catch (error) {
       return moderationErrorResponse(error);

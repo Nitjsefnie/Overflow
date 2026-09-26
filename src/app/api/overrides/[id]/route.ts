@@ -16,6 +16,7 @@ import {
   type SettlementOverrideDecisionInput,
   type SettlementOverrideRequest,
 } from "@/lib/overrides/service";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { reasonText } from "@/lib/validation/reason";
@@ -79,6 +80,13 @@ export function createSettlementOverridePatchHandler(
     try {
       const service = await dependencies.createService();
       const decided = await service.decideRequest(session.user, requestId, decision);
+      logPrivilegedAction({
+        action: decision.decision === "GRANT" ? "settlement-override.grant" : "settlement-override.decline",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { overrideRequestId: requestId, issueId: decided.issueId },
+      });
       return Response.json({ request: decided });
     } catch (error) {
       return settlementOverrideErrorResponse(error);

@@ -9,6 +9,7 @@ import {
   type ModeratorRoleChange,
   type ModeratorSummary,
 } from "@/lib/moderation/service";
+import { logPrivilegedAction, readClientAddress } from "@/lib/security/privileged-action-log";
 import { guardByCredential, type RouteCredentialReference } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
@@ -86,6 +87,13 @@ export function createModeratorPostHandler(dependencies: ModeratorRouteDependenc
         input.moderator,
         session.credential,
       );
+      logPrivilegedAction({
+        action: input.moderator ? "moderator-role.grant" : "moderator-role.revoke",
+        actorId: session.user.id,
+        credential: session.credential,
+        clientAddress: readClientAddress(request),
+        subject: { targetAccountId: input.targetAccountId },
+      });
       return Response.json({ change });
     } catch (error) {
       return moderationErrorResponse(error);
