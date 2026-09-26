@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NextAuthConfig, Profile } from "next-auth";
 import { refreshSessionToken, type SessionAccountState } from "@/lib/auth/account-store";
 import type { PersistedGitHubUser } from "@/lib/auth/sign-in-decision";
@@ -84,9 +84,19 @@ describe("refreshSessionToken", () => {
 });
 
 describe("jwt callback wiring", () => {
+  // Pinned so the sign-in case can assert the recorded authenticatedAt
+  // exactly, the way tests/auth/session-authenticated-at.test.ts does.
+  const signedInAt = new Date("2026-09-26T12:00:00.750Z");
+  const signedInAtSeconds = Math.floor(signedInAt.getTime() / 1000);
+
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"], now: signedInAt });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   async function jwtCallback(): Promise<NonNullable<NonNullable<NextAuthConfig["callbacks"]>["jwt"]>> {
@@ -113,14 +123,22 @@ describe("jwt callback wiring", () => {
 
   it("resolves the account inline on the sign-in branch and never consults the session state", async () => {
     const jwt = await jwtCallback();
-    mocks.findGitHubAccount.mockResolvedValue({ id: "user-uuid", role: "MEMBER" });
+    // The mock's role differs from the token's input role, so a result still
+    // carrying MEMBER proves the token took the account's role, not its own.
+    mocks.findGitHubAccount.mockResolvedValue({ id: "user-uuid", role: "MODERATOR" });
     const token = { userId: "u1", role: "MEMBER" };
 
     await expect(jwt({
       token,
       account: { provider: "github", providerAccountId: "4242", type: "oauth" },
       profile: { id: 4242, login: "octocat" } as unknown as Profile,
-    } as never)).resolves.toEqual({ userId: "user-uuid", role: "MEMBER", canAdministerWebhooks: false });
+    } as never)).resolves.toEqual({
+      userId: "user-uuid",
+      role: "MODERATOR",
+      canAdministerWebhooks: false,
+      // Main's sign-in instant, recorded only on the OAuth callback.
+      authenticatedAt: signedInAtSeconds,
+    });
     expect(mocks.findGitHubAccount).toHaveBeenCalledExactlyOnceWith(4242);
     // The jwt callback resolves the account read-only: persistence belongs to
     // the signIn callback, and the refresh lookup has no business here.
