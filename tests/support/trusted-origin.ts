@@ -41,6 +41,20 @@ export function useTrustedOrigin(appUrl: string = trustedOrigin): void {
 export const requestHost = "https://overflow.internal";
 
 /**
+ * The `next/headers` module shape for a test whose server actions run behind
+ * the origin guard: the request names the trusted origin while its host is
+ * `requestHost`'s, deliberately not the trusted one, so a guard that compared
+ * Origin against the request host would fail every caller. Mock factories are
+ * hoisted, so import it inside the factory:
+ * `vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders())`.
+ */
+export function trustedRequestHeaders() {
+  return {
+    headers: async () => new Headers({ origin: trustedOrigin, host: new URL(requestHost).host }),
+  };
+}
+
+/**
  * The request shapes a guarded route must accept and refuse, bound to one
  * route's path. Building them here keeps the header spellings the guard reads
  * in one place instead of once per route test file.
