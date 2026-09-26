@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { calibration } from "../../scripts/calibrate-coverage.ts";
 import {
   COVERAGE_PATH,
   MODULE_SIZE_PATH,
@@ -82,13 +83,68 @@ describe("coverage ratchet relaxations", () => {
   });
 
   it("refuses an added key, top-level or nested", () => {
-    expect(coverageRelaxations(coverage(), { ...coverage(), exempt: 1 })).toEqual([
-      expect.stringContaining("exempt"),
-    ]);
+    const added = coverageRelaxations(coverage(), { ...coverage(), exempt: 1 });
+    expect(added).toHaveLength(1);
+    expect(added[0]).toContain("exempt");
+    expect(added[0]).toContain("key added");
     const nested = coverage();
     (nested.languages as Json).python = { measured: 50, floor: 49 };
     expect(coverageRelaxations(coverage(), nested).length).toBeGreaterThan(0);
     expect(coverageRelaxations(coverage(), nested).join("\n")).toContain("languages.python");
+  });
+
+  it("refuses an added or removed empty object", () => {
+    expect(coverageRelaxations(coverage(), { ...coverage(), exempt: {} })).toEqual([
+      expect.stringContaining("key added"),
+    ]);
+    const nested = coverage();
+    (nested.languages as Json).python = {};
+    expect(coverageRelaxations(coverage(), nested)).toEqual([
+      expect.stringContaining("languages.python"),
+    ]);
+    expect(coverageRelaxations({ ...coverage(), exempt: {} }, coverage())).toEqual([
+      expect.stringContaining("key removed"),
+    ]);
+  });
+
+  it("refuses a change to a key with no known tightening direction", () => {
+    expect(coverageRelaxations({ ...coverage(), note: 1 }, { ...coverage(), note: 2 })).toEqual([
+      expect.stringContaining("no tightening direction"),
+    ]);
+  });
+
+  it("refuses a change away from a non-finite merge-base value", () => {
+    expect(coverageRelaxations(coverage({ floor: "91.89" }), coverage({ floor: 92 }))).toEqual([
+      expect.stringContaining("merge-base value is not a finite number"),
+    ]);
+  });
+
+  it("refuses a negative hysteresis and accepts zero", () => {
+    expect(coverageRelaxations(coverage(), coverage({ hysteresis: -100 }))).toEqual([
+      expect.stringContaining("hysteresis"),
+    ]);
+    expect(coverageRelaxations(coverage(), coverage({ hysteresis: 0 }))).toEqual([]);
+  });
+
+  it("refuses a changed measurement whose floor is below measured minus gap", () => {
+    const inflated = coverageRelaxations(coverage(), coverage({ measured: 1000 }));
+    expect(inflated).toHaveLength(1);
+    expect(inflated[0]).toContain("languages.typescript.floor");
+    expect(inflated[0]).toContain("1000");
+    expect(coverageRelaxations(coverage(), coverage({ measured: 93.5, floor: 92.4 }))).toEqual([
+      expect.stringContaining("languages.typescript.floor"),
+    ]);
+    expect(coverageRelaxations(coverage(), coverage({ measured: 93.5, floor: 92.5 }))).toEqual([]);
+  });
+
+  it("accepts a genuine calibrate output from the current document", () => {
+    const next = calibration({ total: { lines: { pct: 94.37 } } }, {
+      gap: 1.0,
+      hysteresis: 0.5,
+      languages: { typescript: { measured: 92.89, floor: 91.89 } },
+    });
+    expect(next).not.toBeNull();
+    expect(coverageRelaxations(coverage(), next)).toEqual([]);
   });
 
   it("refuses a value changed to anything but a finite number", () => {
@@ -195,6 +251,18 @@ describe("module size ratchet relaxations", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("refuses a change to a top-level key with no known tightening direction", () => {
+    expect(
+      moduleSizeRelaxations({ ...moduleSize(), note: "a" }, { ...moduleSize(), note: "b" }),
+    ).toEqual([expect.stringContaining("no tightening direction")]);
+  });
+
+  it("refuses a change away from a non-integer merge-base value", () => {
+    expect(
+      moduleSizeRelaxations(moduleSize({ src: 800.5, tests: 2500 }), moduleSize()),
+    ).toEqual([expect.stringContaining("merge-base value is not an integer")]);
+  });
+
   it("refuses a deleted document", () => {
     expect(moduleSizeRelaxations(moduleSize(), null)).toEqual([
       expect.stringContaining(MODULE_SIZE_PATH),
@@ -252,7 +320,8 @@ describe("ratchet check against a real git repository", () => {
     commit("feature change");
     git("checkout", "-q", "main");
     writeDoc(COVERAGE_PATH, coverage({ measured: 95.0, floor: 94.0 }));
-    commit("calibrate raises the floor");
+    writeDoc(MODULE_SIZE_PATH, moduleSize(undefined, { "src/big.ts": 850 }));
+    commit("calibrate raises the floor and the baseline tightens");
   };
 
   it("compares against the merge base, not the advanced base tip", () => {
@@ -295,6 +364,50 @@ describe("ratchet check against a real git repository", () => {
     const result = run("main", "feature");
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(MODULE_SIZE_PATH);
+  });
+
+  it("exits 1 when the branch replaces a document with a symlink", () => {
+    // The link's target text is the merge base's JSON, so reading the blob
+    // would see an unchanged document while the checks read floor 0.
+    const target = JSON.stringify(coverage());
+    seed(() => {
+      rmSync(join(root, COVERAGE_PATH));
+      symlinkSync(target, join(root, COVERAGE_PATH));
+      writeDoc(join("scripts", target), coverage({ floor: 0 }));
+    });
+    expect(git("ls-tree", "feature", "--", COVERAGE_PATH)).toMatch(/^120000 blob /);
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain("120000");
+  });
+
+  it("exits 1 when the branch makes a document executable", () => {
+    seed(() => chmodSync(join(root, MODULE_SIZE_PATH), 0o755));
+    expect(git("ls-tree", "feature", "--", MODULE_SIZE_PATH)).toMatch(/^100755 blob /);
+    const result = run("main", "feature");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(MODULE_SIZE_PATH);
+    expect(result.stdout).toContain("100755");
+  });
+
+  it("exits 2 when the merge base holds a document that is not a regular file", () => {
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "ratchets@example.test");
+    git("config", "user.name", "Ratchets Test");
+    git("config", "commit.gpgsign", "false");
+    mkdirSync(join(root, "scripts"));
+    // Valid JSON as the link text, so a blob read would parse and compare.
+    symlinkSync('{"floor":1}', join(root, COVERAGE_PATH));
+    commit("symlinked document");
+    git("checkout", "-q", "-b", "feature");
+    rmSync(join(root, COVERAGE_PATH));
+    writeDoc(COVERAGE_PATH, coverage());
+    commit("regular document");
+    const result = run("main", "feature");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("not a regular file");
   });
 
   it("exits 0 when the branch only tightens", () => {
