@@ -188,12 +188,14 @@ function addedCeiling(key: string, now: unknown): string[] {
 }
 
 // A path that was a regular file at the merge base, which carried a green
-// module-size check, was either over no ceiling (outside the tracked
-// families — the entry is a new cap at or below its size) or under its
-// ceiling (the entry then only makes check-module-size report it
-// `graduated`). So an entry at or below the merge-base size never grants
-// headroom the file did not already have, and growth past it is reported
-// `grown`. An entry for a new file, or above the merge-base size, could.
+// module-size check, was either over no ceiling or under its ceiling. The
+// first case is a family the branch starts measuring: the entry is a new cap
+// at or below the file's size. Outside such onboarding, an entry for a path in
+// no measured family fails check-module-size as `unmeasured-entry`. In the
+// second case the entry only makes check-module-size report it `graduated`.
+// So an entry at or below the merge-base size never grants headroom the file
+// did not already have, and growth past it is reported `grown`. An entry for a
+// new file, or above the merge-base size, could.
 function addedBaselineEntry(
   key: string,
   path: string,

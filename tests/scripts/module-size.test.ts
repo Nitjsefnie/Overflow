@@ -385,6 +385,48 @@ describe("module size families and exclusions", () => {
     expect(collectViolations(files, tightened)).toEqual([]);
   });
 
+  it("keeps an unmeasured entry whose tracked path is unclassified on tighten", () => {
+    const files = filesWithLines({ "tools/build.py": 900, "src/big.ts": 900 });
+    const doc = document({
+      "README.md": 900,
+      "tools/build.py": 900,
+      "tools/gone.py": 900,
+      "src/big.ts": 900,
+    });
+    const result = applyTighten(files, doc);
+    expect(result.doc.module_size_baseline).toEqual({
+      "tools/build.py": 900,
+      "src/big.ts": 900,
+    });
+    const violations = collectViolations(files, result.doc);
+    expect(violations).toMatchObject([
+      { kind: "unmeasured-entry", path: "tools/build.py" },
+      { kind: "unclassified", path: "tools/build.py" },
+    ]);
+    // --tighten would refuse here, so the remedy must not point at it.
+    expect(violations[0]?.remedy).not.toContain("--tighten");
+  });
+
+  it("refuses --tighten without writing while a tracked path is unclassified", () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
+    git("init", "-q");
+    filesWithLines({ "src/app/globals.scss": 900, "src/big.ts": 850 });
+    git("add", "-A");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    const before = JSON.stringify(
+      document({ "src/app/globals.scss": 900, "src/big.ts": 900 }),
+    );
+    writeFileSync(join(root, DOC_PATH), before);
+    const script = fileURLToPath(new URL("../../scripts/check-module-size.ts", import.meta.url));
+    const run = spawnSync(process.execPath, [script, "--tighten"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("src/app/globals.scss");
+    expect(readFileSync(join(root, DOC_PATH), "utf8")).toBe(before);
+  });
+
   it("names every measured family that has no ceilings key as a configuration error", () => {
     const doc = { ...document(), ceilings: ceilingsWithout("stylesheets", "migrations") };
     expect(configurationErrors(doc)).toEqual([

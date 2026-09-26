@@ -6,8 +6,11 @@
 //                                               exit 2 on a configuration error
 //   node scripts/check-module-size.ts --tighten rewrite the baseline downward
 //                                               only (lower shrunken counts,
-//                                               drop gone/graduated/unmeasured
-//                                               entries)
+//                                               drop gone, graduated and
+//                                               excluded entries); refuses
+//                                               with exit 2, writing nothing,
+//                                               while any tracked file is
+//                                               unclassified
 //
 // Every tracked file (`git ls-files`, the whole repository) lands in exactly
 // one class, both defined below by exact name:
@@ -17,7 +20,9 @@
 //     measured.
 // A tracked file in neither is reported `unclassified`, so a new file type
 // cannot ship unmeasured by accident: it is added to a family or recorded as
-// an exclusion. A ceilings key naming no family is reported `unknown-ceiling`,
+// an exclusion. --tighten will not run until it is, because an entry whose
+// file fell out of every family through a predicate change would otherwise
+// be dropped as if it no longer needed a cap. A ceilings key naming no family is reported `unknown-ceiling`,
 // and a family with no ceilings key is a configuration error (exit 2) — the
 // check cannot say what that family's files may weigh.
 //
@@ -175,11 +180,14 @@ export function collectViolations(
   for (const [path, recorded] of Object.entries(doc.module_size_baseline)) {
     const ceiling = ceilingFor(path, doc);
     if (ceiling === undefined) {
+      const droppable = classify(path)?.kind === "excluded" || !files.has(path);
       out.push({
         kind: "unmeasured-entry",
         path,
         detail: `listed in ${DOC_PATH} but in no measured family`,
-        remedy: `drop the entry: node ${SCRIPT_PATH} --tighten`,
+        remedy: droppable
+          ? `drop the entry: node ${SCRIPT_PATH} --tighten`
+          : `add the file to a measured family or to the recorded exclusions in ${SCRIPT_PATH}`,
       });
       continue;
     }
@@ -239,7 +247,9 @@ export function collectViolations(
         kind: "over",
         path,
         detail: `${current} lines, over the ${ceiling}-line ceiling for the ${cls.name} family`,
-        remedy: "shrink the file or relocate code into a new module; entries are never added by hand",
+        remedy:
+          "shrink the file or relocate code into a new module; an entry is added only when " +
+          "a family starts being measured, at the file's current count",
       });
     }
   }
@@ -247,7 +257,9 @@ export function collectViolations(
 }
 
 // Downward-only rewrite: lowers counts that shrank, drops gone, graduated and
-// unmeasured entries, never adds or raises. Survivor key order is preserved.
+// excluded entries, never adds or raises. An entry whose file is tracked but
+// unclassified is kept: its cap stays until the file is classified. Survivor
+// key order is preserved.
 export function applyTighten(
   files: Map<string, number>,
   doc: ModuleSizeDoc,
@@ -255,9 +267,9 @@ export function applyTighten(
   const changes: string[] = [];
   const next: Record<string, number> = {};
   for (const [path, recorded] of Object.entries(doc.module_size_baseline)) {
-    const ceiling = ceilingFor(path, doc);
-    if (ceiling === undefined) {
-      changes.push(`dropped ${path} (in no measured family)`);
+    const cls = classify(path);
+    if (cls?.kind === "excluded") {
+      changes.push(`dropped ${path} (recorded exclusion: ${cls.name})`);
       continue;
     }
     const current = files.get(path);
@@ -265,6 +277,11 @@ export function applyTighten(
       changes.push(`dropped ${path} (gone)`);
       continue;
     }
+    if (cls === undefined) {
+      next[path] = recorded;
+      continue;
+    }
+    const ceiling = familyCeiling(cls.name, doc);
     let value = recorded;
     if (current < recorded) {
       changes.push(`lowered ${path}: ${recorded} -> ${current}`);
@@ -336,6 +353,16 @@ function main(): void {
   const files = trackedLineCounts(repoRoot);
 
   if (process.argv[2] === "--tighten") {
+    const unclassified = [...files.keys()].filter((path) => classify(path) === undefined);
+    if (unclassified.length > 0) {
+      for (const path of unclassified) {
+        console.error(
+          `unclassified: ${path} — add it to a measured family or to the recorded exclusions in ${SCRIPT_PATH}`,
+        );
+      }
+      console.error(`module size check: --tighten refused while a tracked file is unclassified; nothing written`);
+      process.exit(2);
+    }
     const { doc: nextDoc, changes } = applyTighten(files, doc);
     if (changes.length === 0) {
       console.log("baseline already tight; nothing to change");
