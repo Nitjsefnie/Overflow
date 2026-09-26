@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { processWebhook, type WebhookProcessorDependencies } from "@/lib/webhooks/processor";
+import { inspect } from "node:util";
+import { RECORD_MARKER, withRecordBearingPostgresWrite } from "../support/record-bearing-postgres-error";
 
 describe("processWebhook", () => {
   it("records a reconciliation job and finishes the delivery with the lease it claimed", async () => {
@@ -67,6 +69,25 @@ describe("processWebhook", () => {
       "lease-1",
       "Webhook processing failed.",
     );
+  });
+
+  it("keeps Postgres record text out of the thrown cause chain", async () => {
+    await withRecordBearingPostgresWrite(async (write, originalError) => {
+      const dependencies = processorDependencies();
+      dependencies.store.applyIssueView = vi.fn().mockImplementation(write);
+      const issueDelivery = {
+        ...delivery(), event: "issues" as const,
+        subject: { kind: "ISSUE" as const, id: 101, number: 1 },
+        issue: { state: "OPEN" as const, updatedAt: "2026-09-08T10:00:00Z", title: "title", body: "body", url: "https://example.test/issue" },
+      };
+
+      const failure = await processWebhook(dependencies, issueDelivery).catch((caught: unknown) => caught);
+      const upstream = originalError();
+      expect(inspect(upstream, { depth: null })).toContain(RECORD_MARKER);
+      expect(inspect(failure, { depth: null })).not.toContain(RECORD_MARKER);
+      expect(inspect(failure, { depth: null })).toContain(upstream.code);
+      expect(dependencies.store.markFailed).toHaveBeenCalledWith("delivery-1", "lease-1", "Webhook processing failed.");
+    });
   });
 
   it("keeps a sanitized failure when persisting FAILED itself fails", async () => {

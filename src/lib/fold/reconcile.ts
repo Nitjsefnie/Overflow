@@ -10,6 +10,7 @@ import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
+import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 import type { ReconciliationCostCharge, ReconciliationFairnessAssessment } from "@/lib/fold/reconciliation-fairness";
 import {
   RECONCILIATION_EVIDENCE_FORMAT,
@@ -435,9 +436,10 @@ async function reconcileRepositoryWhileCoordinated(
     }
     // The stored message stays fixed: an upstream error can carry the sponsor's
     // GitHub token in a URL, and reconciliation_runs is read by the product.
-    // The cause reaches the service log here and rides on the thrown error, so
-    // a caller that reports the failure reports what actually went wrong.
-    console.error(`Reconciliation of repository ${repositoryId} failed.`, error);
+    // PostgreSQL diagnostic fields can quote the forge record. Keep them out
+    // of this log and every logger that prints the rethrown cause chain.
+    const reportedError = redactPostgresError(error);
+    console.error(`Reconciliation of repository ${repositoryId} failed.`, reportedError);
     await dependencies.store.failRun(
       runId,
       carriesCredentialRejection(error) ? FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE : "Reconciliation failed.",
@@ -446,7 +448,7 @@ async function reconcileRepositoryWhileCoordinated(
       const seconds = error.retryAfterSeconds ?? DEFAULT_RECONCILIATION_COOLDOWN_SECONDS;
       await dependencies.store.setReconciliationCooldown(repositoryId, new Date(now().getTime() + seconds * 1000));
     }
-    throw new Error("Unable to reconcile repository.", { cause: error });
+    throw new Error("Unable to reconcile repository.", { cause: reportedError });
   }
 }
 
