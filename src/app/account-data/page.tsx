@@ -138,8 +138,9 @@ export function AccountDataNotice() {
             a cache per registered repository holding every issue in it, not only tracked ones: each issue&apos;s
             title, description, author, assignee, and the history of who labelled and assigned it; every comment
             on it, with its author&apos;s login, numeric user id, and text; and the title, description, and
-            author of each pull request that closes it. For each merged pull request in the registered
-            repository, the cache also keeps its diff and its reviews, without the reviewer&apos;s login or text
+            author of each pull request that closes it. For each of those closing pull requests that was merged
+            in the registered repository, the cache also keeps its diff and its reviews, without the
+            reviewer&apos;s login or text
           </li>
           <li>a change log recording logins and titles as those records change</li>
           <li>moderation notes, which can name the account that applied a label</li>
@@ -148,12 +149,12 @@ export function AccountDataNotice() {
         <p>
           Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
           members see a claim assignee&apos;s login and issue titles on the issues board. A repository&apos;s
-          sponsor sees the claim assignees on its dashboard, and issue and pull request titles on its dashboard
-          and its settlement proof and calibration pages; a member credited with a settlement sees the same
-          titles on that settlement&apos;s proof page and their own dashboard. Moderators see the moderation
-          notes, and issue and pull request titles in the moderation queues and closure history. Descriptions,
-          comment text, the cache, and the change log are displayed to no one. The site operator administers the
-          database.
+          sponsor sees the claim assignees on its dashboard, and issue titles, often with pull request titles, on
+          its dashboard, settlement history, and settlement proof and calibration pages; a member credited with a
+          settlement sees the same titles on their own dashboard and settlement history and on that
+          settlement&apos;s proof page. Moderators see the moderation notes, and issue and pull request titles in
+          the moderation queues and closure history. Descriptions, comment text, the cache, and the change log
+          are displayed to no one. The site operator administers the database.
         </p>
         <p>How long it is kept:</p>
         <ul>
@@ -168,7 +169,8 @@ export function AccountDataNotice() {
           </li>
           <li>
             If the repository itself is deleted, made private, or can no longer be read with its sponsor&apos;s
-            token, the re-reads stop and nothing is deleted: the stored copy is kept, as after unregistering.
+            token, the re-reads stop while it stays that way and nothing is deleted: the stored copy is kept.
+            Once the repository can be read again, the re-reads resume.
           </li>
           <li>
             The change log is append-only: Overflow itself never deletes the logins and titles it recorded,
@@ -200,9 +202,9 @@ export function AccountDataNotice() {
           The web server in front of Overflow logs every request: the client&apos;s IP address — the real address,
           restored from Cloudflare&apos;s forwarding header — the time, the requested path, the response status,
           the referring page, and the browser&apos;s user agent. That log is shared by every site on the host. It
-          is rotated daily and each rotated file is deleted after 14 rotations, about 15 days in all. The web
-          server&apos;s error log also records the client&apos;s IP address for a request that hits an error; it
-          is rotated and deleted on the same schedule.
+          is kept for 14 rotations, normally one a day, so about 15 days in all; a log that stays empty rotates
+          less often. The web server&apos;s error log also records the client&apos;s IP address for a request that
+          hits an error; it is rotated and deleted the same way.
         </p>
         <p>
           Overflow&apos;s own output goes to the host&apos;s system journal. The journal has no time limit, only a
