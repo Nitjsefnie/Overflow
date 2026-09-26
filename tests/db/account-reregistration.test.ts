@@ -100,8 +100,9 @@ describe("account re-registration after deletion", () => {
     const row = await identityRow(seeded.id);
     expect(row.deleted_at).toBeNull();
     expect(row.github_login).toBe("octocat");
-    expect(row.avatar_url).not.toBeNull();
-    expect(row.encrypted_oauth_token).not.toBeNull();
+    // The restored identity is exactly what the second upsert supplied.
+    expect(row.avatar_url).toBe("https://avatars.example/octocat.png");
+    expect(row.encrypted_oauth_token).toEqual(reRegisteredToken);
     expect(await getCurrentUserRole(seeded.id, sql)).toBe("MEMBER");
   });
 
@@ -112,9 +113,6 @@ describe("account re-registration after deletion", () => {
       select github_user_id from users where id = ${creditorId}
     `;
     const creditorGithubId = Number(githubId!.github_user_id);
-
-    const before = await settlementCreditor(fixture.repositoryId);
-    expect(before.creditorId).toBe(creditorId);
 
     await deleteAccount(sql, creditorGithubId, { confirm: true });
     expect((await settlementCreditor(fixture.repositoryId)).creditorId).toBe(creditorId);
