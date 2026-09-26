@@ -1,6 +1,14 @@
 import type { lookup as dnsLookup, LookupAddress } from "node:dns";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { getDefaultAutoSelectFamily, isIP, setDefaultAutoSelectFamily } from "node:net";
+import { once } from "node:events";
+import {
+  createServer,
+  get as httpGet,
+  globalAgent,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import { getDefaultAutoSelectFamily, isIP, setDefaultAutoSelectFamily, type Socket } from "node:net";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -20,7 +28,10 @@ type Listener = {
   port: number;
   /** TCP connections accepted — a refusal must happen before any exists. */
   connections: number;
+  /** The server side of every accepted connection, open or closed. */
+  sockets: Socket[];
   requests: RecordedRequest[];
+  server: Server;
   close(): Promise<void>;
 };
 
@@ -41,15 +52,18 @@ async function listen(
   const listener: Listener = {
     port: 0,
     connections: 0,
+    sockets: [],
     requests: [],
+    server,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
         server.close(() => resolve());
       }),
   };
-  server.on("connection", () => {
+  server.on("connection", (socket: Socket) => {
     listener.connections += 1;
+    listener.sockets.push(socket);
   });
   server.on("request", (request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
@@ -396,6 +410,29 @@ describe("judging the address the socket connects to", () => {
       expect(listener.connections).toBe(0);
     },
   );
+});
+
+describe("keeping its connection pool to itself", () => {
+  it("never takes a socket another client pooled, so a pooled loopback connection is still refused", async () => {
+    const ipv4 = await listen("127.0.0.1");
+    const ipv6 = await listenOrNull("::1", ipv4.port);
+    const listeners = ipv6 === null ? [ipv4] : [ipv4, ipv6];
+    const connections = () => listeners.reduce((total, listener) => total + listener.connections, 0);
+    const requests = () => listeners.reduce((total, listener) => total + listener.requests.length, 0);
+
+    // Unrelated code pools a keep-alive socket to localhost through Node's
+    // shared agent. Reusing it would skip the lookup the guard lives in.
+    const pooling = httpGet({ host: "localhost", port: ipv4.port, path: "/", agent: globalAgent });
+    const [answer] = (await once(pooling, "response")) as [IncomingMessage];
+    answer.resume();
+    await once(pooling, "close");
+    expect(Object.keys(globalAgent.freeSockets).some((name) => name.startsWith(`localhost:${ipv4.port}:`))).toBe(true);
+    const [connectionsBefore, requestsBefore] = [connections(), requests()];
+
+    await expectRefusal(publicFetch(`http://localhost:${ipv4.port}/`), ["127.0.0.1", "::1", "reached"]);
+    expect(connections()).toBe(connectionsBefore);
+    expect(requests()).toBe(requestsBefore);
+  });
 });
 
 describe("following no redirects", () => {
