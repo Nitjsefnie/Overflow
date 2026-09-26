@@ -948,8 +948,10 @@ from, which is what the last paragraph of section 9 is about.
 `TOKEN_ENCRYPTION_KEY` seals three kinds of stored credential: each user's
 GitHub OAuth token (`users.encrypted_oauth_token`), each linked forge access
 token (`user_forge_identities.encrypted_token`) and each registration's webhook
-secret (`registered_repositories.encrypted_webhook_secret`). Every stored value
-names the key that sealed it and is bound to its own row.
+secret (`registered_repositories.encrypted_webhook_secret`). Every value written
+in the current format names the key that sealed it and is bound to its own row;
+values stored before that format carry neither until they are re-sealed (see
+"Credentials stored before key identifiers" below).
 
 **This section is the only sanctioned way to change `TOKEN_ENCRYPTION_KEY`.**
 Replacing the value in the environment file any other way leaves every stored
@@ -970,6 +972,11 @@ variables and never unsets them, so a shell that loaded the file before an edit
 keeps the values the edit removed. `pnpm` is on root's `PATH` and deliberately
 not on the service's (section 3).
 
+**Do not deploy (section 10) between step 3's edit and step 6's restart.** A
+deploy restarts the service and runs the webhook upgrade with whatever the
+environment file holds at that moment, or, from a shell sourced earlier, with
+keys the file no longer holds. Finish or roll back the rotation first.
+
 ### Step 1: back up the database
 
 Take a fresh dump first, the way [backup-restore.md](backup-restore.md)'s drill
@@ -985,49 +992,72 @@ bash scripts/db-backup.sh
 
 The script prints the dump's path; record it with the rotation. The dump holds
 the credentials sealed under the old key, so it restores usefully only together
-with that key: keep the old key's value where only root can read it, outside
-`/etc/overflow/overflow.env`, for as long as you keep the dump. The backup
-script deletes `overflow-*.dump` files older than 14 days (section (d) of
+with that key; step 3 keeps the old key in
+`/etc/overflow/token-encryption-key.old` for that reason. The backup script
+deletes `overflow-*.dump` files older than 14 days (section (d) of
 backup-restore.md); copy this dump to a name outside that pattern, in the same
 directory, if the rollback window has to outlast that.
 
 ### Step 2: generate the new key
 
+The key goes straight into a root-only file and is never printed, so it stays
+out of terminal scrollback:
+
 ```bash
-node -p "require('node:crypto').randomBytes(32).toString('base64url')"
+set -e
+test ! -e /etc/overflow/token-encryption-key.new
+install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.new
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > /etc/overflow/token-encryption-key.new
+wc -c < /etc/overflow/token-encryption-key.new
 ```
 
-It prints 43 characters: 32 random bytes as unpadded base64url, the only form
-the service accepts. Generate it on this host and put it straight into the
-environment file in step 3; it is a secret like every other value there.
+Expect `43`: 32 random bytes as unpadded base64url, the only form the service
+accepts. The `test` refuses to overwrite a key file left by an interrupted
+rotation; find out whether that key was ever configured before removing it.
 
 ### Step 3: configure both keys and restart
 
-Edit `/etc/overflow/overflow.env`. Rename the existing
-`TOKEN_ENCRYPTION_KEY=<old key>` line to
-`TOKEN_ENCRYPTION_KEY_PREVIOUS=<old key>`, keeping the value byte for byte, and
-add `TOKEN_ENCRYPTION_KEY=<new key>`. Each name appears exactly once. Then make
-sure the file is still root-only, as section 4 left it:
+This block keeps the old key in `/etc/overflow/token-encryption-key.old`,
+renames the `TOKEN_ENCRYPTION_KEY` line to `TOKEN_ENCRYPTION_KEY_PREVIOUS`
+without changing its value, appends the new key as `TOKEN_ENCRYPTION_KEY`, and
+restores section 4's ownership and mode. Its guards refuse to run unless the
+file holds exactly one `TOKEN_ENCRYPTION_KEY` line and no previous key, and
+unless no `token-encryption-key.old` from an earlier rotation is in the way;
+such a file belongs with that rotation's dump, so rename it rather than
+removing it.
 
 ```bash
+set -e
+test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1
+test "$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)" = 0
+test ! -e /etc/overflow/token-encryption-key.old
+install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
+grep '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env | cut -d= -f2- > /etc/overflow/token-encryption-key.old
+sed -i 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+{ printf 'TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
+rm /etc/overflow/token-encryption-key.new
 chown root:root /etc/overflow/overflow.env
 chmod 0600 /etc/overflow/overflow.env
 ```
 
-Before restarting, confirm that the service will accept both values. The
-re-encryption script's check mode reads the keys from the file the same way the
-service does and writes nothing:
+Before restarting, confirm that both values are keys the service will accept.
+The re-encryption script's check mode reads the same file and writes nothing:
 
 ```bash
 cd /srv/overflow
 set -a; . /etc/overflow/overflow.env; set +a
-pnpm credentials:reencrypt --check
+check_status=0
+pnpm --silent credentials:reencrypt --check || check_status=$?
+printf 'Check exit status: %s\n' "$check_status"
 ```
 
 Expect one JSON line for each of the three columns and, while any credential is
-stored, exit status 1, because nothing is sealed under the new key yet. `{"failure":"KEYS_INVALID"}` instead means one of the two
-values is not a 32-byte base64url key: correct the file. The running service
-still holds the old configuration in memory, so nothing has changed yet.
+stored, exit status 1, because nothing is sealed under the new key yet. (Node's
+experimental-feature warning on standard error accompanies every run of the
+script.) `{"failure":"KEYS_INVALID"}` instead means one of the two values is not
+a 32-byte base64url key: roll back as below, before the restart. The running
+service still holds the old configuration in memory, so nothing has changed
+yet.
 
 Then restart, proving the switch the way section 7 does:
 
@@ -1052,11 +1082,13 @@ new key and still opens everything sealed under the old one.
 ### Step 4: re-encrypt the stored credentials
 
 ```bash
-set -e
 cd /srv/overflow
 set -a; . /etc/overflow/overflow.env; set +a
-pnpm credentials:reencrypt
-pnpm credentials:reencrypt --check
+reencrypt_status=0
+pnpm --silent credentials:reencrypt || reencrypt_status=$?
+check_status=0
+pnpm --silent credentials:reencrypt --check || check_status=$?
+printf 'Re-encryption exit status: %s\nCheck exit status: %s\n' "$reencrypt_status" "$check_status"
 ```
 
 Load the keys from the service's own environment file, as here, and never type
@@ -1072,8 +1104,8 @@ plus one line for each row it could not open (step 5), and exits 0 only when no
 row failed. `skipped` counts rows the service rewrote between the script's read
 and its write, or whose GitHub user id, forge identity or webhook credential id
 (what the seal is bound to) changed in that interval; the script leaves them as
-they now are. The script is idempotent and safe to re-run:
-a second run rewrites only what is still not current, so run it again after any
+they now are. The script is idempotent and safe to re-run: a second run
+rewrites only what is still not current, so run the block again after any
 failure or interruption. `{"failure":"REENCRYPTION_FAILED"}` means the database
 could not be read or written; rows already re-sealed stay re-sealed. The output
 names tables, columns, row ids and counts, never a credential or a key, so
@@ -1082,8 +1114,8 @@ retain it with the rotation record.
 The second command writes nothing. It prints
 `{"table":…,"column":…,"current":N,"notCurrent":N}` for each column and exits 0
 only when every stored credential is sealed under the current key. It reads
-which key sealed each row; it does not open them. When a row failed, `set -e`
-stops the block after the first command: go to step 5.
+which key sealed each row; it does not open them. Both statuses 0 means step 6
+may follow; a re-encryption status of 1 with `UNDECRYPTABLE` lines means step 5.
 
 ### Step 5: rows reported undecryptable
 
@@ -1091,18 +1123,37 @@ stops the block after the first command: go to step 5.
 neither configured key opens for that row: it was sealed under some other key,
 damaged, or copied from another row. The service could not read it before the
 rotation either, so the rotation did not cause it, and the script leaves it
-untouched. Each one is repaired by minting the credential again:
+untouched. Each one is repaired by minting the credential again.
 
-- `users`: the user signs in with GitHub again, which stores a fresh token.
-- `user_forge_identities`: the user links the forge identity again.
-- `registered_repositories`: the sponsor unregisters and registers the
-  repository again, or you clear the row's credential and let the webhook
-  upgrade mint and configure a new one. The upgrade mints only for a
-  registration holding no credential; one still holding an unreadable secret
-  fails there as well.
+**`users`.** The user's next GitHub sign-in stores a fresh token. Without
+waiting for that, clear the reported row's token:
 
 ```bash
-set -e
+set -a; . /etc/overflow/overflow.env; set +a
+row_id='REPLACE-WITH-REPORTED-ID'
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update users set encrypted_oauth_token = null where id = '$row_id'"
+```
+
+Expect `UPDATE 1`; `UPDATE 0` means no user has that id, so check it against
+the reported line. A NULL token reads as "no token" everywhere the service
+reads it, and the re-encryption skips it. Until the user signs in again, the
+repositories they sponsor do not reconcile ("GitHub access token was not
+available."), they cannot register a repository or read its labels, and the
+webhook upgrade reports `CREDENTIALS_FAILED` for their registrations. Each of
+those already failed while the token was unreadable. Signing in does not need
+the stored token, and it writes a new one.
+
+**`user_forge_identities`.** The user links the forge identity again, which
+replaces the stored token. Until they do, `--check` keeps exiting 1 and step 6
+waits.
+
+**`registered_repositories`.** The sponsor unregisters and registers the
+repository again, or you clear the row's credential and let the webhook
+upgrade mint and configure a new one. The upgrade mints only for a
+registration holding no credential; one still holding an unreadable secret
+fails there as well.
+
+```bash
 set -a; . /etc/overflow/overflow.env; set +a
 row_id='REPLACE-WITH-REPORTED-ID'
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null"
@@ -1111,7 +1162,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set w
 Expect `UPDATE 1`, then run the `webhooks:upgrade` package script with the same
 environment and retain its output, as section 10 describes. The hook rejects
 deliveries until the upgrade configures its new secret, as it already did while
-the old one was unreadable.
+the old one was unreadable. `UPDATE 0` means the id is not a registered
+repository: either it is mistyped, or the repository is unregistered, in which
+case the statement under "Webhook secrets of unregistered repositories" below
+clears it.
 
 Then run step 4 again. **Do not retire the previous key while any row still
 fails** or while `--check` exits non-zero: a row it counts as not current may
@@ -1120,38 +1174,61 @@ be one that only the previous key opens.
 ### Step 6: retire the previous key
 
 Only after step 4's `--check` has exited 0, with the environment file unchanged
-since. Delete the `TOKEN_ENCRYPTION_KEY_PREVIOUS` line from
-`/etc/overflow/overflow.env`, leave `TOKEN_ENCRYPTION_KEY` as it is, and repeat
-step 3's restart block with the same expectations. Then, from a fresh shell:
+since. Remove the previous key, then repeat step 3's restart block with the same
+expectations:
+
+```bash
+set -e
+sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env
+chown root:root /etc/overflow/overflow.env
+chmod 0600 /etc/overflow/overflow.env
+```
+
+Then, from a fresh shell:
 
 ```bash
 cd /srv/overflow
 set -a; . /etc/overflow/overflow.env; set +a
-pnpm credentials:reencrypt --check
+check_status=0
+pnpm --silent credentials:reencrypt --check || check_status=$?
+printf 'Check exit status: %s\n' "$check_status"
 ```
 
-It must exit 0 with `"notCurrent":0` on every line. Then exercise the
-application and inspect its journal as in section 7. Keep the old key, as
-step 1 says, for as long as you keep the dump.
+It must print status 0 with `"notCurrent":0` on every line. Then exercise the
+application and inspect its journal as in section 7. Keep
+`/etc/overflow/token-encryption-key.old` for as long as you keep step 1's dump.
 
 ### Rolling back a rotation
 
-- **Before step 3's restart**, the service still runs on the old configuration:
-  put the original `TOKEN_ENCRYPTION_KEY=<old key>` line back, remove
-  `TOKEN_ENCRYPTION_KEY_PREVIOUS`, and nothing else is needed.
+- **Before step 3's restart**, the service still runs on the old configuration.
+  If only step 2 ran, `rm /etc/overflow/token-encryption-key.new` is all. If
+  step 3's edit ran, drop the new key, give the old one its name back, and
+  remove the copy step 3 kept, since the old key is current again:
+
+  ```bash
+  set -e
+  sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env
+  rm /etc/overflow/token-encryption-key.old
+  ```
+
 - **While both keys are configured**, from step 3's restart until step 6: swap
-  them, `TOKEN_ENCRYPTION_KEY=<old key>` and
-  `TOKEN_ENCRYPTION_KEY_PREVIOUS=<new key>`, and restart with step 3's restart
-  block. Every row stays readable whichever key sealed it, and new writes go
-  back under the old key. To finish, run steps 4 to 6 with the keys in that
-  order; it is the same rotation, back to the old key.
+  them, so the old key is current and the new one previous, and restart with
+  step 3's restart block:
+
+  ```bash
+  sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
+  ```
+
+  Every row stays readable whichever key sealed it, and new writes go back
+  under the old key. To finish, run steps 4 to 6 with the keys in that order;
+  it is the same rotation, back to the old key. `token-encryption-key.old`
+  then holds the current key, so remove it after that step 6.
 - **After step 6**, the rows are sealed under the new key alone. While the new
-  key is still held, going back is another rotation by this section, with the
-  old key in step 2's place. If the new key is lost, the step 1 dump together
-  with the old key is the only way back: restore it as section (e.2) of
-  [backup-restore.md](backup-restore.md) describes, with `TOKEN_ENCRYPTION_KEY`
-  set to the old key and no previous key. Everything written since the dump is
-  lost.
+  key is still held, going back is another rotation by this section. If the new
+  key is lost, the step 1 dump together with the old key is the only way back:
+  restore it as section (e.2) of [backup-restore.md](backup-restore.md)
+  describes, with `TOKEN_ENCRYPTION_KEY` set to the old key and no previous key.
+  Everything written since the dump is lost.
 
 Section 9's release rollback is not a key rollback. A build older than the
 key-identified credential format reads no `TOKEN_ENCRYPTION_KEY_PREVIOUS` and

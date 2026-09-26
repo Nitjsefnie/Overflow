@@ -8,7 +8,6 @@ const otherPnpmShapes = [
   /^NEXT_DIST_DIR="\$release" pnpm build$/,
   /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)" --expect-current (?:absent|"\$expected_serving")$/,
   /^pnpm release:prune \/srv\/overflow --keep [1-9][0-9]*$/,
-  /^pnpm credentials:reencrypt(?: --check)?$/,
 ];
 
 // This is a closed vocabulary, not a shell interpreter. Every logical shell
@@ -106,12 +105,36 @@ const otherShellLines = new Set([
   "rm -rf -- node_modules",
   "set -o pipefail",
   "LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1   -type d -regex '.*/\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'   -printf '%f\\n' | LC_ALL=C sort -r",
-  // Section 11's key rotation: the pre-rotation dump, key generation, and the
-  // credential repairs run through the service's own DATABASE_URL.
+  // Section 11's key rotation: the pre-rotation dump, the key files under
+  // /etc/overflow, the environment-file edits, the re-encryption runs with
+  // their captured statuses, and the credential repairs run through the
+  // service's own DATABASE_URL.
   "bash scripts/db-backup.sh",
-  "node -p \"require('node:crypto').randomBytes(32).toString('base64url')\"",
+  "test ! -e /etc/overflow/token-encryption-key.new",
+  "install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.new",
+  "node -e \"process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))\" > /etc/overflow/token-encryption-key.new",
+  "wc -c < /etc/overflow/token-encryption-key.new",
+  "test \"$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)\" = 1",
+  "test \"$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)\" = 0",
+  "test ! -e /etc/overflow/token-encryption-key.old",
+  "install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old",
+  "grep '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env | cut -d= -f2- > /etc/overflow/token-encryption-key.old",
+  "sed -i 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env",
+  "{ printf 'TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\\n'; } >> /etc/overflow/overflow.env",
+  "rm /etc/overflow/token-encryption-key.new",
+  "check_status=0",
+  "pnpm --silent credentials:reencrypt --check || check_status=$?",
+  "printf 'Check exit status: %s\\n' \"$check_status\"",
+  "reencrypt_status=0",
+  "pnpm --silent credentials:reencrypt || reencrypt_status=$?",
+  "printf 'Re-encryption exit status: %s\\nCheck exit status: %s\\n' \"$reencrypt_status\" \"$check_status\"",
   "row_id='REPLACE-WITH-REPORTED-ID'",
+  "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update users set encrypted_oauth_token = null where id = '$row_id'\"",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null\"",
+  "sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env",
+  "sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env",
+  "rm /etc/overflow/token-encryption-key.old",
+  "sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env",
   "psql \"$DATABASE_URL\" -tAc \"select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null\"",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null\"",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
