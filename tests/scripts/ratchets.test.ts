@@ -8,6 +8,7 @@ import { calibration } from "../../scripts/calibrate-coverage.ts";
 import {
   COVERAGE_PATH,
   MODULE_SIZE_PATH,
+  type MergeBaseEntry,
   checkRatchets,
   coverageRelaxations,
   moduleSizeRelaxations,
@@ -202,25 +203,101 @@ describe("module size ratchet relaxations", () => {
     ]);
   });
 
-  it("refuses an added or removed ceilings key", () => {
-    expect(
-      moduleSizeRelaxations(moduleSize(), moduleSize({ src: 800, tests: 2500, scripts: 100 })),
-    ).toEqual([expect.stringContaining("ceilings.scripts")]);
+  it("refuses a removed ceilings key", () => {
     expect(moduleSizeRelaxations(moduleSize(), moduleSize({ src: 800 }))).toEqual([
       expect.stringContaining("ceilings.tests"),
     ]);
   });
 
-  it("refuses an added baseline entry", () => {
-    const head = moduleSize(undefined, {
-      "src/big.ts": 900,
-      "tests/big.test.ts": 2600,
-      "src/new.ts": 801,
-    });
-    const findings = moduleSizeRelaxations(moduleSize(), head);
+  it("accepts an added ceiling whose value is a positive integer", () => {
+    expect(
+      moduleSizeRelaxations(moduleSize(), moduleSize({ src: 800, tests: 2500, scripts: 100 })),
+    ).toEqual([]);
+    expect(
+      moduleSizeRelaxations(moduleSize(), moduleSize({ src: 800, tests: 2500, scripts: 1 })),
+    ).toEqual([]);
+  });
+
+  it("refuses an added ceiling that is not a positive integer", () => {
+    for (const value of [0, -1, 100.5, "100", null, Infinity, NaN, {}]) {
+      const findings = moduleSizeRelaxations(
+        moduleSize(),
+        moduleSize({ src: 800, tests: 2500, scripts: value }),
+      );
+      expect(findings, `value ${String(value)}`).toHaveLength(1);
+      expect(findings[0]).toContain("ceilings.scripts");
+      expect(findings[0]).toContain("not a positive integer");
+    }
+  });
+
+  // A merge-base lookup over a fixed tree: a number is a regular file's
+  // newline count, a string is the kind of any other entry.
+  const mergeBase =
+    (tree: Record<string, number | string>) =>
+    (path: string): MergeBaseEntry => {
+      if (!Object.hasOwn(tree, path)) return null;
+      const entry = tree[path];
+      return typeof entry === "number" ? { lines: entry } : { kind: entry as string };
+    };
+
+  const withNew = (value: unknown): Json =>
+    moduleSize(undefined, { "src/big.ts": 900, "tests/big.test.ts": 2600, "src/new.ts": value });
+
+  it("accepts an added baseline entry at or below the file's merge-base line count", () => {
+    const tree = mergeBase({ "src/new.ts": 1200 });
+    expect(moduleSizeRelaxations(moduleSize(), withNew(1100), tree)).toEqual([]);
+    expect(moduleSizeRelaxations(moduleSize(), withNew(1200), tree)).toEqual([]);
+    expect(moduleSizeRelaxations(moduleSize(), withNew(0), tree)).toEqual([]);
+  });
+
+  it("refuses an added baseline entry above the file's merge-base line count", () => {
+    const findings = moduleSizeRelaxations(
+      moduleSize(),
+      withNew(1201),
+      mergeBase({ "src/new.ts": 1200 }),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toContain("src/new.ts");
+    expect(findings[0]).toContain("1201");
+    expect(findings[0]).toContain("above the file's 1200 lines at the merge base");
+  });
+
+  it("refuses an added baseline entry for a path absent at the merge base", () => {
+    const findings = moduleSizeRelaxations(moduleSize(), withNew(801), mergeBase({}));
     expect(findings).toHaveLength(1);
     expect(findings[0]).toContain("src/new.ts");
     expect(findings[0]).toContain("801");
+    expect(findings[0]).toContain("absent at the merge base");
+  });
+
+  it("refuses an added baseline entry when no merge-base lookup is supplied", () => {
+    expect(moduleSizeRelaxations(moduleSize(), withNew(801))).toEqual([
+      expect.stringContaining("absent at the merge base"),
+    ]);
+  });
+
+  it("refuses an added baseline entry for a path that is not a regular file at the merge base", () => {
+    for (const kind of ["120000 blob", "100755 blob", "040000 tree", "160000 commit"]) {
+      const findings = moduleSizeRelaxations(
+        moduleSize(),
+        withNew(1),
+        mergeBase({ "src/new.ts": kind }),
+      );
+      expect(findings, kind).toHaveLength(1);
+      expect(findings[0]).toContain("src/new.ts");
+      expect(findings[0]).toContain(kind);
+      expect(findings[0]).toContain("not a regular file");
+    }
+  });
+
+  it("refuses an added baseline entry that is not a non-negative integer", () => {
+    const tree = mergeBase({ "src/new.ts": 1200 });
+    for (const value of [-1, 100.5, "100", null, Infinity, NaN, [100]]) {
+      const findings = moduleSizeRelaxations(moduleSize(), withNew(value), tree);
+      expect(findings, `value ${String(value)}`).toHaveLength(1);
+      expect(findings[0]).toContain("src/new.ts");
+      expect(findings[0]).toContain("not a non-negative integer");
+    }
   });
 
   it("refuses a raised baseline count", () => {
@@ -411,6 +488,108 @@ describe("ratchet check against a real git repository", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(MODULE_SIZE_PATH);
     expect(result.stdout).toContain("src/new.ts");
+  });
+
+  const initRepo = () => {
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "ratchets@example.test");
+    git("config", "user.name", "Ratchets Test");
+    git("config", "commit.gpgsign", "false");
+  };
+
+  it("judges an added baseline entry against the file's line count at the merge base", () => {
+    // tests/grown.test.ts has 3 lines at the merge base and 5 at the head:
+    // an entry of 3 is accepted, one of 4 would take headroom the merge base
+    // never had. src/late.ts exists only at the head, so any entry is refused.
+    initRepo();
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    mkdirSync(join(root, "tests"));
+    writeFileSync(join(root, "tests", "grown.test.ts"), "a\nb\nc\n");
+    commit("base documents");
+    git("checkout", "-q", "-b", "feature");
+    writeFileSync(join(root, "tests", "grown.test.ts"), "a\nb\nc\nd\ne\n");
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "late.ts"), "x\n");
+    commit("files grow and appear");
+
+    git("checkout", "-q", "-b", "accepted", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, {
+        "src/big.ts": 900,
+        "tests/big.test.ts": 2600,
+        "tests/grown.test.ts": 3,
+      }),
+    );
+    commit("baseline at the merge-base size");
+    const accepted = run("main", "accepted");
+    expect(accepted.stderr).toBe("");
+    expect(accepted.status).toBe(0);
+    expect(accepted.stdout).toContain("ok");
+
+    git("checkout", "-q", "-b", "refused", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, {
+        "src/big.ts": 900,
+        "tests/big.test.ts": 2600,
+        "tests/grown.test.ts": 4,
+        "src/late.ts": 1,
+      }),
+    );
+    commit("baseline above the merge-base size and for a new file");
+    const refused = run("main", "refused");
+    expect(refused.stderr).toBe("");
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain("above the file's 3 lines at the merge base");
+    expect(refused.stdout).toContain("src/late.ts");
+    expect(refused.stdout).toContain("absent at the merge base");
+    expect(checkRatchets(root, "main", "refused").findings).toHaveLength(2);
+  });
+
+  it("refuses baseline entries that name anything but a regular file at the merge base", () => {
+    // git ls-tree reads its argument as a pattern: "tests/" lists the
+    // directory's children, and git show of "<commit>:tests/" prints a tree
+    // listing. Only a tree entry named exactly by the key is that key's file.
+    // git show of a symlink yields its target text, not the file behind it.
+    initRepo();
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    mkdirSync(join(root, "tests"));
+    writeFileSync(join(root, "tests", "a.test.ts"), "a\n");
+    symlinkSync("a.test.ts", join(root, "tests", "link.test.ts"));
+    writeFileSync(join(root, "tests", "run.test.ts"), "a\n");
+    chmodSync(join(root, "tests", "run.test.ts"), 0o755);
+    commit("base documents");
+    expect(git("ls-tree", "main", "--", "tests/link.test.ts")).toMatch(/^120000 blob /);
+    expect(git("ls-tree", "main", "--", "tests/run.test.ts")).toMatch(/^100755 blob /);
+    git("checkout", "-q", "-b", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, {
+        "src/big.ts": 900,
+        "tests/big.test.ts": 2600,
+        "tests/": 0,
+        tests: 0,
+        "tests/*.ts": 0,
+        "./tests/a.test.ts": 0,
+        "tests/link.test.ts": 0,
+        "tests/run.test.ts": 0,
+      }),
+    );
+    commit("baseline entries that are not regular files");
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(checkRatchets(root, "main", "feature").findings).toEqual([
+      expect.stringContaining("absent at the merge base"),
+      expect.stringContaining("040000 tree"),
+      expect.stringContaining("absent at the merge base"),
+      expect.stringContaining("absent at the merge base"),
+      expect.stringContaining("120000 blob"),
+      expect.stringContaining("100755 blob"),
+    ]);
   });
 
   it("exits 1 when the branch deletes a ratchet document", () => {
