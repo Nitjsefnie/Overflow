@@ -33,9 +33,10 @@ export type GitHubWebhookDelivery = {
   /**
    * True only when the payload itself asserts the repository is not public:
    * GitHub's `repository.private`, or a GitLab `project.visibility_level`
-   * below its public level (internal=10 refuses too, matching registration,
-   * which maps internal to PRIVATE and refuses). Absent when the payload does
-   * not say — absence is unknown, and the payload alone never refuses.
+   * other than public (20) — internal (10) refuses too, matching
+   * registration, which maps internal to PRIVATE and refuses. Absent when the
+   * payload does not say — absence is unknown, and the payload alone never
+   * refuses.
    */
   repositoryPrivate?: boolean;
 };
