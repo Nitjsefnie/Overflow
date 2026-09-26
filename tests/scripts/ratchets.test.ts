@@ -488,6 +488,26 @@ describe("ratchet check against a real git repository", () => {
     expect(result.stderr).toContain("merge base");
   });
 
+  it("exits 2 in a shallow clone, naming the fix", () => {
+    seed(() => writeFileSync(join(root, "unrelated.txt"), "change\n"));
+    const shallow = join(root, "shallow");
+    const clone = spawnSync("git", ["clone", "-q", "--depth=1", `file://${root}`, shallow], {
+      encoding: "utf8",
+    });
+    expect(clone.status, `clone failed: ${clone.stderr}`).toBe(0);
+    // Even the trivially answerable HEAD-vs-HEAD comparison must refuse to
+    // run: a shallow history can make git merge-base return a wrong base
+    // without erroring, so its answer cannot be trusted at all.
+    const result = spawnSync(process.execPath, [script, "origin/main", "HEAD"], {
+      cwd: shallow,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("shallow");
+    expect(result.stderr).toContain("unshallow");
+  });
+
   it("exits 2 on a missing argument or an unknown revision", () => {
     seed(() => writeFileSync(join(root, "unrelated.txt"), "change\n"));
     expect(run().status).toBe(2);
