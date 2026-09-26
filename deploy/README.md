@@ -582,14 +582,17 @@ The procedure runs as one committed script. As root, from the tree root, run
 the same guards the manual fallback below documents: the `flock` fence on
 `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
 with the serialization refusal when the lock is not acquired, the `.next`
-anchor taken before `git pull` and passed to `release:switch --expect-current`,
-the pull itself, the tree-cleanliness gate that refuses the deploy when the
-working tree deviates from the resolved SHA — tracked modifications, staged
-changes and untracked non-ignored files all survive a fast-forward pull, and a
-release is named for the commit it was built from, so the tree must be that
+anchor taken before the fetch and passed to `release:switch --expect-current`,
+a `git fetch origin main` that moves only refs, resolution of the deployed SHA
+from `FETCH_HEAD`, a refusal when `HEAD` cannot fast-forward to that SHA (the
+tree is ahead of or diverged from main), the tree-cleanliness gate that refuses
+the deploy when the working tree deviates from `HEAD` — tracked modifications,
+staged changes and untracked non-ignored files all survive a fast-forward, and
+a release is named for the commit it was built from, so the tree must be that
 commit; ignored operational files (`.next`, releases, `node_modules`,
 generated files) do not block — the required-checks gate that must bless the
-exact deployed SHA before anything is installed (below), the redundant-deploy
+exact fetched SHA (below), and only after both gates pass the
+`git merge --ff-only` that moves the tree to that SHA; then the redundant-deploy
 skip that compares the resolved SHA against the serving release's `REVISION`
 record and, on a match — the run that built the serving release migrated at
 that same commit — exits without installing, migrating or building, the
@@ -621,15 +624,17 @@ confirm-first rule below; the script's guard is additional automation, and the
 manual rule is what still applies when pruning by hand.
 
 The script deploys only a SHA that main's required checks have blessed. Right
-after the pull it resolves the exact SHA being deployed and reads main's
-required checks from the branch protection; every required check's latest run
-on that SHA must conclude `success` before install, migrations, build, switch
-or restart. A failed, cancelled or otherwise non-successful conclusion refuses
+after the fetch it resolves the exact SHA being deployed and, once the
+tree-cleanliness gate passes, reads main's required checks from the branch
+protection; every required check's latest run on that SHA must conclude
+`success` before the fast-forward, and so before install, migrations, build,
+switch or restart. A failed, cancelled or otherwise non-successful conclusion refuses
 immediately, and a check whose latest run is queued, in progress or has not
 been created yet makes the script wait, polling every 15 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
-the still-pending checks named, an absent run reported as `<check> (absent)`;
-a refused gate mutates nothing.
+the still-pending checks named, an absent run reported as `<check> (absent)`.
+A refused gate mutates nothing: the tree has not moved yet, so it stays on the
+commit it was on.
 `OVERFLOW_DEPLOY_CI_GATE=skip` bypasses the entire gate with a loud warning
 naming the skip and the SHA, and is reserved for rollback or recovery deploys
 when main's CI is red; unset or empty enforces the gate, and any other value
