@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
 describe("redactPostgresError", () => {
-  it("redacts a PostgresError from another class copy", () => {
+  it("redacts a server error from a minified copy of the PostgresError class", () => {
+    // The production build minifies class names and ships more than one copy
+    // of the client, so neither the name nor instanceof identifies the error.
     const original = Object.assign(new Error("write failed"), {
-      name: "PostgresError", code: "P0001", severity: "ERROR", routine: "exec_stmt_raise",
+      name: "u", code: "P0001", severity: "ERROR", routine: "exec_stmt_raise",
       detail: "detail-record-marker-721", where: "where-record-marker-721",
     });
     expect(original).not.toBeInstanceOf(postgres.PostgresError);
@@ -17,6 +19,15 @@ describe("redactPostgresError", () => {
     expect(rendered).not.toContain("detail-record-marker-721");
     expect(rendered).not.toContain("where-record-marker-721");
     expect(Object.keys(redacted).sort()).toEqual(["code", "name", "routine", "severity"]);
+    expect(redacted.name).toBe("u");
+  });
+
+  it("returns an error that carries only a code unchanged", () => {
+    const original = Object.assign(new Error("GitHub request failed"), {
+      name: "GitHubApiError", code: "SECONDARY_RATE_LIMIT", status: 403,
+    });
+
+    expect(redactPostgresError(original)).toBe(original);
   });
 
   it("preserves the original client-side stack on a redacted PostgresError", () => {
