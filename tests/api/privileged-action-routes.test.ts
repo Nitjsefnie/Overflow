@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { inspect } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from "vitest";
 import { requestHost, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
@@ -8,6 +7,7 @@ import { requestHost, trustedOrigin, useTrustedOrigin } from "../support/trusted
 vi.mock("@/auth", () => ({ auth: vi.fn().mockResolvedValue(null) }));
 
 import { createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
+import { hashApiToken } from "@/lib/security/api-token";
 import {
   createModerationClosePatchHandler,
   createModerationPostHandler,
@@ -38,9 +38,10 @@ const overrideRequestId = "00000000-0000-4000-8000-0000000000a6";
 const issueId = "00000000-0000-4000-8000-0000000000a7";
 const clientAddress = "203.0.113.7";
 
-// Distinctive values that must never reach a journal line.
+// Distinctive values that must never reach a journal line. The digest is the
+// production hash function's output, not a hand-rolled re-derivation of it.
 const bearerToken = `ovf_${"P".repeat(20)}rivilegedBearer${"z".repeat(8)}`;
-const bearerHashHex = createHash("sha256").update(bearerToken).digest("hex");
+const bearerHashHex = hashApiToken(bearerToken)!.toString("hex");
 const cookieValue = "privileged-cookie-secret-4c19e2";
 const secrets = [bearerToken, bearerHashHex, cookieValue];
 

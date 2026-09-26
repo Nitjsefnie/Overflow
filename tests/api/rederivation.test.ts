@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
@@ -17,6 +16,7 @@ import {
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { startReconciliationSweep } from "@/lib/fold/sweep";
 import { ModerationServiceError } from "@/lib/moderation/service";
+import { hashApiToken } from "@/lib/security/api-token";
 import {
   RepositoryRederivationService,
   type RederivationStore,
@@ -41,7 +41,9 @@ const { json: jsonRequest, foreignJson: foreignJsonRequest, trustedText: trusted
 
 const ownerId = "00000000-0000-4000-8000-000000000012";
 const apiCredential = `ovf_${"rederivation-gate".padEnd(43, "_")}`;
-const apiCredentialHash = createHash("sha256").update(apiCredential).digest();
+// The digest the gate must hand the token store is the production hash
+// function's output, not a hand-rolled re-derivation of it.
+const apiCredentialHash = hashApiToken(apiCredential)!;
 const tokenRejection = {
   error: { code: "UNAUTHENTICATED", message: "The supplied API token was not accepted." },
 };

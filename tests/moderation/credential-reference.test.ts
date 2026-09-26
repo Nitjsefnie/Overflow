@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -15,7 +14,7 @@ import {
   AccountModerationService,
   type CalibrationCohortSnapshot,
 } from "@/lib/moderation/service";
-import { mintApiToken } from "@/lib/security/api-token";
+import { hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 // Issue 682, task 2: the credential the moderator gate resolved is what the
@@ -187,9 +186,12 @@ describe("the credential recorded on privileged-action rows", () => {
       where actor_id = ${moderatorId} and target_account_id = ${targetId}
     `;
     const serialized = JSON.stringify(stored.row);
-    const digest = createHash("sha256").update(token, "utf8").digest("hex");
+    // The digest a leak would carry is the production hash function's output,
+    // not a hand-rolled re-derivation of it.
+    const digest = hashApiToken(token);
+    expect(digest).not.toBeNull();
     expect(serialized).not.toContain(token);
-    expect(serialized).not.toContain(digest);
+    expect(serialized).not.toContain(digest!.toString("hex"));
     expect(serialized).not.toContain(cookieValue);
   });
 
@@ -236,9 +238,12 @@ describe("the credential recorded on privileged-action rows", () => {
       select to_jsonb(t) as row from moderation_events t where target_user_id = ${targetId}
     `;
     const serialized = JSON.stringify(stored.row);
-    const digest = createHash("sha256").update(token, "utf8").digest("hex");
+    // The digest a leak would carry is the production hash function's output,
+    // not a hand-rolled re-derivation of it.
+    const digest = hashApiToken(token);
+    expect(digest).not.toBeNull();
     expect(serialized).not.toContain(token);
-    expect(serialized).not.toContain(digest);
+    expect(serialized).not.toContain(digest!.toString("hex"));
     expect(serialized).not.toContain(cookieValue);
   });
 
@@ -340,8 +345,11 @@ describe("the credential recorded on moderation events written through the route
       credential_kind: "token",
       credential_token_id: tokenId,
     });
-    const digest = createHash("sha256").update(token, "utf8").digest("hex");
-    await expectEventRowCarriesNoSecret(auditId, [token, digest, cookieValue]);
+    // The digest a leak would carry is the production hash function's output,
+    // not a hand-rolled re-derivation of it.
+    const digest = hashApiToken(token);
+    expect(digest).not.toBeNull();
+    await expectEventRowCarriesNoSecret(auditId, [token, digest!.toString("hex"), cookieValue]);
   });
 
   it("records the session credential on the dismissal event and never the cookie value", async () => {
