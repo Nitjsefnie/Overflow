@@ -259,7 +259,7 @@ GitHub Actions runs the complete gate on pushes to `main`, pull requests targeti
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
 | `TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional decrypt-only previous key, set only while rotating `TOKEN_ENCRYPTION_KEY` by [deploy/README.md section 11](deploy/README.md#11-rotating-the-credential-encryption-key); unset or empty means none, a malformed value is an error |
-| `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them |
+| `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them; the same origin is what Auth.js trusts for sign-in |
 | `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 | `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
