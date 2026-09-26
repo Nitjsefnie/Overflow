@@ -156,8 +156,8 @@ const productionToolDependencies: McpToolDependencies = {
 };
 
 export type McpRouteDependencies = MemberRouteDependencies & {
-  /** Builds the ten tools against one incoming request's credential headers. */
-  defineTools: (credentialHeaders: Headers) => ReturnType<typeof defineMcpTools>;
+  /** Builds the ten tools with the incoming request's credential and client-address headers. */
+  defineTools: (incomingHeaders: Headers) => ReturnType<typeof defineMcpTools>;
 };
 
 /**
