@@ -33,13 +33,18 @@ export type GitLabWebhookParseResult =
 
 type GitLabMessageHeaders = { idempotencyKey?: string | null; webhookId?: string | null };
 
-/** The GitLab issue actions Overflow materializes, in the GitHub vocabulary. */
-const issueActions: Record<string, string> = {
-  open: "opened",
-  close: "closed",
-  reopen: "reopened",
-  update: "edited",
-};
+/**
+ * The GitLab issue actions Overflow materializes, in the GitHub vocabulary.
+ * Both action tables are Maps, never object literals: the action name is
+ * sender-controlled, and an object lookup would find an inherited member such
+ * as `constructor` or `__proto__` instead of reporting the action unknown.
+ */
+const issueActions: ReadonlyMap<string, string> = new Map([
+  ["open", "opened"],
+  ["close", "closed"],
+  ["reopen", "reopened"],
+  ["update", "edited"],
+]);
 
 /**
  * The GitLab merge request actions Overflow materializes, each mapped onto
@@ -47,20 +52,20 @@ const issueActions: Record<string, string> = {
  * GitLab's `merge` has no GitHub twin — a merged pull request arrives there
  * as `closed` — and its approval actions (spelled both `approved`/`approval`
  * and `unapproved`/`unapproval` across GitLab versions) are the review
- * submitted/dismissed pair. Any other action is invalid, the same discipline
- * the issue arm applies.
+ * submitted/dismissed pair. Any other action, an inherited object member name
+ * included, is invalid, the same discipline the issue arm applies.
  */
-const mergeRequestActions: Record<string, { event: SupportedGitHubWebhookEvent; action: string }> = {
-  open: { event: "pull_request", action: "opened" },
-  reopen: { event: "pull_request", action: "reopened" },
-  update: { event: "pull_request", action: "edited" },
-  close: { event: "pull_request", action: "closed" },
-  merge: { event: "pull_request", action: "closed" },
-  approved: { event: "pull_request_review", action: "submitted" },
-  approval: { event: "pull_request_review", action: "submitted" },
-  unapproved: { event: "pull_request_review", action: "dismissed" },
-  unapproval: { event: "pull_request_review", action: "dismissed" },
-};
+const mergeRequestActions: ReadonlyMap<string, { event: SupportedGitHubWebhookEvent; action: string }> = new Map([
+  ["open", { event: "pull_request", action: "opened" }],
+  ["reopen", { event: "pull_request", action: "reopened" }],
+  ["update", { event: "pull_request", action: "edited" }],
+  ["close", { event: "pull_request", action: "closed" }],
+  ["merge", { event: "pull_request", action: "closed" }],
+  ["approved", { event: "pull_request_review", action: "submitted" }],
+  ["approval", { event: "pull_request_review", action: "submitted" }],
+  ["unapproved", { event: "pull_request_review", action: "dismissed" }],
+  ["unapproval", { event: "pull_request_review", action: "dismissed" }],
+]);
 
 const gitlabProjectSchema = z.object({
   id: z.number().int().positive(),
@@ -136,7 +141,7 @@ export function parseGitLabWebhookDeliveryDetailed(
   const parsed = gitlabPayloadSchema.safeParse(payload);
   if (!parsed.success) return { status: "invalid" };
 
-  const action = issueActions[parsed.data.object_attributes.action];
+  const action = issueActions.get(parsed.data.object_attributes.action);
   if (action === undefined) {
     return { status: "invalid" };
   }
@@ -174,7 +179,7 @@ function parseMergeRequestPayload(deliveryId: string, executionId: string, paylo
   const parsed = gitlabMergeRequestPayloadSchema.safeParse(payload);
   if (!parsed.success) return { status: "invalid" };
 
-  const mapped = mergeRequestActions[parsed.data.object_attributes.action];
+  const mapped = mergeRequestActions.get(parsed.data.object_attributes.action);
   if (mapped === undefined) {
     return { status: "invalid" };
   }

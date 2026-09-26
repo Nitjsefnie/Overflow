@@ -207,6 +207,38 @@ describe("GitLab webhook merge request delivery", () => {
   });
 });
 
+// Names every object inherits from Object.prototype. An action lookup that
+// consults the prototype chain finds a member for each of them, so each must
+// be proven invalid on both arms rather than assumed absent.
+const inheritedMemberNames = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"];
+
+// Built through JSON.parse so every name, `__proto__` included, arrives as an
+// own `action` property: an object literal `{ __proto__: ... }` would set the
+// prototype instead of the key.
+function withOwnAction(build: (attributeOverrides: Record<string, unknown>) => object, action: string): unknown {
+  const placeholder = "\"action\":\"__action_placeholder__\"";
+  const serialized = JSON.stringify(build({ action: "__action_placeholder__" }));
+  expect(serialized).toContain(placeholder);
+  const body = JSON.parse(serialized.replace(placeholder, `"action":${JSON.stringify(action)}`)) as {
+    object_attributes: Record<string, unknown>;
+  };
+  expect(Object.hasOwn(body.object_attributes, "action")).toBe(true);
+  expect(body.object_attributes.action).toBe(action);
+  return body;
+}
+
+describe("GitLab webhook action lookup ignores inherited object members", () => {
+  it.each(inheritedMemberNames)("classifies an issue action of %s as invalid", (action) => {
+    const body = withOwnAction((overrides) => payload({}, overrides), action);
+    expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", "uuid-5", body)).toEqual({ status: "invalid" });
+  });
+
+  it.each(inheritedMemberNames)("classifies a merge request action of %s as invalid", (action) => {
+    const body = withOwnAction(mergeRequestPayload, action);
+    expect(parseMergeRequest(body)).toEqual({ status: "invalid" });
+  });
+});
+
 describe("GitLab webhook delivery classification", () => {
   it("classifies an unrecognised object_kind as invalid", () => {
     expect(parseGitLabWebhookDeliveryDetailed("Push Hook", "uuid-3", payload({ object_kind: "push" }))).toEqual({
