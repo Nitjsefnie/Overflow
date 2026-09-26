@@ -309,11 +309,12 @@ describe("GitLab webhook route", () => {
     }
   });
 
-  // path_with_namespace is trimmed but otherwise free text, so a hostile
-  // namespace reaches the failure line. The parser still accepts it — the
-  // defect is the log line, not the delivery — and the line must stay one
-  // bounded line with no terminal escape in it.
-  it("encodes and bounds a hostile repository namespace in the failure line", async () => {
+  // path_with_namespace is trimmed but otherwise free text, and the receipt
+  // key and execution UUID are header values that may carry ESC, so every
+  // identifier on the failure line can be hostile. The parser still accepts
+  // them — the defect is the log line, not the delivery — and the line must
+  // stay one bounded line with each identifier as its own encoded token.
+  it("encodes and bounds hostile identifiers in the failure line", async () => {
     const namespace = `gitlab-org\n\u001b[2J${"a".repeat(5_000)}`;
     const payload = JSON.parse(issuePayload) as { project: Record<string, unknown> };
     payload.project.path_with_namespace = namespace;
@@ -322,38 +323,47 @@ describe("GitLab webhook route", () => {
     const route = createGitLabWebhookPostHandler({ lookupCredential: async () => webhookCredential("gitlab", secret), processWebhook: processWebhookMock });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const response = await route(request(JSON.stringify(payload), gitlabHeaders({ "Idempotency-Key": "stable-message" })));
+      const response = await route(request(JSON.stringify(payload), gitlabHeaders({
+        "Idempotency-Key": "key\u001b[1mz",
+        "x-gitlab-webhook-uuid": "uuid\u001b[2Kz",
+      })));
 
       expect(response.status).toBe(503);
-      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({ repositoryFullName: namespace }), expect.anything());
+      expect(processWebhookMock).toHaveBeenCalledWith(expect.objectContaining({
+        deliveryId: "key\u001b[1mz", executionId: "uuid\u001b[2Kz", repositoryFullName: namespace,
+      }), expect.anything());
       expect(logged).toHaveBeenCalledTimes(1);
       const [message, loggedError] = logged.mock.calls[0] ?? [];
       expect(typeof message).toBe("string");
       expect(message).not.toContain("\n");
       expect(message).not.toContain("\u001b");
       expect((message as string).length).toBeLessThan(1_024);
-      expect(message).toContain("\"gitlab-org\\u000a\\u001b[2J");
-      expect(message).toContain("stable-message");
+      expect(message).toContain("delivery \"key\\u001b[1mz\" (");
+      expect(message).toContain("(execution \"uuid\\u001b[2Kz\",");
+      expect(message).toContain(`repository "gitlab-org\\u000a\\u001b[2J${"a".repeat(241)}"… (+4759 more),`);
       expect(loggedError).toBe(rootCause);
     } finally {
       logged.mockRestore();
     }
   });
 
-  it("encodes a terminal escape in the receipt key of the still-in-progress line", async () => {
+  it("encodes a terminal escape in both identifiers of the still-in-progress line", async () => {
     const route = createGitLabWebhookPostHandler({
       lookupCredential: async () => webhookCredential("gitlab", secret),
       processWebhook: vi.fn().mockResolvedValue({ status: "IN_PROGRESS" }),
     });
     const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const response = await route(request(issuePayload, gitlabHeaders({ "Idempotency-Key": "key\u001b[2Jz" })));
+      const response = await route(request(issuePayload, gitlabHeaders({
+        "Idempotency-Key": "key\u001b[2Jz",
+        "x-gitlab-webhook-uuid": "uuid\u001b[2Kz",
+      })));
 
       expect(response.status).toBe(503);
       expect(warned).toHaveBeenCalledTimes(1);
       const [message] = warned.mock.calls[0] ?? [];
       expect(message).not.toContain("\u001b");
-      expect(message).toContain("\"key\\u001b[2Jz\"");
+      expect(message).toContain("delivery \"key\\u001b[2Jz\" (execution \"uuid\\u001b[2Kz\")");
     } finally {
       warned.mockRestore();
     }
