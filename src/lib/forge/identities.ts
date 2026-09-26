@@ -1,4 +1,4 @@
-import { publicFetch } from "@/lib/security/public-destination";
+import { identityLinkFetch } from "@/lib/security/identity-link-fetch";
 import { encryptToken } from "@/lib/security/token-cipher";
 
 export type ForgeIdentityView = {
@@ -240,7 +240,7 @@ export async function linkForgeIdentity(
   input: { userId: string; instanceUrl: string; token: string },
 ): Promise<ForgeIdentityView> {
   const instanceUrl = normalizeInstanceUrl(input.instanceUrl);
-  const fetchImplementation = dependencies.fetch ?? publicFetch;
+  const fetchImplementation = dependencies.fetch ?? identityLinkFetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? defaultTimeoutMs);
   let forgeUser: { id: number; username: string };

@@ -245,5 +245,3 @@ export function createPublicFetch(options: PublicFetchOptions = {}): typeof fetc
 
   return guardedFetch as typeof fetch;
 }
-
-export const publicFetch: typeof fetch = createPublicFetch();
