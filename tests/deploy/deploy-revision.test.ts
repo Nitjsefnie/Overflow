@@ -172,11 +172,14 @@ const SHIM_DISPATCH: Record<string, { envKeys: string[]; dispatch: string }> = {
   git: {
     envKeys: [],
     dispatch: `
-if [ "$1" = pull ]; then
-  if [ -n "\${GIT_SHIM_PULL_REPOINT:-}" ]; then
-    ln -sfn "$GIT_SHIM_PULL_REPOINT" "\${GIT_SHIM_TREE:?}/.next"
+if [ "$1" = fetch ]; then
+  if [ -n "\${GIT_SHIM_FETCH_REPOINT:-}" ]; then
+    ln -sfn "$GIT_SHIM_FETCH_REPOINT" "\${GIT_SHIM_TREE:?}/.next"
   fi
   exit 0
+fi
+if [ "$1" = merge-base ]; then
+  exit "\${GIT_SHIM_ANCESTOR_RC:-0}"
 fi
 if [ "$1" = status ]; then
   printf '%s' "\${GIT_SHIM_STATUS:-}"
@@ -308,12 +311,17 @@ function describeEntry(entry: ShimLogEntry): string {
   return `${entry.cmd} ${entry.args.join(" ")}`;
 }
 
+/** A refused deploy never reaches the fast-forward, the only step that moves HEAD. */
+function expectTreeNotMoved(entries: ShimLogEntry[], label = "the fast-forward"): void {
+  expect(entries.some((entry) => entry.cmd === "git" && entry.args[0] === "merge"), label).toBe(false);
+}
+
 async function runDeploy(
   fixture: Fixture,
   extraEnv: Record<string, string> = {},
-  options: { omitFlockShim?: boolean } = {},
+  options: { omitShims?: string[] } = {},
 ) {
-  const names = options.omitFlockShim ? ALL_SHIMS.filter((name) => name !== "flock") : ALL_SHIMS;
+  const names = ALL_SHIMS.filter((name) => !(options.omitShims ?? []).includes(name));
   await writeShims(fixture, names);
   return spawnSync("bash", [script], {
     encoding: "utf8",
@@ -403,12 +411,14 @@ describe("scripts/deploy-revision.sh", () => {
     const sequential = received.filter((line) => line !== listingFind && line !== "sort -r");
     expect(sequential).toEqual([
       `flock -w 900 9`,
-      `git pull --ff-only origin main`,
-      `git rev-parse HEAD`,
+      `git fetch origin main`,
+      `git rev-parse --verify FETCH_HEAD^{commit}`,
+      `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
       `git config --get remote.origin.url`,
       `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
       `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+      `git merge --ff-only ${FIXTURE_HASH}`,
       `pnpm install --frozen-lockfile`,
       `pnpm db:migrate`,
       `git rev-parse --short=7 HEAD`,
@@ -518,7 +528,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain(listing);
   });
 
-  it("passes --expect-current the pre-pull anchor, not a value re-read after the pull", async () => {
+  it("passes --expect-current the pre-fetch anchor, not a value re-read after the fetch", async () => {
     const fixture = await makeFixture({
       extraReleases: [
         ".next-release-20260701T000000Z-abc1234",
@@ -526,11 +536,11 @@ describe("scripts/deploy-revision.sh", () => {
         ".next-release-20260501T000000Z-abc1234",
       ],
     });
-    // The pull moves the serving release out from under the deploy, as a
+    // The fetch moves the serving release out from under the deploy, as a
     // concurrent off-procedure actor would: a re-read anchor would name the new
     // release, and the conditional switch must still receive the old one.
     const repointed = ".next-release-20260701T000000Z-abc1234";
-    const result = await runDeploy(fixture, { GIT_SHIM_PULL_REPOINT: repointed });
+    const result = await runDeploy(fixture, { GIT_SHIM_FETCH_REPOINT: repointed });
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
@@ -640,7 +650,7 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("satisfies the fence with the real flock binary, proving the fd 9 wiring", async () => {
     const fixture = await makeFixture();
-    const result = await runDeploy(fixture, {}, { omitFlockShim: true });
+    const result = await runDeploy(fixture, {}, { omitShims: ["flock"] });
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
@@ -679,7 +689,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(source).toContain("--paginate");
     expect(source).toContain("OVERFLOW_DEPLOY_CI_TIMEOUT");
     expect(source).toContain("OVERFLOW_DEPLOY_CI_GATE");
-    expect(source).toContain('git rev-parse HEAD');
+    expect(source).toContain("git rev-parse --verify 'FETCH_HEAD^{commit}'");
   });
 
   async function writeCheckRuns(
@@ -715,6 +725,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(started).toEqual([]);
     expect(entries.some((entry) => entry.cmd === "systemctl" && entry.args[0] === "restart")).toBe(false);
     expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(2);
+    expectTreeNotMoved(entries);
   });
 
   it("waits for an absent required check run and proceeds once it appears and succeeds", async () => {
@@ -756,6 +767,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain("deploy-gate (absent)");
     expect(result.stderr).toContain("nothing has been mutated");
     const entries = await readLog(fixture.shimLog);
+    expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate")).toBe(false);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(false);
@@ -827,6 +839,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain("pending");
     expect(result.stderr).toContain("nothing has been mutated");
     const entries = await readLog(fixture.shimLog);
+    expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
   });
@@ -876,6 +889,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain("could not determine required checks");
     const entries = await readLog(fixture.shimLog);
     expect(entries.filter((entry) => entry.cmd === "gh")).toHaveLength(0);
+    expectTreeNotMoved(entries);
     const started = entries.filter(
       (entry) =>
         entry.cmd === "pnpm" &&
@@ -919,6 +933,7 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain("OVERFLOW_DEPLOY_CI_GATE");
     expect(result.stderr).toContain("skip");
     const entries = await readLog(fixture.shimLog);
+    expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
@@ -932,17 +947,19 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("remote.origin.url");
     const entries = await readLog(fixture.shimLog);
+    expectTreeNotMoved(entries);
     expect(entries.some((entry) => entry.cmd === "gh")).toBe(false);
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
 
   /**
    * The tree-cleanliness gate's refusals are pre-mutation: nothing after the
-   * gate — install, migrate, prepare, build, switch, restart, upgrade, prune —
-   * may start, and the CI gate must not run either, since a dirty tree fails
-   * fast without waiting on GitHub.
+   * gate — fast-forward, install, migrate, prepare, build, switch, restart,
+   * upgrade, prune — may start, and the CI gate must not run either, since a
+   * dirty tree fails fast without waiting on GitHub.
    */
   function expectNoDeployStepRan(entries: ShimLogEntry[], label: string): void {
+    expectTreeNotMoved(entries, label);
     const started = entries.filter(
       (entry) =>
         entry.cmd === "pnpm" &&
@@ -966,7 +983,7 @@ describe("scripts/deploy-revision.sh", () => {
 
       expect(result.status, `${label}: ${result.stderr}`).toBe(1);
       expect(result.stderr).toContain(
-        `The working tree in ${fixture.tree} deviates from HEAD (${FIXTURE_HASH})`,
+        `The working tree in ${fixture.tree} deviates from HEAD; fast-forwarding it to ${FIXTURE_HASH} would not make it that commit.`,
       );
       expect(result.stderr).toContain("refusing to build one from a tree that is not that commit");
       expect(result.stdout, label).toContain(dirt.trimEnd());
@@ -982,6 +999,20 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stderr).toContain(`Could not read the working-tree state in ${fixture.tree}`);
     expect(result.stderr).toContain("refusing to build a release whose source identity cannot be attested");
     expectNoDeployStepRan(await readLog(fixture.shimLog), "unreadable status");
+  });
+
+  it("refuses before either gate when HEAD cannot fast-forward to the fetched commit", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, { GIT_SHIM_ANCESTOR_RC: "1" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`HEAD in ${fixture.tree} is not an ancestor of the fetched main (${FIXTURE_HASH})`);
+    expect((await readLog(fixture.shimLog)).map(describeEntry)).toEqual([
+      `flock -w 900 9`,
+      `git fetch origin main`,
+      `git rev-parse --verify FETCH_HEAD^{commit}`,
+      `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
+    ]);
   });
 
   it("records the exact source SHA in the release's REVISION, surviving the build's clean step, and prints it to the deploy record", async () => {
@@ -1000,25 +1031,27 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.stdout).toContain(`Source revision: ${fullSha}`);
   });
 
-  it("skips install, migrate and build when the pulled commit is the one already serving", async () => {
+  it("skips install, migrate and build when the fetched commit is the one already serving", async () => {
     const fixture = await makeFixture();
     await writeFile(path.join(fixture.prevDir, "REVISION"), `${FIXTURE_HASH}\n`);
     const result = await runDeploy(fixture);
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.stdout).toContain(`Already serving ${realpathSync(fixture.prevDir)} (${FIXTURE_HASH})`);
-    // Nothing after the required-checks gate runs: the log is exactly the
-    // fence, the pull, the SHA resolution, the cleanliness read and the two
-    // gate reads.
+    // Nothing after the fast-forward runs: the log is exactly the fence, the
+    // fetch, the SHA resolution, the ancestry check, the cleanliness read, the
+    // two gate reads and the fast-forward itself.
     const entries = await readLog(fixture.shimLog);
     expect(entries.map(describeEntry)).toEqual([
       `flock -w 900 9`,
-      `git pull --ff-only origin main`,
-      `git rev-parse HEAD`,
+      `git fetch origin main`,
+      `git rev-parse --verify FETCH_HEAD^{commit}`,
+      `git merge-base --is-ancestor HEAD ${FIXTURE_HASH}`,
       `git status --porcelain=v1 -uall`,
       `git config --get remote.origin.url`,
       `gh api repos/${FIXTURE_REPO}/branches/main/protection --jq ${JQ_PROTECTION}`,
       `gh api repos/${FIXTURE_REPO}/commits/${FIXTURE_HASH}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+      `git merge --ff-only ${FIXTURE_HASH}`,
     ]);
     const grammarNames = (await readdir(fixture.tree)).filter((name) => RELEASE_GRAMMAR.test(name));
     expect(grammarNames.sort()).toEqual(
@@ -1107,16 +1140,32 @@ describe("scripts/deploy-revision.sh", () => {
     }
   });
 
-  it("places the tree-cleanliness gate after the SHA resolution and before the CI gate, and writes REVISION from the full SHA", async () => {
+  it("places both gates between the fetch and the fast-forward, and writes REVISION from the full SHA", async () => {
     const source = await readFile(script, "utf8");
     expect(source).toContain("git status --porcelain=v1 -uall");
     expect(source).toContain("printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"");
-    const atSha = source.indexOf("full_sha=$(git rev-parse HEAD)");
+    // A refused gate must leave the tree where it was, so nothing moves HEAD
+    // before the last gate: fetch (which only writes refs), resolve, check the
+    // fast-forward is possible, both gates, and only then the fast-forward.
+    expect(source).not.toMatch(/git pull/);
+    const atAnchor = source.indexOf("expected_serving=$(readlink -f");
+    const atFetch = source.indexOf("git fetch origin main");
+    const atSha = source.indexOf("full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')");
+    const atAncestry = source.indexOf('git merge-base --is-ancestor HEAD "$full_sha"');
     const atGate = source.indexOf("git status --porcelain=v1 -uall");
     const atCiGate = source.indexOf('case "${OVERFLOW_DEPLOY_CI_GATE:-}"');
-    expect(atSha).toBeGreaterThanOrEqual(0);
-    expect(atGate, "the gate after full_sha").toBeGreaterThan(atSha);
+    const atMerge = source.indexOf('git merge --ff-only "$full_sha"');
+    const atEsac = source.lastIndexOf("esac", atMerge);
+    const atSkip = source.indexOf("Already serving");
+    expect(atAnchor, "the anchor present").toBeGreaterThanOrEqual(0);
+    expect(atFetch, "the fetch after the anchor").toBeGreaterThan(atAnchor);
+    expect(atSha, "full_sha from the fetched commit, after the fetch").toBeGreaterThan(atFetch);
+    expect(atAncestry, "the ancestry check after full_sha").toBeGreaterThan(atSha);
+    expect(atGate, "the cleanliness gate after the ancestry check").toBeGreaterThan(atAncestry);
     expect(atCiGate, "the CI gate after the cleanliness gate").toBeGreaterThan(atGate);
+    expect(atEsac, "the CI gate's esac after its case").toBeGreaterThan(atCiGate);
+    expect(atMerge, "the fast-forward after the CI gate").toBeGreaterThan(atEsac);
+    expect(atSkip, "the redundant-deploy skip after the fast-forward").toBeGreaterThan(atMerge);
     // The record must be written after the build — the build's clean step
     // wipes the release directory (everything outside cache|dev|lock|trace) —
     // and after the webhook upgrade's status test: it attests a fully
@@ -1144,6 +1193,118 @@ describe("scripts/deploy-revision.sh", () => {
     expect(atEsac, "the CI-gate esac present").toBeGreaterThan(-1);
     expect(atSkip, "the skip after the CI-gate case").toBeGreaterThan(atEsac);
     expect(atInstall, "the install after the skip").toBeGreaterThan(atSkip);
+  });
+});
+
+/**
+ * The refusal regressions against real git: the shims above make every git
+ * call succeed, so only a real repository shows whether a refused deploy has
+ * already moved the tree. The fixture tree becomes a checkout three commits
+ * behind an origin repo. Its origin URL is github-shaped, so the CI gate
+ * parses the fixture slug, and a clone-local insteadOf rewrites it to the
+ * origin repo, so the fetch never leaves the fixture. The origin commits a
+ * .gitignore for the fixture's release layout, so the tree starts clean.
+ * Global and system git config are shut out of the fixture and the deploy
+ * alike, so a host setting (pull.rebase, say) cannot decide the outcome.
+ */
+const HERMETIC_GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+
+async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip: string; git: (...args: string[]) => string }> {
+  const fixture = await makeFixture();
+  const origin = path.join(fixture.dir, "origin");
+  const run = (cwd: string, args: string[]): string => {
+    const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, ...HERMETIC_GIT_ENV },
+    });
+    expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+    return result.stdout.trim();
+  };
+  await mkdir(origin);
+  run(origin, ["init", "-q", "-b", "main"]);
+  await writeFile(path.join(origin, ".gitignore"), "/.next\n/.next-release-*\n");
+  await writeFile(path.join(origin, "app.txt"), "stable\n");
+  run(origin, ["add", ".gitignore", "app.txt"]);
+  run(origin, ["commit", "-q", "-m", "base"]);
+  const behind = run(origin, ["rev-parse", "HEAD"]);
+  for (const n of [1, 2, 3]) {
+    await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
+    run(origin, ["add", "incoming.txt"]);
+    run(origin, ["commit", "-q", "-m", `incoming ${n}`]);
+  }
+  const tip = run(origin, ["rev-parse", "HEAD"]);
+  const git = (...args: string[]): string => run(fixture.tree, args);
+  git("init", "-q", "-b", "main");
+  git("remote", "add", "origin", FIXTURE_REMOTE_URL);
+  git("config", `url.${origin}.insteadOf`, FIXTURE_REMOTE_URL);
+  git("fetch", "-q", "origin", "main");
+  git("checkout", "-q", "-B", "main", behind);
+  expect(git("status", "--porcelain=v1", "-uall"), "the fixture tree starts clean").toBe("");
+  return { fixture, behind, tip, git };
+}
+
+describe("scripts/deploy-revision.sh against a real git tree", () => {
+  const realGit = { omitShims: ["git"] };
+
+  it("leaves HEAD where it was when the CI-gate setting is refused", async () => {
+    const { fixture, behind, git } = await makeGitFixture();
+    const result = await runDeploy(fixture, { ...HERMETIC_GIT_ENV, OVERFLOW_DEPLOY_CI_GATE: "bogus" }, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("OVERFLOW_DEPLOY_CI_GATE=bogus is not a supported value");
+    expect(git("rev-parse", "HEAD")).toBe(behind);
+  });
+
+  it("leaves HEAD where it was when a required check on the fetched commit concluded failure", async () => {
+    const { fixture, behind, tip, git } = await makeGitFixture();
+    const failed = path.join(fixture.dir, "check-runs-failed.txt");
+    await writeFile(failed, "verify\tcompleted\tfailure\ndeploy-gate\tcompleted\tsuccess\n");
+    const result = await runDeploy(fixture, { ...HERMETIC_GIT_ENV, GH_SHIM_CHECKRUNS_SEQUENCE: failed }, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`Required check verify concluded failure on ${tip}`);
+    expect(git("rev-parse", "HEAD")).toBe(behind);
+  });
+
+  it("leaves HEAD and the deviation where they were when the tree is dirty", async () => {
+    const { fixture, behind, git } = await makeGitFixture();
+    await writeFile(path.join(fixture.tree, "app.txt"), "edited in place\n");
+    const result = await runDeploy(fixture, { ...HERMETIC_GIT_ENV, OVERFLOW_DEPLOY_CI_GATE: "skip" }, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`The working tree in ${fixture.tree} deviates from HEAD`);
+    expect(git("rev-parse", "HEAD")).toBe(behind);
+    expect(git("status", "--porcelain=v1", "-uall")).toBe("M app.txt");
+  });
+
+  it("refuses a tree that diverged from main before either gate, leaving HEAD where it was", async () => {
+    const { fixture, tip, git } = await makeGitFixture();
+    await writeFile(path.join(fixture.tree, "local.txt"), "local only\n");
+    git("add", "local.txt");
+    git("commit", "-q", "-m", "local commit not on main");
+    const diverged = git("rev-parse", "HEAD");
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`HEAD in ${fixture.tree} is not an ancestor of the fetched main (${tip})`);
+    expect(git("rev-parse", "HEAD")).toBe(diverged);
+    expect((await readLog(fixture.shimLog)).some((entry) => entry.cmd === "gh"), "the CI gate never ran").toBe(false);
+  });
+
+  it("fast-forwards to the fetched commit once the gates pass, and records it as the release's source", async () => {
+    const { fixture, tip, git } = await makeGitFixture();
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.map(describeEntry)).toContain(
+      `gh api repos/${FIXTURE_REPO}/commits/${tip}/check-runs?per_page=100 --paginate --jq ${JQ_CHECKRUNS}`,
+    );
+    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
+    await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
   });
 });
 

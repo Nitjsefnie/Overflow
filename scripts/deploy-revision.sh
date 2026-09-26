@@ -19,8 +19,8 @@ url="${OVERFLOW_DEPLOY_URL:-http://127.0.0.1:3000/api/readiness}"
 log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 
 # The CI gate: refuse to ship a SHA that main's required checks have not
-# blessed. Runs after the pull and before install, migrations, build, switch
-# or restart, so every refusal below leaves the tree untouched. Per required
+# blessed. Runs against the fetched SHA before the fast-forward, so every
+# refusal below leaves HEAD and the working tree untouched. Per required
 # context, only the latest check run decides: completed + success passes;
 # completed + any other conclusion refuses immediately; a status that is not
 # completed is pending and waits; an absent run (GitHub has not created it
@@ -92,20 +92,35 @@ cd "$tree"
 exec 9>"$lock"
 flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 expected_serving=$(readlink -f "$tree/.next" || printf absent)
-git pull --ff-only origin main
-full_sha=$(git rev-parse HEAD)
+# Fetch, gate, then fast-forward: nothing below moves HEAD or the working tree
+# until both gates have passed, so a refused deploy leaves the tree on the
+# commit it was on. The fetch only writes refs.
+git fetch origin main
+# FETCH_HEAD, not origin/main: it records exactly what the fetch above
+# retrieved, whereas origin/main moves only when remote.origin.fetch maps
+# main to it (a single-branch or custom-refspec clone may not). Resolved once;
+# the gates and the fast-forward all use this one value.
+full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+# The refusal pull --ff-only used to make: HEAD must fast-forward to the
+# fetched commit. A tree ahead of or diverged from main is refused here,
+# before either gate.
+if ! git merge-base --is-ancestor HEAD "$full_sha"; then
+  printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. Nothing has been mutated. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
+  exit 1
+fi
 # Tree-cleanliness gate: a release is named for the commit it was built from,
-# so the tree must BE that commit. Tracked modifications, staged changes and
-# untracked non-ignored files all survive a fast-forward pull; ignored files
-# (.next, releases, node_modules, generated files) are operational state and
-# do not block. Refuses before the CI gate, install, migrate or build.
+# so the tree must BE that commit. It reads the pre-merge tree: tracked
+# modifications, staged changes and untracked non-ignored files all survive a
+# fast-forward; ignored files (.next, releases, node_modules, generated files)
+# are operational state and do not block. Refuses before the CI gate and the
+# fast-forward.
 tree_status=$(git status --porcelain=v1 -uall) || {
   printf 'Could not read the working-tree state in %s; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' "$tree" >&2
   exit 1
 }
 if [ -n "$tree_status" ]; then
   printf '%s\n' "$tree_status"
-  printf 'The working tree in %s deviates from HEAD (%s). A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
+  printf 'The working tree in %s deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
   exit 1
 fi
 case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
@@ -120,18 +135,21 @@ case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
     exit 1
     ;;
 esac
+# Both gates passed: only now does the tree move to the gated commit.
+git merge --ff-only "$full_sha"
 # Redundant-deploy skip: the serving release records the exact commit it was
-# built from (REVISION, written only after the deploy verifies), so a pull that left HEAD at
-# that commit means production already serves this source. A match also means
+# built from (REVISION, written only after the deploy verifies), so a
+# fast-forward that left HEAD at that commit means production already serves
+# this source. A match also means
 # the migrations for HEAD are applied: the run that built this release ran
 # pnpm db:migrate at the same commit, immediately before building it. A
 # missing or unreadable REVISION (fresh host, pre-484 release) skips nothing.
-# The fresh read is deliberate: the pre-pull anchor can be repointed by an
+# The fresh read is deliberate: the pre-fetch anchor can be repointed by an
 # off-procedure actor mid-deploy, so the skip compares against what serves now.
 serving_release=$(readlink -f "$tree/.next" || printf absent)
 if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   if [ "$(cat "$serving_release/REVISION")" = "$full_sha" ]; then
-    printf 'Already serving %s (%s); the tree pulled to the serving commit, so install, migrate and build are skipped and the existing release stays.\n' "$serving_release" "$full_sha"
+    printf 'Already serving %s (%s); the tree fast-forwarded to the serving commit, so install, migrate and build are skipped and the existing release stays.\n' "$serving_release" "$full_sha"
     exit 0
   fi
 fi
