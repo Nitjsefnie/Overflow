@@ -121,7 +121,11 @@ describe("the server-action origin guard", () => {
  * exported action to the guard — a foreign origin must be refused before any
  * next-auth call. A future server-action file that forgets the guard fails
  * here; a broken discovery fails on the two known files.
- * Inline function-level "use server" actions are not discovered; none exist today.
+ * Anything discovery cannot exercise is refused outright: every file under src/
+ * with a "use server" directive line anywhere — an inline function-level action,
+ * or a module whose directive follows another one such as "use strict" — must
+ * also be a discovered module, so an action cannot escape the check by where
+ * it declares itself.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -170,10 +174,33 @@ function discoverServerActionFiles(): string[] {
     .map((path) => path.slice(repositoryRoot.length));
 }
 
+const USE_SERVER_LINE = /^\s*["']use server["'];?\s*$/m;
+
+/** Every file under src/ with a "use server" directive on a line of its own. */
+function filesWithUseServerLine(): string[] {
+  return typescriptFilesUnder(join(repositoryRoot, "src"))
+    .filter((path) => USE_SERVER_LINE.test(readFileSync(path, "utf8")))
+    .map((path) => path.slice(repositoryRoot.length));
+}
+
 describe("coverage of the guard across every server action", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+  });
+
+  it("finds every \"use server\" directive in a module the guard check exercises", () => {
+    const discovered = discoverServerActionFiles();
+    const declaring = filesWithUseServerLine();
+    expect(declaring, "found no \"use server\" line under src/").toContain("src/lib/auth/sign-out-action.ts");
+
+    for (const file of declaring) {
+      expect(
+        discovered,
+        `${file} declares "use server" where the origin-guard coverage check cannot exercise it; ` +
+          `move the action into a guarded module whose first statement is "use server"`,
+      ).toContain(file);
+    }
   });
 
   it("refuses a foreign origin on every exported action before next-auth is reached", async () => {
