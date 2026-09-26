@@ -41,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 /** Answers like a GitLab that hides every project, so a reached listener changes the answer. */
