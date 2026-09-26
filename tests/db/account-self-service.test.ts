@@ -33,6 +33,9 @@ afterAll(async () => {
   await container?.stop();
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = originalDatabaseUrl;
+  // The route modules imported above are bound to the real database client;
+  // drop them so a later file in a shared worker loads them under its mocks.
+  vi.resetModules();
 });
 
 async function insertUser(login: string) {

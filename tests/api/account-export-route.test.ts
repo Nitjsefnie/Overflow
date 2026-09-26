@@ -4,6 +4,9 @@ import { formatAccountExport, type AccountExport } from "@/lib/accounts/export";
 import { expectNoDependencyCall, guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 import type { SqlClient } from "@/lib/db/types";
 
+// Rebind cached consumers to this file's mocks when workers are shared.
+vi.hoisted(() => { vi.resetModules(); });
+
 const { productionAuth, productionGetSql, productionFindIdentity, productionExportAccount } = vi.hoisted(() => ({
   productionAuth: vi.fn(),
   productionGetSql: vi.fn(),
