@@ -3,7 +3,8 @@ export const REAUTHENTICATION_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * A small allowance for disagreement between servers' clocks. The JWT callback
- * records the GitHub sign-in in whole epoch seconds on an Overflow server.
+ * records the GitHub sign-in in whole epoch seconds on an Overflow server;
+ * anything further ahead is a claim no sign-in produced.
  */
 export const AUTHENTICATION_CLOCK_SKEW_MS = 60 * 1000;
 

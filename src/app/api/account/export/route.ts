@@ -22,17 +22,26 @@ export function createAccountExportPostHandler(dependencies: AccountExportRouteD
     let session: Session | null;
     try {
       session = await dependencies.getSession();
-    } catch {
+    } catch (error) {
+      console.error("Account export session failed.", error);
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to export account data.");
     }
     if (session === null) return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
 
+    let sql: SqlClient;
+    let identity: Identity | null;
     try {
-      const sql = dependencies.getSql();
-      const identity = await (dependencies.findIdentity ?? findLiveAccountIdentity)(sql, session.user.id);
-      if (identity === null) return errorResponse(403, "FORBIDDEN", "Account data is unavailable.");
+      sql = dependencies.getSql();
+      identity = await (dependencies.findIdentity ?? findLiveAccountIdentity)(sql, session.user.id);
+    } catch (error) {
+      console.error("Account export lookup failed.", error);
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to export account data.");
+    }
+    if (identity === null) return errorResponse(403, "FORBIDDEN", "A member account is required.");
+
+    try {
       const document = await (dependencies.exportAccount ?? exportAccount)(sql, identity.githubUserId);
-      if (document === null) return errorResponse(403, "FORBIDDEN", "Account data is unavailable.");
+      if (document === null) return errorResponse(403, "FORBIDDEN", "A member account is required.");
       return new Response(formatAccountExport(document), {
         status: 200,
         headers: {
@@ -41,7 +50,8 @@ export function createAccountExportPostHandler(dependencies: AccountExportRouteD
           "cache-control": "no-store",
         },
       });
-    } catch {
+    } catch (error) {
+      console.error("Account export operation failed.", error);
       return errorResponse(502, "UPSTREAM_FAILURE", "Unable to export account data.");
     }
   };
