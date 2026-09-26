@@ -51,7 +51,7 @@ jobs:
         run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
 
       # The base of the comparison is the checked-out commit itself — under
-      # pull_request_target that is main's latest commit (GITHUB_SHA) — never
+      # pull_request_target that is main's tip when the event fired (GITHUB_SHA) — never
       # the event's base.sha: that value is recorded when the pull request
       # opens and can trail main, and once the branch has rebased onto a
       # newer main the merge base of the stale base and the head sits below
