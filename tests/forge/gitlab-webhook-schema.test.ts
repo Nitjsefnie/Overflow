@@ -7,8 +7,8 @@ import {
 /**
  * The GitLab issue payload maps into the delivery vocabulary the shared
  * processor already speaks: subject ISSUE, the raw issue view, and a delivery
- * id namespaced with `gitlab:` so it can never collide with a GitHub delivery
- * guid. The repository is resolved by forge identity — provider + instance +
+ * id scoped by the processor to the authenticated provider and registration.
+ * The repository is resolved by forge identity — provider + instance +
  * project id — never by the numeric id alone. A merge request payload maps
  * the same way onto a PULL_REQUEST subject with no issue view, so an MR
  * approval, merge or edit that moves no issue still invalidates the MR's own
@@ -51,7 +51,8 @@ function parse(payloadValue: unknown, deliveryUuid = "uuid-1") {
 describe("GitLab webhook issue delivery", () => {
   it("maps an issue payload onto the shared delivery vocabulary with the forge identity", () => {
     expect(parse(payload())).toEqual({
-      deliveryId: "gitlab:uuid-1",
+      deliveryId: "uuid-1",
+      executionId: "uuid-1",
       event: "issues",
       action: "edited",
       repositoryGitHubId: 278964,
@@ -153,7 +154,8 @@ describe("GitLab webhook merge request delivery", () => {
     expect(parseMergeRequest(mergeRequestPayload())).toStrictEqual({
       status: "ok",
       delivery: {
-        deliveryId: "gitlab:uuid-mr",
+        deliveryId: "uuid-mr",
+        executionId: "uuid-mr",
         event: "pull_request",
         action: "closed",
         repositoryGitHubId: 278964,
@@ -216,5 +218,39 @@ describe("GitLab webhook delivery classification", () => {
     expect(parseGitLabWebhookDeliveryDetailed(null, "uuid-4", payload())).toEqual({ status: "invalid" });
     expect(parseGitLabWebhookDeliveryDetailed("", "uuid-4", payload())).toEqual({ status: "invalid" });
     expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", null, payload())).toEqual({ status: "invalid" });
+  });
+});
+
+describe("GitLab webhook message identity", () => {
+  it.each([
+    { name: "Idempotency-Key wins conflicting headers", ids: { idempotencyKey: " message-1 ", webhookId: "other" }, key: "message-1" },
+    { name: "webhook-id alone", ids: { webhookId: " message-2 " }, key: "message-2" },
+    { name: "blank Idempotency-Key falls through", ids: { idempotencyKey: "   ", webhookId: " message-2 " }, key: "message-2" },
+    { name: "blank stable headers fall back", ids: { idempotencyKey: " ", webhookId: " " }, key: "execution-1" },
+    { name: "absent stable headers fall back", ids: {}, key: "execution-1" },
+    { name: "Idempotency-Key at the limit", ids: { idempotencyKey: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
+    { name: "webhook-id at the limit", ids: { webhookId: ` ${"x".repeat(255)} ` }, key: "x".repeat(255) },
+  ])("uses $name for issues and merge requests", ({ ids, key }) => {
+    for (const body of [payload(), mergeRequestPayload()]) {
+      expect(parseGitLabWebhookDelivery("Issue Hook", " execution-1 ", body, ids))
+        .toMatchObject({ deliveryId: key, executionId: "execution-1" });
+    }
+  });
+
+  it.each([
+    { idempotencyKey: "x".repeat(256) },
+    { webhookId: "x".repeat(256) },
+    { idempotencyKey: "valid", webhookId: "x".repeat(256) },
+  ])("rejects an oversized stable header %j", (ids) => {
+    for (const body of [payload(), mergeRequestPayload()]) {
+      expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", "execution-1", body, ids))
+        .toEqual({ status: "invalid" });
+    }
+  });
+
+  it.each([["issue", payload()], ["merge request", mergeRequestPayload()]])("trims the execution header at the 255-character limit for %s", (_kind, body) => {
+    const header = "x".repeat(255);
+    expect(parseGitLabWebhookDeliveryDetailed("Issue Hook", ` ${header} `, body))
+      .toMatchObject({ status: "ok", delivery: { deliveryId: header, executionId: header } });
   });
 });

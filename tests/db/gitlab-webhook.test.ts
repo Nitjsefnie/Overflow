@@ -163,8 +163,8 @@ describe("GitLab webhook delivery materialization", () => {
       from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}
     `).toEqual([{ kind: "ISSUE", github_subject_id: String(issueId), subject_number: 23 }]);
     // Receipts are scoped to the authenticated registration.
-    expect(await sql`select delivery_key, processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'gitlab:db-uuid-1'`)
-      .toEqual([{ delivery_key: "gitlab:db-uuid-1", processing_state: "PROCESSED" }]);
+    expect(await sql`select delivery_key, processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'db-uuid-1'`)
+      .toEqual([{ delivery_key: "db-uuid-1", processing_state: "PROCESSED" }]);
   });
 
   it("marks a merge request delivery's own PULL_REQUEST subject dirty and queues the fold", async () => {
@@ -186,7 +186,7 @@ describe("GitLab webhook delivery materialization", () => {
       .toEqual([{ state: "PENDING", reason: "WEBHOOK" }]);
     // No issue view rides on an MR delivery, so no issue row is written.
     expect(await sql`select github_issue_id from issues where repository_id = ${repositoryId}`).toEqual([]);
-    expect(await sql`select processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'gitlab:db-uuid-mr-1'`)
+    expect(await sql`select processing_state::text as processing_state from webhook_deliveries where registration_id = ${repositoryId} and delivery_key = 'db-uuid-mr-1'`)
       .toEqual([{ processing_state: "PROCESSED" }]);
   });
 
@@ -207,7 +207,7 @@ describe("GitLab webhook delivery materialization", () => {
     });
 
     // The replay left the dirty subject exactly as the first delivery left it:
-    // the namespaced uuid's unique claim, not the subject row, is what dedups.
+    // the registration-scoped receipt claim, not the subject row, deduplicates.
     expect(await sql`
       select generation::text as generation from repository_reconciliation_dirty_subjects
       where repository_id = ${repositoryId}
