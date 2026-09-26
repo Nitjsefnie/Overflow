@@ -285,9 +285,10 @@ from `git status` altogether, which is exactly what makes this failure quiet.
 ### A migration has a second edit site
 
 `tests/db/schema.test.ts` asserts the exact list of applied migrations, name by
-name, and that each was applied exactly once. Adding
-`db/migrations/NNN_something.sql` therefore fails that suite until the list in
-the test names it too. Same commit, both files.
+name, and that each was applied exactly once. The list lives in
+`tests/support/applied-migrations.ts`. Adding `db/migrations/NNN_something.sql`
+therefore fails that suite until that list names it too. Same commit, both
+files.
 
 The assertion is not bureaucracy: `runMigrations` decides what to apply by
 reading the directory and diffing against `schema_migrations`, so nothing else
