@@ -548,6 +548,57 @@ describe("ratchet check against a real git repository", () => {
     expect(checkRatchets(root, "main", "refused").findings).toHaveLength(2);
   });
 
+  it("judges an added baseline entry at the merge base, not at the advanced base tip", () => {
+    // tests/grown.test.ts has 3 lines where the feature forks and 5 on the
+    // main tip. An entry of 4 fits the tip but not the merge base, so it
+    // takes headroom the branch never had and is refused.
+    initRepo();
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    mkdirSync(join(root, "tests"));
+    writeFileSync(join(root, "tests", "grown.test.ts"), "a\nb\nc\n");
+    commit("base documents");
+    git("checkout", "-q", "-b", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, {
+        "src/big.ts": 900,
+        "tests/big.test.ts": 2600,
+        "tests/grown.test.ts": 4,
+      }),
+    );
+    commit("baseline between the merge-base and tip sizes");
+    git("checkout", "-q", "main");
+    writeFileSync(join(root, "tests", "grown.test.ts"), "a\nb\nc\nd\ne\n");
+    commit("main grows the file after the fork");
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("tests/grown.test.ts");
+    expect(result.stdout).toContain("above the file's 3 lines at the merge base");
+  });
+
+  it("reads a baseline key that looks like pathspec magic as a literal file name", () => {
+    // Without literal pathspecs, git ls-tree reads ":(top)x.ts" as the magic
+    // prefix ":(top)" on "x.ts" and never lists the file of that name.
+    initRepo();
+    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(MODULE_SIZE_PATH, moduleSize());
+    writeFileSync(join(root, ":(top)x.ts"), "a\nb\n");
+    commit("base documents");
+    expect(git("ls-files")).toContain(":(top)x.ts");
+    git("checkout", "-q", "-b", "feature");
+    writeDoc(
+      MODULE_SIZE_PATH,
+      moduleSize(undefined, { "src/big.ts": 900, "tests/big.test.ts": 2600, ":(top)x.ts": 2 }),
+    );
+    commit("baseline for a file whose name looks like pathspec magic");
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ok");
+  });
+
   it("refuses baseline entries that name anything but a regular file at the merge base", () => {
     // git ls-tree reads its argument as a pattern: "tests/" lists the
     // directory's children, and git show of "<commit>:tests/" prints a tree
