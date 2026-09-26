@@ -458,7 +458,7 @@ describe("account deletion as pseudonymisation", () => {
     // Main's 046 migration gave every token a bounded lifetime; the export
     // carries the expiry alongside the creation instant, never the hash.
     expect(new Date(exported.apiToken!.expiresAt).toISOString()).toEqual(exported.apiToken!.expiresAt);
-    expect(Object.keys(exported.apiToken!).sort()).toEqual(["createdAt", "expiresAt"]);
+    expect(Object.keys(exported.apiToken!).sort()).toEqual(["createdAt", "expiresAt", "lastUsedAt"]);
     // The expiry must be the stored instant, not a stand-in: the export
     // reports the token as the database holds it.
     const [storedToken] = await sql<{ created_at: Date; expires_at: Date }[]>`

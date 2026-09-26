@@ -4030,7 +4030,6 @@ describe("initial PostgreSQL materialization", () => {
     expect(record.user_id).toBe(userId);
     expect(Buffer.from(record.token_hash)).toEqual(apiTokenHash("column-shape"));
     expect(record.created_at).toBeInstanceOf(Date);
-
     const columns = await sql<{ column_name: string; is_nullable: string }[]>`
       select column_name, is_nullable from information_schema.columns
       where table_schema = 'public' and table_name = 'api_tokens'
@@ -4040,6 +4039,7 @@ describe("initial PostgreSQL materialization", () => {
       { column_name: "created_at", is_nullable: "NO" },
       { column_name: "expires_at", is_nullable: "NO" },
       { column_name: "id", is_nullable: "NO" },
+      { column_name: "last_used_at", is_nullable: "YES" },
       { column_name: "token_hash", is_nullable: "NO" },
       { column_name: "user_id", is_nullable: "NO" },
     ]);
@@ -4071,7 +4071,7 @@ describe("initial PostgreSQL materialization", () => {
     await store.issueToken(userId, tokenHash);
 
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
-      id: userId,
+      id: userId, tokenId: expect.any(String),
       role: "MEMBER",
       enforcementState: "ACTIVE",
     });
@@ -4088,7 +4088,7 @@ describe("initial PostgreSQL materialization", () => {
 
     await expect(store.findAccountByTokenHash(revokedHash)).resolves.toBeNull();
     await expect(store.findAccountByTokenHash(currentHash)).resolves.toEqual({
-      id: userId,
+      id: userId, tokenId: expect.any(String),
       role: "MEMBER",
       enforcementState: "ACTIVE",
     });
@@ -4139,7 +4139,7 @@ describe("initial PostgreSQL materialization", () => {
     await store.issueToken(userId, tokenHash);
 
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
-      id: userId,
+      id: userId, tokenId: expect.any(String),
       role: "MODERATOR",
       enforcementState: "UNDER_AUDIT",
     });
@@ -4153,7 +4153,7 @@ describe("initial PostgreSQL materialization", () => {
     await store.issueToken(userId, tokenHash);
     const account = await store.findAccountByTokenHash(tokenHash);
 
-    expect(Object.keys(account ?? {}).sort()).toEqual(["enforcementState", "id", "role"]);
+    expect(Object.keys(account ?? {}).sort()).toEqual(["enforcementState", "id", "role", "tokenId"]);
     const resolvedValues: unknown[] = Object.values(account ?? {});
     expect(resolvedValues.some((value) => value instanceof Uint8Array)).toBe(false);
     expect(JSON.stringify(account)).not.toContain(tokenHash.toString("hex"));

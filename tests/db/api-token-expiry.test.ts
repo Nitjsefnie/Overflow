@@ -64,6 +64,7 @@ describe("API token expiry in the store", () => {
 
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
       id: userId,
+      tokenId: expect.any(String),
       role: "MEMBER",
       enforcementState: "ACTIVE",
     });

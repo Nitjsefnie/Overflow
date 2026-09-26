@@ -59,4 +59,5 @@ export const appliedMigrationNames: readonly string[] = [
   "051_forge_identity_https_instance.sql",
   "052_repository_policy_violations.sql",
   "053_webhook_delivery_receipt_scope.sql",
+  "054_privileged_action_credentials.sql",
 ];

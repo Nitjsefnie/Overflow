@@ -95,6 +95,7 @@ describe("resolveRouteCredential", () => {
     // the gate's own fresh-role lookup stays the single role authority.
     const findAccountByTokenHash = vi.fn().mockResolvedValue({
       id: ownerId,
+      tokenId: "68200000-0000-4000-8000-000000000003",
       role: "MODERATOR",
       enforcementState: "ACTIVE",
     });
