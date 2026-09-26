@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -97,6 +97,18 @@ describe("policy violations are recorded when they newly appear", () => {
       .toEqual([mutated]);
   });
 
+  it("records a violation larger than a btree index row once, and not again when it is unchanged", async () => {
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    // Hash hex does not compress, so the stored jsonb stays over 4 kB: above the
+    // roughly 2.7 kB a btree index row may hold, which a key on the raw
+    // violation would refuse.
+    const prose = Array.from({ length: 64 }, (_, index) => createHash("sha256").update(String(index)).digest("hex")).join("");
+    const large: FoldPolicyViolation = { ...unauthorized, githubIssueId: 71_304, reason: prose };
+
+    expect(await violationsRecordedBy(await reconcile(store, repositoryId, fold, [large]))).toEqual([large]);
+    expect(await violationsRecordedBy(await reconcile(store, repositoryId, fold, [large]))).toEqual([]);
+  });
+
   it("leaves the stored set as it was when the run's publication fails after recording", async () => {
     const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
     await reconcile(store, repositoryId, fold, [mutated]);
@@ -105,11 +117,17 @@ describe("policy violations are recorded when they newly appear", () => {
     // insert, which the publication performs after the violations: the whole
     // transaction, the violation bookkeeping included, rolls back.
     const failedRun = await store.beginRun(repositoryId);
+    const sequenceBefore = await recordedSequenceValue();
     await expect(store.withRepositoryReconciliation(repositoryId, () => store.materialize({
       repositoryId, runId: failedRun, fold: withViolations(fold, [missing]),
       cost: { sponsorId: randomUUID(), completedAt: new Date(), observedCost: null, observedResponses: 0, unmeasuredResponses: 0 },
     }))).rejects.toThrow(/foreign key/);
     expect(await violationsRecordedBy(failedRun)).toEqual([]);
+    // A sequence is not rolled back, so the one `recorded_seq` value the
+    // failed run drew shows its recording of `missing` executed before the
+    // failure. Without it this case would pass vacuously if the failure moved
+    // ahead of the recording.
+    expect(await recordedSequenceValue()).toBe(sequenceBefore + 1n);
 
     // `mutated` is still stored (the failed run did not remove it) and
     // `missing` is not (the failed run did not add it).
@@ -128,6 +146,14 @@ async function reconcile(store: PostgresFoldStore, repositoryId: string, fold: F
 
 function withViolations(fold: FoldResult, policyViolations: FoldPolicyViolation[]): FoldResult {
   return { ...fold, policyViolations };
+}
+
+/** The last value drawn for `reconciliation_changes.recorded_seq`, committed or not. */
+async function recordedSequenceValue(): Promise<bigint> {
+  const [row] = await sql<{ value: string }[]>`
+    select pg_sequence_last_value(pg_get_serial_sequence('reconciliation_changes', 'recorded_seq')::regclass)::text as value
+  `;
+  return BigInt(row!.value);
 }
 
 /** The violations a run recorded, in the order it recorded them, with the shape every such row has. */
