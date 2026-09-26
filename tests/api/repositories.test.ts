@@ -1,5 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import postgres, { type Sql } from "postgres";
+import type { StartedTestContainer } from "testcontainers";
 import {
   expectNoDependencyCall,
   foreignOrigin,
@@ -20,6 +22,11 @@ import type { ApiTokenAccount } from "@/lib/tokens/postgres-store";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import type { RepositoryRouteDependencies, RepositoryRouteSession } from "@/app/api/repositories/route";
 import { GitHubWebhookScopeError } from "@/lib/auth/github-granted-scopes";
+import { runMigrations } from "../../scripts/migrate";
+import { startPostgresContainer } from "../support/postgres-container";
+import { closeSql } from "@/lib/db/client";
+import { deleteAccount } from "@/lib/accounts/deletion";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 import {
   RepositoryRegistrationEnforcementError,
@@ -45,7 +52,18 @@ afterAll(() => { vi.resetModules(); });
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
-vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+// The production wiring reads the live role through `getSql()` (issue 733),
+// and the unit tests here run without a database: the stub answers one live
+// MEMBER role row. The container suite below passes its own sql to
+// getCurrentUserRole explicitly, so the stub never stands in for a real
+// lookup there, and runMigrations keeps the real module's transaction client.
+const { sqlStub } = vi.hoisted(() => ({
+  sqlStub: vi.fn(async () => [{ role: "MEMBER" }]),
+}));
+vi.mock("@/lib/db/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/client")>();
+  return { ...actual, getSql: () => sqlStub };
+});
 // The production wiring builds its GitLab gateway on the default transport,
 // which refuses a non-public instance and has no injection seam there; route
 // it to the global fetch the GitLab wiring tests stub.
@@ -93,6 +111,7 @@ describe("POST /api/repositories", () => {
   it("returns a structured 400 when the request does not contain exactly one repository configuration", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -111,6 +130,7 @@ describe("POST /api/repositories", () => {
   it("returns a structured 401 without a session", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -126,6 +146,7 @@ describe("POST /api/repositories", () => {
   it("requires a session before validating a submitted repository payload", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -141,6 +162,7 @@ describe("POST /api/repositories", () => {
   it("returns a structured 403 for a signed-in user without GitHub administrator permission", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { canAdminister: false }),
@@ -166,6 +188,7 @@ describe("POST /api/repositories", () => {
     });
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "member-id", role: "MEMBER" } }),
       createRegistrationDependencies: registrationDependencies,
     });
@@ -182,6 +205,7 @@ describe("POST /api/repositories", () => {
   it("returns a structured 409 when the submitted repository is already registered", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { existingRepository: true }),
@@ -198,6 +222,7 @@ describe("POST /api/repositories", () => {
   it("returns a structured 502 without exposing a GitHub failure", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, { webhookFailure: true }),
@@ -220,6 +245,7 @@ describe("POST /api/repositories", () => {
     consoleOutputAllowed.add("error");
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) =>
         successfulDependencies(session.user, {
@@ -271,6 +297,7 @@ describe("POST /api/repositories", () => {
     });
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -299,6 +326,7 @@ describe("POST /api/repositories", () => {
     dependencies.github = failingGitHubGateway("lookup", status);
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -330,6 +358,7 @@ describe("POST /api/repositories", () => {
       dependencies.github = failingGitHubGateway(step, status, headers);
       const handler = createRepositoryPostHandler({
         findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => "MEMBER",
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -372,6 +401,7 @@ describe("POST /api/repositories", () => {
       dependencies.github = failingGitHubGateway(step, 403, { "x-ratelimit-remaining": "4999" }, ownerType, secondaryRateLimitBody);
       const handler = createRepositoryPostHandler({
         findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => "MEMBER",
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -399,6 +429,7 @@ describe("POST /api/repositories", () => {
       dependencies.github = failingGitHubGateway(step, status, headers, ownerType);
       const handler = createRepositoryPostHandler({
         findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => "MEMBER",
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -437,6 +468,7 @@ describe("POST /api/repositories", () => {
     dependencies.github = failingGitHubGateway("webhook", 404, {}, "User");
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -452,6 +484,7 @@ describe("POST /api/repositories", () => {
   it("returns the registered repository after a successful explicit registration", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) => successfulDependencies(session.user),
     });
@@ -488,6 +521,7 @@ describe("POST /api/repositories", () => {
       };
       const handler = createRepositoryPostHandler({
         findAccountByTokenHash: async () => null,
+        getCurrentRole: async () => "MEMBER",
         getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
         createRegistrationDependencies: async () => dependencies,
       });
@@ -513,6 +547,7 @@ describe("POST /api/repositories", () => {
   it("reports an unscheduled initial import when the enqueue fails", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async (session) => ({
         ...successfulDependencies(session.user),
@@ -610,14 +645,15 @@ function tokenFixture(
     user: { id: "cookie-account-id", role: "MODERATOR" as const },
   }));
   const findAccountByTokenHash = vi.fn<(hash: Buffer) => Promise<ApiTokenAccount | null>>(async () => account);
+  const getCurrentRole = vi.fn(async () => "MEMBER" as const);
   const createRegistrationDependencies = vi.fn(async (session: RepositoryRouteSession) =>
     successfulDependencies(session.user, options),
   );
-  const handlerDependencies = { getSession, findAccountByTokenHash, createRegistrationDependencies };
+  const handlerDependencies = { getSession, findAccountByTokenHash, getCurrentRole, createRegistrationDependencies };
   const handler = method === "DELETE"
     ? createRepositoryDeleteHandler(handlerDependencies)
     : createRepositoryPostHandler(handlerDependencies);
-  return { handler, getSession, findAccountByTokenHash, createRegistrationDependencies };
+  return { handler, getSession, findAccountByTokenHash, getCurrentRole, createRegistrationDependencies };
 }
 
 /** Every route dependency as a mock, for requests the guard must refuse outright. */
@@ -625,6 +661,7 @@ function unusedRouteDependencies() {
   return {
     getSession: vi.fn(),
     findAccountByTokenHash: vi.fn(),
+    getCurrentRole: vi.fn(),
     createRegistrationDependencies: vi.fn(),
   };
 }
@@ -1195,6 +1232,7 @@ describe("Overflow token registration", () => {
   it("answers 502 UPSTREAM_FAILURE when a GitLab path lookup fails upstream", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       async createRegistrationDependencies() {
         return {
@@ -1421,6 +1459,7 @@ describe("PATCH /api/repositories", () => {
   it("returns a structured 401 without a session", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1436,6 +1475,7 @@ describe("PATCH /api/repositories", () => {
   it("returns a structured 400 when the request is not one repository catalog submission", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1469,6 +1509,7 @@ describe("PATCH /api/repositories", () => {
   it("answers 200 with the appended version when the catalog changed", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         existingRepository: true,
@@ -1501,6 +1542,7 @@ describe("PATCH /api/repositories", () => {
   it("answers 200 with changed false when the submitted catalog already is the current one", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         existingRepository: true,
@@ -1520,6 +1562,7 @@ describe("PATCH /api/repositories", () => {
     dependencies.actor = { ...dependencies.actor, enforcementState: "BANNED" };
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -1538,6 +1581,7 @@ describe("PATCH /api/repositories", () => {
   it("returns a structured 409 when the submitted repository is not registered", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1556,6 +1600,7 @@ describe("PATCH /api/repositories", () => {
   it("returns a structured 403 when the requester is not the repository's sponsor", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
       createRegistrationDependencies: async () => successfulDependencies(
         { id: "outsider-id", role: "MEMBER" },
@@ -1596,6 +1641,7 @@ describe("PATCH /api/repositories", () => {
     };
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
       createRegistrationDependencies: async () => dependencies,
     });
@@ -1609,6 +1655,7 @@ describe("PATCH /api/repositories", () => {
   it("answers a conflicting catalog order with an explicit 409, not a generic upstream failure", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         existingRepository: true,
@@ -1630,6 +1677,7 @@ describe("PATCH /api/repositories", () => {
   it("returns a structured 400 for a catalog that fails the registration validation", async () => {
     const handler = createRepositoryPatchHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, { existingRepository: true }),
     });
@@ -1645,6 +1693,7 @@ describe("PATCH /api/repositories", () => {
   it("keeps the POST registration behavior untouched beside the change path", async () => {
     const handler = createRepositoryPostHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1659,6 +1708,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 401 without a session", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => null,
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1674,6 +1724,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 400 when the request is not one repository reference", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1689,6 +1740,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 400 when the body carries an unknown extra key beside the reference", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1708,6 +1760,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 404 when no registration holds the submitted path", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1726,6 +1779,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 403 when the requester is not the repository's sponsor", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "outsider-id", role: "MEMBER" } }),
       createRegistrationDependencies: async () => successfulDependencies(
         { id: "outsider-id", role: "MEMBER" },
@@ -1747,6 +1801,7 @@ describe("DELETE /api/repositories", () => {
   it("answers 200 with the unregister result once the hook is deleted and the write lands", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         unregisterTarget: registeredTarget(),
@@ -1767,6 +1822,7 @@ describe("DELETE /api/repositories", () => {
   it("answers 200 reporting an idempotent repeat as already unregistered", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         unregisterTarget: registeredTarget(),
@@ -1787,6 +1843,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 400 when the body carries neither a repository reference nor a GitLab provider", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1805,6 +1862,7 @@ describe("DELETE /api/repositories", () => {
   it("resolves a GitLab unregistration by instance and project and answers 200 with the result", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         unregisterForgeTarget: gitlabTarget(),
@@ -1825,6 +1883,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 404 when no GitLab registration matches the instance and project", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(),
     });
@@ -1906,6 +1965,7 @@ describe("DELETE /api/repositories", () => {
   it("passes a store-raised conflict through the shared error mapping unchanged", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => successfulDependencies(undefined, {
         unregisterTarget: registeredTarget(),
@@ -1930,6 +1990,7 @@ describe("DELETE /api/repositories", () => {
   it("returns a structured 502 when the route's registration dependencies cannot be built", async () => {
     const handler = createRepositoryDeleteHandler({
       findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MEMBER",
       getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
       createRegistrationDependencies: async () => {
         throw new Error("GitHub webhook configuration must be set.");
@@ -2232,6 +2293,7 @@ function successfulDependencies(
 function forgeWiringDependencies(options: SuccessfulDependenciesOptions = {}): RepositoryRouteDependencies {
   return {
     findAccountByTokenHash: async () => null,
+    getCurrentRole: async () => "MEMBER",
     getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" as const } }),
     async createRegistrationDependencies(_session, input) {
       if (input.provider === "gitlab") {
@@ -2275,3 +2337,152 @@ function failingGitHubGateway(
     },
   });
 }
+
+/**
+ * Issue 733: the session JWT outlives the account it was issued for, so every
+ * write verb re-reads the account's role live. The deleted row is real: the
+ * suite runs the migrations and the account deletion against a disposable
+ * database, asserted through the real getCurrentUserRole.
+ */
+describe("repository writes for a deleted account (issue 733)", () => {
+  let sql: Sql;
+  let container: StartedTestContainer | undefined;
+  let deletedAccountId = "";
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    const started = await startPostgresContainer({
+      database: "repositories_deleted_account_test",
+      user: "repositories_deleted_account_test",
+      password: "repositories_deleted_account_test",
+    });
+    container = started.container;
+    process.env.DATABASE_URL = started.databaseUrl;
+    sql = postgres(started.databaseUrl, { max: 1 });
+    await runMigrations();
+    const githubUserId = 7_330_003;
+    const [row] = await sql<{ id: string }[]>`
+      insert into users (github_user_id, github_login)
+      values (${githubUserId}, 'deleted-gate-repositories')
+      returning id
+    `;
+    deletedAccountId = row!.id;
+    await deleteAccount(sql, githubUserId, { confirm: true });
+  });
+
+  afterAll(async () => {
+    // Two pools: runMigrations ran on the module client, the fixtures on this one.
+    await closeSql();
+    await sql.end();
+    await container?.stop();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
+  /**
+   * The deleted account's cookie session, wired for success: if the route
+   * ever reaches createRegistrationDependencies, the gate has failed.
+   */
+  function deletedAccountDependencies(
+    createRegistrationDependencies: RepositoryRouteDependencies["createRegistrationDependencies"] =
+      async () => successfulDependencies(),
+  ): RepositoryRouteDependencies {
+    return {
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: deletedAccountId, role: "MEMBER" } }),
+      getCurrentRole: (userId) => getCurrentUserRole(userId, sql),
+      createRegistrationDependencies,
+    };
+  }
+
+  it("refuses a registration with the member-gate envelope when the account row is deleted", async () => {
+    // The real lookup against the container: the row is provably deleted.
+    expect(await getCurrentUserRole(deletedAccountId, sql)).toBeNull();
+    const createRegistrationDependencies = vi.fn(async () => successfulDependencies());
+    const handler = createRepositoryPostHandler(deletedAccountDependencies(createRegistrationDependencies));
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+    expect(createRegistrationDependencies).not.toHaveBeenCalled();
+  });
+
+  it("refuses a catalog change with the member-gate envelope when the account row is deleted", async () => {
+    const handler = createRepositoryPatchHandler(deletedAccountDependencies(async () =>
+      successfulDependencies(undefined, {
+        existingRepository: true,
+        catalogChange: { changed: true, versionNumber: 2, effectiveFrom: "2026-09-26T12:00:00.000Z" },
+      }),
+    ));
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+  });
+
+  it("refuses an unregistration with the member-gate envelope when the account row is deleted", async () => {
+    const handler = createRepositoryDeleteHandler(deletedAccountDependencies(async () =>
+      successfulDependencies(undefined, {
+        unregisterTarget: registeredTarget(),
+        unregisterOutcome: { kind: "UNREGISTERED", repository: registeredTarget() },
+      }),
+    ));
+    const response = await handler(jsonRequest(validUnregisterInput(), "DELETE"));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+  });
+
+  it.each([
+    { label: "a cookie session", bearer: false },
+    { label: "a bearer credential whose account is deleted after minting", bearer: true },
+  ])("refuses $label with the member-gate envelope when the role read returns null", async ({ bearer }) => {
+    const getCurrentRole = vi.fn(async () => null);
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
+      getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
+      getCurrentRole,
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+    const response = await handler(bearer ? authorizedRequest(validInput()) : jsonRequest(validInput()));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "A member account is required." },
+    });
+  });
+
+  it("answers the route's own 502 when the role read fails, on either credential path", async () => {
+    const refusal = { error: { code: "UPSTREAM_FAILURE", message: "Unable to initialize repository registration." } };
+    const handlerFor = (bearer: boolean) =>
+      createRepositoryPostHandler({
+        findAccountByTokenHash: async () => (bearer ? tokenAccount : null),
+        getSession: async () => (bearer ? null : { user: { id: "member-id", role: "MEMBER" } }),
+        getCurrentRole: async () => {
+          throw new Error("role lookup unavailable");
+        },
+        createRegistrationDependencies: async () => successfulDependencies(),
+      });
+    const cookieResponse = await handlerFor(false)(jsonRequest(validInput()));
+    const bearerResponse = await handlerFor(true)(authorizedRequest(validInput()));
+    expect(cookieResponse.status).toBe(502);
+    expect(bearerResponse.status).toBe(502);
+    await expect(cookieResponse.json()).resolves.toEqual(refusal);
+    await expect(bearerResponse.json()).resolves.toEqual(refusal);
+  });
+
+  it("lets a live account through, consulting the role read once", async () => {
+    const getCurrentRole = vi.fn(async () => "MEMBER" as const);
+    const handler = createRepositoryPostHandler({
+      findAccountByTokenHash: async () => null,
+      getSession: async () => ({ user: { id: "moderator-id", role: "MODERATOR" } }),
+      getCurrentRole,
+      createRegistrationDependencies: async () => successfulDependencies(),
+    });
+    const response = await handler(jsonRequest(validInput()));
+    expect(response.status).toBe(201);
+    expect(getCurrentRole).toHaveBeenCalledExactlyOnceWith("moderator-id");
+  });
+});

@@ -25,7 +25,10 @@ const { enqueued, readSession, registerRepositoryMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/auth", () => ({ auth: readSession }));
-vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+// The production repositories wiring reads the live role through getSql()
+// (issue 733); the stub answers one live MEMBER role row so the wiring's own
+// authorization succeeds for these wiring-shape tests.
+vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn(async () => [{ role: "MEMBER" }]) }));
 vi.mock("@/lib/fold/postgres-store", () => ({
   PostgresFoldStore: class {
     async applyIssueView() {}
