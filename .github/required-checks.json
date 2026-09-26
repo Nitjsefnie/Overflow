@@ -1,0 +1,5 @@
+{
+  "actionlint": ".github/workflows/actionlint.yml",
+  "ratchet-guard": ".github/workflows/ratchet-guard.yml",
+  "verify": ".github/workflows/ci.yml"
+}
