@@ -12,12 +12,14 @@
 //
 // Exit 0 when nothing is relaxed, 1 with one line per relaxation (file, key,
 // merge-base value, head value), 2 on a usage error, an unknown revision, a
-// merge base that cannot be computed (unrelated histories or a shallow
-// clone) or a document that is not valid JSON. A document absent at the
-// merge base cannot be relaxed; the sibling checks judge its content. A
-// non-regular entry (anything but a 100644 blob) at the head is a finding
-// (exit 1) — it is the branch's own change; a non-regular entry at the merge
-// base is a git/parse error (exit 2).
+// shallow clone — refused up front, because a shallow history can make git
+// merge-base fail or return a wrong base without erroring, and the fix is to
+// fetch full history (`git fetch --unshallow`) — a merge base that cannot be
+// computed (unrelated histories) or a document that is not valid JSON. A
+// document absent at the merge base cannot be relaxed; the sibling checks
+// judge its content. A non-regular entry (anything but a 100644 blob) at the
+// head is a finding (exit 1) — it is the branch's own change; a non-regular
+// entry at the merge base is a git/parse error (exit 2).
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -224,6 +226,23 @@ function git(cwd: string, args: string[]): { status: number | null; stdout: stri
   return spawnSync("git", args, { cwd, encoding: "utf8" });
 }
 
+// A shallow history disqualifies the whole check: git merge-base can fail on
+// it, or worse pick a wrong base without erroring, and either answer is one
+// a relaxation could hide behind. Refuse before touching any revision.
+function requireFullHistory(cwd: string): void {
+  const result = git(cwd, ["rev-parse", "--is-shallow-repository"]);
+  if (result.status !== 0) {
+    throw new Error(`cannot tell whether the repository is shallow: ${result.stderr}`);
+  }
+  if (result.stdout.trim() === "true") {
+    throw new Error(
+      "the repository is shallow; a shallow history can make git merge-base return " +
+        "a wrong base without erroring, so the check refuses to run — fetch full " +
+        "history first (git fetch --unshallow)",
+    );
+  }
+}
+
 export function resolveCommit(cwd: string, rev: string): string {
   const result = git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]);
   if (result.status !== 0) throw new Error(`unknown revision: ${rev}`);
@@ -275,6 +294,7 @@ export function checkRatchets(
   baseRev: string,
   headRev: string,
 ): { mergeBase: string; findings: string[] } {
+  requireFullHistory(cwd);
   const base = resolveCommit(cwd, baseRev);
   const head = resolveCommit(cwd, headRev);
   const fork = mergeBase(cwd, base, head);
