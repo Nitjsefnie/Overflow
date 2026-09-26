@@ -138,6 +138,88 @@ Retain the JSON output and real exit status with the deployment record, as the
 [ordinary deployment procedure](deploy/README.md#10-deploying-a-new-revision)
 does. The startup sweep reconciles evidence but does not upgrade subscriptions.
 
+## Account deletion and export
+
+A person may ask for everything the service stores about them, or for their
+account to be deleted. Deletion is pseudonymisation: the account row survives
+with its identifier, so ledger history stays attributable, but nothing that
+lets anyone act as the person survives with it.
+
+### Requests
+
+Requests arrive only as an issue on the public tracker (the Code of Conduct's
+[Reporting](CODE_OF_CONDUCT.md#reporting) section); there is no private
+channel. Act only for the account that opened the issue, and resolve that
+account's numeric id before touching anything with
+`gh api repos/Nitjsefnie/Overflow/issues/<number> --jq .user.id`. Pass that
+id to the commands below — never a login.
+
+Send the export by posting it in the requester's issue only after the
+requester has confirmed in that issue that a public reply is acceptable: the
+export includes the account's enforcement state and the reasons recorded on
+moderation events. Otherwise hold the export until self-service export ships
+(issue 664).
+
+### Running the commands
+
+On the deployment host, with the deployment's `DATABASE_URL` loaded:
+
+```bash
+cd /srv/overflow
+set -a; . /etc/overflow/overflow.env; set +a
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export --github-user-id <github-user-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id>
+node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id> --confirm
+```
+
+Each command writes its JSON document to standard output and reports its
+outcome through an exit code. The export covers every table with a foreign
+key to the account, with secrets reduced to presence flags — API-token
+metadata is `createdAt` and `expiresAt`, never the token hash. The first
+`delete` is a dry run; `--confirm` performs it. Exit codes: `0` the command
+succeeded (an export, or a confirmed deletion); `1` it failed — an unknown
+account, a sponsor refusal, or a command error reported as
+`ACCOUNT_COMMAND_FAILED`; `2` the arguments violate the grammar; `3` the
+dry run completed without deleting.
+
+### What deletion scrubs
+
+- The GitHub login is replaced with the tombstone `(deleted account)`, and the
+  avatar and the stored GitHub OAuth token are cleared.
+- The account's API token is deleted, so its hash stops authenticating at
+  once.
+- GitLab identities keep their instance URL and numeric id — the fold
+  attributes authorship by them — but their token is cleared and their login
+  is tombstoned.
+- The account is stamped with `deleted_at`.
+
+### What deletion keeps
+
+The account's `id`, its `github_user_id` and GitLab numeric ids stay, because
+the fold attributes work by them. Every ledger row stays too, including the
+GitHub-reported login copies on settlements and pull requests, which
+reconciliation keeps refreshing from GitHub after deletion.
+
+### Sponsors and moderators
+
+Deletion is refused while the account sponsors any registration that has not
+been unregistered (`SPONSOR_BLOCKED`, naming each repository). To proceed,
+the sponsor unregisters each named repository from the dashboard; a handover
+is unregister, then the new sponsor registers. Deletion never demotes a
+moderator: if removing the moderator role is intended, revoke it first.
+
+### After deletion
+
+Sessions end at their next request, and API tokens stop at once. A later
+GitHub sign-in re-registers the account and re-links its history. Deletion
+does not revoke the OAuth grant on GitHub; the person revokes that at
+<https://github.com/settings/applications>.
+
+### Backups
+
+Database dumps taken before the deletion keep the pre-deletion data for up to
+14 days; see [backup retention](deploy/backup-restore.md#d-backup-location-and-retention).
+
 ## Continuous integration
 
 GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`, finishing with the page-geometry check, `node scripts/check-page-geometry.mjs`, against the built output. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.
