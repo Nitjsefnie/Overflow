@@ -10,10 +10,11 @@ import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 export const auditActionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("dismiss"), reason: z.string() }).strict(),
-  z.object({ action: z.literal("substantiate"), reason: z.string() }).strict(),
+  z.object({ action: z.literal("dismiss"), reason: reasonText() }).strict(),
+  z.object({ action: z.literal("substantiate"), reason: reasonText() }).strict(),
 ]);
 
 export type ModerationAuditRouteContext = {

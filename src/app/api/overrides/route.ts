@@ -15,6 +15,7 @@ import {
   requiredMemberSession,
 } from "@/lib/security/member-route-auth";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 // Strict on both sides of the union, so a body naming a settlement and a
 // calibration at once matches neither: one request corrects one priced outcome.
@@ -22,13 +23,13 @@ export const overrideRequestSchema = z.union([
   z
     .object({
       settlementId: z.string().uuid(),
-      reason: z.string().trim().min(1),
+      reason: reasonText(),
     })
     .strict(),
   z
     .object({
       calibrationId: z.string().uuid(),
-      reason: z.string().trim().min(1),
+      reason: reasonText(),
     })
     .strict(),
 ]);

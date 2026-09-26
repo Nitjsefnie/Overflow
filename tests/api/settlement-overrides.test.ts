@@ -19,6 +19,7 @@ vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: production
 import { createSettlementOverridePostHandler } from "@/app/api/overrides/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import { SettlementOverrideError, type SettlementOverrideRequest } from "@/lib/overrides/service";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 const moderatorId = "00000000-0000-4000-8000-000000000002";
@@ -452,6 +453,98 @@ describe("settlement override decision API", () => {
       },
     });
     expectNoDependencyCall(dependencies);
+  });
+});
+
+// The shared reason cap (issue 690): a value of exactly MAX_REASON_LENGTH
+// characters after trim is accepted and one more is refused with the route's
+// own validation answer, before any service is reached.
+describe("reason length caps", () => {
+  const maxReason = "x".repeat(MAX_REASON_LENGTH);
+  const overReason = `${maxReason}!`;
+
+  it("accepts a request reason of exactly the cap on both branches", async () => {
+    const { handler, requestOverride } = memberPostHandler();
+    requestOverride.mockResolvedValue(recorded);
+
+    const first = await handler(jsonRequest({ settlementId, reason: maxReason }));
+    const second = await handler(jsonRequest({ calibrationId, reason: maxReason }));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(requestOverride).toHaveBeenNthCalledWith(
+      1,
+      { id: memberId },
+      { target: { kind: "settlement", settlementId }, reason: maxReason },
+    );
+    expect(requestOverride).toHaveBeenNthCalledWith(
+      2,
+      { id: memberId },
+      { target: { kind: "calibration", calibrationId }, reason: maxReason },
+    );
+  });
+
+  it("rejects a request reason past the cap on both branches before calling the service", async () => {
+    const { handler, requestOverride } = memberPostHandler();
+
+    const settlementBranch = await handler(jsonRequest({ settlementId, reason: overReason }));
+    const calibrationBranch = await handler(jsonRequest({ calibrationId, reason: overReason }));
+
+    await expectInvalidRequest(settlementBranch);
+    await expectInvalidRequest(calibrationBranch);
+    expect(requestOverride).not.toHaveBeenCalled();
+  });
+
+  it("accepts grant and decline reasons of exactly the cap", async () => {
+    const decideRequest = vi.fn().mockResolvedValue(recorded);
+    const handler = createSettlementOverridePatchHandler({
+      getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => ({ decideRequest }),
+    });
+
+    const grant = await handler(
+      jsonRequest({ action: "grant", settledPoints: 6, reason: maxReason }),
+      { params: Promise.resolve({ id: requestId }) },
+    );
+    const decline = await handler(jsonRequest({ action: "decline", reason: maxReason }), {
+      params: Promise.resolve({ id: requestId }),
+    });
+
+    expect(grant.status).toBe(200);
+    expect(decline.status).toBe(200);
+    expect(decideRequest).toHaveBeenNthCalledWith(1, { id: moderatorId, role: "MODERATOR" }, requestId, {
+      decision: "GRANT",
+      settledPoints: 6,
+      reason: maxReason,
+    });
+    expect(decideRequest).toHaveBeenNthCalledWith(2, { id: moderatorId, role: "MODERATOR" }, requestId, {
+      decision: "DECLINE",
+      reason: maxReason,
+    });
+  });
+
+  it("rejects grant and decline reasons past the cap before calling the service", async () => {
+    const decideRequest = vi.fn();
+    const handler = createSettlementOverridePatchHandler({
+      getSession: async () => ({ user: { id: moderatorId } }),
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => ({ decideRequest }),
+    });
+
+    const grant = await handler(
+      jsonRequest({ action: "grant", settledPoints: 6, reason: overReason }),
+      { params: Promise.resolve({ id: requestId }) },
+    );
+    const decline = await handler(jsonRequest({ action: "decline", reason: overReason }), {
+      params: Promise.resolve({ id: requestId }),
+    });
+
+    expect(grant.status).toBe(422);
+    expect(decline.status).toBe(422);
+    expect(decideRequest).not.toHaveBeenCalled();
   });
 });
 

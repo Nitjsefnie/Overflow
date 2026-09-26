@@ -11,6 +11,7 @@ import {
 } from "@/lib/moderation/service";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 export const openAccountAuditSchema = z
   .object({
@@ -18,14 +19,14 @@ export const openAccountAuditSchema = z
     repositoryId: z.string().uuid().optional(),
     sampleStartedAt: z.string(),
     sampleEndedAt: z.string(),
-    reason: z.string(),
+    reason: reasonText(),
   })
   .strict();
 
 const closeRecalibrationSchema = z
   .object({
     targetAccountId: z.string().uuid(),
-    plan: z.string().trim().min(1),
+    plan: reasonText(),
   })
   .strict();
 

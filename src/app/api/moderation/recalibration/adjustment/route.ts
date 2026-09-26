@@ -12,11 +12,16 @@ import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { AccountModerationService } from "@/lib/moderation/service";
 import { guardByCredential } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
+import { reasonText } from "@/lib/validation/reason";
 
 const adjustmentSchema = z
   .object({
     targetAccountId: z.string().uuid(),
-    reason: z.string(),
+    // The service's normalizer stays the blank-reason authority for this
+    // field, exactly as before the cap: a blank reason still reaches it for
+    // its structured INVALID_INPUT answer, while the length cap is enforced
+    // here, on the trimmed value, before any service work.
+    reason: reasonText({ allowBlank: true }),
   })
   .strict();
 

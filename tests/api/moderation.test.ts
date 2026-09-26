@@ -35,6 +35,7 @@ import {
 import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/recalibration/adjustment/route";
 import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
 import { type RecalibrationCreditStore } from "@/lib/moderation/credit-adjustment-store";
+import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -941,6 +942,192 @@ describe("recalibration adjustment reversal API", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code, message: "Unable to process moderation request." },
     });
+  });
+});
+
+// The shared reason cap (issue 690): every free-text reason and plan field the
+// moderation routes carry accepts exactly MAX_REASON_LENGTH characters after
+// trim and refuses one more with the route's own validation answer, before any
+// service or store is reached.
+describe("reason length caps", () => {
+  const maxReason = "x".repeat(MAX_REASON_LENGTH);
+  const overReason = `${maxReason}!`;
+
+  function moderatorDependencies(service: unknown) {
+    return {
+      getSession: async () => moderatorSession,
+      findAccountByTokenHash: async () => null,
+      getCurrentRole: async () => "MODERATOR",
+      createService: async () => service as never,
+    };
+  }
+
+  it("accepts an open-audit reason of exactly the cap", async () => {
+    const open = vi.fn().mockResolvedValue(auditFixture());
+    const handler = createModerationPostHandler(moderatorDependencies(serviceHarness({ open })));
+
+    const response = await handler(jsonRequest({ ...openPayload(), reason: maxReason }));
+
+    expect(response.status).toBe(201);
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      { ...openPayload(), reason: maxReason },
+    );
+  });
+
+  it("rejects an open-audit reason past the cap before calling the service", async () => {
+    const open = vi.fn();
+    const handler = createModerationPostHandler(moderatorDependencies(serviceHarness({ open })));
+
+    const response = await handler(jsonRequest({ ...openPayload(), reason: overReason }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("accepts a recalibration plan of exactly the cap", async () => {
+    const close = vi.fn().mockResolvedValue({
+      targetAccountId,
+      priorState: "RECALIBRATING",
+      targetState: "ACTIVE",
+      confirmedPatternCount: 2,
+      reactivatedRepositoryCount: 2,
+    });
+    const handler = createModerationClosePatchHandler(moderatorDependencies(serviceHarness({ close })));
+
+    const response = await handler(jsonRequest({ targetAccountId, plan: maxReason }, "PATCH"));
+
+    expect(response.status).toBe(200);
+    expect(close).toHaveBeenCalledExactlyOnceWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+      maxReason,
+    );
+  });
+
+  it("rejects a recalibration plan past the cap before calling the service", async () => {
+    const close = vi.fn();
+    const handler = createModerationClosePatchHandler(moderatorDependencies(serviceHarness({ close })));
+
+    const response = await handler(jsonRequest({ targetAccountId, plan: overReason }, "PATCH"));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it.each(["dismiss", "substantiate"] as const)(
+    "accepts a %s reason of exactly the cap",
+    async (action) => {
+      const decide = vi.fn().mockResolvedValue(
+        auditFixture({ state: action === "dismiss" ? "DISMISSED" : "SUBSTANTIATED" }),
+      );
+      const handler = createModerationAuditPatchHandler(
+        moderatorDependencies(serviceHarness({ [action]: decide })),
+      );
+
+      const response = await handler(
+        jsonRequest({ action, reason: maxReason }, "PATCH"),
+        { params: Promise.resolve({ id: auditId }) },
+      );
+
+      expect(response.status).toBe(200);
+      expect(decide).toHaveBeenCalledExactlyOnceWith(
+        { id: moderatorSession.user.id, role: "MODERATOR" },
+        auditId,
+        maxReason,
+      );
+    },
+  );
+
+  it.each(["dismiss", "substantiate"] as const)(
+    "rejects a %s reason past the cap before calling the service",
+    async (action) => {
+      const decide = vi.fn();
+      const handler = createModerationAuditPatchHandler(
+        moderatorDependencies(serviceHarness({ [action]: decide })),
+      );
+
+      const response = await handler(
+        jsonRequest({ action, reason: overReason }, "PATCH"),
+        { params: Promise.resolve({ id: auditId }) },
+      );
+
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+      });
+      expect(decide).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts an adjustment reason of exactly the cap", async () => {
+    const apply = vi.fn().mockResolvedValue(adjustmentFixture());
+    const handler = createModerationAdjustmentPostHandler(
+      moderatorDependencies(creditServiceHarness({ apply })),
+    );
+
+    const response = await handler(jsonRequest({ targetAccountId, reason: maxReason }));
+
+    expect(response.status).toBe(201);
+    expect(apply).toHaveBeenCalledExactlyOnceWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      targetAccountId,
+      maxReason,
+    );
+  });
+
+  it("rejects an adjustment reason past the cap before calling the service", async () => {
+    const apply = vi.fn();
+    const handler = createModerationAdjustmentPostHandler(
+      moderatorDependencies(creditServiceHarness({ apply })),
+    );
+
+    const response = await handler(jsonRequest({ targetAccountId, reason: overReason }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("accepts a reversal reason of exactly the cap", async () => {
+    const reverse = vi.fn().mockResolvedValue(
+      adjustmentFixture({ id: reversalRecordId, reversalOf: appliedAdjustmentId }),
+    );
+    const handler = createModerationReversalPostHandler(
+      moderatorDependencies(creditServiceHarness({ reverse })),
+    );
+
+    const response = await handler(jsonRequest({ ...reversalPayload(), reason: maxReason }));
+
+    expect(response.status).toBe(201);
+    expect(reverse).toHaveBeenCalledExactlyOnceWith(
+      { id: moderatorSession.user.id, role: "MODERATOR" },
+      appliedAdjustmentId,
+      maxReason,
+    );
+  });
+
+  it("rejects a reversal reason past the cap before calling the service", async () => {
+    const reverse = vi.fn();
+    const handler = createModerationReversalPostHandler(
+      moderatorDependencies(creditServiceHarness({ reverse })),
+    );
+
+    const response = await handler(jsonRequest({ ...reversalPayload(), reason: overReason }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "INVALID_REQUEST", message: "Invalid moderation request." },
+    });
+    expect(reverse).not.toHaveBeenCalled();
   });
 });
 
