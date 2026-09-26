@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createAccountExportPostHandler, POST as productionPost } from "@/app/api/account/export/route";
 import { formatAccountExport, type AccountExport } from "@/lib/accounts/export";
-import { expectNoDependencyCall, guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
+import { expectNoDependencyCall, guardedRequests, trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 import type { SqlClient } from "@/lib/db/types";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
@@ -74,6 +74,15 @@ describe("POST /api/account/export", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(deps.findIdentity).toHaveBeenCalledWith(sql, "internal-id");
     expect(deps.exportAccount).toHaveBeenCalledWith(sql, 42);
+  });
+
+  // The dashboard panel sends exactly this: a POST naming only the origin,
+  // with no body and so no content type.
+  it("accepts the panel's bodyless request that carries no content type", async () => {
+    const deps = dependencies();
+    const response = await createAccountExportPostHandler(deps)(new Request(requests.url, { method: "POST", headers: { origin: trustedOrigin } }));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(formatAccountExport(document));
   });
 
   it.each(["session", "sql", "lookup", "export"])('returns 502 and logs when the %s dependency throws', async (failure) => {
