@@ -4096,12 +4096,12 @@ describe("initial PostgreSQL materialization", () => {
     const userId = await insertUser(sql);
 
     await expect(sql`
-      insert into api_tokens (user_id, token_hash, expires_at)
-      values (${userId}, ${Buffer.alloc(16)}, now() + interval '1 day')
+      insert into api_tokens (user_id, token_hash)
+      values (${userId}, ${Buffer.alloc(16)})
     `).rejects.toMatchObject({ code: "23514" });
     await expect(sql`
-      insert into api_tokens (user_id, token_hash, expires_at)
-      values (${userId}, ${Buffer.alloc(0)}, now() + interval '1 day')
+      insert into api_tokens (user_id, token_hash)
+      values (${userId}, ${Buffer.alloc(0)})
     `).rejects.toMatchObject({ code: "23514" });
 
     const [record] = await sql<{ count: number }[]>`
@@ -4304,8 +4304,8 @@ async function insertApiToken(
   label: string,
 ): Promise<void> {
   await client`
-    insert into api_tokens (user_id, token_hash, expires_at)
-    values (${userId}, ${apiTokenHash(label)}, now() + interval '1 day')
+    insert into api_tokens (user_id, token_hash)
+    values (${userId}, ${apiTokenHash(label)})
   `;
 }
 
