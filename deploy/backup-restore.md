@@ -134,7 +134,7 @@ script on first use; dump files inside are `0600` because the script sets
 involved and produces `0600` all the same. The unit's `UMask=0077` is
 defense in depth for the same property, not the mechanism.
 `db-backup.sh` prunes `overflow-*.dump` files older than 14 days
-(`--retention-days`, default 14) after each successful dump — 14 daily dumps
+(`--retention-days`, default 14) after each successful dump — 15 daily dumps
 are retained at the steady state, and nothing not matching `overflow-*.dump`
 in the directory is ever deleted. After the drill of 2026-09-10 the directory
 holds the first real backup, `overflow-20260910T154923Z.dump` (22.7 MB).

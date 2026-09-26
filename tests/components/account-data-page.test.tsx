@@ -108,6 +108,17 @@ describe("account-data notice page", () => {
     ).not.toBeNull();
   });
 
+  it("points the deletion description's authorization limit at GitHub's application settings", async () => {
+    await renderAccountDataPage();
+
+    const deletionSection = document.getElementById("account-data-deletion-heading")!.closest("section");
+    expect(deletionSection, "the deletion section exists").not.toBeNull();
+    expect(
+      deletionSection!.querySelector('a[href="https://github.com/settings/applications"]'),
+      "the deletion description names where to revoke Overflow's authorization on GitHub",
+    ).not.toBeNull();
+  });
+
   it("offers nothing that submits or collects an email address", async () => {
     await renderAccountDataPage();
 
