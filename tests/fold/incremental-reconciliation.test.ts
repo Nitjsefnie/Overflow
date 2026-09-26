@@ -5,6 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { CACHED_COMMENT_BODY_PLACEHOLDER } from "@/lib/fold/reconciliation-evidence";
 import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -53,13 +54,13 @@ describe("incremental reconciliation", () => {
 
     expect(f.issueReads).toEqual([issue.number]);
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
-    // The row stops holding body text (issue 681); the evidence keeps it, so the
-    // sanitized value is still asserted below against the evidence.
+    // The row stops holding body text (issue 681), and the cache write drops
+    // the issue body outright, so the sanitized title is the surviving check.
     expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: null });
     const [evidence] = await sql`select issues from repository_reconciliation_evidence where repository_id = ${f.id}`;
-    expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({
-      title: "Dirty\uFFFDtitle", body: "Dirty\uFFFDbody",
-    });
+    const cachedIssue = evidence!.issues.find(({ id }: { id: number }) => id === issue.id)!;
+    expect(cachedIssue).toMatchObject({ title: "Dirty\uFFFDtitle" });
+    expect("body" in cachedIssue).toBe(false);
   });
 
   it("replaces NUL in forge evidence and derived rows before hashing, including a cached second run", async () => {
@@ -84,10 +85,17 @@ describe("incremental reconciliation", () => {
     expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
       proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
     const [evidence] = await sql`select issues, pull_requests from repository_reconciliation_evidence where repository_id = ${f.id}`;
-    expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({
-      title: "Issue\uFFFDtitle", body: "Issue\uFFFDbody", comments: [{ body: "Comment\uFFFDbody" }],
-      closingPullRequests: [{ title: "PR\uFFFDtitle", body: "PR\uFFFDbody" }],
+    // New cache writes stop holding body text (issue 681): comment bodies
+    // become the fixed placeholder, issue and nested pull request bodies are
+    // dropped, and everything else \u2014 sanitized titles and the raw diff \u2014 still
+    // round-trips.
+    const cachedIssue = evidence!.issues.find(({ id }: { id: number }) => id === issue.id)!;
+    expect(cachedIssue).toMatchObject({
+      title: "Issue\uFFFDtitle", comments: [{ body: CACHED_COMMENT_BODY_PLACEHOLDER }],
+      closingPullRequests: [{ title: "PR\uFFFDtitle" }],
     });
+    expect("body" in cachedIssue).toBe(false);
+    expect("body" in cachedIssue.closingPullRequests[0]!).toBe(false);
     expect(evidence!.pull_requests.find(({ id }: { id: number }) => id === pr.id)).toMatchObject({ rawDiff: "diff\uFFFDbody" });
 
     f.clock = new Date("2026-09-08T10:02:00Z");
@@ -254,8 +262,8 @@ describe("incremental reconciliation", () => {
     f.clock = new Date("2026-09-08T10:02:00Z");
     await f.run();
     const cache = await f.store.getReconciliationEvidence(f.id);
-    expect(cache?.issues.map(({ number, body }) => ({ number, body }))).toEqual([
-      { number: 1, body: "edited body" }, { number: 2, body: "body" }, { number: 3, body: "body" },
+    expect(cache?.issues.map((issue) => ({ number: issue.number, hasBody: "body" in issue }))).toEqual([
+      { number: 1, hasBody: false }, { number: 2, hasBody: false }, { number: 3, hasBody: false },
     ]);
     expect((await derived(f.id)).issues.map(({ title }) => title)).toEqual(["edited title", "Issue 2"]);
   });

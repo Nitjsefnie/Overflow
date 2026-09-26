@@ -87,10 +87,12 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.setReconciliationCooldown(repositoryId, second));
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold, synchronization: synchronization() }));
     const restarted = new PostgresFoldStore(sql);
-    expect(await restarted.getReconciliationEvidence(repositoryId)).toEqual({
+    const cached = await restarted.getReconciliationEvidence(repositoryId);
+    expect(cached).toEqual({
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first,
-      issues: [rawIssue()], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
+      issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
+    expect(cached!.issues[0]).not.toHaveProperty("body");
     expect(await restarted.getReconciliationCooldown(repositoryId)).toBeNull();
     expect(await sql`select status from reconciliation_runs where id = ${runId}`).toEqual([{ status: "COMPLETED" }]);
   });
@@ -102,9 +104,14 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 1, scanStartedAt: second, full: false,
         issues: [{ ...rawIssue(), body: "edited" }], pullRequests: [] } }));
-    expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({
-      version: 2, checkpoint: second, lastFullPassAt: first, issues: [{ body: "edited" }], pullRequests: [],
+    const replaced = await store.getReconciliationEvidence(repositoryId);
+    expect(replaced).toMatchObject({
+      version: 2, checkpoint: second, lastFullPassAt: first, pullRequests: [],
     });
+    // The writer narrows whatever it is handed: the wide body above must not
+    // reach the jsonb.
+    expect(replaced!.issues).toEqual([{ ...rawIssue(), body: undefined }]);
+    expect(replaced!.issues[0]).not.toHaveProperty("body");
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 2, scanStartedAt: second, issues: [], pullRequests: [] } }));
     expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({

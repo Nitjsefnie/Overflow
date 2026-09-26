@@ -117,6 +117,41 @@ describe("materialized body text is not persisted", () => {
       select body from issues where repository_id = ${repositoryId}
     `).resolves.toEqual([{ body: "legacy body text" }]);
   });
+
+  it("keeps a stored pull request body untouched when the fold re-materializes the row", async () => {
+    const { repositoryId, store } = await registerRepository({
+      githubRepositoryId: 9_820_005,
+      ownerName: "example/body-minimisation-three",
+      githubWebhookId: 9_820_006,
+      sponsorLogin: "body-sponsor-three",
+      sponsorGitHubUserId: 9_830_003,
+    });
+    const closingPullRequest = mergedPullRequest({
+      id: closingPullRequestGitHubId + 20,
+      number: 21,
+      ownerName: "example/body-minimisation-three",
+      githubRepositoryId: 9_820_005,
+    });
+    const issues: GitHubIssue[] = [{
+      ...openIssue({ id: openIssueGitHubId + 20, number: 21, ownerLogin: "body-sponsor-three" }),
+      state: "CLOSED",
+      stateReason: "COMPLETED",
+      closedAt: "2026-09-01T12:01:00.000Z",
+      claimAssigneeGitHubLogin: "body-contributor-one",
+      closingPullRequests: [closingPullRequest],
+    }];
+    await reconcile(store, gateway("example/body-minimisation-three", () => issues), repositoryId);
+
+    // A value that predates the minimisation (the migration leaves existing
+    // rows alone) survives a re-fold on the pull request side too: the fold no
+    // longer writes the column in either the insert or the on-conflict update.
+    await sql`update pull_requests set body = 'legacy body text' where repository_id = ${repositoryId}`;
+    await reconcile(store, gateway("example/body-minimisation-three", () => issues), repositoryId);
+
+    await expect(sql<{ body: string | null }[]>`
+      select body from pull_requests where repository_id = ${repositoryId}
+    `).resolves.toEqual([{ body: "legacy body text" }]);
+  });
 });
 
 async function reconcile(
