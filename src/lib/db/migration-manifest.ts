@@ -75,6 +75,7 @@ export const bundledMigrationNames: readonly string[] = [
   "052_repository_policy_violations.sql",
   "053_webhook_delivery_receipt_scope.sql",
   "054_privileged_action_credentials.sql",
+  "055_allow_nullable_issue_and_pr_bodies.sql",
 ];
 
 /**

@@ -22,8 +22,7 @@ import {
 } from "@/lib/fold/reconciliation-fairness";
 import type { GitHubGraphqlBudgetAssessment } from "@/lib/github/rate-limit-budget";
 import {
-  narrowCachedIssueBodies,
-  RECONCILIATION_EVIDENCE_FORMAT,
+  narrowCachedIssueBodies, RECONCILIATION_EVIDENCE_FORMAT,
   type DirtyReconciliationSubject,
   type ReconciliationEvidence,
   type ReconciliationSynchronization,
@@ -371,8 +370,6 @@ async function synchronizeReconciliationEvidence(
   if ((current?.version ?? null) !== synchronization.expectedVersion) {
     throw new Error("Stale reconciliation evidence publisher.");
   }
-  // New cache writes hold no body text (issue 681): comments serialise with a
-  // fixed placeholder body; issue and nested pull request bodies are dropped.
   await transaction`insert into repository_reconciliation_evidence
     (repository_id, version, format_version, checkpoint, last_full_pass_at, issues, pull_requests)
     values (${repositoryId}, ${(current?.version ?? 0) + 1}, ${RECONCILIATION_EVIDENCE_FORMAT},
