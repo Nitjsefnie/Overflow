@@ -91,7 +91,7 @@ export type OpenAccountAuditStoreInput = {
    * event. Absent for a writer with no HTTP request behind it, which the store
    * records as NULL for both columns.
    */
-  credential?: RouteCredentialReference | null;
+  credential: RouteCredentialReference | null;
 };
 
 export type ModerationStoreResult<T> =
@@ -145,26 +145,26 @@ export type ModerationStore = {
     actorId: string;
     auditId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>>;
   substantiateAccountAudit(input: {
     actorId: string;
     auditId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>>;
   closeRecalibration(input: {
     actorId: string;
     targetAccountId: string;
     plan: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<RecalibrationClosure>>;
   listModerators(): Promise<ModeratorSummary[]>;
   setModeratorRole(input: {
     actorId: string;
     targetAccountId: string;
     moderator: boolean;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<ModeratorRoleChange>>;
 };
 
@@ -209,7 +209,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     moderator: boolean,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<ModeratorRoleChange> {
     requireModerator(actor);
     if (!moderator && actor.id === targetAccountId) {
@@ -232,7 +232,7 @@ export class AccountModerationService {
   public async openAccountAudit(
     actor: ModerationActor,
     input: OpenAccountAuditInput,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     const { reason, ...window } = normalizeOpenInput(input);
@@ -293,7 +293,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     auditId: string,
     reason: string,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     return unwrapStoreResult(
@@ -310,7 +310,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     auditId: string,
     reason: string,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<AccountAudit> {
     requireModerator(actor);
     return unwrapStoreResult(
@@ -327,7 +327,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     plan: string,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<RecalibrationClosure> {
     requireModerator(actor);
     let normalizedPlan: string;
@@ -384,7 +384,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     targetAccountId: string,
     reason: string,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<CreditAdjustmentRecord> {
     requireModerator(actor);
     const creditStore = this.requireCreditStore();
@@ -411,7 +411,7 @@ export class AccountModerationService {
     actor: ModerationActor,
     adjustmentId: string,
     reason: string,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<CreditAdjustmentRecord> {
     requireModerator(actor);
     const creditStore = this.requireCreditStore();

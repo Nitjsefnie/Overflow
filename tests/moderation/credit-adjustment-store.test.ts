@@ -101,6 +101,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "The stored cohort undercredited outsiders by one point per pair.",
+      credential: null,
     });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") {
@@ -151,6 +152,49 @@ describe("PostgreSQL recalibration credit adjustments", () => {
     });
   });
 
+  it("records the acting credential on the apply and reversal events", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const fixture = await seedActionableCohort();
+    await openSubstantiatedAudit(fixture);
+    const actingTokenId = randomUUID();
+
+    const applied = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      targetAccountId: fixture.targetId,
+      reason: "The acting bearer credential is recorded on the apply event.",
+      credential: { kind: "token", tokenId: actingTokenId },
+    });
+    expect(applied.kind).toBe("ok");
+    if (applied.kind !== "ok") {
+      throw new Error("Expected the adjustment to apply.");
+    }
+    const [applyEvent] = await sql`
+      select events.credential_kind, events.credential_token_id
+      from moderation_events as events
+      join moderation_credit_adjustments as adjustments on adjustments.moderation_event_id = events.id
+      where adjustments.id = ${applied.value.id}
+    `;
+    expect(applyEvent).toEqual({ credential_kind: "token", credential_token_id: actingTokenId });
+
+    const reversal = await store.reverseModerationCreditAdjustment({
+      actorId: fixture.moderatorId,
+      adjustmentId: applied.value.id,
+      reason: "The acting bearer credential is recorded on the reversal event.",
+      credential: { kind: "token", tokenId: actingTokenId },
+    });
+    expect(reversal.kind).toBe("ok");
+    if (reversal.kind !== "ok") {
+      throw new Error("Expected the reversal to apply.");
+    }
+    const [reversalEvent] = await sql`
+      select events.credential_kind, events.credential_token_id
+      from moderation_events as events
+      join moderation_credit_adjustments as adjustments on adjustments.moderation_event_id = events.id
+      where adjustments.reversal_of = ${applied.value.id}
+    `;
+    expect(reversalEvent).toEqual({ credential_kind: "token", credential_token_id: actingTokenId });
+  });
+
   it("refuses a drifted snapshot with a conflict and writes nothing", async () => {
     const store = new PostgresRecalibrationCreditStore(sql);
 
@@ -165,6 +209,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: driftedSettlement.moderatorId,
       targetAccountId: driftedSettlement.targetId,
       reason: "The stored cohort no longer matches its live settlement.",
+      credential: null,
     });
     expect(settledResult).toEqual({
       kind: "conflict",
@@ -183,6 +228,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: deletedSettlement.moderatorId,
       targetAccountId: deletedSettlement.targetId,
       reason: "The stored cohort's settlement no longer exists.",
+      credential: null,
     });
     expect(deletedResult).toEqual({
       kind: "conflict",
@@ -200,6 +246,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: driftedSelfWork.moderatorId,
       targetAccountId: driftedSelfWork.targetId,
       reason: "The stored self-work cohort no longer matches its live calibration.",
+      credential: null,
     });
     expect(selfWorkResult).toEqual({
       kind: "conflict",
@@ -235,6 +282,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "The first adjustment compensates the undercredited outsiders.",
+      credential: null,
     });
     expect(first.kind).toBe("ok");
     await expect(
@@ -242,6 +290,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         actorId: fixture.moderatorId,
         targetAccountId: fixture.targetId,
         reason: "The second adjustment must lose to the partial unique index.",
+        credential: null,
       }),
     ).resolves.toEqual({ kind: "conflict", detail: { cause: "ALREADY_APPLIED" } });
     await expect(sql<{ count: number }[]>`
@@ -262,6 +311,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "The stored cohort undercredited outsiders by one point per pair.",
+      credential: null,
     });
     expect(applied.kind).toBe("ok");
     if (applied.kind !== "ok") {
@@ -279,6 +329,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       adjustmentId: applied.value.id,
       reason: "The adjustment compensated the wrong cohort window.",
+      credential: null,
     });
     expect(reversal.kind).toBe("ok");
     if (reversal.kind !== "ok") {
@@ -310,6 +361,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         actorId: fixture.moderatorId,
         adjustmentId: applied.value.id,
         reason: "A second reversal must lose to the partial unique index.",
+        credential: null,
       }),
     ).resolves.toEqual({ kind: "conflict", detail: { cause: "ALREADY_REVERSED" } });
     await expect(
@@ -317,6 +369,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         actorId: fixture.moderatorId,
         adjustmentId: randomUUID(),
         reason: "A reversal of an unknown adjustment is not found.",
+        credential: null,
       }),
     ).resolves.toEqual({ kind: "not_found" });
     await expect(
@@ -324,6 +377,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         actorId: fixture.moderatorId,
         adjustmentId: reversal.value.id,
         reason: "A reversal row itself cannot be reversed.",
+        credential: null,
       }),
     ).resolves.toEqual({ kind: "conflict", detail: { cause: "ALREADY_REVERSED" } });
   });
@@ -337,6 +391,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "The stored cohort undercredited outsiders by one point per pair.",
+      credential: null,
     });
     expect(applied.kind).toBe("ok");
     if (applied.kind !== "ok") {
@@ -346,6 +401,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       adjustmentId: applied.value.id,
       reason: "The adjustment compensated the wrong cohort window.",
+      credential: null,
     });
     expect(reversal.kind).toBe("ok");
     if (reversal.kind !== "ok") {
@@ -396,6 +452,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         actorId: fixture.moderatorId,
         targetAccountId: fixture.targetId,
         reason: "A zero-point figure compensates nobody.",
+        credential: null,
       }),
     ).resolves.toEqual({
       kind: "not_actionable",
@@ -434,6 +491,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "A snapshot listing a settlement twice is corrupt evidence.",
+      credential: null,
     });
     expect(result).toEqual({
       kind: "conflict",
@@ -466,6 +524,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "A snapshot listing a self-work pair twice inflates its own cohort.",
+      credential: null,
     });
     expect(result).toEqual({
       kind: "conflict",
@@ -501,6 +560,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "Stored statistics that miscount their own pairs are corrupt evidence.",
+      credential: null,
     });
     expect(result).toEqual({
       kind: "conflict",
@@ -543,6 +603,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId,
       targetAccountId: fixture.targetId,
       reason: "Statistics overstating the gap their pairs support are corrupt evidence.",
+      credential: null,
     });
     expect(result).toEqual({
       kind: "conflict",
@@ -587,6 +648,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: newerCohort.moderatorId,
       targetAccountId: targetId,
       reason: "The adjustment must be computed from the audit the moderator saw last.",
+      credential: null,
     });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") {
@@ -777,6 +839,7 @@ async function openSubstantiatedAudit(fixture: CohortFixture): Promise<string> {
   const store = new PostgresModerationStore(sql);
   const outsiderSettlementPairs = fixture.outsiderPairs.map((entry) => entry.pair);
   const opened = await store.openAccountAudit({
+    credential: null,
     actorId: fixture.moderatorId,
     targetAccountId: fixture.targetId,
     repositoryId: fixture.repositoryId,
@@ -800,6 +863,7 @@ async function openSubstantiatedAudit(fixture: CohortFixture): Promise<string> {
     actorId: fixture.moderatorId,
     auditId: opened.value.id,
     reason: "Independent review confirms the account-level pattern.",
+    credential: null,
   });
   expect(substantiated.kind).toBe("ok");
   if (substantiated.kind !== "ok") {

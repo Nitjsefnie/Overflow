@@ -158,7 +158,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     return this.sql.begin(async (transaction) => {
       const locked = await lockTargetAndAudit(transaction, input.auditId);
@@ -210,7 +210,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     return this.sql.begin(async (transaction) => {
       const locked = await lockTargetAndAudit(transaction, input.auditId);
@@ -271,7 +271,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     targetAccountId: string;
     plan: string;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<RecalibrationClosure>> {
     return this.sql.begin(async (transaction) => {
       const [target] = await transaction<UserRow[]>`
@@ -351,7 +351,7 @@ export class PostgresModerationStore implements ModerationStore {
     actorId: string;
     targetAccountId: string;
     moderator: boolean;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<ModeratorRoleChange>> {
     return this.sql.begin(async (transaction) => {
       // Serialization boundary, taken before any row lock: every moderator role
@@ -499,7 +499,7 @@ async function insertModerationEvent(
     reason: string;
     cohort: CalibrationCohortSnapshot;
     recalibrationPlan: string | null;
-    credential?: RouteCredentialReference | null;
+    credential: RouteCredentialReference | null;
   },
 ): Promise<void> {
   await sql`

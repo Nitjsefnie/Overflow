@@ -20,6 +20,7 @@ import {
   type ModerationStoreResult,
   type OpenAccountAuditStoreInput,
 } from "@/lib/moderation/service";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 
 describe("account moderation service", () => {
   it("opens an eligible account audit with an exact reproducible cohort snapshot", async () => {
@@ -35,7 +36,7 @@ describe("account moderation service", () => {
       sampleStartedAt: "2026-01-01T00:00:00.000Z",
       sampleEndedAt: "2026-02-01T00:00:00.000Z",
       reason: "A moderator identified a sustained account-level pattern.",
-    });
+    }, null);
 
     expect(audit).toMatchObject({
       id: "audit-1",
@@ -68,7 +69,7 @@ describe("account moderation service", () => {
     const service = new AccountModerationService(store);
 
     await expect(
-      service.openAccountAudit(moderator(), { ...openAuditInput(), reason: "   " }),
+      service.openAccountAudit(moderator(), { ...openAuditInput(), reason: "   " }, null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
     expect(store.lastOpenInput).toBeUndefined();
   });
@@ -81,7 +82,7 @@ describe("account moderation service", () => {
     const service = new AccountModerationService(store);
 
     await expect(
-      service.openAccountAudit(moderator(), openAuditInput()),
+      service.openAccountAudit(moderator(), openAuditInput(), null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
     expect(store.lastOpenInput).toBeUndefined();
   });
@@ -93,7 +94,7 @@ describe("account moderation service", () => {
     });
 
     await expect(
-      new AccountModerationService(belowFloor).openAccountAudit(moderator(), openAuditInput()),
+      new AccountModerationService(belowFloor).openAccountAudit(moderator(), openAuditInput(), null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({
       code: "INSUFFICIENT_SAMPLES",
       message: `At least ${MINIMUM_CALIBRATION_SAMPLE_SIZE} self-work and ${MINIMUM_CALIBRATION_SAMPLE_SIZE} outsider-settlement pairs are required.`,
@@ -105,7 +106,7 @@ describe("account moderation service", () => {
       outsiderSettlementPairs: calibrationPairs(MINIMUM_CALIBRATION_SAMPLE_SIZE, 20_000),
     });
 
-    const audit = await new AccountModerationService(atFloor).openAccountAudit(moderator(), openAuditInput());
+    const audit = await new AccountModerationService(atFloor).openAccountAudit(moderator(), openAuditInput(), null);
 
     expect(audit.state).toBe("OPEN");
     expect(atFloor.lastOpenInput?.cohort.comparison).toMatchObject({
@@ -122,7 +123,7 @@ describe("account moderation service", () => {
     const service = new AccountModerationService(store);
 
     await expect(
-      service.openAccountAudit({ id: "member", role: "MEMBER" }, openAuditInput()),
+      service.openAccountAudit({ id: "member", role: "MEMBER" }, openAuditInput(), null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
     expect(store.cohortReadCount).toBe(0);
   });
@@ -135,7 +136,7 @@ describe("account moderation service", () => {
     });
     const service = new AccountModerationService(store);
 
-    await expect(service.openAccountAudit(moderator(), openAuditInput())).rejects.toMatchObject<
+    await expect(service.openAccountAudit(moderator(), openAuditInput(), null)).rejects.toMatchObject<
       Partial<ModerationServiceError>
     >({ code: "CONFLICT" });
   });
@@ -156,13 +157,14 @@ describe("account moderation service", () => {
     });
     const service = new AccountModerationService(store);
 
-    const audit = await service.dismissAccountAudit(moderator(), "audit-1", "The comparison does not support a pattern.");
+    const audit = await service.dismissAccountAudit(moderator(), "audit-1", "The comparison does not support a pattern.", null);
 
     expect(audit).toMatchObject({ state: "DISMISSED", targetState: "WARNED", confirmedPatternCount: 1 });
     expect(store.lastDismissInput).toEqual({
       actorId: "moderator",
       auditId: "audit-1",
       reason: "The comparison does not support a pattern.",
+      credential: null,
     });
   });
 
@@ -195,11 +197,13 @@ describe("account moderation service", () => {
       moderator(),
       "audit-1",
       "The preserved cohorts support an account-level pattern.",
+      null,
     );
     const closed = await service.closeRecalibration(
       moderator(),
       "target-account",
       "Review ten completed contributions before applying each opening label.",
+      null,
     );
 
     expect(substantiated).toMatchObject({
@@ -218,14 +222,67 @@ describe("account moderation service", () => {
       actorId: "moderator",
       auditId: "audit-1",
       reason: "The preserved cohorts support an account-level pattern.",
+      credential: null,
     });
     expect(store.lastCloseInput).toEqual({
       actorId: "moderator",
       targetAccountId: "target-account",
       plan: "Review ten completed contributions before applying each opening label.",
+      credential: null,
     });
     expect(store.settlementMutationCount).toBe(0);
     expect(store.ledgerMutationCount).toBe(0);
+  });
+  it("hands the acting credential to every moderation store write", async () => {
+    const acting = { kind: "token" as const, tokenId: "issuance-1" };
+    const store = new TestModerationStore({
+      selfWorkPairs: calibrationPairs(10, 10_000),
+      outsiderSettlementPairs: calibrationPairs(10, 20_000),
+    });
+    const service = new AccountModerationService(store);
+
+    await service.openAccountAudit(moderator(), openAuditInput(), acting);
+    expect(store.lastOpenInput?.credential).toEqual(acting);
+
+    await expect(
+      service.dismissAccountAudit(moderator(), "audit-1", "Reason one.", acting),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    expect(store.lastDismissInput).toMatchObject({ credential: acting });
+
+    await expect(
+      service.substantiateAccountAudit(moderator(), "audit-1", "Reason two.", acting),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    expect(store.lastSubstantiateInput).toMatchObject({ credential: acting });
+
+    await expect(
+      service.closeRecalibration(moderator(), "target-account", "The plan.", acting),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    expect(store.lastCloseInput).toMatchObject({ credential: acting });
+
+    await expect(
+      service.setModeratorRole(moderator(), "target-account", true, acting),
+    ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
+    expect(store.lastModeratorRoleInput).toMatchObject({ credential: acting });
+  });
+
+  it("hands the acting credential to both credit store writes", async () => {
+    const acting = { kind: "token" as const, tokenId: "issuance-2" };
+    const creditStore = new TestRecalibrationCreditStore({
+      applyResult: { kind: "ok", value: appliedAdjustment() },
+      reverseResult: {
+        kind: "ok",
+        value: appliedAdjustment({ id: "reversal-1", reversalOf: "adjustment-1", lines: [] }),
+      },
+    });
+    const service = new AccountModerationService(eligibleStore(), creditStore);
+
+    const applied = await service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", acting);
+    expect(applied).toEqual(appliedAdjustment());
+    expect(creditStore.lastApplyInput).toMatchObject({ credential: acting });
+
+    const reversed = await service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason.", acting);
+    expect(reversed).toEqual(appliedAdjustment({ id: "reversal-1", reversalOf: "adjustment-1", lines: [] }));
+    expect(creditStore.lastReverseInput).toMatchObject({ credential: acting });
   });
 });
 
@@ -319,7 +376,7 @@ describe("calibration cohort preview", () => {
         service.openAccountAudit(moderator(), {
           ...previewInput(),
           reason: "A moderator identified a sustained account-level pattern.",
-        }),
+        }, null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INSUFFICIENT_SAMPLES" });
       expect(store.lastOpenInput).toBeUndefined();
     },
@@ -400,7 +457,7 @@ describe("sample-window bound normalization", () => {
       new AccountModerationService(store).openAccountAudit(moderator(), {
         ...openAuditInput(),
         sampleStartedAt: bound,
-      }),
+      }, null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({
       code: "INVALID_INPUT",
       message: expect.stringMatching(offsetRequirement) as unknown as string,
@@ -419,7 +476,7 @@ describe("sample-window bound normalization", () => {
         ...openAuditInput(),
         sampleStartedAt: "2025-01-01T00:00:00.000Z",
         sampleEndedAt: bound,
-      }),
+      }, null),
     ).rejects.toMatchObject<Partial<ModerationServiceError>>({
       code: "INVALID_INPUT",
       message: expect.stringMatching(offsetRequirement) as unknown as string,
@@ -755,6 +812,7 @@ describe("recalibration credit adjustments", () => {
         moderator(),
         "  target-account  ",
         "  Compensating the outsider cohort.  ",
+        null,
       );
 
       expect(applied).toEqual(appliedAdjustment());
@@ -762,6 +820,7 @@ describe("recalibration credit adjustments", () => {
         actorId: "moderator",
         targetAccountId: "target-account",
         reason: "Compensating the outsider cohort.",
+        credential: null,
       });
     });
 
@@ -770,7 +829,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   "),
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   ", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
       expect(creditStore.lastApplyInput).toBeUndefined();
     });
@@ -780,7 +839,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "   ", "A reason."),
+        service.applyRecalibrationCreditAdjustment(moderator(), "   ", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
       expect(creditStore.lastApplyInput).toBeUndefined();
     });
@@ -790,7 +849,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
     });
 
@@ -807,7 +866,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "CONFLICT",
         message:
@@ -822,7 +881,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "CONFLICT",
         message: "This audit already carries an applied credit adjustment.",
@@ -841,7 +900,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+        service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "INVALID_INPUT",
         message: "The audit's calibration gap does not support a compensating adjustment.",
@@ -855,7 +914,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.applyRecalibrationCreditAdjustment({ id: "member", role: "MEMBER" }, "target-account", "A reason."),
+        service.applyRecalibrationCreditAdjustment({ id: "member", role: "MEMBER" }, "target-account", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
       expect(creditStore.lastApplyInput).toBeUndefined();
     });
@@ -877,6 +936,7 @@ describe("recalibration credit adjustments", () => {
         moderator(),
         "  adjustment-1  ",
         "  The adjustment compensated the wrong cohort.  ",
+        null,
       );
 
       expect(reversed).toEqual(reversal);
@@ -884,6 +944,7 @@ describe("recalibration credit adjustments", () => {
         actorId: "moderator",
         adjustmentId: "adjustment-1",
         reason: "The adjustment compensated the wrong cohort.",
+        credential: null,
       });
     });
 
@@ -892,7 +953,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   "),
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   ", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
       expect(creditStore.lastReverseInput).toBeUndefined();
     });
@@ -902,7 +963,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.reverseModerationCreditAdjustment(moderator(), "   ", "A reason."),
+        service.reverseModerationCreditAdjustment(moderator(), "   ", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "INVALID_INPUT" });
       expect(creditStore.lastReverseInput).toBeUndefined();
     });
@@ -912,7 +973,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "NOT_FOUND" });
     });
 
@@ -923,7 +984,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+        service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "CONFLICT",
         message: "This credit adjustment has already been reversed.",
@@ -937,7 +998,7 @@ describe("recalibration credit adjustments", () => {
       const service = new AccountModerationService(eligibleStore(), creditStore);
 
       await expect(
-        service.reverseModerationCreditAdjustment({ id: "member", role: "MEMBER" }, "adjustment-1", "A reason."),
+        service.reverseModerationCreditAdjustment({ id: "member", role: "MEMBER" }, "adjustment-1", "A reason.", null),
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({ code: "FORBIDDEN" });
       expect(creditStore.lastReverseInput).toBeUndefined();
     });
@@ -953,12 +1014,12 @@ describe("recalibration credit adjustments", () => {
       [
         "applying",
         (service: AccountModerationService) =>
-          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason."),
+          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "A reason.", null),
       ],
       [
         "reversing",
         (service: AccountModerationService) =>
-          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason."),
+          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "A reason.", null),
       ],
     ] as const)("refuses %s as a construction bug rather than a client-facing error", async (_label, call) => {
       const service = new AccountModerationService(eligibleStore());
@@ -982,12 +1043,12 @@ describe("recalibration credit adjustments", () => {
       [
         "applying",
         (service: AccountModerationService) =>
-          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   "),
+          service.applyRecalibrationCreditAdjustment(moderator(), "target-account", "   ", null),
       ],
       [
         "reversing",
         (service: AccountModerationService) =>
-          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   "),
+          service.reverseModerationCreditAdjustment(moderator(), "adjustment-1", "   ", null),
       ],
     ] as const)("refuses %s as a construction bug before normalizing a blank input", async (_label, call) => {
       const store = eligibleStore();
@@ -1018,9 +1079,10 @@ class TestModerationStore implements ModerationStore {
   public settlementMutationCount = 0;
   public ledgerMutationCount = 0;
   public lastOpenInput: OpenAccountAuditStoreInput | undefined;
-  public lastDismissInput: { actorId: string; auditId: string; reason: string } | undefined;
-  public lastSubstantiateInput: { actorId: string; auditId: string; reason: string } | undefined;
-  public lastCloseInput: { actorId: string; targetAccountId: string; plan: string } | undefined;
+  public lastDismissInput: { actorId: string; auditId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
+  public lastSubstantiateInput: { actorId: string; auditId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
+  public lastCloseInput: { actorId: string; targetAccountId: string; plan: string; credential: RouteCredentialReference | null } | undefined;
+  public lastModeratorRoleInput: { actorId: string; targetAccountId: string; moderator: boolean; credential: RouteCredentialReference | null } | undefined;
   public lastCohortInput: LoadedCohortRequest | undefined;
 
   public constructor(
@@ -1065,6 +1127,7 @@ class TestModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     this.lastDismissInput = input;
     return this.options.dismissResult ?? { kind: "not_found" };
@@ -1074,6 +1137,7 @@ class TestModerationStore implements ModerationStore {
     actorId: string;
     auditId: string;
     reason: string;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<AccountAudit>> {
     this.lastSubstantiateInput = input;
     return this.options.substantiateResult ?? { kind: "not_found" };
@@ -1083,6 +1147,7 @@ class TestModerationStore implements ModerationStore {
     actorId: string;
     targetAccountId: string;
     plan: string;
+    credential: RouteCredentialReference | null;
   }): Promise<ModerationStoreResult<{
     targetAccountId: string;
     priorState: "RECALIBRATING";
@@ -1098,7 +1163,13 @@ class TestModerationStore implements ModerationStore {
     return [];
   }
 
-  public async setModeratorRole(): Promise<ModerationStoreResult<never>> {
+  public async setModeratorRole(input: {
+    actorId: string;
+    targetAccountId: string;
+    moderator: boolean;
+    credential: RouteCredentialReference | null;
+  }): Promise<ModerationStoreResult<never>> {
+    this.lastModeratorRoleInput = input;
     return { kind: "not_found" };
   }
 }
@@ -1122,8 +1193,8 @@ class TestRecalibrationCreditStore implements RecalibrationCreditStore {
   public previewCallCount = 0;
   public listCallCount = 0;
   public lastPreviewTarget: string | undefined;
-  public lastApplyInput: { actorId: string; targetAccountId: string; reason: string } | undefined;
-  public lastReverseInput: { actorId: string; adjustmentId: string; reason: string } | undefined;
+  public lastApplyInput: { actorId: string; targetAccountId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
+  public lastReverseInput: { actorId: string; adjustmentId: string; reason: string; credential: RouteCredentialReference | null } | undefined;
 
   public constructor(private readonly options: CreditStoreOptions = {}) {}
 
@@ -1137,6 +1208,7 @@ class TestRecalibrationCreditStore implements RecalibrationCreditStore {
     actorId: string;
     targetAccountId: string;
     reason: string;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     this.lastApplyInput = input;
     return this.options.applyResult ?? { kind: "not_found" };
@@ -1146,6 +1218,7 @@ class TestRecalibrationCreditStore implements RecalibrationCreditStore {
     actorId: string;
     adjustmentId: string;
     reason: string;
+    credential: RouteCredentialReference | null;
   }): Promise<CreditAdjustmentResult> {
     this.lastReverseInput = input;
     return this.options.reverseResult ?? { kind: "not_found" };

@@ -9,8 +9,7 @@ import {
   type ModeratorRoleChange,
   type ModeratorSummary,
 } from "@/lib/moderation/service";
-import { guardByCredential } from "@/lib/security/route-credential";
-import type { RouteCredentialReference } from "@/lib/security/route-credential";
+import { guardByCredential, type RouteCredentialReference } from "@/lib/security/route-credential";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 const roleChangeSchema = z
@@ -30,7 +29,7 @@ export type ModeratorRouteService = {
     actor: { id: string; role: UserRole },
     targetAccountId: string,
     moderator: boolean,
-    credential?: RouteCredentialReference | null,
+    credential: RouteCredentialReference | null,
   ): Promise<ModeratorRoleChange>;
 };
 

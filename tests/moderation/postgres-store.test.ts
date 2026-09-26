@@ -105,11 +105,13 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         auditId: opened.value.id,
         reason: "The first independently reviewed cohort confirms the pattern.",
+        credential: null,
       }),
       store.substantiateAccountAudit({
         actorId: moderatorId,
         auditId: opened.value.id,
         reason: "The competing transition must not increment the count twice.",
+        credential: null,
       }),
     ]);
     expect(concurrentSubstantiations.map((result) => result.kind).sort()).toEqual(["conflict", "ok"]);
@@ -123,6 +125,7 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         targetAccountId: targetId,
         plan: "This must not close before the account enters recalibration.",
+        credential: null,
       }),
     ).resolves.toEqual({ kind: "invalid_state" });
 
@@ -131,6 +134,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       auditId: reopenedForDismissal.id,
       reason: "The second review did not establish an account-level pattern.",
+      credential: null,
     });
     expect(dismissed).toMatchObject({ kind: "ok", value: { state: "DISMISSED", targetState: "WARNED" } });
     expect(await targetState(targetId)).toEqual({ state: "WARNED", confirmedCount: 1 });
@@ -140,6 +144,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       auditId: reopenedForRecalibration.id,
       reason: "The second confirmed account-level pattern requires recalibration.",
+      credential: null,
     });
     expect(recalibrating).toMatchObject({
       kind: "ok",
@@ -155,6 +160,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       targetAccountId: targetId,
       plan: "Compare each opening label with ten completed contributions before new sponsorship activity.",
+      credential: null,
     });
     expect(closed).toMatchObject({
       kind: "ok",
@@ -171,6 +177,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       auditId: reopenedForBan.id,
       reason: "The third confirmed account-level pattern requires a ban.",
+      credential: null,
     });
     expect(banned).toMatchObject({
       kind: "ok",
@@ -290,6 +297,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       auditId: opened.id,
       reason: "This cohort did not substantiate another pattern.",
+      credential: null,
     });
     expect(dismissed).toMatchObject({
       kind: "ok",
@@ -306,6 +314,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       auditId: reopened.id,
       reason: "Independent review confirms another account-level pattern.",
+      credential: null,
     });
     expect(substantiated).toMatchObject({
       kind: "ok",
@@ -342,6 +351,7 @@ describe("PostgreSQL account moderation transitions", () => {
           actorId: moderatorId,
           auditId: audit.id,
           reason: `Independent review confirms pattern ${count}.`,
+          credential: null,
         })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
       }
       expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
@@ -352,6 +362,7 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         targetAccountId: targetId,
         plan: "The account completed the authorized recalibration plan.",
+        credential: null,
       })).resolves.toMatchObject({
         kind: "ok",
         value: { targetState: "ACTIVE", confirmedPatternCount: 2, reactivatedRepositoryCount: 1 },
@@ -370,6 +381,7 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         auditId: opened.id,
         reason: "The overlapping audit did not substantiate another pattern.",
+        credential: null,
       });
 
       expect.soft(await targetState(targetId)).toEqual({ state: "ACTIVE", confirmedCount: 2 });
@@ -410,6 +422,7 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         auditId: audit.id,
         reason: `Independent review confirms pattern ${count}.`,
+        credential: null,
       })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
     }
     expect(await targetState(targetId)).toEqual({ state: "RECALIBRATING", confirmedCount: 2 });
@@ -432,6 +445,7 @@ describe("PostgreSQL account moderation transitions", () => {
       actorId: moderatorId,
       targetAccountId: targetId,
       plan: "The account completed the authorized recalibration plan.",
+      credential: null,
     })).resolves.toMatchObject({
       kind: "ok",
       value: { targetState: "ACTIVE", confirmedPatternCount: 2, reactivatedRepositoryCount: 1 },
@@ -481,6 +495,7 @@ describe("PostgreSQL account moderation transitions", () => {
         actorId: moderatorId,
         auditId: audit.id,
         reason: `Independent review confirms pattern ${count}.`,
+        credential: null,
       })).resolves.toMatchObject({ kind: "ok", value: { confirmedPatternCount: count } });
     }
     // The second substantiation is the transition whose deactivation this test pins.
@@ -707,8 +722,8 @@ describe("PostgreSQL account moderation transitions", () => {
         execute function overflow_test_role_sleep()
       `;
       outcomes = await Promise.allSettled([
-        store.setModeratorRole({ actorId: aliceId, targetAccountId: bobId, moderator: false }),
-        store.setModeratorRole({ actorId: bobId, targetAccountId: aliceId, moderator: false }),
+        store.setModeratorRole({ actorId: aliceId, targetAccountId: bobId, moderator: false, credential: null }),
+        store.setModeratorRole({ actorId: bobId, targetAccountId: aliceId, moderator: false, credential: null }),
       ]);
     } finally {
       await sql`drop trigger if exists widen_moderator_race on users`;
@@ -748,6 +763,7 @@ function auditInput(input: {
   outsiderSettlementPairs: readonly CalibrationPair[];
 }): OpenAccountAuditStoreInput {
   return {
+    credential: null,
     actorId: input.actorId,
     targetAccountId: input.targetAccountId,
     repositoryId: input.repositoryId,

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -8,6 +8,9 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { createModeratorPostHandler } from "@/app/api/moderation/moderators/route";
+import { createModerationAuditPatchHandler } from "@/app/api/moderation/[id]/route";
+import { createModerationClosePatchHandler } from "@/app/api/moderation/route";
+import type { RouteCredentialReference } from "@/lib/security/route-credential";
 import {
   AccountModerationService,
   type CalibrationCohortSnapshot,
@@ -22,6 +25,17 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 // credential secret: not the bearer token, not its SHA-256 digest, not the
 // session cookie value.
 useTrustedOrigin();
+
+// This file imports the real route, gate and store graph, while other suites in
+// the same shared worker mock parts of it. Start from a clean registry and
+// release this file's real modules afterwards, so neither file hands the other
+// a cached module it did not mock (the postgres-store suite's own convention).
+vi.hoisted(() => {
+  vi.resetModules();
+});
+afterAll(() => {
+  vi.resetModules();
+});
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 let container: StartedTestContainer | undefined;
@@ -52,6 +66,8 @@ afterAll(async () => {
 
 let sequence = 0;
 const cookieValue = "authjs.session-token=seed-session-cookie-value";
+/** The open event's fixed reason; the action event for an audit is the other row. */
+const openAuditReason = "The credential behind this audit must be recorded.";
 
 async function insertUser(role: "MEMBER" | "MODERATOR"): Promise<string> {
   sequence += 1;
@@ -130,17 +146,21 @@ function cohortFixture(targetAccountId: string): CalibrationCohortSnapshot {
 async function openAuditWithCredential(
   actorId: string,
   targetAccountId: string,
-  credential?: { kind: "session" } | { kind: "token"; tokenId: string },
-): Promise<void> {
+  credential: RouteCredentialReference | null,
+): Promise<string> {
   const opened = await new PostgresModerationStore(sql).openAccountAudit({
     actorId,
     targetAccountId,
     repositoryId: null,
-    reason: "The credential behind this audit must be recorded.",
+    reason: openAuditReason,
     cohort: cohortFixture(targetAccountId),
     credential,
   });
   expect(opened.kind).toBe("ok");
+  if (opened.kind !== "ok") {
+    throw new Error("Expected the audit to open.");
+  }
+  return opened.value.id;
 }
 
 describe("the credential recorded on privileged-action rows", () => {
@@ -240,7 +260,7 @@ describe("the credential recorded on privileged-action rows", () => {
     const moderatorId = await insertUser("MODERATOR");
     const targetId = await insertUser("MEMBER");
 
-    await openAuditWithCredential(moderatorId, targetId);
+    await openAuditWithCredential(moderatorId, targetId, null);
 
     const [row] = await sql<{ credential_kind: string | null; credential_token_id: string | null }[]>`
       select credential_kind, credential_token_id
@@ -248,5 +268,160 @@ describe("the credential recorded on privileged-action rows", () => {
       where target_user_id = ${targetId}
     `;
     expect(row).toEqual({ credential_kind: null, credential_token_id: null });
+  });
+});
+
+// The store-level rows above are written from references the test builds, so no
+// secret material ever exists on the driving path. These tests drive the real
+// routes with a minted bearer token (and the session cookie header), where the
+// secret does exist on the request, and prove the event rows written through
+// the whole route → service → store path record the credential and none of its
+// secret material.
+describe("the credential recorded on moderation events written through the routes", () => {
+  const auditRouteContext = (auditId: string) => ({ params: Promise.resolve({ id: auditId }) });
+
+  function moderationRouteDependencies(moderatorId: string | null) {
+    return {
+      getSession: async () => (moderatorId === null ? null : { user: { id: moderatorId } }),
+      findAccountByTokenHash: (hash: Buffer) => new PostgresApiTokenStore(sql).findAccountByTokenHash(hash),
+      getCurrentRole: getCurrentUserRole,
+      createService: async () => new AccountModerationService(new PostgresModerationStore(sql)),
+    };
+  }
+
+  function patchJsonRequest(body: unknown, headers: Record<string, string>): Request {
+    return new Request(new URL("/api/moderation", requestHost), {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function eventCredentialRow(auditId: string) {
+    const [row] = await sql<{ credential_kind: string | null; credential_token_id: string | null }[]>`
+      select credential_kind, credential_token_id
+      from moderation_events
+      where audit_id = ${auditId} and reason is distinct from ${openAuditReason}
+    `;
+    expect(row).toBeDefined();
+    return row;
+  }
+
+  async function expectEventRowCarriesNoSecret(auditId: string, secrets: string[]) {
+    const [stored] = await sql<{ row: Record<string, unknown> }[]>`
+      select to_jsonb(t) as row
+      from moderation_events t
+      where audit_id = ${auditId} and reason is distinct from ${openAuditReason}
+    `;
+    expect(stored).toBeDefined();
+    const serialized = JSON.stringify(stored.row);
+    for (const secret of secrets) {
+      expect(serialized).not.toContain(secret);
+    }
+  }
+
+  it("records the bearer token's issuance id on the dismissal event and no secret material", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const { token, tokenId } = await mintTokenFor(moderatorId);
+    const auditId = await openAuditWithCredential(moderatorId, targetId, null);
+    const dismissReason = "The route-driven dismissal records the acting bearer credential.";
+
+    const response = await createModerationAuditPatchHandler(moderationRouteDependencies(null))(
+      patchJsonRequest(
+        { action: "dismiss", reason: dismissReason },
+        { authorization: `Bearer ${token}` },
+      ),
+      auditRouteContext(auditId),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await eventCredentialRow(auditId)).toEqual({
+      credential_kind: "token",
+      credential_token_id: tokenId,
+    });
+    const digest = createHash("sha256").update(token, "utf8").digest("hex");
+    await expectEventRowCarriesNoSecret(auditId, [token, digest, cookieValue]);
+  });
+
+  it("records the session credential on the dismissal event and never the cookie value", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const auditId = await openAuditWithCredential(moderatorId, targetId, null);
+    const dismissReason = "The route-driven dismissal records the acting session credential.";
+
+    const response = await createModerationAuditPatchHandler(moderationRouteDependencies(moderatorId))(
+      patchJsonRequest(
+        { action: "dismiss", reason: dismissReason },
+        { origin: trustedOrigin, cookie: cookieValue },
+      ),
+      auditRouteContext(auditId),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await eventCredentialRow(auditId)).toEqual({
+      credential_kind: "session",
+      credential_token_id: null,
+    });
+    await expectEventRowCarriesNoSecret(auditId, [cookieValue, "authjs.session-token"]);
+  });
+
+  it("records the bearer token's issuance id on the substantiation event", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const { token, tokenId } = await mintTokenFor(moderatorId);
+    const auditId = await openAuditWithCredential(moderatorId, targetId, null);
+    const substantiateReason = "The route-driven substantiation records the acting bearer credential.";
+
+    const response = await createModerationAuditPatchHandler(moderationRouteDependencies(null))(
+      patchJsonRequest(
+        { action: "substantiate", reason: substantiateReason },
+        { authorization: `Bearer ${token}` },
+      ),
+      auditRouteContext(auditId),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await eventCredentialRow(auditId)).toEqual({
+      credential_kind: "token",
+      credential_token_id: tokenId,
+    });
+  });
+
+  it("records the bearer token's issuance id on the recalibration-closure event", async () => {
+    const moderatorId = await insertUser("MODERATOR");
+    const targetId = await insertUser("MEMBER");
+    const { token, tokenId } = await mintTokenFor(moderatorId);
+    const auditId = await openAuditWithCredential(moderatorId, targetId, null);
+    const firstReason = "The first independently reviewed cohort confirms the account-level pattern.";
+    await new PostgresModerationStore(sql).substantiateAccountAudit({
+      actorId: moderatorId,
+      auditId: auditId,
+      reason: firstReason,
+      credential: null,
+    });
+    const secondAuditId = await openAuditWithCredential(moderatorId, targetId, null);
+    await new PostgresModerationStore(sql).substantiateAccountAudit({
+      actorId: moderatorId,
+      auditId: secondAuditId,
+      reason: "The second independently reviewed cohort recalibrates the account.",
+      credential: null,
+    });
+    const closePlan = "The recalibration closure records the acting bearer credential.";
+
+    const response = await createModerationClosePatchHandler(moderationRouteDependencies(null))(
+      patchJsonRequest(
+        { targetAccountId: targetId, plan: closePlan },
+        { authorization: `Bearer ${token}` },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const [row] = await sql<{ credential_kind: string | null; credential_token_id: string | null }[]>`
+      select credential_kind, credential_token_id
+      from moderation_events
+      where target_user_id = ${targetId} and reason = ${closePlan}
+    `;
+    expect(row).toEqual({ credential_kind: "token", credential_token_id: tokenId });
   });
 });
