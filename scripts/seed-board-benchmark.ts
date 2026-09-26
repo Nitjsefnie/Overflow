@@ -425,7 +425,9 @@ export function planSeedWorld(options: SeedOptions): SeedWorld {
 export async function seedBoardBenchmark(options: SeedOptions): Promise<SeedResult> {
   const databaseUrl = options.databaseUrl ?? requireDatabaseUrl();
   const world = planSeedWorld(options);
-  const sql = postgres(databaseUrl, { max: 4 });
+  // The truncate-cascade NOTICEs are expected on every reseed; dropping them
+  // keeps the stdout contract (seed line, member id, credentials) parseable.
+  const sql = postgres(databaseUrl, { max: 4, onnotice: () => {} });
 
   try {
     await sql.begin(async (tx) => {
