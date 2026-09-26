@@ -7,10 +7,16 @@ name: coverage comment
 #
 #   - it checks out NOTHING — the workspace stays empty, run blocks reference
 #     env names only, and the artifact is parsed as data only;
-#   - the destination pull request is resolved from the triggering event's
-#     head branch only — zero open PRs exits silently, more than one fails
-#     loudly, and a claim inside the artifact that mismatches the
-#     event-resolved PR fails loudly;
+#   - the destination pull request is resolved from the triggering event
+#     only — its head repository, head branch and head SHA (issue 656): a
+#     candidate from another repository, or whose head has moved past the
+#     event's SHA, is never selected; zero matches exits silently, more than
+#     one fails loudly, and a claim inside a same-repository artifact that
+#     mismatches the event-resolved PR fails loudly;
+#   - a fork-headed run controls its own ci workflow and so the whole
+#     artifact: its markdown and file list are never posted, and the body is
+#     rendered here from the two totals alone, validated as non-negative
+#     integers with covered <= added;
 #   - one marker-identified comment is posted or updated in place, never
 #     duplicated;
 #   - a red or cancelled run, a missing artifact, and an unmeasurable report
@@ -22,7 +28,7 @@ name: coverage comment
 #     triggering run's head SHA: success when a comment was posted or updated
 #     (either body variant), failure on any loud failure.
 on:
-  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, and the destination PR is resolved from the event only; the pinning suite holds that shape
+  workflow_run:  # zizmor: ignore[dangerous-triggers] — checks out nothing, executes nothing from the artifact, binds the destination PR to the event's head repository, branch and SHA, and posts a fork's report only as validated integer totals; the pinning and behavior suites hold that shape
     workflows: [ci]
     types: [completed]
 
@@ -47,9 +53,13 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # The destination comes from the triggering event only. The head branch
-      # is attacker-controlled, so it travels through env and is used only as
-      # a quoted gh argument — never interpolated into the run block.
+      # The destination comes from the triggering event only: its head
+      # repository, head branch and head SHA. The branch is attacker-
+      # controlled, so it travels through env and reaches the API as a -f
+      # field, which gh URL-encodes into the query — never interpolated into
+      # the run block or spliced into the path, where & or # could inject
+      # parameters. GitHub's head=owner:branch filter scopes by owner; the jq
+      # filter then binds every candidate to the exact repository and SHA.
       - name: Resolve the destination pull request
         id: pr
         shell: bash
@@ -57,23 +67,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO_SLUG: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # Zero open PRs with this head branch — a merged or closed PR, or a
-          # main push — is the one silent exit: nothing to report, exit 0.
-          # More than one is ambiguous: refuse loudly rather than guess.
-          prs=$(gh pr list --repo "$REPO_SLUG" --state open --head "$HEAD_BRANCH" --json number)
-          count=$(printf '%s' "$prs" | jq 'length')
+          # A deleted head repository leaves nothing to bind the destination
+          # to: silent exit, exit 0.
+          if [[ -z "$HEAD_OWNER" || -z "$HEAD_REPO" ]]; then
+            echo "the triggering run's head repository no longer exists; nothing to comment on"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          prs=$(gh api -X GET "repos/$REPO_SLUG/pulls" \
+            -f state=open -f head="$HEAD_OWNER:$HEAD_BRANCH" -f per_page=100)
+          # A deleted fork has head.repo null; null.full_name is null in jq, so
+          # it simply does not match.
+          matches=$(printf '%s' "$prs" | jq -c --arg repo "$HEAD_REPO" --arg sha "$HEAD_SHA" \
+            '[.[] | select(.head.repo.full_name == $repo and .head.sha == $sha) | .number]')
+          count=$(printf '%s' "$matches" | jq 'length')
+          # Zero matches — a merged or closed PR, a main push, or a PR head
+          # that moved on (the newer run posts) — is a silent exit: nothing to
+          # report, exit 0. More than one is ambiguous: refuse loudly rather
+          # than guess.
           case "$count" in
             0)
-              echo "no open pull request carries this head branch; nothing to comment on"
+              echo "no open pull request from this head repository and branch is at the triggering run's head SHA; nothing to comment on (a newer run posts if the head moved on)"
               echo "found=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
             1)
-              pr_number=$(printf '%s' "$prs" | jq -r '.[0].number')
+              pr_number=$(printf '%s' "$matches" | jq -r '.[0]')
+              same_repo=false
+              if [[ "$HEAD_REPO" == "$REPO_SLUG" ]]; then
+                same_repo=true
+              fi
               echo "found=true" >> "$GITHUB_OUTPUT"
               echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+              echo "same_repo=${same_repo}" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::found ${count} open pull requests carrying this head branch; refusing to guess the destination"
@@ -97,9 +128,13 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
-      # JSON parsed as data only (jq), never executed. The body is the
-      # pre-rendered markdown field verbatim — this job never renders or
-      # transforms anything itself.
+      # JSON parsed as data only (jq), never executed. A same-repository head
+      # gets the pre-rendered markdown field verbatim. A fork head wrote the
+      # whole artifact, so nothing it rendered is posted: the body is built
+      # here from total_added and total_covered alone, mirroring the heading,
+      # informational line and totals line of renderMarkdown in
+      # scripts/patch-coverage.ts, and totals that are not non-negative
+      # integers with covered <= added get the not-measurable body.
       - name: Determine the comment body
         id: body
         if: steps.pr.outputs.found == 'true'
@@ -108,6 +143,7 @@ jobs:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          SAME_REPO: ${{ steps.pr.outputs.same_repo }}
         run: |
           set -euo pipefail
           marker="<!-- overflow:coverage-comment -->"
@@ -120,6 +156,32 @@ jobs:
             printf '%s\n\nNo patch coverage report could be retrieved for this run, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
           elif [[ "$(jq -r '.measured // false' patch-coverage/patch-coverage.json)" != "true" ]]; then
             printf '%s\n\nThe patch-coverage artifact from this run is not measurable, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
+          elif [[ "$SAME_REPO" != "true" ]]; then
+            # Fork head: only the two totals are read, and only as validated
+            # integers. jq 1.7 prints an untouched literal as written (3.0,
+            # 1E+3, -0), so each is re-derived by arithmetic before printing;
+            # the safe-integer bound keeps it in plain notation.
+            totals=$(jq -r '
+              def count: type == "number" and . >= 0 and . == floor and . <= 9007199254740991;
+              if (.total_added | count) and (.total_covered | count) and .total_covered <= .total_added
+              then (.total_added | floor + 0) as $added
+                | (.total_covered | floor + 0) as $covered
+                | "\($covered) \($added) \(if $added == 0 then 0 else (($covered / $added) * 100 * 100 | round) / 100 end)"
+              else empty end' patch-coverage/patch-coverage.json)
+            if [[ -z "$totals" ]]; then
+              printf '%s\n\nThe patch-coverage artifact from this run is not measurable, so patch coverage was not measured for it; %s.\n' "$marker" "$stale" > "$body_file"
+            else
+              read -r covered added pct <<< "$totals"
+              {
+                printf '%s\n\n## Patch coverage\n\nInformational — not a gate; the coverage floor remains the merge criterion.\n\n' "$marker"
+                if (( added == 0 )); then
+                  printf 'No added line was executable in the cobertura report, so there is nothing to measure.\n'
+                else
+                  printf '**%s** of **%s** added lines covered (%s%%).\n' "$covered" "$added" "$pct"
+                fi
+                printf '\n%s\n' "The per-file table is omitted because this pull request's head is from a fork."
+              } > "$body_file"
+            fi
           else
             # Any claim inside the artifact must match the event-resolved PR
             # and the event's head branch; today's artifact carries neither
