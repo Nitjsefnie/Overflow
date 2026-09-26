@@ -38,6 +38,28 @@ afterAll(async () => {
 });
 
 describe("incremental reconciliation", () => {
+  it("sanitizes a dirty issue fetched through getIssue before updating rows and evidence", async () => {
+    const f = await fixture();
+    const issue = f.issues[0]!;
+    issue.updatedAt = "2026-09-08T09:00:00Z";
+    await f.run();
+
+    issue.title = "Dirty\u0000title";
+    issue.body = "Dirty\u0000body";
+    issue.updatedAt = "2026-09-08T09:58:00Z";
+    await f.dirty("ISSUE", issue);
+    f.clock = new Date("2026-09-08T10:02:00Z");
+    await f.run();
+
+    expect(f.issueReads).toEqual([issue.number]);
+    const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
+    expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: "Dirty\uFFFDbody" });
+    const [evidence] = await sql`select issues from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({
+      title: "Dirty\uFFFDtitle", body: "Dirty\uFFFDbody",
+    });
+  });
+
   it("replaces NUL in forge evidence and derived rows before hashing, including a cached second run", async () => {
     const f = await fixture();
     const issue = f.issues[0]!;
