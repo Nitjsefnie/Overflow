@@ -299,3 +299,54 @@ describe("NEXT_DIST_DIR", () => {
     },
   );
 });
+
+describe("framing-protection headers", () => {
+  const frameProtectionHeaders = [
+    { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+    { key: "X-Frame-Options", value: "DENY" },
+  ];
+  const framedRoutes = ["/", "/repositories/new", "/api/mcp", "/_next/static/chunks/x.js"];
+
+  async function importHeaderRules() {
+    const { default: config } = await import("../../next.config");
+    expect(config.headers).toBeTypeOf("function");
+    return (await config.headers?.()) ?? [];
+  }
+
+  it("frames every route with NEXT_DIST_DIR unset", async () => {
+    delete process.env.NEXT_DIST_DIR;
+    vi.resetModules();
+
+    const rules = await importHeaderRules();
+
+    expect(rules.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
+  });
+
+  it("frames every route with NEXT_DIST_DIR set to a prepared release dir", async () => {
+    prepareConfig();
+    process.env.NEXT_DIST_DIR = ".next-release-20260907T101500Z-abc1234";
+    vi.resetModules();
+
+    const rules = await importHeaderRules();
+
+    expect(rules.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
+  });
+
+  it.each([
+    ["/", {}],
+    ["/repositories/new", { path: ["repositories", "new"] }],
+    ["/api/mcp", { path: ["api", "mcp"] }],
+    ["/_next/static/chunks/x.js", { path: ["_next", "static", "chunks", "x.js"] }],
+  ])("covers %s with Next's own header matcher", async (route, params) => {
+    delete process.env.NEXT_DIST_DIR;
+    vi.resetModules();
+
+    const rules = await importHeaderRules();
+    const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match");
+    const covering = rules.filter((rule) => framedRoutes.every((r) => getPathMatch(rule.source)(r)));
+
+    expect(covering.map((rule) => rule.headers)).toContainEqual(frameProtectionHeaders);
+    // The matcher returns the route's captured params on a hit and false on a miss.
+    expect(getPathMatch(covering[0]!.source)(route)).toEqual(params);
+  });
+});

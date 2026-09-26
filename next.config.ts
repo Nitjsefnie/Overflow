@@ -65,8 +65,20 @@ if (distDir) {
   }
 }
 
-const nextConfig: NextConfig = distDir
-  ? { distDir, typescript: { tsconfigPath } }
-  : {};
+// Framing protection (issue 677): refuse cross-site framing everywhere. The
+// CSP carries exactly frame-ancestors 'none' — no other directive, so Next's
+// inline scripts are unaffected — with X-Frame-Options: DENY as the fallback
+// for clients without CSP frame-ancestors support.
+const frameProtectionHeaders = [
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "X-Frame-Options", value: "DENY" },
+];
+
+const nextConfig: NextConfig = {
+  ...(distDir ? { distDir, typescript: { tsconfigPath } } : {}),
+  async headers() {
+    return [{ source: "/:path*", headers: frameProtectionHeaders }];
+  },
+};
 
 export default nextConfig;
