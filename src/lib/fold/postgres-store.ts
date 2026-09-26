@@ -13,6 +13,7 @@ import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/dif
 import { calculateSettlement } from "@/lib/domain/settlement";
 import { FOLD_REVISION } from "@/lib/fold/fold-revision";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
+import { recordNewPolicyViolations } from "@/lib/fold/policy-violation-record";
 import type { FoldForgeIdentity } from "@/lib/fold/repository-fold";
 import {
   assessReconciliationFairness,
@@ -208,11 +209,10 @@ type ReconciledEntityKind =
   | "SETTLEMENT"
   | "SELF_WORK_CALIBRATION"
   | "UNWRITABLE_CLOSURE"
-  | "POLICY_VIOLATION"
   | "ISSUE"
   | "PULL_REQUEST";
 
-type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE" | "POLICY_VIOLATION";
+type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE";
 
 const repositoryLockWaitDeadlineMs = 60_000;
 const repositoryLockInitialRetryMs = 10;
@@ -1113,7 +1113,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         pullRequestIds,
         input.runId,
       );
-      await recordPolicyViolations(transaction, input.runId, publication.fold);
+      await recordNewPolicyViolations(transaction, input.repositoryId, input.runId, publication.fold.policyViolations);
       if (input.synchronization !== undefined) {
         await transaction`update registered_repositories set reconciliation_not_before = null where id = ${input.repositoryId}`;
       }
@@ -2528,16 +2528,6 @@ async function deleteAbsentPullRequestIssueLinks(
         where pull_request_id = ${row.pull_request_id} and issue_id = ${row.issue_id}
       `;
     }
-  }
-}
-
-async function recordPolicyViolations(
-  sql: TransactionClient,
-  runId: string,
-  fold: FoldResult,
-): Promise<void> {
-  for (const violation of fold.policyViolations) {
-    await recordChange(sql, runId, null, "POLICY_VIOLATION", "POLICY_VIOLATION", null, violation);
   }
 }
 
