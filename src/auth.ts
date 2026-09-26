@@ -24,10 +24,21 @@ import {
   grantsWebhookAdministration,
   parseGrantedScopes,
 } from "@/lib/auth/github-oauth-scopes";
+import { authTrustHost } from "@/lib/auth/trusted-host";
 
 export { GITHUB_CONTRIBUTOR_SCOPE, GITHUB_REPOSITORY_REGISTRATION_SCOPE };
 
 export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
+  // Auth.js trusts the request's host only when its configuration says so, and
+  // answers every auth route `500 [auth][error] UntrustedHost` otherwise. Left
+  // unset, `@auth/core` derives trust from `AUTH_URL`/`AUTH_TRUST_HOST`/
+  // `VERCEL`/`CF_PAGES` (or non-production NODE_ENV) — so a deployment
+  // configured from only the documented settings answered every sign-in route
+  // 500 while readiness answered 200 (issue 649). Derive the flag from APP_URL
+  // instead, the origin the origin guard already enforces, so the documented
+  // environment signs in; an operator-set AUTH_URL or AUTH_TRUST_HOST keeps
+  // the precedence it has under @auth/core's own derivation.
+  trustHost: authTrustHost(),
   providers: [
     GitHub({
       // The least-privilege default (issue 599): public identity only, so any
