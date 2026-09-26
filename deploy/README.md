@@ -1001,43 +1001,62 @@ directory, if the rollback window has to outlast that.
 ### Step 2: generate the new key
 
 The key goes straight into a root-only file and is never printed, so it stays
-out of terminal scrollback:
+out of terminal scrollback. This block and the other guarded edits below run in
+a subshell, `( … )`, so a refusal ends the subshell with a message and leaves
+your shell open:
 
 ```bash
+(
 set -e
-test ! -e /etc/overflow/token-encryption-key.new
+test ! -e /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new already exists." >&2; exit 1; }
 install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.new
 node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > /etc/overflow/token-encryption-key.new
 wc -c < /etc/overflow/token-encryption-key.new
+)
 ```
 
 Expect `43`: 32 random bytes as unpadded base64url, the only form the service
-accepts. The `test` refuses to overwrite a key file left by an interrupted
-rotation; find out whether that key was ever configured before removing it.
+accepts. The refusal protects a key file left by an interrupted rotation; find
+out whether that key was ever configured before removing it.
 
 ### Step 3: configure both keys and restart
 
 This block keeps the old key in `/etc/overflow/token-encryption-key.old`,
 renames the `TOKEN_ENCRYPTION_KEY` line to `TOKEN_ENCRYPTION_KEY_PREVIOUS`
-without changing its value, appends the new key as `TOKEN_ENCRYPTION_KEY`, and
-restores section 4's ownership and mode. Its guards refuse to run unless the
-file holds exactly one `TOKEN_ENCRYPTION_KEY` line and no previous key, and
-unless no `token-encryption-key.old` from an earlier rotation is in the way;
-such a file belongs with that rotation's dump, so rename it rather than
-removing it.
+without changing its value, appends the new key as `TOKEN_ENCRYPTION_KEY`,
+confirms both lines read back as the two saved keys, and restores section 4's
+ownership and mode. It refuses, changing nothing, unless:
+
+- step 2's file holds a 43-character key;
+- the environment file ends with a newline, so the appended line cannot be
+  glued onto the last one;
+- the file holds exactly one `TOKEN_ENCRYPTION_KEY` line, with the bare value
+  and nothing else: no quotes, spaces or comment. Rewrite a quoted line as
+  `TOKEN_ENCRYPTION_KEY=<value>` first; systemd and the shell read the bare
+  form identically;
+- no line names `TOKEN_ENCRYPTION_KEY_PREVIOUS`;
+- no `token-encryption-key.old` from an earlier rotation is in the way. Such a
+  file belongs with that rotation's dump, so rename it rather than removing it.
 
 ```bash
+(
 set -e
-test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1
-test "$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)" = 0
-test ! -e /etc/overflow/token-encryption-key.old
+grep -Eqx '[A-Za-z0-9_-]{43}' /etc/overflow/token-encryption-key.new || { echo "Refusing: token-encryption-key.new does not hold a 43-character key." >&2; exit 1; }
+test -z "$(tail -c 1 /etc/overflow/overflow.env)" || { echo "Refusing: overflow.env does not end with a newline." >&2; exit 1; }
+test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env needs exactly one TOKEN_ENCRYPTION_KEY line." >&2; exit 1; }
+grep -Eqx 'TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo "Refusing: the TOKEN_ENCRYPTION_KEY value is not bare." >&2; exit 1; }
+test "$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)" = 0 || { echo "Refusing: overflow.env already names TOKEN_ENCRYPTION_KEY_PREVIOUS." >&2; exit 1; }
+test ! -e /etc/overflow/token-encryption-key.old || { echo "Refusing: token-encryption-key.old already exists." >&2; exit 1; }
 install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old
-grep '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env | cut -d= -f2- > /etc/overflow/token-encryption-key.old
+sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old
 sed -i 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env
 { printf 'TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\n'; } >> /etc/overflow/overflow.env
+test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.new)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
+test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "The edited file does not read back as the saved keys; roll back as below." >&2; exit 1; }
 rm /etc/overflow/token-encryption-key.new
 chown root:root /etc/overflow/overflow.env
 chmod 0600 /etc/overflow/overflow.env
+)
 ```
 
 Before restarting, confirm that both values are keys the service will accept.
@@ -1195,10 +1214,12 @@ since. Remove the previous key, then repeat step 3's restart block with the same
 expectations:
 
 ```bash
+(
 set -e
 sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env
 chown root:root /etc/overflow/overflow.env
 chmod 0600 /etc/overflow/overflow.env
+)
 ```
 
 Then, from a fresh shell:
@@ -1219,13 +1240,22 @@ application and inspect its journal as in section 7. Keep
 
 - **Before step 3's restart**, the service still runs on the old configuration.
   If only step 2 ran, `rm /etc/overflow/token-encryption-key.new` is all. If
-  step 3's edit ran, drop the new key, give the old one its name back, and
-  remove the copy step 3 kept, since the old key is current again:
+  step 3's edit ran, drop the new key and give the old one its name back. The
+  block removes the copy step 3 kept only after the file reads back as exactly
+  that old key, on exactly one line that names the key. Otherwise it refuses
+  and keeps the copy, the only clean one: repair the file by hand from
+  `/etc/overflow/token-encryption-key.old` before restarting anything.
 
   ```bash
+  (
   set -e
+  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 2 && test "$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not hold exactly the two key lines step 3 wrote." >&2; exit 1; }
+  test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the previous key does not match token-encryption-key.old." >&2; exit 1; }
   sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env
+  test "$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)" = 1 || { echo "Refusing: overflow.env does not name the key exactly once; token-encryption-key.old is kept." >&2; exit 1; }
+  test "$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)" = "$(cat /etc/overflow/token-encryption-key.old)" || { echo "Refusing: the key does not match token-encryption-key.old, which is kept." >&2; exit 1; }
   rm /etc/overflow/token-encryption-key.old
+  )
   ```
 
 - **While both keys are configured**, from step 3's restart until step 6: swap

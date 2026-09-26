@@ -105,22 +105,29 @@ const otherShellLines = new Set([
   "rm -rf -- node_modules",
   "set -o pipefail",
   "LC_ALL=C find /srv/overflow -regextype posix-extended -mindepth 1 -maxdepth 1   -type d -regex '.*/\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}'   -printf '%f\\n' | LC_ALL=C sort -r",
-  // Section 11's key rotation: the pre-rotation dump, the key files under
-  // /etc/overflow, the environment-file edits, the re-encryption runs with
-  // their captured statuses, and the credential repairs run through the
-  // service's own DATABASE_URL.
+  // Section 11's key rotation: the pre-rotation dump, the guarded key-file and
+  // environment-file edits (run in subshells so a refusal keeps the operator's
+  // shell), the re-encryption runs with their captured statuses, and the
+  // credential repairs run through the service's own DATABASE_URL.
   "bash scripts/db-backup.sh",
-  "test ! -e /etc/overflow/token-encryption-key.new",
+  "(",
+  "test ! -e /etc/overflow/token-encryption-key.new || { echo \"Refusing: token-encryption-key.new already exists.\" >&2; exit 1; }",
   "install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.new",
   "node -e \"process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))\" > /etc/overflow/token-encryption-key.new",
   "wc -c < /etc/overflow/token-encryption-key.new",
-  "test \"$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)\" = 1",
-  "test \"$(grep -c '^TOKEN_ENCRYPTION_KEY_PREVIOUS=' /etc/overflow/overflow.env)\" = 0",
-  "test ! -e /etc/overflow/token-encryption-key.old",
+  ")",
+  "grep -Eqx '[A-Za-z0-9_-]{43}' /etc/overflow/token-encryption-key.new || { echo \"Refusing: token-encryption-key.new does not hold a 43-character key.\" >&2; exit 1; }",
+  "test -z \"$(tail -c 1 /etc/overflow/overflow.env)\" || { echo \"Refusing: overflow.env does not end with a newline.\" >&2; exit 1; }",
+  "test \"$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)\" = 1 || { echo \"Refusing: overflow.env needs exactly one TOKEN_ENCRYPTION_KEY line.\" >&2; exit 1; }",
+  "grep -Eqx 'TOKEN_ENCRYPTION_KEY=[A-Za-z0-9_-]{43}' /etc/overflow/overflow.env || { echo \"Refusing: the TOKEN_ENCRYPTION_KEY value is not bare.\" >&2; exit 1; }",
+  "test \"$(grep -c 'TOKEN_ENCRYPTION_KEY_PREVIOUS' /etc/overflow/overflow.env)\" = 0 || { echo \"Refusing: overflow.env already names TOKEN_ENCRYPTION_KEY_PREVIOUS.\" >&2; exit 1; }",
+  "test ! -e /etc/overflow/token-encryption-key.old || { echo \"Refusing: token-encryption-key.old already exists.\" >&2; exit 1; }",
   "install -o root -g root -m 0600 /dev/null /etc/overflow/token-encryption-key.old",
-  "grep '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env | cut -d= -f2- > /etc/overflow/token-encryption-key.old",
+  "sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env > /etc/overflow/token-encryption-key.old",
   "sed -i 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env",
   "{ printf 'TOKEN_ENCRYPTION_KEY='; cat /etc/overflow/token-encryption-key.new; printf '\\n'; } >> /etc/overflow/overflow.env",
+  "test \"$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)\" = \"$(cat /etc/overflow/token-encryption-key.new)\" || { echo \"The edited file does not read back as the saved keys; roll back as below.\" >&2; exit 1; }",
+  "test \"$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)\" = \"$(cat /etc/overflow/token-encryption-key.old)\" || { echo \"The edited file does not read back as the saved keys; roll back as below.\" >&2; exit 1; }",
   "rm /etc/overflow/token-encryption-key.new",
   "check_status=0",
   "pnpm --silent credentials:reencrypt --check || check_status=$?",
@@ -133,7 +140,11 @@ const otherShellLines = new Set([
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update user_forge_identities set encrypted_token = null where id = '$row_id'\"",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where id = '$row_id' and unregistered_at is null\"",
   "sed -i '/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/d' /etc/overflow/overflow.env",
+  "test \"$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)\" = 2 && test \"$(grep -c '^TOKEN_ENCRYPTION_KEY=' /etc/overflow/overflow.env)\" = 1 || { echo \"Refusing: overflow.env does not hold exactly the two key lines step 3 wrote.\" >&2; exit 1; }",
+  "test \"$(sed -n 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=//p' /etc/overflow/overflow.env)\" = \"$(cat /etc/overflow/token-encryption-key.old)\" || { echo \"Refusing: the previous key does not match token-encryption-key.old.\" >&2; exit 1; }",
   "sed -i -e '/^TOKEN_ENCRYPTION_KEY=/d' -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' /etc/overflow/overflow.env",
+  "test \"$(grep -c 'TOKEN_ENCRYPTION_KEY' /etc/overflow/overflow.env)\" = 1 || { echo \"Refusing: overflow.env does not name the key exactly once; token-encryption-key.old is kept.\" >&2; exit 1; }",
+  "test \"$(sed -n 's/^TOKEN_ENCRYPTION_KEY=//p' /etc/overflow/overflow.env)\" = \"$(cat /etc/overflow/token-encryption-key.old)\" || { echo \"Refusing: the key does not match token-encryption-key.old, which is kept.\" >&2; exit 1; }",
   "rm /etc/overflow/token-encryption-key.old",
   "sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env",
   "psql \"$DATABASE_URL\" -tAc \"select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null\"",
