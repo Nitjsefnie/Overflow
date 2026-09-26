@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   expectNoDependencyCall,
@@ -38,6 +37,7 @@ import { createModerationAdjustmentPostHandler } from "@/app/api/moderation/reca
 import { createModerationReversalPostHandler } from "@/app/api/moderation/adjustments/reversal/route";
 import { type RecalibrationCreditStore } from "@/lib/moderation/credit-adjustment-store";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
+import { hashApiToken } from "@/lib/security/api-token";
 import {
   AccountModerationService,
   ModerationServiceError,
@@ -1353,9 +1353,11 @@ describe("the shared moderator gate's bearer credential", () => {
 
       expect(response.ok).toBe(true);
       expect(deps.getSession).not.toHaveBeenCalled();
-      expect(deps.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
-        createHash("sha256").update(apiCredential).digest(),
-      );
+      // The gate hands the token store the production hash function's output,
+      // not a hand-rolled re-derivation of it.
+      const credentialHash = hashApiToken(apiCredential);
+      expect(credentialHash).not.toBeNull();
+      expect(deps.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(credentialHash);
       expect(deps.getCurrentRole).toHaveBeenCalledExactlyOnceWith(ownerId);
     },
   );
