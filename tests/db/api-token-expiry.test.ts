@@ -68,7 +68,7 @@ describe("API token expiry in the store", () => {
       enforcementState: "ACTIVE",
     });
     expect(issued.expiresAt).toEqual(await ninetyDaysAfter(sql, issued.createdAt));
-    await expect(store.getTokenSummary(userId)).resolves.toEqual(issued);
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...issued, expired: false });
   });
 
   it("resolves no account for a token whose expiry has passed", async () => {
@@ -85,6 +85,7 @@ describe("API token expiry in the store", () => {
     await expect(store.getTokenSummary(userId)).resolves.toEqual({
       createdAt: issued.createdAt,
       expiresAt: lapsed.expires_at,
+      expired: true,
     });
   });
 
@@ -113,12 +114,18 @@ describe("API token expiry in the store", () => {
     await store.issueToken(userId, tokenHash);
 
     // One transaction, so `now()` is the same instant in the update and the lookup.
-    const resolved = await sql.begin(async (transaction) => {
+    const [resolved, summary] = await sql.begin(async (transaction) => {
       await transaction`update api_tokens set expires_at = now() where user_id = ${userId}`;
-      return new PostgresApiTokenStore(transaction as unknown as Sql).findAccountByTokenHash(tokenHash);
+      const inTransaction = new PostgresApiTokenStore(transaction as unknown as Sql);
+      return [
+        await inTransaction.findAccountByTokenHash(tokenHash),
+        await inTransaction.getTokenSummary(userId),
+      ] as const;
     });
 
     expect(resolved).toBeNull();
+    // The panel's expired state agrees with the refusal at the same instant.
+    expect(summary?.expired).toBe(true);
   });
 
   it("restarts the lifetime on regeneration after expiry", async () => {
@@ -136,7 +143,7 @@ describe("API token expiry in the store", () => {
     await expect(store.findAccountByTokenHash(expired.tokenHash)).resolves.toBeNull();
     expect(reissued.expiresAt).toEqual(await ninetyDaysAfter(sql, reissued.createdAt));
     expect(reissued.expiresAt.getTime()).toBeGreaterThan(lapsed.expires_at.getTime());
-    await expect(store.getTokenSummary(userId)).resolves.toEqual(reissued);
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...reissued, expired: false });
   });
 });
 
