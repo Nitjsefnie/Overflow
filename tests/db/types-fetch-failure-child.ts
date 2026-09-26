@@ -57,7 +57,11 @@ const roleUrl = required("TYPES_FETCH_ROLE_URL");
 const adminUrl = required("TYPES_FETCH_ADMIN_URL");
 const waitingOn = required("TYPES_FETCH_WAITING");
 
-const sql = postgres(roleUrl, { max: 1 });
+// stdout carries only the JSON report lines the test parses, and postgres.js's default onnotice
+// is console.log, so a server NOTICE would put a line on stdout that is not JSON.
+const quiet = { onnotice: () => {} };
+
+const sql = postgres(roleUrl, { max: 1, ...quiet });
 
 async function reserveAndRelease(): Promise<string> {
   const reserved = await sql.reserve();
@@ -87,7 +91,7 @@ const waiting =
 report({ waiting, unhandled: [...unhandled] });
 
 // The failure cause is removed, so the client's next connection can fetch its types.
-const admin = postgres(adminUrl, { max: 1 });
+const admin = postgres(adminUrl, { max: 1, ...quiet });
 try {
   await admin.unsafe("grant select on pg_catalog.pg_type to public");
 } finally {
