@@ -10,6 +10,11 @@ import type { ChildReport } from "./types-fetch-failure-child";
 
 const database = "overflow_types_fetch_failure_test";
 const childScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "types-fetch-failure-child.ts");
+/**
+ * A cleanup bound, not an assertion: a regression that leaves the child hanging is killed here, well
+ * inside vitest's test timeout, so the case fails on its own assertions and leaves no process behind.
+ */
+const childBoundMs = 30_000;
 
 let container: StartedTestContainer | undefined;
 let adminUrl: string;
@@ -18,20 +23,31 @@ let deniedRole: string;
 
 interface ChildRun {
   exitCode: number | null;
+  signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
 }
 
-function runChild(env: Record<string, string>): Promise<ChildRun> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [childScript], { env: { ...process.env, ...env } });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
+async function runChild(env: Record<string, string>): Promise<ChildRun> {
+  const child = spawn(process.execPath, [childScript], {
+    env: { ...process.env, ...env },
+    timeout: childBoundMs,
+    killSignal: "SIGKILL",
   });
+  try {
+    return await new Promise<ChildRun>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+      child.on("error", reject);
+      child.on("close", (exitCode, signal) => resolve({ exitCode, signal, stdout, stderr }));
+    });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
 }
 
 async function asAdmin(statement: string): Promise<void> {
@@ -48,15 +64,20 @@ async function asAdmin(statement: string): Promise<void> {
  * the array-type fetch that a new connection sends before its first query fails, every time, with
  * 42501. The child grants the read back after its waiting query has settled.
  */
-async function runWithTypesFetchDenied(waiting: "query" | "reserve"): Promise<{ run: ChildRun; report: ChildReport | undefined }> {
+async function runWithTypesFetchDenied(
+  waiting: "query" | "reserve" | "queue",
+): Promise<{ run: ChildRun; report: Partial<ChildReport> }> {
   await asAdmin("revoke select on pg_catalog.pg_type from public");
   const run = await runChild({
     TYPES_FETCH_ROLE_URL: roleUrl,
     TYPES_FETCH_ADMIN_URL: adminUrl,
     TYPES_FETCH_WAITING: waiting,
   });
-  const lastLine = run.stdout.trim().split("\n").at(-1);
-  const report = lastLine ? (JSON.parse(lastLine) as ChildReport) : undefined;
+  // Each line the child printed supersedes the one before; a killed child leaves only its first.
+  const report: Partial<ChildReport> = {};
+  for (const line of run.stdout.split("\n").filter((text) => text.trim() !== "")) {
+    Object.assign(report, JSON.parse(line) as Partial<ChildReport>);
+  }
   return { run, report };
 }
 
@@ -94,7 +115,7 @@ describe("a new connection whose array-type fetch fails", () => {
 
     expect(report, run.stderr).toMatchObject({
       unhandled: [],
-      waiting: { status: "rejected", code: "42501" },
+      waiting: [{ status: "rejected", code: "42501" }],
       later: { status: "fulfilled", value: [["1", "2"]] },
     });
     expect(run.exitCode, run.stderr).toBe(0);
@@ -105,7 +126,25 @@ describe("a new connection whose array-type fetch fails", () => {
 
     expect(report, run.stderr).toMatchObject({
       unhandled: [],
-      waiting: { status: "rejected", code: "42501" },
+      waiting: [{ status: "rejected", code: "42501" }],
+      later: { status: "fulfilled", value: [["1", "2"]] },
+    });
+    expect(run.exitCode, run.stderr).toBe(0);
+  });
+
+  // Queued work is what tells a synchronous close from a late one. Closing the connection only
+  // once the fetch's promise has settled comes after ReadyForQuery has already opened it, and the
+  // pool has already executed the queued sql.array query on it with no array types: that query is
+  // then destroyed with the connection instead of receiving the server's error.
+  it("rejects every query queued on a max: 1 client with the server's error, an sql.array one included", async () => {
+    const { run, report } = await runWithTypesFetchDenied("queue");
+
+    expect(report, run.stderr).toMatchObject({
+      unhandled: [],
+      waiting: [
+        { status: "rejected", code: "42501" },
+        { status: "rejected", code: "42501" },
+      ],
       later: { status: "fulfilled", value: [["1", "2"]] },
     });
     expect(run.exitCode, run.stderr).toBe(0);

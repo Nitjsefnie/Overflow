@@ -8,10 +8,14 @@
  *   connection sends before its first query fails with 42501;
  * - TYPES_FETCH_ADMIN_URL: a superuser, used to grant that read back once the waiting query has
  *   settled;
- * - TYPES_FETCH_WAITING: "query" to wait on a plain query, "reserve" to wait on sql.reserve().
+ * - TYPES_FETCH_WAITING: "query" to wait on a plain query, "reserve" to wait on sql.reserve(), or
+ *   "queue" to queue several queries on the one connection of a max: 1 client, the second carrying an
+ *   sql.array() parameter, so that all but the first wait in the pool while the fetch fails.
  *
- * Prints one JSON line (ChildReport) on stdout, and exits 1 when any promise rejection went
- * unhandled.
+ * Prints a JSON line on stdout once the waiting work has settled, and a full ChildReport line at
+ * the end; a later line supersedes an earlier one. The first line lets the test assert on what the
+ * waiting work received even when the child hangs afterwards and has to be killed. Exits 1 when any
+ * promise rejection went unhandled.
  */
 import postgres from "postgres";
 
@@ -20,7 +24,8 @@ export type Outcome =
   | { status: "rejected"; code: string | undefined; message: string };
 
 export interface ChildReport {
-  waiting: Outcome;
+  /** One outcome per waiting query or reserve, in the order they were issued. */
+  waiting: Outcome[];
   later: Outcome;
   unhandled: string[];
 }
@@ -54,14 +59,32 @@ const waitingOn = required("TYPES_FETCH_WAITING");
 
 const sql = postgres(roleUrl, { max: 1 });
 
-const waiting = await settle(async () => {
-  if (waitingOn === "reserve") {
-    const reserved = await sql.reserve();
-    reserved.release();
-    return "reserved";
-  }
+async function reserveAndRelease(): Promise<string> {
+  const reserved = await sql.reserve();
+  reserved.release();
+  return "reserved";
+}
+
+async function plainQuery(): Promise<unknown[]> {
   return (await sql`select 1 as one`).map((row) => row.one);
-});
+}
+
+async function arrayQuery(): Promise<unknown[]> {
+  return (await sql`select ${sql.array([3, 4])}::bigint[] as v`).map((row) => row.v);
+}
+
+function report(line: Partial<ChildReport>): void {
+  process.stdout.write(`${JSON.stringify(line)}\n`);
+}
+
+const waiting =
+  waitingOn === "reserve"
+    ? [await settle(reserveAndRelease)]
+    : waitingOn === "queue"
+      ? await Promise.all([settle(plainQuery), settle(arrayQuery)])
+      : [await settle(plainQuery)];
+
+report({ waiting, unhandled: [...unhandled] });
 
 // The failure cause is removed, so the client's next connection can fetch its types.
 const admin = postgres(adminUrl, { max: 1 });
@@ -79,6 +102,5 @@ await sql.end({ timeout: 5 });
 // setImmediate callback runs; waiting one turn makes sure the listener has seen every rejection.
 await new Promise((resolve) => setImmediate(resolve));
 
-const report: ChildReport = { waiting, later, unhandled };
-process.stdout.write(`${JSON.stringify(report)}\n`);
+report({ waiting, later, unhandled });
 process.exitCode = unhandled.length === 0 ? 0 : 1;
