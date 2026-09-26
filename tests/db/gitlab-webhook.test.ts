@@ -137,7 +137,9 @@ describe("GitLab webhook delivery materialization", () => {
     await deliver(repositoryId, issueDelivery({ projectId, instanceUrl, uuid: "db-uuid-nul", issueId,
       title: "Webhook\u0000title", body: "Webhook\u0000body" }));
     const [row] = await sql`select title, body from issues where repository_id = ${repositoryId}`;
-    expect(row).toMatchObject({ title: "Webhook\uFFFDtitle", body: "Webhook\uFFFDbody" });
+    // The view stops writing body text (issue 681), so the seeded empty body is
+    // untouched while the title still carries the sanitized replacement.
+    expect(row).toMatchObject({ title: "Webhook\uFFFDtitle", body: "" });
   });
 
   it("resolves the registration by forge identity, applies the issue view, and queues the fold", async () => {

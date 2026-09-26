@@ -53,7 +53,9 @@ describe("incremental reconciliation", () => {
 
     expect(f.issueReads).toEqual([issue.number]);
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
-    expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: "Dirty\uFFFDbody" });
+    // The row stops holding body text (issue 681); the evidence keeps it, so the
+    // sanitized value is still asserted below against the evidence.
+    expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: null });
     const [evidence] = await sql`select issues from repository_reconciliation_evidence where repository_id = ${f.id}`;
     expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({
       title: "Dirty\uFFFDtitle", body: "Dirty\uFFFDbody",
@@ -76,8 +78,10 @@ describe("incremental reconciliation", () => {
     await f.run();
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
     const [prRow] = await sql`select title, body, proof_sha256 from pull_requests where repository_id = ${f.id} and github_pull_request_id = ${pr.id}`;
-    expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: "Issue\uFFFDbody" });
-    expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: "PR\uFFFDbody",
+    // The rows stop holding body text (issue 681); the evidence keeps it, so the
+    // sanitized values are still asserted below against the evidence.
+    expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: null });
+    expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
       proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
     const [evidence] = await sql`select issues, pull_requests from repository_reconciliation_evidence where repository_id = ${f.id}`;
     expect(evidence!.issues.find(({ id }: { id: number }) => id === issue.id)).toMatchObject({

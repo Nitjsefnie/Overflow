@@ -167,9 +167,11 @@ describe("reconcileRepository", () => {
       key === "authorGitHubUserId" || key === "creditorGitHubUserId"
         || key === "claimAssigneeGitHubUserId" || key === "updatedAt" ? undefined : value
     ));
-    expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("ad44c506ea706236d3a9ad69d466b696ab88200c54c5861228d1c0fa2f10346f");
+    // The digest moved when the fold result stopped carrying issue and pull
+    // request body text (issue 681); the JSON shape is otherwise unchanged.
+    expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("9640faa8a1fd4b0db7d108e447da7c9d6b347d0cfaa9d47e1f38568523ad0224");
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("9d08f7b5e71f0a2857d888e9fb1a1f1a97b27bd39ba3e279ce3d28d9d20a8569");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("cfb680a10c35065663b858d59c86e2688ef85205a594e9e002ac7c08422b2b2d");
   });
 
   it("settles from the only merged closing reference on the second continuation", async () => {
@@ -189,7 +191,7 @@ describe("reconcileRepository", () => {
     ]);
     // The 120 unmerged references per issue must not alter any part of the baseline fold.
     const unstampedFold = JSON.stringify(fold, (key, value) => key === "updatedAt" ? undefined : value);
-    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("9d08f7b5e71f0a2857d888e9fb1a1f1a97b27bd39ba3e279ce3d28d9d20a8569");
+    expect(createHash("sha256").update(unstampedFold).digest("hex")).toBe("cfb680a10c35065663b858d59c86e2688ef85205a594e9e002ac7c08422b2b2d");
     expect(requests.filter(({ operation }) => operation === "ClosingPullRequests")).toEqual([
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-next" } },
       { operation: "ClosingPullRequests", variables: { owner: "octo", name: "example", issueNumber: 3, cursor: "closing-3-last" } },

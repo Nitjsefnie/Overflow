@@ -3652,7 +3652,7 @@ describe("initial PostgreSQL materialization", () => {
       // (issue 296). 029's backfill then assigns recorded_seq to these
       // genuinely pre-existing rows in physical insertion order, which is the
       // order this fixture inserts them in. The fold computes the values; the
-      // seeds name the 028-era subset of them.
+      // seeds name the 028-era subset of them, body now a literal (issue 681).
       const fold = foldRepository(snapshot);
       const addRun = randomUUID();
       const changeRun = randomUUID();
@@ -3668,7 +3668,7 @@ describe("initial PostgreSQL materialization", () => {
             opening_source_event_id, opening_source_actor_login, opening_source_at
           )
           values (
-            ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state},
+            ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, '029-seed issue body', ${issue.url}, ${issue.state},
             ${issue.ownerGitHubLogin}, ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints},
             ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt}
           )
@@ -3682,7 +3682,7 @@ describe("initial PostgreSQL materialization", () => {
           )
           select
             ${pullRequest.githubPullRequestId}, ${repositoryId}, issues.id, ${pullRequest.number},
-            ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.body}, ${pullRequest.authorId},
+            ${pullRequest.url}, ${pullRequest.title}, '029-seed pull request body', ${pullRequest.authorId},
             ${pullRequest.authorGitHubLogin}, ${pullRequest.authorGitHubUserId}, ${pullRequest.state}, ${pullRequest.mergedAt},
             ${pullRequest.mergeCommitOid}, ${pullRequest.finalCommitAt}, ${pullRequest.proofSha256}
           from issues

@@ -1213,9 +1213,11 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
 
   public async applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void> {
     // Unknown issues need the fold's opening evidence before they can be inserted.
+    // The body column is deliberately absent (issue 681): the view stops
+    // persisting body text, and a body a row already holds is left as it is.
     await this.sql`
       update issues
-      set state = ${issue.state}, title = ${issue.title}, body = ${issue.body}, url = ${issue.url},
+      set state = ${issue.state}, title = ${issue.title}, url = ${issue.url},
           github_updated_at = ${issue.updatedAt}
       where repository_id = ${repositoryId} and github_issue_id = ${githubIssueId}
         and (github_updated_at is null or github_updated_at <= ${issue.updatedAt}::timestamptz)
@@ -1790,7 +1792,7 @@ async function upsertIssues(
   for (const issue of fold.issues) {
     const [row] = await sql<IssueRow[]>`
       insert into issues (
-        github_issue_id, repository_id, issue_number, title, body, url, state, github_updated_at,
+        github_issue_id, repository_id, issue_number, title, url, state, github_updated_at,
         owner_github_login, opening_label, opening_comparison_points, opening_reserve_points,
         opening_source_event_id, opening_source_actor_login, opening_source_at,
         settled_label, settled_points, settled_label_event_id, settled_label_actor_login,
@@ -1798,7 +1800,7 @@ async function upsertIssues(
         settled_rationale_commented_at, claim_assignee_github_login, claim_assignee_github_user_id
       )
       values (
-        ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.body}, ${issue.url}, ${issue.state}, ${issue.updatedAt},
+        ${issue.githubIssueId}, ${repositoryId}, ${issue.number}, ${issue.title}, ${issue.url}, ${issue.state}, ${issue.updatedAt},
         ${issue.ownerGitHubLogin}, ${issue.openingLabel}, ${issue.openingComparisonPoints}, ${issue.openingReservePoints},
         ${issue.openingSourceEventId}, ${issue.openingSourceActorLogin}, ${issue.openingSourceAt},
         ${issue.settledLabel}, ${issue.settledPoints}, ${issue.settledLabelEventId}, ${issue.settledLabelActorLogin},
@@ -1808,7 +1810,6 @@ async function upsertIssues(
       on conflict (github_issue_id) do update
       set issue_number = excluded.issue_number,
           title = case when ${acceptsRawView} then excluded.title else issues.title end,
-          body = case when ${acceptsRawView} then excluded.body else issues.body end,
           url = case when ${acceptsRawView} then excluded.url else issues.url end,
           state = case when ${acceptsRawView} then excluded.state else issues.state end,
           github_updated_at = case when ${acceptsRawView} then excluded.github_updated_at else issues.github_updated_at end,
@@ -1877,12 +1878,12 @@ async function upsertPullRequests(
     }
     const [row] = await sql<PullRequestRow[]>`
       insert into pull_requests (
-        github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
+        github_pull_request_id, repository_id, issue_id, pull_request_number, url, title,
         author_id, author_github_login, author_github_user_id, state, merged_at, merge_commit_oid, final_commit_at, proof_sha256
       )
       values (
         ${pullRequest.githubPullRequestId}, ${repositoryId}, ${firstIssueId}, ${pullRequest.number},
-        ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.body}, ${pullRequest.authorId},
+        ${pullRequest.url}, ${pullRequest.title}, ${pullRequest.authorId},
         ${pullRequest.authorGitHubLogin}, ${pullRequest.authorGitHubUserId}, ${pullRequest.state}, ${pullRequest.mergedAt},
         ${pullRequest.mergeCommitOid}, ${pullRequest.finalCommitAt}, ${pullRequest.proofSha256}
       )
@@ -1891,7 +1892,6 @@ async function upsertPullRequests(
           pull_request_number = excluded.pull_request_number,
           url = excluded.url,
           title = excluded.title,
-          body = excluded.body,
           author_id = excluded.author_id,
           author_github_login = excluded.author_github_login,
           author_github_user_id = excluded.author_github_user_id,
