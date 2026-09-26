@@ -3,11 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
+// Type-only, so erased at build time: the store's database client never
+// reaches this client bundle.
+import type {
+  ApiTokenStatus as StoredApiTokenStatus,
+  ApiTokenSummary as StoredApiTokenSummary,
+} from "@/lib/tokens/postgres-store";
 
-type ApiTokenSummary = { createdAt: string; expiresAt: string };
+/** A store shape as it crosses to the browser: every instant as an ISO-8601 string. */
+type Serialized<T> = { [K in keyof T]: T[K] extends Date ? string : T[K] };
+
+type ApiTokenSummary = Serialized<StoredApiTokenSummary>;
 
 /** `expired` is the database's verdict, decided when the page rendered. */
-type ApiTokenStatus = ApiTokenSummary & { expired: boolean };
+type ApiTokenStatus = Serialized<StoredApiTokenStatus>;
 
 /** The route's refusal when the session's GitHub sign-in is too old to mint. */
 const REAUTHENTICATION_REQUIRED_CODE = "REAUTHENTICATION_REQUIRED";
