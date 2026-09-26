@@ -6,14 +6,23 @@ import { API_TOKEN_LIFETIME_DAYS } from "@/lib/tokens/lifetime";
 
 type ApiTokenSummary = { createdAt: string; expiresAt: string };
 
+/** The route's refusal when the session's GitHub sign-in is too old to mint. */
+const REAUTHENTICATION_REQUIRED_CODE = "REAUTHENTICATION_REQUIRED";
+
 type ApiTokenPanelProps = {
   summary: ApiTokenSummary | null;
+  /**
+   * The GitHub sign-in that makes the session fresh enough to mint, offered
+   * beside a `REAUTHENTICATION_REQUIRED` refusal. The page passes the
+   * registration sign-in, which returns to this page.
+   */
+  reauthenticateAction?: () => Promise<void>;
 };
 
-export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
+export function ApiTokenPanel({ summary, reauthenticateAction }: ApiTokenPanelProps) {
   const router = useRouter();
   const [issued, setIssued] = useState<({ token: string } & ApiTokenSummary) | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const currentSummary = issued ?? summary;
@@ -29,15 +38,15 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
     try {
       const response = await fetch("/api/tokens", { method: "POST", credentials: "same-origin" });
       if (!response.ok) {
-        const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-        setError(body?.error?.message ?? "Unable to issue an API token.");
+        const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+        setError({ message: body?.error?.message ?? "Unable to issue an API token.", code: body?.error?.code });
         return;
       }
       const body = await response.json() as { token: string } & ApiTokenSummary;
       setIssued({ token: body.token, createdAt: body.createdAt, expiresAt: body.expiresAt });
       router.refresh();
     } catch {
-      setError("The request could not reach Overflow. Check your connection and try again.");
+      setError({ message: "The request could not reach Overflow. Check your connection and try again." });
     } finally {
       inFlight.current = false;
       setPending(false);
@@ -80,7 +89,12 @@ export function ApiTokenPanel({ summary }: ApiTokenPanelProps) {
       >
         {currentSummary ? "Regenerate token" : "Generate token"}
       </button>
-      {error ? <p className="feedback error" role="alert">{error}</p> : null}
+      {error ? <p className="feedback error" role="alert">{error.message}</p> : null}
+      {error?.code === REAUTHENTICATION_REQUIRED_CODE && reauthenticateAction !== undefined ? (
+        <form id="api-token-reauthenticate" action={reauthenticateAction}>
+          <button className="action-button" type="submit">Confirm GitHub sign-in</button>
+        </form>
+      ) : null}
       {issued ? (
         <div role="status" className="feedback success">
           <p><strong>Copy this token now. It will not be shown again after you leave or reload this page.</strong></p>

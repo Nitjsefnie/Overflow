@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoConsoleOutput, spyOnConsoleOutput } from "../support/console-guard";
@@ -11,11 +11,12 @@ import NewRepositoryPage from "@/app/repositories/new/page";
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
-const { getTokenSummary, requireMemberPageSession, redirect, refresh } = vi.hoisted(() => ({
+const { getTokenSummary, requireMemberPageSession, redirect, refresh, signInForRepositoryRegistration } = vi.hoisted(() => ({
   getTokenSummary: vi.fn(),
   requireMemberPageSession: vi.fn(),
   redirect: vi.fn(),
   refresh: vi.fn(),
+  signInForRepositoryRegistration: vi.fn(async () => {}),
 }));
 
 vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh }) }));
@@ -27,6 +28,7 @@ vi.mock("@/lib/dashboard/session", () => ({
   requireMemberPageSession,
   isModeratorSession: () => false,
 }));
+vi.mock("@/lib/auth/sign-in-actions", () => ({ signInForRepositoryRegistration }));
 
 const createdAt = "2026-09-05T10:30:00.123Z";
 const expiresAt = "2026-12-04T10:30:00.123Z";
@@ -39,6 +41,12 @@ const expiredSummary = { createdAt: "2026-05-01T08:00:00.000Z", expiresAt: "2026
 function mintedToken(value = token, date = createdAt, expiry = expiresAt) {
   return Response.json({ token: value, createdAt: date, expiresAt: expiry }, { status: 201 });
 }
+
+const reauthenticationRefusal = () => Response.json({ error: {
+  code: "REAUTHENTICATION_REQUIRED", message: "Confirm your GitHub sign-in to issue an API token.",
+} }, { status: 403 });
+
+const reauthenticateForm = () => document.getElementById("api-token-reauthenticate");
 
 function describedBy(element: HTMLElement): string[] {
   return (element.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
@@ -189,6 +197,55 @@ describe("API token panel", () => {
     expect(screen.getByRole("button", { name: "Generate token" })).toBeEnabled();
   });
 
+  it("offers the supplied re-authentication action as its own form when minting needs a fresh sign-in", async () => {
+    const reauthenticate = vi.fn(async () => {});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reauthenticationRefusal()));
+    render(<ApiTokenPanel summary={{ createdAt, expiresAt }} reauthenticateAction={reauthenticate} />);
+    expect(reauthenticateForm()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate token" }));
+
+    const alert = await screen.findByRole("alert");
+    const form = reauthenticateForm();
+    expect(form).toBeInstanceOf(HTMLFormElement);
+    expect(screen.getByRole("region", { name: "Overflow API token" })).toContainElement(form);
+    expect(form).not.toContainElement(alert);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const submit = within(form!).getByRole("button");
+    expect(submit).toHaveAttribute("type", "submit");
+    fireEvent.click(submit);
+    await waitFor(() => expect(reauthenticate).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    [401, "UNAUTHENTICATED", "Sign in is required."],
+    [403, "FORBIDDEN", "The request origin is not allowed."],
+    [502, "UPSTREAM_FAILURE", "Unable to issue an API token."],
+  ])("offers no re-authentication form for a %s %s refusal", async (status, code, message) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { code, message } }, { status })));
+    render(<ApiTokenPanel summary={null} reauthenticateAction={vi.fn(async () => {})} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    await screen.findByRole("alert");
+    expect(reauthenticateForm()).toBeNull();
+  });
+
+  it("drops the re-authentication form once a later attempt mints", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(reauthenticationRefusal())
+      .mockResolvedValueOnce(mintedToken()));
+    render(<ApiTokenPanel summary={null} reauthenticateAction={vi.fn(async () => {})} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+    await screen.findByRole("alert");
+    expect(reauthenticateForm()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    expect(await screen.findByText(token)).toBeVisible();
+    expect(reauthenticateForm()).toBeNull();
+  });
+
   it("leaves the displayed token and date alone after a failed regenerate, then allows retry", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mintedToken())
@@ -308,6 +365,25 @@ describe("repository registration page token panel", () => {
     } finally {
       stylesheet.remove();
     }
+  });
+
+  it("wires the registration sign-in as the panel's re-authentication action", async () => {
+    requireMemberPageSession.mockReset().mockResolvedValue({
+      user: { id: "member-id", name: "Ada", role: "MEMBER", canAdministerWebhooks: true },
+    });
+    getTokenSummary.mockReset().mockResolvedValue(null);
+    signInForRepositoryRegistration.mockClear();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === "/api/tokens" ? reauthenticationRefusal() : Response.json({ labels: [], identities: [] }),
+    ));
+    render(await NewRepositoryPage());
+    const panel = screen.getByRole("region", { name: "Overflow API token" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Generate token" }));
+    await within(panel).findByRole("alert");
+    fireEvent.click(within(reauthenticateForm()!).getByRole("button"));
+
+    await waitFor(() => expect(signInForRepositoryRegistration).toHaveBeenCalledTimes(1));
   });
 
   it.each([
