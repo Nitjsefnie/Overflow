@@ -110,8 +110,8 @@ describe("account controls panel", () => {
     fireEvent.change(confirmation, { target: { value: "" } });
     expect(deleteButton).toBeDisabled();
 
-    // A blank confirmation never sends the delete request: the export click
-    // alone lands, and the disabled delete control's click sends nothing.
+    // An export in flight disarms the delete control even with the login
+    // typed: the export request alone lands, and the delete click sends nothing.
     fireEvent.change(confirmation, { target: { value: confirmLogin } });
     fireEvent.click(within(region).getByRole("button", { name: "Download export" }));
     fireEvent.click(deleteButton);
@@ -174,7 +174,8 @@ describe("account controls panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Download export" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach Overflow/i);
+    const alert = await screen.findByRole("alert");
+    expect(alert).not.toHaveTextContent("private network detail");
     expect(screen.getByRole("button", { name: "Download export" })).toBeEnabled();
     expect(createObjectURL).not.toHaveBeenCalled();
   });
@@ -211,7 +212,7 @@ describe("account controls panel", () => {
 
   it("reports a confirmation mismatch without navigating or sending a second request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ error: {
-      code: "CONFIRMATION_MISMATCH", message: "The confirmation login does not match your account.",
+      code: "CONFIRMATION_MISMATCH", message: "route-message-sentinel",
     } }, { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
     render(<AccountControlsPanel reauthenticateAction={vi.fn(async () => {})} />);
@@ -219,7 +220,7 @@ describe("account controls panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete account" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/match/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent("route-message-sentinel");
     expect(assign).not.toHaveBeenCalled();
     expect(reauthenticateForm()).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -272,7 +273,7 @@ describe("account controls panel", () => {
     ];
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: {
       code: "SPONSOR_BLOCKED",
-      message: "Unregister your sponsored repositories before deleting your account.",
+      message: "route-message-sentinel",
       repositories,
     } }, { status: 409 })));
     render(<AccountControlsPanel reauthenticateAction={vi.fn(async () => {})} />);
@@ -281,7 +282,7 @@ describe("account controls panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete account" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/unregister/i);
+    expect(alert).toHaveTextContent("route-message-sentinel");
     const region = screen.getByRole("region", { name: "Your account data" });
     expect(within(region).getByRole("list")).toHaveTextContent("octo/harbour");
     expect(within(region).getByRole("list")).toHaveTextContent("octo/quay");

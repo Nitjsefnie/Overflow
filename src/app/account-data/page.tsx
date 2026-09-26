@@ -296,9 +296,9 @@ export function AccountDataNotice() {
             causes Overflow to try to record the failure time on the identity whose token was used.
           </li>
           <li>
-            Download an export of the data stored about your account, or delete your account, from the{" "}
-            <Link href="/dashboard">account controls on your dashboard</Link> — no public request is
-            needed.
+            Download an export of the data stored about your account, or delete your account, from the
+            &ldquo;Your account data&rdquo; section of your <Link href="/dashboard">dashboard</Link> — no
+            public request is needed.
           </li>
           <li>
             If you cannot sign in to Overflow, request deletion or an export of the data stored about
@@ -321,8 +321,9 @@ export function AccountDataNotice() {
             you accept a public reply there, and only when the export holds no records of you acting on
             other accounts — no moderation action you took, no audit report you filed or decided, no role
             change you made, no override decision you issued — and no audit reports filed about your
-            account. A member who can sign in downloads the export themselves, from the dashboard, in
-            every case.
+            account. When it cannot be posted, sign in with the same GitHub account and download it from
+            the &ldquo;Your account data&rdquo; section of your dashboard; otherwise the export is held. A
+            member who can sign in can download the export there in every case.
           </li>
         </ul>
       </section>
@@ -364,7 +365,9 @@ export function AccountDataNotice() {
         <p>What happens afterwards:</p>
         <ul>
           <li>
-            your signed-in sessions end at their next request, and your API token stops working at once
+            a deletion from your dashboard signs that browser out at once; any other signed-in session
+            ends at its next request whose account lookup succeeds, and until then every member page and
+            member API refuses the deleted account. Your API token stops working at once
           </li>
           <li>
             signing in with GitHub again registers the account again and re-links the retained history;
@@ -386,7 +389,7 @@ export function AccountDataNotice() {
           </li>
         </ul>
         <p>
-          To delete your account, use the account controls on your{" "}
+          To delete your account, use the &ldquo;Your account data&rdquo; section of your{" "}
           <Link href="/dashboard">dashboard</Link>: deletion there confirms a fresh GitHub sign-in
           first, and refuses while your account still sponsors a registered repository.
         </p>
