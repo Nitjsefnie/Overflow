@@ -8,6 +8,8 @@ name: ratchet guard
 # installed, built or executed.
 on:
   pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    # main only: a PR retargeted to main (an edited event) gets no new run, so without this filter its stale green would carry over — required contexts match by name on the head SHA
+    branches: [main]
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -23,14 +25,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # The checkout ref is pinned to main deliberately: under
-      # pull_request_target an unpinned checkout would take the event ref
-      # (refs/pull/<N>/merge — pull request content), and this job must
-      # never materialize the head. main provides scripts/check-ratchets.ts;
-      # the pull request contributes no byte of the executed code.
+      # No ref: input — under pull_request_target GitHub points GITHUB_REF
+      # at the default branch and GITHUB_SHA at its last commit, so the
+      # default checkout is the trusted base, never the merge ref, and
+      # actions/checkout's fork guard exempts that default checkout. main
+      # provides scripts/check-ratchets.ts; the pull request contributes no
+      # byte of the executed code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
           persist-credentials: false
           fetch-depth: 0
 
