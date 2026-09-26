@@ -1,6 +1,6 @@
 import type { JSONValue } from "postgres";
 import type { TransactionClient } from "@/lib/db/types";
-import { narrowCachedIssueBodies } from "@/lib/fold/reconciliation-evidence";
+import { narrowCachedIssueBodies, type BodyBearingCachedIssue } from "@/lib/fold/reconciliation-evidence";
 
 /**
  * How long after a merge the fold's settlement evidence window stays open.
@@ -13,17 +13,6 @@ import { narrowCachedIssueBodies } from "@/lib/fold/reconciliation-evidence";
  * could still produce one.
  */
 const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
-
-/**
- * The cached-issue shape the narrowing needs: free text may sit on the issue,
- * on any comment, and on any nested closing pull request, and the rest of the
- * jsonb is opaque here.
- */
-type CachedIssueScrubShape = {
-  body?: string | undefined;
-  comments: Array<{ body?: string | undefined }>;
-  closingPullRequests: Array<{ body?: string | undefined }>;
-};
 
 /**
  * Scrubs the free text a repository's rows hold, in place, inside the
@@ -92,7 +81,7 @@ export async function scrubRepositoryFreeText(
     return;
   }
 
-  const [evidence] = await transaction<{ issues: CachedIssueScrubShape[] }[]>`
+  const [evidence] = await transaction<{ issues: BodyBearingCachedIssue[] }[]>`
     select issues from repository_reconciliation_evidence where repository_id = ${repositoryId}
   `;
   if (evidence === undefined) {

@@ -40,7 +40,7 @@ export type NarrowedCachedIssue = Omit<GitHubIssue, "body" | "closingPullRequest
  * body to match, so demanding `{ body? }` would reject exactly the input the
  * narrowing is idempotent over.
  */
-type BodyBearingCachedIssue = {
+export type BodyBearingCachedIssue = {
   body?: string | undefined;
   comments: Array<{ body?: string | undefined }>;
   closingPullRequests: Array<object>;

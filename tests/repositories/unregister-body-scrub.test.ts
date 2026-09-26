@@ -8,6 +8,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
 import {
   CACHED_COMMENT_BODY_PLACEHOLDER,
+  narrowCachedIssueBodies,
   RECONCILIATION_EVIDENCE_FORMAT,
 } from "@/lib/fold/reconciliation-evidence";
 
@@ -76,7 +77,10 @@ describe("scrubbing free text when a repository is unregistered", () => {
 
     const after = await evidenceCache(repository.repositoryId);
     const [cachedIssue] = after.issues;
-    expect(after).not.toBeNull();
+    // The scrub leaves exactly the narrowing: every other cached field — ids,
+    // logins, timestamps, history, the diff and reviews — passes through
+    // unchanged.
+    expect(after.issues).toEqual(narrowCachedIssueBodies(before.issues));
     // The issue's and its nested pull request's own bodies are gone outright,
     // while every nonblank comment body is the placeholder and the blank one
     // stays blank.
@@ -130,12 +134,13 @@ describe("scrubbing free text when a repository is unregistered", () => {
       mergedAt: new Date(Date.now() - 5 * 60 * 1000),
     });
     await insertSettlement(repository.repositoryId, pullRequestId, issueId);
-    await seedWideEvidenceCache(repository.repositoryId);
+    const before = await seedWideEvidenceCache(repository.repositoryId);
 
     await store.unregisterRepository(registrationOf(repository));
 
     const after = await evidenceCache(repository.repositoryId);
     const [cachedIssue] = after.issues;
+    expect(after.issues).toEqual(narrowCachedIssueBodies(before.issues));
     expect(Object.hasOwn(cachedIssue!, "body")).toBe(false);
     expect(cachedIssue!.comments.map(({ body }) => body)).toEqual([
       CACHED_COMMENT_BODY_PLACEHOLDER, "",
@@ -208,7 +213,11 @@ async function materializedRows(
 /** A legacy (pre-narrowing) evidence cache: wide bodies, a review and a raw diff. */
 async function seedWideEvidenceCache(
   repositoryId: string,
-): Promise<{ issuesRaw: string; pullRequestsRaw: string }> {
+): Promise<{
+  issues: Array<{ body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> }>;
+  issuesRaw: string;
+  pullRequestsRaw: string;
+}> {
   const issues = [{
     id: externalId,
     number: 1,
@@ -278,7 +287,7 @@ async function seedWideEvidenceCache(
     from repository_reconciliation_evidence
     where repository_id = ${repositoryId}
   `;
-  return { issuesRaw: stored!.issues_raw, pullRequestsRaw: stored!.pull_requests_raw };
+  return { issues, issuesRaw: stored!.issues_raw, pullRequestsRaw: stored!.pull_requests_raw };
 }
 
 async function evidenceCache(
