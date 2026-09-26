@@ -82,6 +82,8 @@ beforeAll(async () => {
   userId = user.id;
   await oldReleaseWrites();
   previousRows = await historyRows();
+  // Migrating with the existing event proves CHECK validation does not fire
+  // its immutability trigger; an UPDATE of that row would abort this setup.
   await runMigrations();
 });
 
@@ -113,7 +115,7 @@ describe("privileged action credential migration", () => {
     ]);
   });
 
-  it("upgrades across 054 with existing history without updating immutable events", async () => {
+  it("preserves existing history and event immutability across 054", async () => {
     expect(await historyRows()).toEqual(previousRows.map((row) => ({
       ...row, credential_kind: null, credential_token_id: null,
     })));
@@ -137,7 +139,7 @@ describe("privileged action credential migration", () => {
   for (const table of tables) {
     const tokenId = randomUUID();
     it.each([
-      ["token", null], ["session", tokenId], ["bogus", null],
+      ["token", null], ["session", tokenId], ["bogus", null], [null, tokenId],
     ])(`${table} rejects credential (%s, %s)`, async (kind, token) => {
       await expect(insertHistory(table, kind, token)).rejects.toMatchObject({
         code: "23514", constraint_name: `${table}_credential_check`,
