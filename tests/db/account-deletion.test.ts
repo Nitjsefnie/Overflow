@@ -480,13 +480,16 @@ describe("account deletion as pseudonymisation", () => {
       Number(seed.contributorPullRequestGithubId),
     );
 
-    // No seeded secret bytes anywhere, in either encoding.
+    // No stored secret bytes anywhere, in either encoding. The forge token is
+    // read back as stored: a fresh encryption has a fresh IV and could never match.
     const serialized = JSON.stringify(exported);
+    const [storedForgeToken] = await sql<{ encrypted_token: Buffer }[]>`
+      select encrypted_token from user_forge_identities where user_id = ${contributor.id}
+    `;
     const secretBytes = [
       Buffer.from("github-oauth-token-bytes", "utf8"),
       seed.apiTokenHash,
-      Buffer.from(encryptToken("gitlab-pat-bytes", TEST_ENCRYPTION_KEY,
-        credentialBinding.forgeToken({ provider: "gitlab", instanceUrl: "https://gitlab.example.com", forgeUserId: 777 })), "utf8"),
+      Buffer.from(storedForgeToken!.encrypted_token),
     ];
     for (const bytes of secretBytes) {
       expect(serialized).not.toContain(bytes.toString("utf8"));
