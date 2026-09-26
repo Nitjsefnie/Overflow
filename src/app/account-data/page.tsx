@@ -7,7 +7,8 @@ export function AccountDataNotice() {
         <h1 id="account-data-title">Account data</h1>
         <p>
           What Overflow stores when you sign in with GitHub or link a GitLab identity, what it is used for, and
-          what you control.
+          what you control — and what it stores about people who have never signed in, and what its server logs
+          record.
         </p>
       </section>
 
@@ -110,6 +111,92 @@ export function AccountDataNotice() {
           which displays each identity&apos;s instance URL, login, and last-verified date, and warns of a recorded
           rejected background reconciliation read. Other members and moderators still see only your GitHub login.
           The stored GitLab token is displayed to no one.
+        </p>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-non-member-heading">
+        <h2 id="account-data-non-member-heading">People who have never signed in</h2>
+        <p>
+          Overflow reads each registered repository&apos;s issues, pull requests, and comments from GitHub or
+          GitLab using the token of the member who registered it — its sponsor. So it stores data about people who
+          took part in that repository without ever signing in to Overflow. GitLab usernames and numeric user ids
+          are stored the same way as GitHub logins and ids.
+        </p>
+        <p>What it stores about them:</p>
+        <ul>
+          <li>
+            the login of the author of an issue Overflow tracks — only an issue carrying one of the
+            repository&apos;s opening catalog labels can be tracked — and the login and numeric user id of an
+            issue&apos;s claim assignee and of a pull request&apos;s author
+          </li>
+          <li>
+            for work credited to someone with no Overflow account, a settlement holding that person&apos;s login
+            and numeric user id
+          </li>
+          <li>the titles and descriptions of the issues and pull requests it records</li>
+          <li>
+            a cache per registered repository holding every issue in it, not only tracked ones: each issue&apos;s
+            title, description, author, assignee, and the history of who labelled and assigned it; every comment
+            on it, with its author&apos;s login, numeric user id, and text; and the title, description, author,
+            and diff of each pull request that closes it. The cache records pull request reviews without the
+            reviewer&apos;s login or text
+          </li>
+          <li>a change log recording logins and titles as those records change</li>
+          <li>moderation notes, which can name the account that applied a label</li>
+        </ul>
+        <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
+        <p>
+          Nothing about a person who has not signed in is shown to a visitor who is not signed in. Signed-in
+          members see a claim assignee&apos;s login and issue titles on the issues board, a sponsor sees the
+          assignee on its dashboard, and moderators see the moderation notes. Descriptions, comment text, the
+          cache, and the change log are displayed to no one. The site operator administers the database.
+        </p>
+        <p>How long it is kept:</p>
+        <ul>
+          <li>
+            While the repository stays registered, reconciliation re-reads it. Every pass overwrites the stored
+            logins and pull request fields from GitHub or GitLab, and an issue&apos;s title and description
+            whenever the forge&apos;s copy is at least as new. An unattended sweep runs every six hours, and a pass
+            replaces the whole cache with a full re-read once six hours have passed since the last one, so an edit
+            or deletion on GitHub or GitLab normally reaches Overflow&apos;s copy within twelve hours. An issue or
+            pull request that a later pass no longer records is removed.
+          </li>
+          <li>
+            The change log is append-only: the logins and titles it recorded, including those of removed issues
+            and pull requests, are never pruned.
+          </li>
+          <li>
+            Unregistering a repository deletes none of this. It stops the re-reads, so the copy stored for that
+            repository is kept indefinitely.
+          </li>
+          <li>The daily database backups described under How long it is kept hold this data too.</li>
+        </ul>
+        <p>
+          To ask for data about you to be removed, open an issue at{" "}
+          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
+            github.com/Nitjsefnie/Overflow/issues
+          </a>{" "}
+          from the account the request is about. No private channel exists, and opening an issue needs a GitHub
+          account. Overflow has no removal feature for people who have not signed in, so the operator handles a
+          request by hand. Content still on GitHub or GitLab in a registered repository is read again at the next
+          pass, so removing it there first is what keeps it out of Overflow.
+        </p>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-logs-heading">
+        <h2 id="account-data-logs-heading">Server logs</h2>
+        <p>This applies to every visitor, signed in or not.</p>
+        <p>
+          The web server in front of Overflow logs every request: the client&apos;s IP address — the real address,
+          restored from Cloudflare&apos;s forwarding header — the time, the requested path, the response status,
+          the referring page, and the browser&apos;s user agent. That log is shared by every site on the host. It
+          is rotated daily and each rotated file is deleted after 14 rotations, about 15 days in all.
+        </p>
+        <p>
+          Overflow&apos;s own output goes to the host&apos;s system journal. The journal has no time limit, only a
+          size limit shared with every other service on the host, so how long an entry lasts depends on how much
+          the host logs overall. Overflow does not log client IP addresses or comment text. Its log lines can
+          include a repository&apos;s owner and name, which may be a person&apos;s username, and error details.
         </p>
       </section>
 
