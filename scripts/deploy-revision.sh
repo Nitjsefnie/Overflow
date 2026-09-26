@@ -20,7 +20,8 @@ log_dir="${OVERFLOW_DEPLOY_LOG_DIR:-/var/log/overflow}"
 
 # The CI gate: refuse to ship a SHA that main's required checks have not
 # blessed. Runs against the fetched SHA before the fast-forward, so every
-# refusal below leaves HEAD and the working tree untouched. Per required
+# refusal below leaves HEAD, the index and the working tree untouched; only
+# the fetch's refs (FETCH_HEAD, origin/main) have moved. Per required
 # context, only the latest check run decides: completed + success passes;
 # completed + any other conclusion refuses immediately; a status that is not
 # completed is pending and waits; an absent run (GitHub has not created it
@@ -81,7 +82,7 @@ $required
 EOF
     [ -z "$pending" ] && break
     if [ "$SECONDS" -ge "$deadline" ]; then
-      printf 'Required checks still pending after %ss: %s. The deploy was refused; nothing has been mutated.\n' "$timeout" "$pending" >&2
+      printf 'Required checks still pending after %ss: %s. The deploy was refused; HEAD, the index and the working tree are untouched; only the fetched refs moved.\n' "$timeout" "$pending" >&2
       exit 1
     fi
     sleep 15
@@ -94,7 +95,7 @@ flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing t
 expected_serving=$(readlink -f "$tree/.next" || printf absent)
 # Fetch, gate, then fast-forward: nothing below moves HEAD or the working tree
 # until both gates have passed, so a refused deploy leaves the tree on the
-# commit it was on. The fetch only writes refs.
+# commit it was on. The fetch only writes refs (FETCH_HEAD, origin/main).
 git fetch origin main
 # FETCH_HEAD, not origin/main: it records exactly what the fetch above
 # retrieved, whereas origin/main moves only when remote.origin.fetch maps
@@ -105,7 +106,7 @@ full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
 # fetched commit. A tree ahead of or diverged from main is refused here,
 # before either gate.
 if ! git merge-base --is-ancestor HEAD "$full_sha"; then
-  printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. Nothing has been mutated. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
+  printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
   exit 1
 fi
 # Tree-cleanliness gate: a release is named for the commit it was built from,
