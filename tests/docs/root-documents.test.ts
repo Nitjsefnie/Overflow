@@ -17,7 +17,14 @@ import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-const rootDocuments = ["README.md", "API.md", "OPERATING.md", "CONTRIBUTING.md"];
+const rootDocuments = [
+  "API.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "OPERATING.md",
+  "README.md",
+  "SECURITY.md",
+];
 
 type MarkdownLink = { line: number; target: string };
 
