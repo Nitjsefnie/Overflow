@@ -1,5 +1,14 @@
 import { callGuarded } from "@/lib/fold/guarded-callback";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
+import { FailureLogger } from "@/lib/worker/failure-logger";
+
+/**
+ * The lease-heartbeat site's failure key (issue 661). One key for the site,
+ * not one per job: an outage fails every in-flight fold's heartbeat together,
+ * so their failures are one outage's count, and the site as a whole is what
+ * stays visible through it.
+ */
+const LEASE_HEARTBEAT_FAILURE_KEY = "reconciliation-lease-heartbeat";
 
 export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
@@ -35,6 +44,16 @@ export type ReconciliationWorkerDependencies = {
    * costs.
    */
   onFailure?(repositoryId: string, error: unknown): void | PromiseLike<unknown>;
+  /**
+   * Bounds the lease-heartbeat site's failure logging (issue 661): the first
+   * heartbeat failure of an outage prints in full, repeats inside the logger's
+   * quiet window are counted silently, and a renewal that succeeds after
+   * failures prints one recovery line. Omitted, each job bounds its own
+   * heartbeat with a fresh logger; passing one logger across every job bounds
+   * the site as a whole, which is what the server's instrumentation wiring
+   * does.
+   */
+  leaseHeartbeatFailureLogger?: FailureLogger;
 };
 
 /**
@@ -293,10 +312,24 @@ function startLeaseRenewal(
 ): () => Promise<void> {
   const now = dependencies.now ?? (() => new Date());
   const renewalDeadline = new Date(now().getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
+  // Omitted, this job bounds its own heartbeat with a fresh logger; the
+  // server's wiring passes one logger across every job, which is what bounds
+  // the site as a whole (issue 661).
+  const failureLogger = dependencies.leaseHeartbeatFailureLogger ?? new FailureLogger();
   let stopped = false;
   let renewing = false;
   let cancel: LeaseRenewalCancellation | undefined;
   let cancellation: Promise<void> | undefined;
+  const reportHeartbeatFailure = (error: unknown): void => {
+    const message = "Reconciliation lease heartbeat failed for job";
+    try {
+      failureLogger.failure(LEASE_HEARTBEAT_FAILURE_KEY, message, job.id, error);
+    } catch {
+      // The bound must not cost the report: a sink that cannot print still
+      // leaves the site's line, the way the unbounded site printed it.
+      console.error(message, job.id);
+    }
+  };
   const stop = () => {
     stopped = true;
     return cancellation ??= (async () => {
@@ -305,7 +338,7 @@ function startLeaseRenewal(
       try {
         await cancel();
       } catch (error) {
-        logLeaseRenewalFailure(job.id, error);
+        reportHeartbeatFailure(error);
       }
     })();
   };
@@ -319,9 +352,15 @@ function startLeaseRenewal(
     renewing = true;
     try {
       const renewed = await dependencies.store.renewReconciliationJobLease(job.id, job.leaseToken, renewalDeadline);
-      if (!renewed) void stop();
+      if (!renewed) {
+        void stop();
+        return;
+      }
+      // A renewal that answers is the heartbeat's positive signal: after
+      // failures it ends the outage with the recovery line (issue 661).
+      failureLogger.success(LEASE_HEARTBEAT_FAILURE_KEY);
     } catch (error) {
-      logLeaseRenewalFailure(job.id, error);
+      reportHeartbeatFailure(error);
     } finally {
       renewing = false;
     }
@@ -331,17 +370,17 @@ function startLeaseRenewal(
     try {
       const schedule = dependencies.scheduleLeaseRenewal ?? defaultScheduleLeaseRenewal;
       if (typeof schedule !== "function") {
-        logLeaseRenewalFailure(job.id, undefined);
+        reportHeartbeatFailure(undefined);
         return;
       }
       const cleanup = await schedule.call(dependencies, renew, RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS);
       if (typeof cleanup !== "function") {
-        logLeaseRenewalFailure(job.id, undefined);
+        reportHeartbeatFailure(undefined);
         return;
       }
       cancel = cleanup;
     } catch (error) {
-      logLeaseRenewalFailure(job.id, error);
+      reportHeartbeatFailure(error);
     }
   });
   return stop;
@@ -351,15 +390,6 @@ function defaultScheduleLeaseRenewal(callback: () => Promise<void>, everyMs: num
   const timer = setInterval(callback, everyMs);
   timer.unref?.();
   return () => clearInterval(timer);
-}
-
-function logLeaseRenewalFailure(jobId: string, error: unknown): void {
-  const message = "Reconciliation lease heartbeat failed for job";
-  try {
-    console.error(message, jobId, error);
-  } catch {
-    console.error(message, jobId);
-  }
 }
 
 /**

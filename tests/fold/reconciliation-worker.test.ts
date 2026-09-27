@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FailureLogger } from "@/lib/worker/failure-logger";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
@@ -826,8 +827,13 @@ describe("reconciliation lease heartbeat", () => {
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(2);
       await surfaceUnhandledRejections();
       expect(rejections.recorded).toEqual([]);
-      expect(logged).toHaveBeenCalledTimes(1);
+      // The rejected renewal prints the site's full line; the renewal that
+      // answers ends the outage with its recovery line (issue 661).
+      expect(logged).toHaveBeenCalledTimes(2);
       expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
+      expect(logged.mock.calls[1]?.[0]).toMatch(
+        /^recovered: reconciliation-lease-heartbeat after 1 failures over \d+ s$/,
+      );
       expect(timer.cancellations).toBe(0);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
@@ -1048,8 +1054,17 @@ describe("reconciliation lease heartbeat", () => {
       await pendingTick;
       await timer.tick();
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(stopFirst ? 1 : 2);
-      expect(logged).toHaveBeenCalledTimes(rejects ? 1 : 0);
+      // A held renewal that then rejects prints the site's full line once; when
+      // the fold goes on and a later renewal answers, it ends the outage with
+      // the recovery line (issue 661). stopFirst ends the job before any
+      // renewal can answer, so only the rejection's line exists.
+      expect(logged).toHaveBeenCalledTimes(rejects && !stopFirst ? 2 : rejects ? 1 : 0);
       if (rejects) expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
+      if (rejects && !stopFirst) {
+        expect(logged.mock.calls[1]?.[0]).toMatch(
+          /^recovered: reconciliation-lease-heartbeat after 1 failures over \d+ s$/,
+        );
+      }
     } finally {
       releaseRenewal.resolve();
       fold.resolve();
@@ -1907,6 +1922,131 @@ describe("the scheduled reconciliation worker", () => {
 
   it("backs off over one minute, five, fifteen and an hour", () => {
     expect(RECONCILIATION_RETRY_DELAYS_MS).toEqual([60_000, 300_000, 900_000, 3_600_000]);
+  });
+});
+
+describe("the bounded lease-heartbeat failure site", () => {
+  /**
+   * Issue 661: during an outage an in-flight fold's lease renewals fail every
+   * five seconds, and each one printed its own full stack trace. The site's
+   * failures now flow through an injectable FailureLogger, so the first prints
+   * in full, repeats inside the quiet window are counted silently, and a
+   * renewal that succeeds after failures prints one recovery line. The
+   * injected logger shares the test's clock, so no case waits on the window.
+   */
+
+  const HEARTBEAT_MESSAGE = "Reconciliation lease heartbeat failed for job";
+  const HEARTBEAT_KEY = "reconciliation-lease-heartbeat";
+
+  function heartbeatLoggerOn(clockMs: { value: number }) {
+    const lines: unknown[][] = [];
+    return {
+      logger: new FailureLogger({
+        now: () => clockMs.value,
+        error: (...args: unknown[]) => {
+          lines.push(args);
+        },
+      }),
+      lines,
+    };
+  }
+
+  it("logs the first heartbeat failure in full and says nothing for repeats inside the window", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const failure = new Error("the lease write could not reach the database");
+    const clock = { value: Date.parse("2030-01-01T12:00:00Z") };
+    const { logger, lines } = heartbeatLoggerOn(clock);
+
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      now: () => new Date(clock.value),
+      ...timer.dependencies,
+      leaseHeartbeatFailureLogger: logger,
+    });
+    try {
+      await timer.armed;
+      store.renewReconciliationJobLease = async () => {
+        throw failure;
+      };
+      await timer.tick();
+      await timer.tick();
+
+      expect(lines).toEqual([[HEARTBEAT_MESSAGE, "job-1", failure]]);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+  });
+
+  it("prints the recovery line when a renewal succeeds after failures", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const failure = new Error("the lease write could not reach the database");
+    const clock = { value: Date.parse("2030-01-01T12:00:00Z") };
+    const { logger, lines } = heartbeatLoggerOn(clock);
+
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      now: () => new Date(clock.value),
+      ...timer.dependencies,
+      leaseHeartbeatFailureLogger: logger,
+    });
+    try {
+      await timer.armed;
+      let renewalCount = 0;
+      store.renewReconciliationJobLease = async () => {
+        renewalCount += 1;
+        if (renewalCount === 1) {
+          throw failure;
+        }
+        return true;
+      };
+      await timer.tick(); // the outage: one full line
+      clock.value += 3_000;
+      await timer.tick(); // the database answers: the recovery line
+
+      expect(lines).toEqual([
+        [HEARTBEAT_MESSAGE, "job-1", failure],
+        [`recovered: ${HEARTBEAT_KEY} after 1 failures over 3 s`],
+      ]);
+    } finally {
+      fold.resolve();
+      await running;
+    }
+  });
+
+  it("bounds even the un-injected default to one full line per job's outage", async () => {
+    const { store } = createFakeStore({ jobs: [job()] });
+    const timer = createRenewalTimer();
+    const fold = signal();
+    const clock = { value: Date.parse("2030-01-01T12:00:00Z") };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const running = runNextReconciliationJob({
+      store,
+      reconcile: () => fold.promise,
+      now: () => new Date(clock.value),
+      ...timer.dependencies,
+    });
+    try {
+      await timer.armed;
+      store.renewReconciliationJobLease = async () => {
+        throw new Error("the lease write could not reach the database");
+      };
+      await timer.tick();
+      await timer.tick();
+
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0]![0]).toBe(HEARTBEAT_MESSAGE);
+    } finally {
+      fold.resolve();
+      await running;
+      logged.mockRestore();
+    }
   });
 });
 
