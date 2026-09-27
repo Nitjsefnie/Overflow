@@ -72,10 +72,16 @@ COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
 COPY --from=build /app/LICENSE ./LICENSE
 # Next.js writes its cache (.next/cache) at runtime, and the unprivileged
 # server cannot create it under the root-owned .next the build stage copied.
-# The host deploy hands the release cache to the service user with exactly
-# this mode (scripts/deploy-revision.sh); the container mirrors it (issue
-# 688). Runs as root, before the privilege drop.
-RUN mkdir -p .next/cache \
+# The host deploy creates each new release's cache EMPTY and hands it to the
+# service user with exactly this mode (scripts/deploy-revision.sh) — the old
+# cache stays in the old release — and the container mirrors that: the
+# build-stage cache contents are wiped rather than chowned in place, because
+# a chown/chmod over the populated cache would copy every file into this RUN
+# layer (+80 MB measured). The directory exists, is owned by node, and is
+# repopulated as the server runs (issue 688). Runs as root, before the
+# privilege drop.
+RUN rm -rf .next/cache \
+  && mkdir -p .next/cache \
   && chown -R node:node .next/cache \
   && chmod -R u=rwX,g=rX,o= .next/cache
 # Health against the readiness endpoint (issue 439, 688): it answers 200 only
