@@ -61,22 +61,22 @@ upheld. These do:
 Report conduct problems by opening an issue on this repository's public
 tracker: <https://github.com/Nitjsefnie/Overflow/issues>.
 
-That is the only route, on purpose: it is the only one that verifiably
-reaches the maintainer and the only one any stranger can use. There is no
-private alternative — the maintainer's GitHub profile carries no public
-email, GitHub Discussions are disabled, and private vulnerability reporting
-is off — so do not go hunting for one, and do not invent an address, a form,
-or a private channel in anyone's name.
+Report security vulnerabilities through GitHub private vulnerability
+reporting, as described in [SECURITY.md](SECURITY.md).
 
-Because the tracker is public, keep the opening report usable:
+These are the two reporting channels that exist. Do not invent an address, a
+form, or a private channel in anyone's name.
+
+For conduct reports on the public tracker, keep the opening report usable:
 
 - Describe the behavior and link the thread where it happened; the record is
   the evidence, and you do not need to reprint all of it.
 - Keep sensitive third-party details out of the opening report. Quote what is
   needed to identify the behavior and link to the rest.
 
-Reports may be about anyone, and the maintainer's own conduct is in scope: a
-report about the maintainer is decided, like every report, by the maintainer.
+Conduct reports may be about anyone, and the maintainer's own conduct is in
+scope: a conduct report about the maintainer is decided, like every conduct
+report, by the maintainer.
 
 ## Enforcement
 
