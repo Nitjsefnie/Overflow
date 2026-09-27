@@ -75,6 +75,8 @@ export function AppShell({ memberName, isModerator, children }: AppShellProps) {
         <p>Overflow keeps cooperative promises legible.</p>
         <p>
           <Link href="/account-data">Account data</Link>
+          {" · "}
+          <Link href="/third-party-notices.txt">Third-party notices</Link>
         </p>
       </footer>
     </div>
@@ -121,6 +123,8 @@ export function PublicAppShell({ children }: PublicAppShellProps) {
         <p>Overflow keeps cooperative promises legible.</p>
         <p>
           <Link href="/account-data">Account data</Link>
+          {" · "}
+          <Link href="/third-party-notices.txt">Third-party notices</Link>
         </p>
       </footer>
     </div>

@@ -45,7 +45,7 @@ describe("account-data notice page", () => {
     }
   });
 
-  it("keeps every internal link on a route that exists in src/app", async () => {
+  it("keeps every internal link on a page route or the generated notices asset", async () => {
     await renderAccountDataPage();
 
     const routes = new Set(
@@ -57,6 +57,8 @@ describe("account-data notice page", () => {
           return directory === "" ? "/" : `/${directory}`;
         }),
     );
+    // The build writes this static asset into public/, outside src/app.
+    routes.add("/third-party-notices.txt");
 
     const internal = Array.from(document.querySelectorAll("a[href]"))
       .map((anchor) => anchor.getAttribute("href") ?? "")
