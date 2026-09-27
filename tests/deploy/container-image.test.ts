@@ -89,8 +89,14 @@ describe("production runtime image (issue 688)", () => {
 
   it("declares a HEALTHCHECK probing the readiness endpoint", () => {
     const lines = dockerfile.split("\n");
-    const healthcheckAt = lines.findIndex((line) => line.startsWith("HEALTHCHECK"));
-    expect(healthcheckAt, "a HEALTHCHECK line in the Dockerfile").toBeGreaterThanOrEqual(0);
+    // The healthcheck guards the stage that SERVES, so it must sit in the
+    // runtime stage — one declared in deps or build would never run against
+    // the started server.
+    const runtimeAt = lines.findIndex((line) => line.includes("AS runtime"));
+    const healthcheckAt = lines.findIndex(
+      (line, index) => index > runtimeAt && line.startsWith("HEALTHCHECK"),
+    );
+    expect(healthcheckAt, "a HEALTHCHECK in the runtime stage").toBeGreaterThan(runtimeAt);
     const healthcheck = lines.slice(healthcheckAt, healthcheckAt + 3).join("\n");
     // bookworm-slim ships neither curl nor wget, so the probe is a node
     // fetch one-liner whose response status drives the exit code.
@@ -98,8 +104,13 @@ describe("production runtime image (issue 688)", () => {
     expect(healthcheck).toContain("/api/readiness");
   });
 
-  it("hands .next/cache to the runtime user before dropping privileges", () => {
+  it("hands an EMPTY .next/cache to the runtime user before dropping privileges", () => {
     const lines = dockerfile.split("\n");
+    // The build-stage cache contents are wiped rather than chowned in place:
+    // a chown/chmod over the populated cache copies every file into the RUN
+    // layer (+80 MB measured), and the host deploy's parity is creating each
+    // new release's cache empty — the old cache stays in the old release.
+    expect(dockerfile).toContain("rm -rf .next/cache");
     const runtimeAt = lines.findIndex((line) => line.includes("AS runtime"));
     const cacheAt = lines.findIndex((line) => line.includes("chown -R node:node .next/cache"));
     const userAt = lines.findIndex((line) => line === "USER node");
