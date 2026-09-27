@@ -68,7 +68,7 @@ so a different pnpm is the first thing that will argue with you.
 
 Copy `.env.example` to `.env` and replace the angle-bracket placeholders with
 your local values. The optional `GITHUB_GRAPHQL_BUDGET_RESERVE=500` default can
-stay as-is:
+stay as-is. Replace these placeholders:
 
 - `DATABASE_URL` — a PostgreSQL 17 connection string.
 - `AUTH_SECRET` — generate with `npx auth secret`.
