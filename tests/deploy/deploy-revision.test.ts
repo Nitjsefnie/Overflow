@@ -2370,10 +2370,12 @@ describe("deploy/README.md section 10 pins the committed script as the procedure
   it("keeps the standing block's fence and --expect-current lines in the manual fallback", async () => {
     const section = await section10();
     const blocks = [...section.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]);
-    const standing = blocks.find((block) => block.includes("git pull --ff-only origin main"));
+    const standing = blocks.find((block) => block.includes("git fetch origin main"));
     expect(standing, "the manual standing block").toBeDefined();
     expect(standing, "the fd 9 fence line").toContain("exec 9>/run/overflow-deploy.lock");
     expect(standing).toContain('pnpm release:switch /srv/overflow "$release" --expect-current "$expected_serving"');
+    expect(standing).toContain('git merge --ff-only "$full_sha"');
+    expect(standing).toContain(`printf '%s\\n' "$full_sha" > "$release/REVISION"`);
   });
 
   it("keeps the retention listing's -regextype posix-extended line", async () => {

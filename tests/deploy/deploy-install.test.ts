@@ -87,7 +87,7 @@ const otherShellLines = new Set([
   "test -d \"$previous_release/cache\"",
   "chown -R overflow:overflow \"$previous_release/cache\"",
   "chmod -R u=rwX,g=rX,o= \"$previous_release/cache\"",
-  "git pull --ff-only origin main",
+  "git fetch origin main",
   "exec 9>/run/overflow-deploy.lock",
   "flock -w 900 9 || { echo \"Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running.\" >&2; exit 1; }",
   "expected_serving=$(readlink -f /srv/overflow/.next || printf absent)",
@@ -154,6 +154,100 @@ const otherShellLines = new Set([
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null\"",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
+// The manual fallback's expanded source-attestation gates are explicitly
+// allowlisted here so this remains a closed shell vocabulary.
+for (const line of [
+  "full_sha=$ ( git rev-parse --verify 'FETCH_HEAD^{commit}' )",
+  "ancestry_status=0",
+  "git merge-base --is-ancestor HEAD \"${full_sha}\" || ancestry_status=$?",
+  "if [ \"${ancestry_status}\" -eq 1 ] ; then",
+  "printf 'HEAD in /srv/overflow is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\\n' \"${full_sha}\" \"${full_sha}\" > & 2",
+  "exit 1",
+  "elif [ \"${ancestry_status}\" -ne 0 ] ; then",
+  "printf 'Could not determine whether HEAD in /srv/overflow is an ancestor of the fetched main (%s): git merge-base exited %s; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate the repository state in the tree before re-running.\\n' \"${full_sha}\" \"${ancestry_status}\" > & 2",
+  "exit 1",
+  "tree_status=$ ( git status --porcelain=v1 -uall ) || {",
+  "printf 'Could not read the working-tree state in /srv/overflow; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\\n' > & 2",
+  "exit 1",
+  "}",
+  "if [ -n \"${tree_status}\" ] ; then",
+  "printf '%s\\n' \"${tree_status}\"",
+  "printf 'The working tree in /srv/overflow deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\\n' \"${full_sha}\" > & 2",
+  "exit 1",
+  "allowlist_re='^(\\.next/?|\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}/|\\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}\\.tsconfig\\.json|\\.next-release-notes/|next-env\\.d\\.ts|node_modules/)$'",
+  "ignored_listing=$ ( mktemp )",
+  "ignored_status=0",
+  "git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory > \"${ignored_listing}\" || ignored_status=$?",
+  "mapfile -d '' -t ignored_entries < \"${ignored_listing}\"",
+  "rm -f \"${ignored_listing}\"",
+  "if [ \"${ignored_status}\" -ne 0 ] ; then",
+  "printf 'Could not list the ignored untracked files in /srv/overflow (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\\n' \"${ignored_status}\" > & 2",
+  "exit 1",
+  "stray_ignored= ( )",
+  "for entry in \"${ignored_entries[@]}\" ; do",
+  "[[ \"${entry}\" =~ ${allowlist_re} ]] || stray_ignored+= ( \"${entry}\" )",
+  "if [ \"${#stray_ignored[@]}\" -gt 0 ] ; then",
+  "printf '  %q\\n' \"${stray_ignored[@]}\" > & 2",
+  "printf 'The tree in /srv/overflow holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\\n' \"${full_sha}\" > & 2",
+  "exit 1",
+  "remote_url=$ ( git config --get remote.origin.url )",
+  "repo=",
+  "case \"${remote_url}\" in",
+  "git@github.com:* ) repo=\"${remote_url#git@github.com:}\" ; ;",
+  "https://github.com/* ) repo=\"${remote_url#https://github.com/}\" ; ;",
+  "esac",
+  "repo=\"${repo%.git}\"",
+  "repo_valid=0",
+  "[[ \"${repo}\" =~ ^[^/]+/[^/]+$ ]] || repo_valid=$?",
+  "if [ \"${repo_valid}\" -ne 0 ] ; then",
+  "printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\\n' \"${remote_url}\" > & 2",
+  "exit 1",
+  "required_status=0",
+  "required=$ ( gh api \"repos/${repo}/branches/main/protection\" --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]' ) || required_status=$?",
+  "if [ \"${required_status}\" -ne 0 ] || [ -z \"${required}\" ] ; then",
+  "printf 'could not determine required checks for main; refusing to deploy\\n' > & 2",
+  "exit 1",
+  "check_runs_status=0",
+  "check_runs=$ ( gh api \"repos/${repo}/commits/${full_sha}/check-runs?filter=all&per_page=100\" --paginate --jq '.check_runs[] | [.id, .name, .status, .conclusion] | @tsv' ) || check_runs_status=$?",
+  "if [ \"${check_runs_status}\" -ne 0 ] ; then",
+  "printf 'Could not read check runs for %s on %s; refusing to deploy.\\n' \"${repo}\" \"${full_sha}\" > & 2",
+  "exit 1",
+  "pending= ( )",
+  "while IFS= read -r check ; do",
+  "[ -n \"${check}\" ] || continue",
+  "newest_id=0",
+  "newest_status=",
+  "newest_conclusion=",
+  "while IFS=$'\\t' read -r id name status conclusion ; do",
+  "[ \"${name}\" = \"${check}\" ] || continue",
+  "[[ \"${id}\" =~ ^[0-9]+$ ]] || continue",
+  "if [ \"${id}\" -gt \"${newest_id}\" ] ; then",
+  "newest_id=$id",
+  "newest_status=$status",
+  "newest_conclusion=$conclusion",
+  "done <<< \"${check_runs}\"",
+  "if [ \"${newest_id}\" -eq 0 ] ; then",
+  "pending+= ( \"${check} (absent)\" )",
+  "elif [ \"${newest_status}\" != completed ] ; then",
+  "pending+= ( \"${check} (${newest_status})\" )",
+  "elif [ \"${newest_conclusion}\" != success ] ; then",
+  "pending+= ( \"${check} (${newest_conclusion})\" )",
+  "done <<< \"${required}\"",
+  "if [ \"${#pending[@]}\" -gt 0 ] ; then",
+  "printf '  %s\\n' \"${pending[@]}\" > & 2",
+  "printf 'Required checks are absent, pending or unsuccessful on %s; refusing to deploy. Re-run the gates part of this block once CI completes.\\n' \"${full_sha}\" > & 2",
+  "exit 1",
+  "git merge --ff-only \"$full_sha\"",
+  "serving_release=$ ( readlink -f /srv/overflow/.next || printf absent )",
+  "if [ \"${serving_release}\" != absent ] && [ -f \"${serving_release}/REVISION\" ] ; then",
+  "if [ \"$(cat \"${serving_release}/REVISION\")\" = \"${full_sha}\" ] ; then",
+  "printf 'Already serving %s (%s); the tree fast-forwarded to the serving commit, so install, migrate and build are skipped and the existing release stays.\\n' \"${serving_release}\" \"${full_sha}\"",
+  "exit 0",
+  "npm_config_package_import_method=copy pnpm install --frozen-lockfile",
+  "printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"",
+  "printf 'Source revision: %s\\n' \"$full_sha\"",
+]) otherShellLines.add(line);
+
 function mentionsPnpm(text: string) {
   return text.replace(/\\\r?\n/g, "").replace(/["'\\]/g, "").includes("pnpm");
 }
@@ -201,14 +295,17 @@ function validateBlock(info: string, body: string): number {
     if (!tokens.length) continue;
     const line = tokens.join(" ");
     const source = line;
-    if (line.includes("<<")) throw new Error(`Unsupported shell syntax: Heredoc introducer: ${source}`);
+    const approvedArrayAppend = /(?:stray_ignored|pending)\+= \( ".+" \)$/.test(line);
+    if (line.includes("<<") && !otherShellLines.has(line)) {
+      throw new Error(`Unsupported shell syntax: Heredoc introducer: ${source}`);
+    }
     if (line.includes("`")) throw new Error(`Unsupported shell syntax: Backtick substitution: ${source}`);
     let commandPosition = true;
     for (const token of tokens) {
       if (/^(?:[;&|()]|&&|\|\|)$/.test(token)) commandPosition = true;
       else if (commandPosition && token === "!") {
         throw new Error(`Unsupported pnpm shape (command negation): ${source}`);
-      } else if (commandPosition && /^["'$\\]/.test(token)) {
+      } else if (commandPosition && /^["'$\\]/.test(token) && !approvedArrayAppend) {
         throw new Error(`Unsupported shell syntax: Non-literal command word: ${token} in ${source}`);
       } else if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) commandPosition = false;
     }
@@ -312,7 +409,7 @@ it("requires the deploy serialization lines in their blocks, in order", async ()
     + "Consult the deploy procedure's serialization notes before re-running.\" >&2; exit 1; }",
   )[0].join(" ");
   const anchor = tokenizeLines("expected_serving=$(readlink -f /srv/overflow/.next || printf absent)")[0].join(" ");
-  const deploy = blocks.find((lines) => lines.includes("git pull --ff-only origin main"));
+  const deploy = blocks.find((lines) => lines.includes("git fetch origin main"));
   const rollback = blocks.find((lines) => lines.includes("previous_release='.next-release-REPLACE-WITH-RECORDED-ID'"));
   const prune = blocks.find((lines) => lines.some((line) => line.startsWith("pnpm release:prune")));
   expect(deploy, "section 10 deploy block").toBeDefined();
