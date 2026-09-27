@@ -94,7 +94,6 @@ describe("production reconciliation wiring", () => {
     { event: "issue_comment", action: "deleted" },
   ])("queues signed $event/$action through the same issue-subject invalidation path", async ({ event, action }) => {
     const { POST } = await import("@/app/api/github/webhooks/route");
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", secret);
     const body = JSON.stringify({
       action,
       repository: { id: 42, full_name: "octo/example" },
@@ -117,7 +116,6 @@ describe("production reconciliation wiring", () => {
   it("records the reason each route's own dependencies enqueue with", async () => {
     const { POST: postWebhook } = await import("@/app/api/github/webhooks/route");
     const { POST: postRepository } = await import("@/app/api/repositories/route");
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", secret);
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     readSession.mockResolvedValue({ user: { id: "member-1", role: "MEMBER" } });
     // The production wiring asks GitHub which scopes the sponsor token holds

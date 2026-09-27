@@ -460,9 +460,7 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
   });
 
   it("rejects an invalid token before constructing production persistence dependencies", async () => {
-    const originalSecret = process.env.GITHUB_WEBHOOK_SECRET;
     const originalDatabaseUrl = process.env.DATABASE_URL;
-    process.env.GITHUB_WEBHOOK_SECRET = secret;
     delete process.env.DATABASE_URL;
     const getSql = vi.spyOn(database, "getSql").mockReturnValue(vi.fn() as unknown as SqlClient);
     const credentialLookup = vi.spyOn(PostgresRepositoryStore.prototype, "findWebhookCredential")
@@ -487,11 +485,6 @@ describe("GitLab webhook route: the shared processor and the body cap", () => {
     } finally {
       getSql.mockRestore();
       credentialLookup.mockRestore();
-      if (originalSecret === undefined) {
-        delete process.env.GITHUB_WEBHOOK_SECRET;
-      } else {
-        process.env.GITHUB_WEBHOOK_SECRET = originalSecret;
-      }
       if (originalDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;
       } else {
