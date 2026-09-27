@@ -124,18 +124,20 @@ describe("member standings page", () => {
 
   it("turns the query string into the window the standings query is paged with", async () => {
     respondWith({ standings: [standingRow("mira", 12, 6)] });
-    await MembersStandingsPage({ searchParams: Promise.resolve({ page: "2", pageSize: "3" }) });
+    await MembersStandingsPage({ searchParams: Promise.resolve({ page: "4", pageSize: "3" }) });
 
-    expect(sql.mock.lastCall![1]).toBe(3);
-    expect(sql.mock.lastCall![2]).toBe(3);
+    const [, limit, offset] = sql.mock.lastCall!;
+    expect(limit).toBe(3);
+    expect(offset).toBe(9);
   });
 
   it("defaults the window to the first page at 200 rows for an unpaginated reader", async () => {
     respondWith({ standings: [standingRow("mira", 12, 6)] });
     await MembersStandingsPage();
 
-    expect(sql.mock.lastCall![1]).toBe(200);
-    expect(sql.mock.lastCall![2]).toBe(0);
+    const [, limit, offset] = sql.mock.lastCall!;
+    expect(limit).toBe(200);
+    expect(offset).toBe(0);
   });
 
   it("offers the next page on a full page and preserves the query state in both links", async () => {
@@ -155,5 +157,26 @@ describe("member standings page", () => {
       "/members?page=3&pageSize=2",
     );
     expect(screen.getByRole("navigation", { name: "Member standings pages" })).toBeInTheDocument();
+  });
+
+  it("offers no next page on a short first page and no pager at all when neither applies", async () => {
+    respondWith({
+      standings: [standingRow("mira", 12, 6), standingRow("zeta", 6, 6)],
+    });
+    render(await MembersStandingsPage({ searchParams: Promise.resolve({ page: "1", pageSize: "3" }) }));
+
+    expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Previous page" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("navigation", { name: "Member standings pages" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still offers the previous page from a deep page past the last row", async () => {
+    respondWith({ standings: [] });
+    render(await MembersStandingsPage({ searchParams: Promise.resolve({ page: "2" }) }));
+
+    expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute("href", "/members");
+    expect(screen.queryByRole("link", { name: "Next page" })).not.toBeInTheDocument();
   });
 });
