@@ -42,6 +42,9 @@ src/app/*
 !src/app/*.ts
 !src/app/*.tsx
 !src/app/*.css
+!src/app/third-party-notices.txt/
+src/app/third-party-notices.txt/*
+!src/app/third-party-notices.txt/route.ts
 !src/app/.well-known/
 src/app/.well-known/*
 !src/app/.well-known/oauth-protected-resource/

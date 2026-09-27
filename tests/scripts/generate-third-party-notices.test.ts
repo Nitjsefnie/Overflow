@@ -11,6 +11,7 @@ import {
   type NoticeEntry,
 } from "../../scripts/generate-third-party-notices.ts";
 import { THIRD_PARTY_LICENCE_TEXTS } from "../../scripts/third-party-licence-texts.ts";
+import * as noticesGenerator from "../../scripts/generate-third-party-notices.ts";
 
 const script = fileURLToPath(new URL("../../scripts/generate-third-party-notices.ts", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -221,6 +222,22 @@ describe("canonical licence texts", () => {
 });
 
 describe("generator CLI", () => {
+  it("resolves the output path from NEXT_DIST_DIR or .next", () => {
+    const resolveOutputPath = Reflect.get(noticesGenerator, "resolveNoticesOutputPath") as
+      | ((env: Record<string, string | undefined>) => string)
+      | undefined;
+    expect(resolveOutputPath).toBeTypeOf("function");
+    if (!resolveOutputPath) return;
+    expect(resolveOutputPath({ NEXT_DIST_DIR: "release-123" })).toBe(join("release-123", "third-party-notices.txt"));
+    expect(resolveOutputPath({ NEXT_DIST_DIR: "  release-123  " })).toBe(join("release-123", "third-party-notices.txt"));
+    expect(resolveOutputPath({})).toBe(join(".next", "third-party-notices.txt"));
+  });
+
+  it("runs the generator after Next builds", () => {
+    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    expect(manifest.scripts.build).toBe("next build && node scripts/generate-third-party-notices.ts");
+  });
+
   it("exits nonzero, names every unresolved package and writes no file", () => {
     const bin = join(root, "bin");
     mkdirSync(bin);
@@ -245,6 +262,7 @@ describe("generator CLI", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("planted-one@1.0.0");
     expect(result.stderr).toContain("planted-two@2.0.0");
+    expect(existsSync(join(root, ".next/third-party-notices.txt"))).toBe(false);
     expect(existsSync(join(root, "public/third-party-notices.txt"))).toBe(false);
   });
 
@@ -252,7 +270,10 @@ describe("generator CLI", () => {
     const result = spawnSync(process.execPath, [script], { cwd: repoRoot, encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
-    const notices = readFileSync(join(repoRoot, "public/third-party-notices.txt"), "utf8");
+    const noticesPath = join(repoRoot, ".next/third-party-notices.txt");
+    expect(existsSync(noticesPath)).toBe(true);
+    expect(existsSync(join(repoRoot, "public/third-party-notices.txt"))).toBe(false);
+    const notices = readFileSync(noticesPath, "utf8");
     expect(notices).toContain("react@");
     expect(notices).toContain("postgres@");
     expect(Buffer.byteLength(notices)).toBe(157768);

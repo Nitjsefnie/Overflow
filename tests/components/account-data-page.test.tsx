@@ -57,7 +57,7 @@ describe("account-data notice page", () => {
           return directory === "" ? "/" : `/${directory}`;
         }),
     );
-    // The build writes this static asset into public/, outside src/app.
+    // The build writes this file into the dist dir; its route serves the URL.
     routes.add("/third-party-notices.txt");
 
     const internal = Array.from(document.querySelectorAll("a[href]"))
