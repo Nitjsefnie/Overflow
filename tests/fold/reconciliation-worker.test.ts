@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FailureLogger } from "@/lib/worker/failure-logger";
+import { FAILURE_LOG_QUIET_WINDOW_MS, FailureLogger } from "@/lib/worker/failure-logger";
 import type { ClaimedReconciliationJob } from "@/lib/fold/reconciliation-jobs";
 import {
   drainReconciliationJobs,
@@ -2017,6 +2017,75 @@ describe("the bounded lease-heartbeat failure site", () => {
     } finally {
       fold.resolve();
       await running;
+    }
+  });
+
+  it("keeps a second job's first heartbeat failure suppressed across the job boundary", async () => {
+    // The suppression that bounds an outage to one full trace is process-scoped
+    // only because the wiring forwards ONE logger across every wake, and the
+    // worker uses the injected logger instead of building a fresh one per job
+    // (issue 661). The other cases never cross a job boundary; this one runs a
+    // second job on the same logger while the outage still stands, where a
+    // fresh-per-job logger would print a full trace per wake again.
+    const { store } = createFakeStore({
+      jobs: [job(), job({ id: "job-2", repositoryId: "repo-b" })],
+    });
+    const firstTimer = createRenewalTimer();
+    const secondTimer = createRenewalTimer();
+    const firstFold = signal();
+    const secondFold = signal();
+    const failure = new Error("the lease write could not reach the database");
+    const clock = { value: Date.parse("2030-01-01T12:00:00Z") };
+    const { logger, lines } = heartbeatLoggerOn(clock);
+
+    // Job one: the first failure prints in full; the next, inside the window,
+    // is counted silently.
+    const firstJob = runNextReconciliationJob({
+      store,
+      reconcile: () => firstFold.promise,
+      now: () => new Date(clock.value),
+      ...firstTimer.dependencies,
+      leaseHeartbeatFailureLogger: logger,
+    });
+    try {
+      await firstTimer.armed;
+      store.renewReconciliationJobLease = async () => {
+        throw failure;
+      };
+      await firstTimer.tick();
+      await firstTimer.tick();
+      expect(lines).toEqual([[HEARTBEAT_MESSAGE, "job-1", failure]]);
+
+      // Job two is the second wake of the same outage. The logger is forwarded,
+      // so its first failure is still inside job one's quiet window: it must be
+      // counted, not printed.
+      const secondJob = runNextReconciliationJob({
+        store,
+        reconcile: () => secondFold.promise,
+        now: () => new Date(clock.value),
+        ...secondTimer.dependencies,
+        leaseHeartbeatFailureLogger: logger,
+      });
+      try {
+        await secondTimer.armed;
+        await secondTimer.tick();
+        expect(lines).toEqual([[HEARTBEAT_MESSAGE, "job-1", failure]]);
+
+        // The first failure of either job to cross the window carries the
+        // whole continuation: both jobs' silent repeats and itself.
+        clock.value += FAILURE_LOG_QUIET_WINDOW_MS;
+        await secondTimer.tick();
+        expect(lines).toEqual([
+          [HEARTBEAT_MESSAGE, "job-1", failure],
+          [`still failing: ${HEARTBEAT_KEY}: 3 failures since last detail`],
+        ]);
+      } finally {
+        secondFold.resolve();
+        await secondJob;
+      }
+    } finally {
+      firstFold.resolve();
+      await firstJob;
     }
   });
 
