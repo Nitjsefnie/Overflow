@@ -2,12 +2,9 @@
 # deploy/README.md stays the default and is untouched by this file.
 #
 # Build:  scripts/container-build.sh [tag]
-# Run:    docker compose --profile app up --build
-#         (export SOURCE_SHA="$(git rev-parse HEAD)" first — the script and the
-#         compose build arg both require it; an unlabelled image cannot be built)
-#         On older Docker installs whose compose cannot build (buildx below
-#         0.17.0), tag the built image <project>-app instead and run:
-#         docker compose --profile app up -d --no-build
+# Run:    docker compose --profile app up -d
+#         Compose runs the script's default overflow-app image; it does not
+#         build. The script supplies SOURCE_SHA and verifies the revision label.
 # The app container applies pending migrations (scripts/migrate.ts) before the
 # server starts, and serves on port 3000.
 

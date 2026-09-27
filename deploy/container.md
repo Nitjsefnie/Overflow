@@ -32,10 +32,11 @@ database alone.
 
 ## Build and run
 
-Build with the committed script, from a clean checkout:
+Build from a clean checkout with the committed script. Its default image tag
+is `overflow-app`, which the compose app service runs:
 
 ```console
-scripts/container-build.sh [tag]
+scripts/container-build.sh
 ```
 
 The script refuses a dirty tree (the revision label must name reviewed
@@ -52,27 +53,22 @@ holds exactly the source its revision label names. The export is the filter
 on this path; `.dockerignore` is not relied on (observed not to apply to a
 stdin context with docker 26.1.5).
 
-Or let compose build it and bring up the database and app together:
+Run the built image with compose, bringing up the database and app together:
 
 ```console
-SOURCE_SHA="$(git rev-parse HEAD)" docker compose --profile app up --build
+docker compose --profile app up -d
 ```
 
-Compose builds from the working tree, filtered only by `.dockerignore`, so its
-image can carry ignored untracked files while its label names HEAD (issue
-718). Use the script whenever the image's revision label must be attested.
+Compose consumes `overflow-app` and has no app build path (issue 718). To
+build under another tag, pass it to `scripts/container-build.sh [tag]` and
+point compose at that image with an override file.
 
-Both paths build from digest-pinned bases —
+The image builds from digest-pinned bases —
 `node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532` for the application image and
 `postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73` for the database — so the same source always resolves the
 same base bytes. A bare `docker build` without `--build-arg SOURCE_SHA=...`
 fails loudly in the Dockerfile's guard instead of producing an unlabelled
 image.
-
-On older Docker installs whose compose cannot build (buildx below 0.17.0),
-run the script, tag the image `<project>-app` for the project name compose
-derives from the directory, and start with `docker compose --profile app up
--d --no-build` instead.
 
 The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
@@ -111,10 +107,10 @@ platform's restart policy, not replicas, absorb failures.
 no files for configuration: everything arrives through the environment, the
 same variables the host path keeps in `/etc/overflow/overflow.env`. A container
 built from this repository can be inspected, shared and re-tagged without
-leaking a secret. `.env` and `.env.*` stay out of the build context on both
-paths (only the tracked placeholder `.env.example` enters): on the script path
-because they are untracked and `git archive` exports tracked files only, on
-the compose path because `.dockerignore` excludes them.
+leaking a secret. Private `.env` files are untracked and stay out of the build
+context because the script exports only committed files with `git archive`;
+the tracked placeholder `.env.example` does enter. Compose supplies `.env`
+variables at runtime through `env_file`; it does not build an image.
 
 **The image builds in-image on `node:24.17.0-bookworm-slim`.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and

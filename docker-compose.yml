@@ -21,12 +21,7 @@ services:
       start_period: 5s
 
   app:
-    build:
-      context: "."
-      args:
-        # Plumbs the image's provenance through compose builds: export
-        # SOURCE_SHA="$(git rev-parse HEAD)" first (deploy/container.md).
-        SOURCE_SHA: "${SOURCE_SHA:-}"
+    image: overflow-app
     profiles: [app]
     restart: unless-stopped
     depends_on:

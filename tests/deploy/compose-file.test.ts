@@ -64,10 +64,10 @@ describe("docker-compose.yml", () => {
     expect(app.ports).toEqual(["${APP_HOST_BIND:-127.0.0.1}:3000:3000"]);
   });
 
-  it("plumbs SOURCE_SHA into the app build so compose builds carry the provenance arg", () => {
-    const build = compose.services.app.build;
-    expect(build?.context).toBe(".");
-    expect(build?.args?.SOURCE_SHA).toBe("${SOURCE_SHA:-}");
+  it("runs the image built by the container script instead of building in compose", () => {
+    const app = compose.services.app;
+    expect(app).not.toHaveProperty("build");
+    expect(app.image).toBe("overflow-app");
   });
 
   it("leaves the app service's runtime user to the image instead of overriding it", () => {
