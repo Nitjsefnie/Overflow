@@ -254,7 +254,7 @@ The `actionlint` workflow validates and security-checks the workflow definitions
 
 ## Environment reference
 
-`.env.example` documents every required setting. The table is the complete reference to the application's operator-controlled settings — the optional ones a minimal setup leaves unset included, and the one debug flag. It does not cover the variables the surrounding tooling reads on its own: the Node runtime's (`NODE_ENV`), the shell's (`PATH`), or the CI runner's:
+`.env.example` documents every required setting. The table is the complete reference to the application's operator-controlled settings — the optional ones a minimal setup leaves unset included, and the one debug flag. It does not cover the variables the surrounding tooling reads on its own: the Node runtime's (`NODE_ENV`), the shell's (`PATH`), and the coverage-recalibration script's (`GH_TOKEN`, `GITHUB_REPOSITORY`, and its optional `PUSH_REMOTE_URL` override):
 
 | Variable | Purpose |
 | --- | --- |
