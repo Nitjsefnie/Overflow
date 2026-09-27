@@ -75,11 +75,16 @@ export function resetSharedProvisions(): void {
   provisionedShared.splice(0);
 }
 
-/** A live pool can hand the next file its database only while its TCP socket is still established. */
-export function clientSocketIsEstablished(clientPort: number | null, serverPort: number): boolean {
-  if (clientPort === null) return true;
+export interface ClientTcpSocket {
+  localPort: number;
+  remotePort: number;
+  state: number;
+}
 
+/** A null table means neither proc table could be read. */
+export function readClientTcpSockets(): readonly ClientTcpSocket[] | null {
   let readable = false;
+  const sockets: ClientTcpSocket[] = [];
   for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     let contents: string;
     try {
@@ -93,11 +98,36 @@ export function clientSocketIsEstablished(clientPort: number | null, serverPort:
       if (fields.length < 4) continue;
       const localPort = Number.parseInt(fields[1].slice(fields[1].lastIndexOf(":") + 1), 16);
       const remotePort = Number.parseInt(fields[2].slice(fields[2].lastIndexOf(":") + 1), 16);
-      if (localPort === clientPort && (remotePort === serverPort || remotePort === CONTAINER_POSTGRES_PORT) && fields[3] === "01") return true;
+      const state = Number.parseInt(fields[3], 16);
+      sockets.push({ localPort, remotePort, state });
     }
   }
-  // Where neither proc table is available, keep the original strict audit.
-  return !readable;
+  return readable ? sockets : null;
+}
+
+/** A live pool can hand the next file its database only while its TCP socket is still established. */
+export function clientSocketIsEstablished(clientPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): boolean {
+  if (clientPort === null || sockets === null) return true;
+  return sockets.some((socket) =>
+    socket.localPort === clientPort
+    && (socket.remotePort === serverPort || socket.remotePort === CONTAINER_POSTGRES_PORT)
+    && socket.state === 0x01);
+}
+
+export interface SharedActivityRow {
+  usename: string;
+  datname: string | null;
+  client_port: number | null;
+}
+
+export function sharedAuditSurvivors(rows: readonly SharedActivityRow[], adminPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): SharedActivityRow[] {
+  // Rootless Docker, remote DOCKER_HOST, or DNAT may make the backend's peer
+  // invisible here even when /proc is readable. Use our own live admin socket
+  // to prove the table covers this topology before trusting absent role sockets.
+  if (adminPort === null || sockets === null || !clientSocketIsEstablished(adminPort, serverPort, sockets)) {
+    return [...rows];
+  }
+  return rows.filter((row) => clientSocketIsEstablished(row.client_port, serverPort, sockets));
 }
 
 /**
@@ -119,14 +149,19 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
     { max: 1 },
   );
   try {
+    const ownRows = await admin<{ client_port: number | null }[]>`
+      select client_port from pg_stat_activity where pid = pg_backend_pid()
+    `;
+    const adminPort = ownRows[0]?.client_port ?? null;
+    const sockets = readClientTcpSockets();
     const survivors: { usename: string; datname: string | null }[] = [];
     for (const role of roles) {
-      const rows = await admin<{ usename: string; datname: string | null; client_port: number | null }[]>`
+      const rows = await admin<SharedActivityRow[]>`
         select usename, datname, client_port
         from pg_stat_activity
         where backend_type = 'client backend' and usename = ${role}
       `;
-      survivors.push(...rows.filter((row) => clientSocketIsEstablished(row.client_port, facts.port)));
+      survivors.push(...sharedAuditSurvivors(rows, adminPort, facts.port, sockets));
     }
     if (survivors.length > 0) {
       const summary = survivors.map((row) => `${row.usename}/${row.datname ?? "(no database)"}`).join(", ");

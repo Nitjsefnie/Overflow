@@ -6,7 +6,9 @@ import { afterAll, afterEach, describe, expect, inject, it } from "vitest";
 import {
   assertNoSharedProvisionSurvivors,
   clientSocketIsEstablished,
+  readClientTcpSockets,
   resolveSharedPostgresFacts,
+  sharedAuditSurvivors,
   startPostgresContainer,
 } from "../support/postgres-container";
 
@@ -147,6 +149,36 @@ describe("suites share one postgres server through startPostgresContainer", () =
  * This file pins the audit itself against a real server.
  */
 describe("the shared-provision survivor audit", () => {
+  it("classifies visible TCP states and preserves strict unknowns", () => {
+    const sockets = [
+      { localPort: 41001, remotePort: 5432, state: 0x01 },
+      { localPort: 41002, remotePort: 5432, state: 0x04 },
+    ];
+    expect(clientSocketIsEstablished(41001, 43000, sockets)).toBe(true);
+    expect(clientSocketIsEstablished(41002, 43000, sockets)).toBe(false);
+    expect(clientSocketIsEstablished(41003, 43000, sockets)).toBe(false);
+    expect(clientSocketIsEstablished(null, 43000, sockets)).toBe(true);
+    expect(clientSocketIsEstablished(41003, 43000, null)).toBe(true);
+  });
+
+  it("refines missing and closing sockets only after its admin socket calibrates", () => {
+    const rows = [
+      { usename: "live", datname: "db", client_port: 41001 },
+      { usename: "closing", datname: "db", client_port: 41002 },
+      { usename: "unseen", datname: "db", client_port: 41003 },
+      { usename: "unknown", datname: "db", client_port: null },
+    ];
+    const sockets = [
+      { localPort: 42000, remotePort: 43000, state: 0x01 },
+      { localPort: 41001, remotePort: 5432, state: 0x01 },
+      { localPort: 41002, remotePort: 5432, state: 0x04 },
+    ];
+    expect(sharedAuditSurvivors(rows, 42000, 43000, sockets)).toEqual([rows[0], rows[3]]);
+    expect(sharedAuditSurvivors(rows, 42001, 43000, sockets)).toEqual(rows);
+    expect(sharedAuditSurvivors(rows, null, 43000, sockets)).toEqual(rows);
+    expect(sharedAuditSurvivors(rows, 42000, 43000, null)).toEqual(rows);
+  });
+
   it.skipIf(process.platform !== "linux")("counts a live TCP client, then stops counting it after FIN", async () => {
     let peer: Socket | undefined;
     let client: Socket | undefined;
@@ -159,14 +191,14 @@ describe("the shared-provision survivor audit", () => {
       client = connect(address.port, "127.0.0.1");
       await once(client, "connect");
       if (client.localPort === undefined) throw new Error("TCP test client has no local port");
-      expect(clientSocketIsEstablished(client.localPort, address.port)).toBe(true);
+      expect(clientSocketIsEstablished(client.localPort, address.port, readClientTcpSockets())).toBe(true);
 
       client.end();
       const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline && clientSocketIsEstablished(client.localPort, address.port)) {
+      while (Date.now() < deadline && clientSocketIsEstablished(client.localPort, address.port, readClientTcpSockets())) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(clientSocketIsEstablished(client.localPort, address.port)).toBe(false);
+      expect(clientSocketIsEstablished(client.localPort, address.port, readClientTcpSockets())).toBe(false);
     } finally {
       client?.destroy();
       peer?.destroy();
