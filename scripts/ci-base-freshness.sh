@@ -60,12 +60,15 @@ fi
 
 # Step 2 — the base advanced. The advance is relevant iff it shares a file
 # with the pull request. Pull both file lists, refuse on anything that makes
-# either list unrepresentative, then intersect.
+# either list unrepresentative, then intersect. A rename (or copy) changes
+# BOTH paths — the API reports the old one in previous_filename — so each
+# projection counts the previous path too (issue 685): either side renaming a
+# file the other just edited is an overlap, not a disjoint advance.
 if [ -z "${PR_NUMBER:-}" ]; then
   fail_ "PR_NUMBER is not set — the pull request's changed-file list cannot be fetched, so the advance cannot be judged. Refusing."
 fi
 
-pr_files=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename') || {
+pr_files=$(gh api "repos/$REPO_SLUG/pulls/$PR_NUMBER/files" --paginate --jq '.[] | (.filename, (.previous_filename // empty))') || {
   fail_ "could not read the pull request's changed-file list (gh api failed) — refusing to certify on a failed API call."
 }
 if [ -z "$pr_files" ]; then
@@ -82,7 +85,7 @@ if [ "$total_commits" -gt 200 ]; then
   fail_ "the advance $BASE_SHA..$current carries $total_commits commits — too large to judge as irrelevant. Update the branch onto current main and re-run. Refusing."
 fi
 
-advance_files=$(gh api "repos/$REPO_SLUG/compare/$BASE_SHA...$current" --jq '.files[].filename') || {
+advance_files=$(gh api "repos/$REPO_SLUG/compare/$BASE_SHA...$current" --jq '.files[] | (.filename, (.previous_filename // empty))') || {
   fail_ "could not list the advance's files (gh api failed) — refusing to certify on a failed API call."
 }
 if [ -z "$advance_files" ]; then
