@@ -160,9 +160,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now });
 });
 
-// Workers are reused across files (isolate: false): the pinned clock belongs
-// to this file alone.
+// Workers are reused across files (isolate: false): the pinned clock and any global
+// stub belong to this file alone — a stub left installed would leak into every later
+// file this worker runs (issue 753).
 afterEach(() => {
+  expect(vi.isMockFunction(globalThis.fetch)).toBe(false);
   vi.useRealTimers();
 });
 
