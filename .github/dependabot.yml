@@ -69,3 +69,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # Declined in #771: node 26 enters LTS only on 2026-10-28 per the
+      # nodejs.org release schedule (nodejs/Release schedule.json), and a Node
+      # runtime major is not taken before LTS. Revisit on/after 2026-10-28:
+      # remove this ignore entry, take the next node major proposal, and make
+      # the coordinated edit the dependabot docker section comment describes
+      # (both Dockerfile FROM lines, the provenance LABEL's base digest, the
+      # container-image test constant).
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
