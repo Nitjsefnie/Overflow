@@ -71,12 +71,13 @@ needed. Replace angle-bracket placeholders with local values; optional values
 can stay at their defaults or be omitted as noted:
 
 - `DATABASE_URL` — set to a PostgreSQL 17 connection string.
-- `AUTH_SECRET` — set to a secret generated with `npx auth secret`.
+- `AUTH_SECRET` — set to a secret generated with `openssl rand -base64 32`.
 - `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` — set to a GitHub OAuth
   application's credentials. Its callback URL is
   `<APP_URL>/api/auth/callback/github`.
-- `TOKEN_ENCRYPTION_KEY` — set to 32 random bytes as unpadded base64url. This
-  is the AES-256-GCM key for stored OAuth tokens, so it is a real key even
+- `TOKEN_ENCRYPTION_KEY` — set to 32 random bytes as unpadded base64url with
+  `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+  This is the AES-256-GCM key for stored OAuth tokens, so it is a real key even
   locally.
 - `APP_URL` — set to the public application URL.
 - `GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL` — set to public HTTPS callback
