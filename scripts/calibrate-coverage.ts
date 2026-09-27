@@ -11,6 +11,11 @@
 // upward only, so a drop never loosens the floor — the document is
 // rewritten with the new measurement and floor = measurement minus gap.
 // Any other comparison writes nothing at all.
+//
+// With --simulate-refused-raise the summary is ignored entirely: the script
+// writes a fabricated +5 raise computed from the recorded document alone
+// (measured = recorded + 5, floor = measured - gap), for the calibrate
+// self-test whose push branch protection must refuse.
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -46,7 +51,52 @@ export function calibration(
   };
 }
 
+// The workflow_dispatch self-test needs a raise that branch protection is
+// guaranteed to refuse, without measuring anything: +5 points off the
+// recorded document, same gap rule as a real calibration.
+export function simulateRaise(doc: CoverageFloorDoc): CoverageFloorDoc {
+  const measured = round2(doc.languages.typescript.measured + 5);
+  return {
+    ...doc,
+    languages: {
+      ...doc.languages,
+      typescript: {
+        measured,
+        floor: round2(measured - doc.gap),
+      },
+    },
+  };
+}
+
+function writeDoc(root: string, next: CoverageFloorDoc): void {
+  writeFileSync(join(root, DOC_PATH), `${JSON.stringify(next, null, 2)}\n`);
+}
+
+function simulateMain(): void {
+  const root = repoRoot();
+  let doc: CoverageFloorDoc;
+  try {
+    doc = readDoc(root);
+  } catch (error) {
+    console.error(`coverage calibration: cannot read ${DOC_PATH}: ${error}`);
+    process.exit(2);
+  }
+  const next = simulateRaise(doc);
+  writeDoc(root, next);
+  console.log(
+    `coverage calibration: simulated raise for the calibrate self-test: ` +
+      `measured ${doc.languages.typescript.measured}% -> ` +
+      `${next.languages.typescript.measured}%, floor ` +
+      `${doc.languages.typescript.floor}% -> ` +
+      `${next.languages.typescript.floor}%; wrote ${DOC_PATH}`,
+  );
+}
+
 function main(): void {
+  if (process.argv.slice(2).includes("--simulate-refused-raise")) {
+    simulateMain();
+    return;
+  }
   const root = repoRoot();
   let doc: CoverageFloorDoc;
   let summary: CoverageSummary;
