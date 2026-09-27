@@ -40,12 +40,11 @@ export function readLicenceFile(directory: string): string | undefined {
     (licenceFileRank(a) ?? 5) - (licenceFileRank(b) ?? 5) ||
     a.length - b.length || a.toLowerCase().localeCompare(b.toLowerCase()),
   );
-  const first = matches[0];
-  if (first) {
+  for (const name of matches) {
     try {
-      return readFileSync(join(directory, first), "utf8");
+      return readFileSync(join(directory, name), "utf8");
     } catch {
-      return undefined;
+      continue;
     }
   }
   return undefined;

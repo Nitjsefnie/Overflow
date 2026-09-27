@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildNotices,
   readLicenceFile,
   type NoticeEntry,
 } from "../../scripts/generate-third-party-notices.ts";
+import { THIRD_PARTY_LICENCE_TEXTS } from "../../scripts/third-party-licence-texts.ts";
 
 const script = fileURLToPath(new URL("../../scripts/generate-third-party-notices.ts", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -81,6 +83,48 @@ describe("buildNotices", () => {
     expect(result.text).not.toContain("none shipped");
   });
 
+  it("chooses bare, dotted, COPYING, NOTICE and COPYRIGHT files in order, then the shortest dotted name", () => {
+    const directory = entry("ranked", "1.0.0", "MIT").directory;
+    const names = ["LICENSE", "LICENSE.md", "LICENSE.longer.txt", "COPYING", "NOTICE", "COPYRIGHT"];
+    const fullText = (name: string) => `Full text from ${name}\nSecond line from ${name}\n`;
+    for (const name of names) writeFileSync(join(directory, name), fullText(name));
+
+    for (const name of names) {
+      expect(readLicenceFile(directory)).toBe(fullText(name));
+      rmSync(join(directory, name));
+    }
+  });
+
+  it("tries a lower-ranked readable file when the top-ranked file is unreadable", () => {
+    const directory = entry("unreadable", "1.0.0", "MIT").directory;
+    const unreadable = join(directory, "LICENSE");
+    const readableText = "Full text from the readable candidate\nSecond line\n";
+    writeFileSync(unreadable, "Unreadable top candidate\n");
+    chmodSync(unreadable, 0o000);
+    writeFileSync(join(directory, "LICENSE.md"), readableText);
+
+    if (process.getuid?.() !== 0) {
+      expect(readLicenceFile(directory)).toBe(readableText);
+      return;
+    }
+
+    // Root can read mode-000 files. Run the real resolver as an unprivileged
+    // child so the fixture has the same permission behavior as CI.
+    chmodSync(root, 0o755);
+    chmodSync(directory, 0o755);
+    // /proc/self/exe reaches the running Node binary without traversing
+    // /root, where this workspace's Node installation lives.
+    const child = spawnSync("/proc/self/exe", [
+      "--input-type=module",
+      "--eval",
+      `import { readLicenceFile } from ${JSON.stringify(pathToFileURL(script).href)}; ` +
+        "process.stdout.write(readLicenceFile(process.argv[1]) ?? '');",
+      directory,
+    ], { uid: 65534, gid: 65534, encoding: "utf8" });
+    expect(child.status, String(child.error ?? child.stderr)).toBe(0);
+    expect(child.stdout).toBe(readableText);
+  });
+
   it("uses the canonical text and labels a declared licence with no shipped file", () => {
     const result = buildNotices([entry("fallback", "3.0.0", "MIT")], readLicenceFile);
 
@@ -104,6 +148,21 @@ describe("buildNotices", () => {
       ok: false,
       missing: ["planted@9.9.9"],
     });
+  });
+});
+
+describe("canonical licence texts", () => {
+  it.each([
+    ["MIT", "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"],
+    ["ISC", "521c6f0ed8e64736684f89843d16a4df6b4b7449acbcfc6ca6630a3037ca8c53"],
+    ["Apache-2.0", "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"],
+    ["BSD-3-Clause", "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"],
+    ["0BSD", "e3f18c71e10d673590eb9856c1d79dd3b4b0d65404efb5e8584dbede7edd608b"],
+    ["Unlicense", "0bdebfeda07d45dada625ae1317c6f833186e798b171d0db640bcf32e92a8240"],
+    ["LGPL-3.0-or-later", "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1"],
+    ["CC-BY-4.0", "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744"],
+  ])("pins the complete %s text to its verified SHA-256", (id, digest) => {
+    expect(createHash("sha256").update(THIRD_PARTY_LICENCE_TEXTS[id]!).digest("hex")).toBe(digest);
   });
 });
 
