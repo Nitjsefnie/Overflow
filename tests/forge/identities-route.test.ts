@@ -36,6 +36,9 @@ function identityView(overrides: Partial<ForgeIdentityView> = {}): ForgeIdentity
 
 function fixture(options: {
   session?: { user: { id: string; role: "MEMBER" | "MODERATOR" } } | null;
+  sessionFails?: boolean;
+  storeCreationFails?: boolean;
+  listFails?: boolean;
   /** What the live role read answers (issue 733); "fails" makes it throw. */
   liveRole?: "MEMBER" | "MODERATOR" | null | "fails";
   list?: ForgeIdentityView[];
@@ -46,6 +49,9 @@ function fixture(options: {
   const store: ForgeIdentityStore = {
     async listForUser(userId) {
       calls.push({ op: "listForUser", args: { userId } });
+      if (options.listFails) {
+        throw new Error("storage read unavailable");
+      }
       return options.list ?? [];
     },
     async markTokenRejected(userId, identityId) {
@@ -61,14 +67,24 @@ function fixture(options: {
     },
   };
   const dependencies: ForgeIdentitiesRouteDependencies = {
-    getSession: vi.fn(async () => options.session === undefined ? SESSION : options.session),
+    getSession: vi.fn(async () => {
+      if (options.sessionFails) {
+        throw new Error("session lookup unavailable");
+      }
+      return options.session === undefined ? SESSION : options.session;
+    }),
     getCurrentRole: vi.fn(async () => {
       if (options.liveRole === "fails") {
         throw new Error("role lookup unavailable");
       }
       return options.liveRole === undefined ? "MEMBER" : options.liveRole;
     }),
-    createIdentityStore: vi.fn(() => store),
+    createIdentityStore: vi.fn(() => {
+      if (options.storeCreationFails) {
+        throw new Error("store construction unavailable");
+      }
+      return store;
+    }),
     tokenEncryptionKey: TEST_KEY,
     fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       // A linkable token: /user answers, and the token's own record carries read_api.
@@ -84,6 +100,65 @@ function fixture(options: {
 }
 
 describe("forge identities API", () => {
+  const operations: {
+    method: string;
+    invoke: (dependencies: ForgeIdentitiesRouteDependencies) => Promise<Response>;
+    checksLiveRole: boolean;
+  }[] = [
+    { method: "GET", invoke: (dependencies) => createForgeIdentitiesGetHandler(dependencies)(), checksLiveRole: false },
+    { method: "POST", invoke: (dependencies) => createForgeIdentitiesPostHandler(dependencies)(mutationRequest({
+      instanceUrl: "https://gitlab.example.com", token: "glpat-x",
+    })), checksLiveRole: true },
+    { method: "DELETE", invoke: (dependencies) => createForgeIdentitiesDeleteHandler(dependencies)(mutationRequest({
+      id: "identity-1",
+    }, "DELETE")), checksLiveRole: true },
+  ];
+
+  async function expectUpstreamFailure(response: Response) {
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "The forge identity operation could not complete." },
+    });
+  }
+
+  it.each(operations)("$method answers a JSON 502 when session lookup rejects", async ({ invoke }) => {
+    const f = fixture({ sessionFails: true });
+
+    await expectUpstreamFailure(await invoke(f.dependencies));
+
+    expect(f.dependencies.getSession).toHaveBeenCalledExactlyOnceWith();
+    expect(f.dependencies.getCurrentRole).not.toHaveBeenCalled();
+    expect(f.dependencies.createIdentityStore).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+  });
+
+  it.each(operations)("$method answers a JSON 502 when store construction throws", async ({ invoke, checksLiveRole }) => {
+    const f = fixture({ storeCreationFails: true });
+
+    await expectUpstreamFailure(await invoke(f.dependencies));
+
+    expect(f.dependencies.getSession).toHaveBeenCalledExactlyOnceWith();
+    if (checksLiveRole) {
+      expect(f.dependencies.getCurrentRole).toHaveBeenCalledExactlyOnceWith("user-1");
+    } else {
+      expect(f.dependencies.getCurrentRole).not.toHaveBeenCalled();
+    }
+    expect(f.dependencies.createIdentityStore).toHaveBeenCalledExactlyOnceWith();
+    expect(f.calls).toEqual([]);
+  });
+
+  it("GET answers a JSON 502 when the identity list read rejects", async () => {
+    const f = fixture({ listFails: true });
+
+    await expectUpstreamFailure(await createForgeIdentitiesGetHandler(f.dependencies)());
+
+    expect(f.dependencies.getSession).toHaveBeenCalledExactlyOnceWith();
+    expect(f.dependencies.getCurrentRole).not.toHaveBeenCalled();
+    expect(f.dependencies.createIdentityStore).toHaveBeenCalledExactlyOnceWith();
+    expect(f.calls).toEqual([{ op: "listForUser", args: { userId: "user-1" } }]);
+  });
+
   it("requires a session for every operation", async () => {
     const f = fixture({ session: null });
     expect((await createForgeIdentitiesGetHandler(f.dependencies)()).status).toBe(401);
