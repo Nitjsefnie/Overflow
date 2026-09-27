@@ -75,6 +75,10 @@ const frameProtectionHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // next dev generates AGENTS.md and CLAUDE.md at the project root by default
+  // (gated on agentRules !== false in next's start-server); this repository's
+  // agent documentation is not generated, so a dev run must write nothing.
+  agentRules: false,
   ...(distDir ? { distDir, typescript: { tsconfigPath } } : {}),
   async headers() {
     return [{ source: "/:path*", headers: frameProtectionHeaders }];
