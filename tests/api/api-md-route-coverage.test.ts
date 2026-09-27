@@ -20,20 +20,16 @@ const apiRoot = join(repoRoot, "src", "app", "api");
 const apiDocPath = join(repoRoot, "API.md");
 
 /**
- * Routes deliberately documented outside API.md. Keys are the route paths
- * exactly as derived from the file tree; each comment names where the route
- * is documented instead (sections verified against OPERATING.md when the
- * allowlist was written).
+ * OAuth flow machinery and webhook delivery receivers intentionally outside
+ * the member-callable API reference. Keys are the route paths exactly as
+ * derived from the file tree; comments name their operator documentation.
  */
 const ALLOWED_UNDOCUMENTED: Record<string, string> = {
-  // Webhook receiver routes: forge deliveries are operator material, documented in OPERATING.md ("Operating an instance: GitHub OAuth and webhooks").
+  // Forge delivery receivers are operator material, documented in OPERATING.md ("GitHub OAuth and webhooks").
   "/api/github/webhooks": "OPERATING.md",
   "/api/gitlab/webhooks": "OPERATING.md",
-  // The Sign in with GitHub OAuth flow route, documented in OPERATING.md ("Operating an instance: GitHub OAuth and webhooks", the OAuth callback setup).
+  // Auth.js OAuth flow machinery is described in OPERATING.md ("GitHub OAuth and webhooks", the OAuth callback setup).
   "/api/auth/[...nextauth]": "OPERATING.md",
-  // Account session routes (deletion and export), documented in OPERATING.md ("Account deletion and export").
-  "/api/account": "OPERATING.md",
-  "/api/account/export": "OPERATING.md",
 };
 
 /** Every `route.ts` under src/app/api, as full paths. */

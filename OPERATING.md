@@ -254,7 +254,13 @@ The `actionlint` workflow validates and security-checks the workflow definitions
 
 ## Environment reference
 
-`.env.example` documents every required setting. The table is the complete reference to the application's operator-controlled settings — the optional ones a minimal setup leaves unset included, and the one debug flag. It does not cover the variables the surrounding tooling reads on its own: the Node runtime's (`NODE_ENV`), the shell's (`PATH`), and the coverage-recalibration script's (`GH_TOKEN`, `GITHUB_REPOSITORY`, and its optional `PUSH_REMOTE_URL` override):
+`.env.example` documents every required application setting. The table below
+covers the application's runtime settings, including the optional ones a
+minimal setup leaves unset and the debug flag. Deployment and build inputs
+read by Next.js configuration or Compose follow in a separate table. Neither
+table covers variables read only by surrounding tooling: the Node runtime's
+`NODE_ENV`, the shell's `PATH`, and the coverage-recalibration script's
+`GH_TOKEN`, `GITHUB_REPOSITORY`, and optional `PUSH_REMOTE_URL` override.
 
 | Variable | Purpose |
 | --- | --- |
@@ -272,5 +278,18 @@ The `actionlint` workflow validates and security-checks the workflow definitions
 | `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` | Any non-empty value turns off the reconciliation worker and its sweep — the whole of automatic reconciliation; jobs still accumulate and nothing drains them (see Reconciliation) |
 | `OVERFLOW_SKIP_STARTUP_RECONCILIATION` | Exactly `1` skips the reconciliation sweep a restart runs at startup, as a temporary deploy override; missed deliveries stay unrecovered until the six-hour sweep or a manual reconciliation, and any other value keeps the startup sweep on |
 | `DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log the point cost and remaining balance of an issues-page query whose response carries a rate-limit reading |
+
+### Deployment and build inputs
+
+These values are read while configuring a build or interpolating a Compose
+file; they are separate from the application's runtime environment above.
+See [the container deployment guide](deploy/container.md) for Compose usage.
+
+| Variable | Read site and purpose |
+| --- | --- |
+| `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–78: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
+| `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–11: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
+| `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 39–42: host address for the published app port; defaults to `127.0.0.1`. |
+| `SOURCE_SHA` | [docker-compose.yml](docker-compose.yml), lines 21–27: optional source revision passed as the app image's build argument; defaults to an empty string when unset. |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
