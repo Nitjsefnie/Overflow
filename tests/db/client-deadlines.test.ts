@@ -57,7 +57,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
  *   default) while the server is unreachable;
  * - a statement that cannot run — blocked behind a lock another session holds
  *   — is cancelled by the server inside the work pool's statement deadline;
- * - the deadline is in force by default ("30s") and a transaction may exempt
+ * - the deadline is in force by default ("10min") and a transaction may exempt
  *   itself with `set local statement_timeout = 0`, which is exactly the shape
  *   the migration runner's per-migration transaction takes, so long DDL is not
  *   killed mid-migration;
@@ -207,12 +207,12 @@ describe("database client deadlines", () => {
     expect(performance.now() - queryStartedAt).toBeLessThan(15_000);
   });
 
-  it("puts the 30 s default deadline in force and drives the real migration runner's set local exemption", async () => {
+  it("puts the 600 s default deadline in force and drives the real migration runner's set local exemption", async () => {
     const sql = await openPoolWithStatementTimeout(undefined);
 
     // The startup parameter took effect: the session deadline is the default
-    // 30000 ms, not the server's own (0, unlimited).
-    expect(await showStatementTimeout(sql)).toBe("30s");
+    // 600000 ms, not the server's own (0, unlimited).
+    expect(await showStatementTimeout(sql)).toBe("10min");
 
     // The exemption is proven on the real path: runMigrations() itself, against
     // this suite's scratch database, with the virtual long migration appended
@@ -281,9 +281,9 @@ describe("database client deadlines", () => {
     );
   });
 
-  it("keeps the 30000 default when DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
+  it("keeps the 600000 default when DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
     const sql = await openPoolWithStatementTimeout(undefined);
-    expect(await showStatementTimeout(sql)).toBe("30s");
+    expect(await showStatementTimeout(sql)).toBe("10min");
   });
 
   it("advertises no statement deadline on the coordination pool", async () => {
@@ -292,7 +292,7 @@ describe("database client deadlines", () => {
     // lock is a wait, not work — a deadline there could only cancel a
     // legitimate wait.
     const workPool = await openPoolWithStatementTimeout(undefined);
-    expect(await showStatementTimeout(workPool)).toBe("30s");
+    expect(await showStatementTimeout(workPool)).toBe("10min");
     expect(await showStatementTimeout(getCoordinationSql())).toBe("0");
   });
 
