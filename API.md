@@ -451,14 +451,14 @@ most `4 KiB`; extra body fields are rejected.
 | `POST /api/forge-identities` | `{ "instanceUrl": <string>, "token": <nonempty string> }`. The URL must be an absolute HTTPS instance URL. The GitLab token must verify with `read_api` or `api` scope; re-linking one's own identity refreshes it. | `201` `{ "identity": <linked identity> }`, in the same shape as a GET array entry. |
 | `DELETE /api/forge-identities` | `{ "id": <string> }`, the linked identity id. | `200` `{ "deleted": true }`. Only the caller's own identity can be removed. |
 
-Failures use `{ "error": { "code": "...", "message": "..." } }`:
+Failures explicitly handled by these methods use `{ "error": { "code": "...", "message": "..." } }`. A failure thrown by session lookup or store construction escapes every method, and a rejected storage read escapes `GET`; those failures surface as the framework's generic error page rather than this JSON error envelope.
 
 | HTTP | Code | Message / meaning |
 | --- | --- | --- |
 | 400 | `INVALID_REQUEST` | `Invalid forge identity link request.` (POST) or `Invalid forge identity unlink request.` (DELETE): malformed JSON or schema-invalid body. |
-| 400 | `INVALID_INPUT` | The service's message identifies an invalid instance URL; submit an absolute HTTPS URL. |
+| 400 | `INVALID_INPUT` | (POST) The service's message identifies an invalid instance URL; submit an absolute HTTPS URL. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` A browser session is required for every method. |
-| 401 | `UNVERIFIED` | The service's message explains why GitLab could not verify the token or its read scope. |
+| 401 | `UNVERIFIED` | (POST) The service's message explains why GitLab could not verify the token or its read scope. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` (writes): missing or foreign `Origin`. |
 | 403 | `FORBIDDEN` | `A member account is required.` (writes): the signed-in account no longer exists. |
 | 403 | `FORBIDDEN` | `That forge identity is already linked to another account.` (POST): the verified identity belongs to someone else. |
@@ -466,7 +466,7 @@ Failures use `{ "error": { "code": "...", "message": "..." } }`:
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` (writes): the body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` (writes): a declared non-JSON media type. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `APP_URL` is absent or malformed. |
-| 502 | `UPSTREAM_FAILURE` | A GitLab, account-role, or storage operation failed; the service's message or `The forge identity operation could not complete.` identifies the failure. |
+| 502 | `UPSTREAM_FAILURE` | (POST) The live account-role lookup failed, the link service returned this code, or another error was thrown during linking; (DELETE) the live account-role lookup failed, the unlink service returned this code, or another error was thrown during unlinking. The response uses the service's message or `The forge identity operation could not complete.`; `GET` does not map a failed storage read to this response. |
 | 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `TOKEN_ENCRYPTION_KEY` on the server. |
 
 ## Account data and deletion
