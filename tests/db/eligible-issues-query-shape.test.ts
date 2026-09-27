@@ -4,12 +4,9 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import {
-  listEligibleIssues,
-  type DashboardSql,
-  type EligibleIssueFilters,
-  type EligibleIssueProjection,
-} from "@/lib/dashboard/queries";
+import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
+import type { DashboardSql } from "@/lib/dashboard/queries";
+import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 /**
  * Two load-independent pins on the eligible-issues query, per the

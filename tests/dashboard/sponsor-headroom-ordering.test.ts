@@ -4,7 +4,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { listEligibleIssues } from "@/lib/dashboard/queries";
+import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 
 /**
  * Settled balance orders the board exactly, without reservation subtraction

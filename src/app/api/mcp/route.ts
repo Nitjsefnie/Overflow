@@ -30,6 +30,8 @@ import { createSettlementOverridePostHandler } from "@/app/api/overrides/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import {
   listEligibleIssues,
+} from "@/lib/dashboard/eligible-issues";
+import {
   listSettlementHistory,
   getSettlementProof,
   getCalibrationComparison,

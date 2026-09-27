@@ -2,7 +2,7 @@ import {
   listEligibleIssues,
   type EligibleIssueFilters,
   type EligibleIssueProjection,
-} from "@/lib/dashboard/queries";
+} from "@/lib/dashboard/eligible-issues";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
   errorResponse,
