@@ -246,22 +246,31 @@ deletion can be kept longer while backups are failing; see
 
 ## Continuous integration
 
-GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The gate uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs `pnpm test --run`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`, finishing with the page-geometry check, `node scripts/check-page-geometry.mjs`, against the built output. A separate actionlint/zizmor workflow validates and security-checks the workflow definitions themselves. All actions are commit-pinned and checkout credentials are not persisted.
+GitHub Actions runs the complete gate on pushes to `main`, pull requests targeting `main`, and manual dispatches. The `verify` job uses the pinned Node and pnpm versions, applies migrations to PostgreSQL 17, then runs the test suite with coverage and the coverage-floor check — a change that touches only documentation is detected first and runs the suite without the coverage measurement — followed by an informational patch-coverage report, `pnpm lint`, the module-size ceilings, `pnpm typecheck`, `pnpm build`, and the page-geometry check, `node scripts/check-page-geometry.mjs`, against the built output. Two further checks run only on pull requests: the ratchet documents check, which rejects a pull request that would relax the coverage floor or the module-size ceilings, and migration immutability, which rejects an edit to a migration file that has already reached `main` — a migration, once on `main`, never changes. A pull-request run tests the head merged with the base as it stood when the run started, so its last step, base freshness, compares that base with `main`'s current tip and certifies the run only when the advance touched none of the files the pull request changes — such an advance carried its own required checks — and refuses an overlapping advance or a failed or unrepresentative comparison; pushes to `main` test `main` itself and skip it.
+
+The separate `calibrate` job runs only after a green `verify`, on pushes to `main`: when the measured coverage exceeds the recorded floor by more than its hysteresis it rewrites the floor document upward and pushes the raise to `main` as a bot commit. Branch protection refuses that push, and the job fails visibly naming the measured and recorded floors — a red `calibrate` job is the coverage ratchet's alarm, not a deployment blocker: it is not one of `main`'s required checks, and the deployment procedure gates on `main`'s required checks concluding `success` on the exact revision being deployed.
+
+The `actionlint` workflow validates and security-checks the workflow definitions themselves: `actionlint` checks workflow correctness, and `zizmor` their security posture, with `zizmor`'s install hash-pinned from `.github/requirements-zizmor.txt`, so the gate refuses any downloaded artifact matching no known hash (#686). All actions are commit-pinned and checkout credentials are not persisted.
 
 ## Environment reference
 
-`.env.example` documents every required setting:
+`.env.example` documents every required setting. The table below is the complete reference: it also covers the optional variables a minimal setup leaves unset, and the debug flag:
 
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | Optional deadline in milliseconds for every statement the database work pool runs, enforced by the server; defaults to 600000 (ten minutes) when unset, while a set-but-invalid value — empty, non-numeric, negative or zero — is an error at client construction, not a fallback |
 | `AUTH_SECRET` | Auth.js session signing secret |
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |
 | `TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional decrypt-only previous key, set only while rotating `TOKEN_ENCRYPTION_KEY` by [deploy/README.md section 11](deploy/README.md#11-rotating-the-credential-encryption-key); unset or empty means none, a malformed value is an error |
 | `APP_URL` | Public application URL; its origin is the only one browser mutations may come from, and a missing or malformed value refuses every one of them; the same origin is what Auth.js trusts for sign-in |
+| `AUTH_URL`, `AUTH_TRUST_HOST` | Optional overrides of the host Auth.js trusts for sign-in: when either is set — along with the hosting platforms' `VERCEL` and `CF_PAGES` — it decides trust by itself and the `APP_URL` origin is no longer consulted, and a set-but-blank value reads as distrust; leave both unset to trust the `APP_URL` origin |
 | `GITHUB_WEBHOOK_URL`, `GITLAB_WEBHOOK_URL` | Public callback base URLs; registration adds a scoped `hook` UUID |
 | `MODERATOR_GITHUB_USER_IDS` | Comma-separated moderator GitHub account ids (`gh api users/<login> --jq .id`); replaces `MODERATOR_GITHUB_LOGINS`, which is no longer read |
 | `GITHUB_GRAPHQL_BUDGET_RESERVE` | Optional GraphQL admission threshold for new worker passes; defaults to 500, malformed values fall back to 500, and `0` disables the hold. A very large value is deliberately restrictive; see Reconciliation for scope and restart instructions. |
+| `OVERFLOW_DISABLE_RECONCILIATION_SWEEP` | Any non-empty value turns off the reconciliation worker and its sweep — the whole of automatic reconciliation; jobs still accumulate and nothing drains them (see Reconciliation) |
+| `OVERFLOW_SKIP_STARTUP_RECONCILIATION` | Exactly `1` skips the reconciliation sweep a restart runs at startup, as a temporary deploy override; missed deliveries stay unrecovered until the six-hour sweep or a manual reconciliation, and any other value keeps the startup sweep on |
+| `DEBUG_GITHUB_COST` | Debug-only, do not set in production: any non-empty value makes the GitHub client log each issues-page query's point cost and remaining balance to the server console |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
