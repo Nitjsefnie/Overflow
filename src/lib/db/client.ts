@@ -46,8 +46,8 @@ const IDLE_TIMEOUT_SECONDS = 300;
 const MAX_LIFETIME_SECONDS = 1800;
 
 /**
- * The statement deadline, in milliseconds, that every connection of both
- * pools advertises through its startup packet, so the server — not a
+ * The statement deadline, in milliseconds, that every connection of the work
+ * pool advertises through its startup packet, so the server — not a
  * client-side race — cancels a statement that runs too long (issue 661).
  *
  * Long legitimate statements opt out where they run: the migration runner and
@@ -55,6 +55,16 @@ const MAX_LIFETIME_SECONDS = 1800;
  * (see those call sites).
  */
 const DEFAULT_STATEMENT_TIMEOUT_MS = "30000";
+
+/**
+ * The coordination pool advertises NO statement deadline (issue 661, task 5):
+ * its statements are coordination primitives — advisory try-locks, unlock and
+ * session-identity checks, the webhook-upgrade transaction lock — each fast on
+ * an uncontended server, and the one blocking wait it can queue on (the
+ * webhook-upgrade lock behind a slow holder) is a wait, not work. A deadline
+ * there could only cancel a legitimate wait, so it is absent outright.
+ */
+const COORDINATION_STATEMENT_TIMEOUT_MS = "0";
 
 /**
  * Reads the statement deadline the environment names, falling back to the
@@ -73,20 +83,20 @@ function statementTimeoutMs(): string {
     throw new Error(
       `DATABASE_STATEMENT_TIMEOUT_MS is set but invalid: "${raw}". ` +
         "It must be a positive whole number of milliseconds, the statement " +
-        "deadline every connection of both pools advertises to the server.",
+        "deadline every connection of the work pool advertises to the server.",
     );
   }
   return raw;
 }
 
 /**
- * Builds one of the shared pools with the deadlines both pools carry (D4/D3
- * of issue 661): a bounded connect phase, an idle cap, a bounded lifetime,
- * and a server-enforced statement deadline delivered as a startup parameter —
- * the server applies it session-wide, so it reaches every statement the pool
+ * Builds one of the shared pools with the deadlines the pools carry (D4/D3 of
+ * issue 661): a bounded connect phase, an idle cap, a bounded lifetime, and a
+ * server-enforced statement deadline delivered as a startup parameter — the
+ * server applies it session-wide, so it reaches every statement the pool
  * serves, including ones queued behind a stuck lock.
  */
-function openPool(max: number): SqlClient {
+function openPool(max: number, statementTimeout: string): SqlClient {
   return postgres(requireDatabaseUrl(), {
     max,
     connect_timeout: CONNECT_TIMEOUT_SECONDS,
@@ -97,7 +107,7 @@ function openPool(max: number): SqlClient {
       // renders each one with `k + N + v`), so the value stays the string the
       // environment names; the library's ConnectionParameters type declares
       // number for this key, hence the widening assertion.
-      statement_timeout: statementTimeoutMs(),
+      statement_timeout: statementTimeout,
     } as unknown as postgres.ConnectionParameters,
   });
 }
@@ -115,7 +125,7 @@ function requireDatabaseUrl(): string {
 
 export function getSql(): SqlClient {
   if (client === undefined) {
-    client = openPool(WORK_POOL_MAX);
+    client = openPool(WORK_POOL_MAX, statementTimeoutMs());
   }
 
   return client;
@@ -123,7 +133,7 @@ export function getSql(): SqlClient {
 
 export function getCoordinationSql(): SqlClient {
   if (coordinationClient === undefined) {
-    coordinationClient = openPool(RECONCILIATION_COORDINATION_POOL_MAX);
+    coordinationClient = openPool(RECONCILIATION_COORDINATION_POOL_MAX, COORDINATION_STATEMENT_TIMEOUT_MS);
   }
 
   return coordinationClient;

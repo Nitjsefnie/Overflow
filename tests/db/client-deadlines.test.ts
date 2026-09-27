@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import postgres from "postgres";
-import { closeSql, getSql, withTransaction } from "@/lib/db/client";
+import { closeSql, getCoordinationSql, getSql, withTransaction } from "@/lib/db/client";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { runMigrations } from "../../scripts/migrate";
 import { runPruneNoopReconciliationChangesCli } from "../../scripts/prune-noop-reconciliation-changes";
@@ -49,17 +49,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 /**
  * Issue 661: the shared clients are the single choke point every database
  * connection in the process flows through, and issue 661 gives them real
- * deadlines. Four properties are pinned here:
+ * deadlines. The posture pinned here (task 5's measurement rescoped it): the
+ * WORK pool carries the statement deadline, the coordination pool carries
+ * none. Properties pinned here:
  *
  * - the connect phase fails fast (connect_timeout 5 s, not the library's 30 s
  *   default) while the server is unreachable;
  * - a statement that cannot run — blocked behind a lock another session holds
- *   — is cancelled by the server inside the statement deadline;
+ *   — is cancelled by the server inside the work pool's statement deadline;
  * - the deadline is in force by default ("30s") and a transaction may exempt
  *   itself with `set local statement_timeout = 0`, which is exactly the shape
  *   the migration runner's per-migration transaction takes, so long DDL is not
  *   killed mid-migration;
- * - the deadline reaches statement bodies inside transactions too.
+ * - the deadline reaches statement bodies inside transactions too;
+ * - the coordination pool advertises no statement deadline, and a
+ *   coordination statement blocked behind a lock survives the tight
+ *   work-pool deadline and resolves when the holder releases.
  *
  * The suite runs against a container of its own (the init script forces the
  * private-container path): the connect-phase test pauses the database with
@@ -279,6 +284,55 @@ describe("database client deadlines", () => {
   it("keeps the 30000 default when DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
     const sql = await openPoolWithStatementTimeout(undefined);
     expect(await showStatementTimeout(sql)).toBe("30s");
+  });
+
+  it("advertises no statement deadline on the coordination pool", async () => {
+    // The rescope (issue 661, task 5): the work pool carries the deadline, the
+    // coordination pool carries none. A coordination statement queued behind a
+    // lock is a wait, not work — a deadline there could only cancel a
+    // legitimate wait.
+    const workPool = await openPoolWithStatementTimeout(undefined);
+    expect(await showStatementTimeout(workPool)).toBe("30s");
+    expect(await showStatementTimeout(getCoordinationSql())).toBe("0");
+  });
+
+  it("lets a coordination statement wait behind a lock the tight work-pool deadline would cancel", async () => {
+    // Behavioral half of the same posture pin: with the work pool at 500 ms,
+    // a coordination-pool statement blocked behind a held lock survives the
+    // point where the deadline would have fired and completes when the holder
+    // releases — under the old both-pools posture it was cancelled.
+    const workPool = await openPoolWithStatementTimeout("500");
+    expect(await showStatementTimeout(workPool)).toBe("500ms");
+    await workPool`create table if not exists db_deadlines_coordination_fixture (id int primary key)`;
+
+    // The holder signals the lock is taken, keeps holding through a
+    // server-side sleep (1.5 s — three times the work pool's deadline), and
+    // releases on its own, so the waiting coordination statement resolves
+    // rather than deadlocking the test.
+    const holder = postgres(databaseUrl, { max: 1 });
+    let lockHeld: () => void = () => {};
+    const lockHeldPromise = new Promise<void>((resolve) => { lockHeld = resolve; });
+    const holderDone = (async () => {
+      try {
+        await holder.begin(async (tx) => {
+          await tx`set local statement_timeout = 0`;
+          await tx`lock table db_deadlines_coordination_fixture in access exclusive mode`;
+          lockHeld();
+          await tx`select pg_sleep(1.5)`;
+        });
+      } finally {
+        await holder.end();
+      }
+    })();
+    await lockHeldPromise;
+    try {
+      // Blocked for the rest of the holder's 1.5 s hold; a 500 ms deadline on
+      // this pool would have cancelled it long before it could resolve.
+      const [row] = await getCoordinationSql()`select count(*)::int as count from db_deadlines_coordination_fixture`;
+      expect(row.count).toBe(0);
+    } finally {
+      await holderDone;
+    }
   });
 
   it("runs the prune script's own pool under a statement deadline to completion", async () => {
