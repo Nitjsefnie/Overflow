@@ -31,7 +31,7 @@ describe("member standings projections", () => {
       ],
     ]);
 
-    await expect(listMemberStandings({ sql })).resolves.toEqual([
+    await expect(listMemberStandings({}, { sql })).resolves.toEqual([
       { accountId: "account-1", githubLogin: "mira", earnedTotal: 12, givenTotal: 6, netBalance: 6 },
       { accountId: "account-2", githubLogin: "quinn", earnedTotal: 4, givenTotal: 0, netBalance: 4 },
     ]);
@@ -66,7 +66,12 @@ describe("member standings projections", () => {
 
     await listMemberStandings({}, { sql });
 
-    const query = captures[0]!.text.replace(/\s+/g, " ").trim();
+    const query = captures[0]!.text
+      .split("\n")
+      .map((line) => line.split("--", 1)[0])
+      .join(" ")
+      .trim()
+      .replace(/\s+/g, " ");
     const orderClause = query.slice(query.toLocaleLowerCase().indexOf("order by"));
     expect(orderClause).toContain(
       "coalesce(sum(ledger_entries.amount) filter (where ledger_entries.amount > 0), 0)",
@@ -75,7 +80,7 @@ describe("member standings projections", () => {
       "+ abs(coalesce(sum(ledger_entries.amount) filter (where ledger_entries.amount < 0), 0))",
     );
     expect(orderClause.toLocaleLowerCase()).toMatch(
-      /\) desc, users\.github_login asc, users\.id asc$/i,
+      /\) desc, users\.github_login asc, users\.id asc limit \? offset \?$/i,
     );
   });
 

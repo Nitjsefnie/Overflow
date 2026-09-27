@@ -152,7 +152,7 @@ describe("member standings page", () => {
     );
     expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
       "href",
-      "/members?pageSize=2&page=3",
+      "/members?page=3&pageSize=2",
     );
     expect(screen.getByRole("navigation", { name: "Member standings pages" })).toBeInTheDocument();
   });

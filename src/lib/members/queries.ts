@@ -28,6 +28,47 @@ export type MemberStandingsQueryDependencies = {
   sql?: MemberStandingsSql;
 };
 
+/**
+ * The page window a standings reader asks for. An unpaginated request reads
+ * as the first page at the default size, exactly as the issues board reads
+ * one: a page holding exactly `pageSize` rows is a full page, and a full page
+ * means a next page may exist.
+ */
+export type MemberStandingsQuery = {
+  /** 1-based page. Undefined, non-finite and non-positive values read as the first page. */
+  page?: number;
+  /** Rows per page. Undefined and non-finite values read as the default; out-of-range values clamp to 1..500. */
+  pageSize?: number;
+};
+
+/**
+ * The standings page shape for an unpaginated client: the first page at the
+ * default size. Documented next to the board's numbers so the two lists page
+ * alike.
+ */
+export const MEMBER_STANDINGS_DEFAULT_PAGE_SIZE = 200;
+
+/** The largest page size the standings serve; anything above clamps back to it. */
+export const MEMBER_STANDINGS_MAX_PAGE_SIZE = 500;
+
+/**
+ * The one clamp every standings caller passes through: whatever page and page
+ * size reach the query, the SQL is always paged with a limit inside the
+ * documented range and an offset no caller can steer outside it.
+ */
+export function resolveMemberStandingsPage(
+  page: number | undefined,
+  pageSize: number | undefined,
+): { page: number; pageSize: number } {
+  const resolvedPageSize =
+    pageSize === undefined || !Number.isFinite(pageSize)
+      ? MEMBER_STANDINGS_DEFAULT_PAGE_SIZE
+      : Math.min(MEMBER_STANDINGS_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
+  const resolvedPage =
+    page === undefined || !Number.isFinite(page) ? 1 : Math.max(1, Math.floor(page));
+  return { page: resolvedPage, pageSize: resolvedPageSize };
+}
+
 type MemberStandingsRow = {
   id: string;
   github_login: string;
@@ -36,7 +77,8 @@ type MemberStandingsRow = {
 };
 
 /**
- * Every account holding at least one ledger entry, busiest first.
+ * Every account holding at least one ledger entry, busiest first, one page at
+ * a time.
  *
  * The INNER JOIN is the roster rule: an account with no settled work — and no
  * sponsored settlement — has no contribution record to show and is not listed.
@@ -46,9 +88,11 @@ type MemberStandingsRow = {
  * credits paid as a sponsor when their repositories' issues closed.
  */
 export async function listMemberStandings(
+  query: MemberStandingsQuery = {},
   dependencies: MemberStandingsQueryDependencies = {},
 ): Promise<MemberStanding[]> {
   const sql = resolveSql(dependencies);
+  const standingsPage = resolveMemberStandingsPage(query.page, query.pageSize);
   const rows = await sql<MemberStandingsRow[]>`
     select
       users.id,
@@ -63,7 +107,11 @@ export async function listMemberStandings(
         coalesce(sum(ledger_entries.amount) filter (where ledger_entries.amount > 0), 0)
         + abs(coalesce(sum(ledger_entries.amount) filter (where ledger_entries.amount < 0), 0))
       ) desc,
-      users.github_login asc
+      users.github_login asc,
+      -- The unique page-cut tiebreaker: without a final total order a page
+      -- boundary could drop or duplicate a row between requests.
+      users.id asc
+    limit ${standingsPage.pageSize} offset ${(standingsPage.page - 1) * standingsPage.pageSize}
   `;
   return rows.map((row) => {
     const earnedTotal = readNumber(row.earned_total, "Earned total");
