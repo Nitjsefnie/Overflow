@@ -614,10 +614,9 @@ considered explicitly.
 ## 10. Deploying a new revision
 
 The procedure runs as one committed script. As root, from the tree root, run
-`bash scripts/deploy-revision.sh`; it runs under the source-tree and
-name-based required-checks guards the manual fallback below documents, plus
-the automated pending-migration and workflow-pinned CI gates: the `flock`
-fence on
+`bash scripts/deploy-revision.sh`; it applies the source-tree guards described
+below, plus its automated pending-migration and workflow-pinned CI gates: the
+`flock` fence on
 `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
 with the serialization refusal when the lock is not acquired, the `.next`
 anchor taken before the fetch and passed to `release:switch --expect-current`,
@@ -799,7 +798,8 @@ off-procedure actor — an old copy of this document, a hand-run switch —
 therefore cannot silently supersede an in-flight deploy: production never moves
 backward and an already-verified release is never silently discarded. When the
 switch reports the mismatch, re-run the whole procedure: the script from the
-start, or the manual block below from `git pull` onwards. A missing or
+start, or the manual block below from its opening fence so it captures a fresh
+serving anchor. A missing or
 dangling `.next` at anchor time is a host that needs repair or the one-time
 migration, not a routine deploy; the conditional switch refuses that state
 rather than building on it.
@@ -871,12 +871,14 @@ the block. The script's `OVERFLOW_DEPLOY_CI_GATE=skip` setting has no manual
 equivalent.
 
 Run the standing block in parts, in one shell so the fd 9 fence and
-`expected_serving` carry over. If a gate refuses, do not continue to
-`pnpm db:migrate`; that would apply the unverified commit's migrations to the
-production schema. If the status command fails or a migration is not safe for
-the previous release's writes, do not migrate. Extract and run the manual
-blocks only after diagnosing why the script could not, and keep every guard in
-this section in force.
+`expected_serving` carry over. The ancestry, cleanliness, ignored-file and
+required-checks gates run before the merge; if a gate refuses, the shell exits.
+Diagnose and resolve the refusal, then start a new shell and re-run the block's
+opening part from the fence. The only manual stop is after loading the
+environment: run `node scripts/deploy-migration-status.ts` by hand, review every
+listed migration as described above, stop if the command fails or a migration
+is unsafe for the previous release's writes, and continue at `pnpm db:migrate`
+only after that review.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
