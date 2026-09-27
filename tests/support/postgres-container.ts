@@ -237,28 +237,25 @@ async function pickPrivateHostPort(): Promise<number> {
   });
 }
 
-class TrackedPrivatePostgresContainer extends GenericContainer {
-  createdContainerId: string | undefined;
+const PRIVATE_POSTGRES_ATTEMPT_LABEL = "overflow.private-postgres.attempt";
 
-  protected override async containerCreated(containerId: string): Promise<void> {
-    this.createdContainerId = containerId;
-  }
-}
-
-/** A failed Docker start can leave the created container behind. */
-async function removeFailedPrivateContainer(id: string | undefined): Promise<void> {
-  if (id === undefined) return;
+/** A failed start can leave a created container behind, even before fixture copying finishes. */
+async function removeFailedPrivateContainers(attemptId: string): Promise<void> {
   try {
     const client = await getContainerRuntimeClient();
-    const container = client.container.getById(id);
-    try {
-      await client.container.stop(container);
-    } catch {
-      // It may never have started.
+    const containers = await client.container.dockerode.listContainers({
+      all: true,
+      filters: { label: [`${PRIVATE_POSTGRES_ATTEMPT_LABEL}=${attemptId}`] },
+    });
+    for (const container of containers) {
+      try {
+        await client.container.getById(container.Id).remove({ force: true, v: true });
+      } catch {
+        // Cleanup is best-effort; keep the original start error.
+      }
     }
-    await client.container.remove(container, { removeVolumes: true });
   } catch {
-    // A failure before creation leaves nothing to remove.
+    // Cleanup is best-effort; keep the original start error.
   }
 }
 
@@ -272,7 +269,9 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const hostPort = await pickPrivateHostPort();
-    let container = new TrackedPrivatePostgresContainer(POSTGRES_IMAGE)
+    const attemptId = randomBytes(16).toString("hex");
+    let container = new GenericContainer(POSTGRES_IMAGE)
+      .withLabels({ [PRIVATE_POSTGRES_ATTEMPT_LABEL]: attemptId })
       .withEnvironment({
         POSTGRES_DB: database,
         POSTGRES_PASSWORD: password,
@@ -294,7 +293,7 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
         databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}?client_min_messages=warning`,
       };
     } catch (error) {
-      await removeFailedPrivateContainer(container.createdContainerId);
+      await removeFailedPrivateContainers(attemptId);
       if (!(error instanceof Error && /userland proxy:.*address already in use/i.test(error.message)) || attempt === 3) {
         throw error;
       }
