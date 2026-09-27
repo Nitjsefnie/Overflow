@@ -67,7 +67,8 @@ Send `POST /api/repositories` with `Authorization: Bearer <token>` and
 `Content-Type: application/json`. Use the Overflow-issued token; registration
 uses the account's stored GitHub OAuth credential for its GitHub operations.
 The repository must be public, and that account must have GitHub administrator
-permission for it. Registration creates the catalog labels and installs a webhook.
+permission for it. The catalog labels must already exist on the repository;
+registration checks them and installs a webhook.
 
 A bearer-token request is exempt from the origin check — a script is not a
 browser and sends no `Origin` header — but it is not exempt from the content
@@ -433,6 +434,84 @@ being gone leaves the local row untouched and surfaces as registration's
 `GITHUB_CREDENTIALS`, `GITHUB_ACCESS`, `GITHUB_RATE_LIMITED` or
 `UPSTREAM_FAILURE` vocabulary for the forge step that died.
 
+## Linked forge identities
+
+`/api/forge-identities` manages the signed-in member's GitLab identities.
+All three methods require a browser session for a `MEMBER` or `MODERATOR`;
+an Overflow API bearer token does not authenticate this route. `POST` and
+`DELETE` additionally re-read the account's live role, require an `Origin`
+equal to the origin of `APP_URL`, and accept only an absent `Content-Type` or
+`application/json` (parameters such as `charset=utf-8` are allowed). Send
+`Content-Type: application/json` with either JSON body. Both writes read at
+most `4 KiB`; extra body fields are rejected.
+
+| Method | Request | Success |
+| --- | --- | --- |
+| `GET /api/forge-identities` | No body or query required. | `200` `{ "identities": [<linked identity>, ...] }`. Each identity has `id`, `provider`, `instanceUrl`, `forgeLogin`, `verifiedAt`, and `tokenFailedAt` (a timestamp or `null`). No token is returned. |
+| `POST /api/forge-identities` | `{ "instanceUrl": <string>, "token": <nonempty string> }`. The URL must be an absolute HTTPS instance URL. The GitLab token must verify with `read_api` or `api` scope; re-linking one's own identity refreshes it. | `201` `{ "identity": <linked identity> }`, in the same shape as a GET array entry. |
+| `DELETE /api/forge-identities` | `{ "id": <string> }`, the linked identity id. | `200` `{ "deleted": true }`. Only the caller's own identity can be removed. |
+
+Failures use `{ "error": { "code": "...", "message": "..." } }`:
+
+| HTTP | Code | Message / meaning |
+| --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `Invalid forge identity link request.` (POST) or `Invalid forge identity unlink request.` (DELETE): malformed JSON or schema-invalid body. |
+| 400 | `INVALID_INPUT` | The service's message identifies an invalid instance URL; submit an absolute HTTPS URL. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` A browser session is required for every method. |
+| 401 | `UNVERIFIED` | The service's message explains why GitLab could not verify the token or its read scope. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` (writes): missing or foreign `Origin`. |
+| 403 | `FORBIDDEN` | `A member account is required.` (writes): the signed-in account no longer exists. |
+| 403 | `FORBIDDEN` | `That forge identity is already linked to another account.` (POST): the verified identity belongs to someone else. |
+| 404 | `NOT_FOUND` | `No such forge identity is linked to this account.` (DELETE): the id is absent or belongs to another account. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` (writes): the body exceeds `4 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` (writes): a declared non-JSON media type. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `APP_URL` is absent or malformed. |
+| 502 | `UPSTREAM_FAILURE` | A GitLab, account-role, or storage operation failed; the service's message or `The forge identity operation could not complete.` identifies the failure. |
+| 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `TOKEN_ENCRYPTION_KEY` on the server. |
+
+## Account data and deletion
+
+These HTTP routes back the signed-in member's **Your account data** dashboard
+controls. They require a browser session for a `MEMBER` or `MODERATOR`, not an
+Overflow API bearer token. Both mutations require an `Origin` equal to the
+origin of `APP_URL`; a declared `Content-Type` must be `application/json`
+(optional parameters are accepted). Their error envelope is
+`{ "error": { "code": "...", "message": "..." } }`.
+
+`POST /api/account/export` needs no request body. Success is `200` with a
+download named `overflow-account-export.json`, `Content-Type:
+application/json; charset=utf-8`, and `Cache-Control: no-store`. Its JSON
+document has `formatVersion`, `exportedAt`, `account`, `apiToken`,
+`forgeIdentities`, `sponsoredRepositories`, and the account's ledger,
+moderation and reconciliation sections. Stored credentials appear only as
+presence booleans; token hashes and webhook secrets are omitted. The
+[operator account-export reference](OPERATING.md#account-deletion-and-export)
+explains its data scope.
+
+`DELETE /api/account` deletes the signed-in account. It requires a GitHub
+sign-in within the last 10 minutes and a JSON body
+`{ "confirmLogin": <GitHub login string> }`, read under `4 KiB`. The login is
+compared with the account's current GitHub login after trimming and without
+case sensitivity. Success is `200` `{ "deleted": true }` and ends the browser
+session; if deletion succeeds but ending the session fails, the response is
+`200` `{ "deleted": true, "sessionEnded": false }`. The
+[operator deletion reference](OPERATING.md#account-deletion-and-export)
+describes what the deletion retains and scrubs.
+
+| HTTP | Code | Exact message | Applies to / meaning |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `A confirmation login is required.` | DELETE: unreadable or invalid JSON, or `confirmLogin` is missing or not a string. |
+| 400 | `CONFIRMATION_MISMATCH` | `The confirmation login does not match your account.` | DELETE: enter the signed-in account's GitHub login. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | Both: no eligible browser session. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | Both: missing or foreign `Origin`. |
+| 403 | `FORBIDDEN` | `A member account is required.` | Both: the session's account no longer exists. |
+| 403 | `REAUTHENTICATION_REQUIRED` | `Confirm your GitHub sign-in to delete your account.` | DELETE: sign in with GitHub again before confirming deletion. |
+| 409 | `SPONSOR_BLOCKED` | `Unregister your sponsored repositories before deleting your account.` | DELETE: `error.repositories` lists registrations that must be unregistered first. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | DELETE: body exceeds `4 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | Both: a declared non-JSON media type. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Both: `APP_URL` is absent or malformed. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to export account data.` or `Unable to delete account.` | The corresponding session, database, or operation failed. |
+
 ## Reading the ledger over the API
 
 Each page a signed-in member reads has a GET endpoint answering the same JSON
@@ -551,6 +630,7 @@ moderation body, and a query parameter named more than once is refused.
 | `GET /api/moderation/recalibration` | Query: `targetAccountId` (required). | `200` `{ "preview": <the recalibration figure> }` — the trigger verdict over the latest substantiated audit's stored snapshot, beside every credit adjustment already applied. |
 | `GET /api/moderation/rederivation` | None. | `200` `{ "rederivation": <per-repository derived-row status>, "startupRecoverySkipped": <boolean> }`. |
 | `GET /api/moderation/moderators` | None. | `200` `{ "moderators": <the moderator roster> }`. |
+| `POST /api/moderation/moderators` | `{ "targetAccountId": <uuid>, "moderator": <boolean> }`; `true` grants the role and `false` revokes it. | `200` `{ "change": <the recorded moderator role change> }`. |
 | `POST /api/moderation` | `{ "targetAccountId": <uuid>, "repositoryId": <uuid, optional>, "sampleStartedAt": <timestamp>, "sampleEndedAt": <timestamp>, "reason": <nonblank, ≤2000 characters> }`. The sample end must be after the sample start. | `201` `{ "audit": <the opened account audit> }`. |
 | `PATCH /api/moderation/<id>` | `{ "action": "dismiss" \| "substantiate", "reason": <nonblank, ≤2000 characters> }`. | `200` `{ "audit": <the decided audit> }`. |
 | `PATCH /api/moderation` | `{ "targetAccountId": <uuid>, "plan": <nonblank, ≤2000 characters> }`. | `200` `{ "recalibration": <the closed recalibration> }`. |
@@ -560,6 +640,9 @@ moderation body, and a query parameter named more than once is refused.
 
 Body limits: `32 KiB` on every moderation route except
 `PATCH /api/moderation/<id>`, whose single-reason body is read under `8 KiB`.
+The moderator role POST uses the `32 KiB` limit and the shared moderator
+credential guard above: a live moderator session or its Overflow API token is
+required. Its two body fields are required and extra fields are rejected.
 
 ### Moderation responses
 
@@ -587,6 +670,17 @@ service's own message instead of the fixed one — `403`/`404`/`409` keep the
 code and name the cause in the message, any other service code answers
 `422` — and an outage behind it is `502` `UPSTREAM_FAILURE` with `Unable to
 complete the moderator request.`
+
+`POST /api/moderation/moderators` also has these request-level error rows;
+the shared credential table and the roster service-error rules above apply:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser-session write has a missing or foreign `Origin`; use the Overflow page's origin. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | The body exceeds `32 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | A declared non-JSON media type was sent; use `application/json`. |
+| 422 | `INVALID_REQUEST` | `Invalid moderator role request.` | Malformed JSON, missing or extra fields, a non-UUID `targetAccountId`, or a non-boolean `moderator`. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | `APP_URL` is absent or malformed for a browser-session write. |
 
 ## Settlement and calibration overrides
 
