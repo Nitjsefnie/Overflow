@@ -275,6 +275,11 @@ async function makeFixture(options: {
   // Production's .next is a relative symlink to the serving release; keep the
   // fixture in the same shape so the anchor exercises real readlink resolution.
   await symlink(path.basename(prevDir), path.join(tree, ".next"));
+  // The post-fast-forward half executes $tree's own copy of the deploy script
+  // (issue 747), so the fixture tree holds the repository's current bytes at
+  // that path.
+  await mkdir(path.join(tree, "scripts"));
+  await writeFile(path.join(tree, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   const envFile = path.join(dir, "overflow.env");
   await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
   const logDir = path.join(dir, "logs");
@@ -518,11 +523,18 @@ function expectTreeNotMoved(entries: ShimLogEntry[], label = "the fast-forward")
 async function runDeploy(
   fixture: Fixture,
   extraEnv: Record<string, string> = {},
-  options: { omitShims?: string[] } = {},
+  options: { omitShims?: string[]; scriptPath?: string; openFd9On?: string } = {},
 ) {
   const names = ALL_SHIMS.filter((name) => !(options.omitShims ?? []).includes(name));
   await writeShims(fixture, names);
-  return spawnSync("bash", [script], {
+  // scriptPath: which copy of the deploy script starts the run (the tree's
+  // own copy for the issue-747 proof). openFd9On: a path fd 9 is opened on
+  // before the script starts, for a phase-2 entry that must get past the
+  // fd 9 check to reach the serving-anchor refusal.
+  const args = options.openFd9On
+    ? ["-c", 'exec 9>"$1"; exec bash "$2"', "deploy-revision", options.openFd9On, options.scriptPath ?? script]
+    : [options.scriptPath ?? script];
+  return spawnSync("bash", args, {
     encoding: "utf8",
     cwd: fixture.dir,
     timeout: 60_000,
@@ -564,6 +576,14 @@ describe("scripts/deploy-revision.sh", () => {
       expect(source).toContain(knob);
     }
     expect(source).toMatch(/production sets none/);
+    // The two re-exec handoff markers are env reads as well, but internal
+    // ones: the script sets both itself across the exec and production never
+    // seeds either, so the header comment declares them beside the operator
+    // knobs without adding them to that list.
+    const header = source.slice(0, source.indexOf("set -euo pipefail"));
+    for (const marker of ["OVERFLOW_DEPLOY_HANDOFF_SHA", "OVERFLOW_DEPLOY_HANDOFF_SERVING"]) {
+      expect(header, `${marker} declared in the header`).toContain(marker);
+    }
   });
 
   it("defaults the deploy verification curl to the readiness endpoint", async () => {
@@ -599,6 +619,36 @@ describe("scripts/deploy-revision.sh", () => {
     );
     const entries = await readLog(fixture.shimLog);
     expect(entries.map((entry) => entry.cmd)).toEqual(["flock"]);
+  });
+
+  it("refuses the phase-2 entry without the deploy lock on fd 9, running nothing", async () => {
+    // The handoff exec inherits fd 9, so a phase-2 entry without it did not
+    // come from the handoff; the entry checks refuse before any command.
+    const fixture = await makeFixture();
+    await writeFile(fixture.shimLog, "");
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH,
+      OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
+    });
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("without the deploy lock on fd 9");
+    expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
+  });
+
+  it("refuses the phase-2 entry without a serving anchor, running nothing", async () => {
+    for (const serving of [undefined, ""] as const) {
+      const fixture = await makeFixture();
+      await writeFile(fixture.shimLog, "");
+      const extraEnv: Record<string, string> = { OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH };
+      if (serving !== undefined) extraEnv.OVERFLOW_DEPLOY_HANDOFF_SERVING = serving;
+      const result = await runDeploy(fixture, extraEnv, { openFd9On: fixture.lock });
+
+      expect(result.status, `${String(serving)}: ${result.stderr}`).not.toBe(0);
+      expect(result.stderr, String(serving)).toContain("OVERFLOW_DEPLOY_HANDOFF_SERVING");
+      expect(await readLog(fixture.shimLog), String(serving)).toEqual([]);
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
   });
 
   it("runs the whole section 10 procedure in order under a successful fence", async () => {
@@ -1973,7 +2023,12 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   // The gate reads the pin map from the deployed commit itself.
   await mkdir(path.join(origin, ".github"));
   await writeFile(path.join(origin, MAP_PATH), await readFile(fixture.requiredChecks, "utf8"));
-  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH]);
+  // The post-fast-forward half executes the merged tree's own copy of the
+  // deploy script, so the origin base commit carries the repository's current
+  // bytes at that path: the exec target must exist in the fixture tree.
+  await mkdir(path.join(origin, "scripts"));
+  await writeFile(path.join(origin, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
+  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh"]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -1981,6 +2036,10 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   git("remote", "add", "origin", FIXTURE_REMOTE_URL);
   git("config", `url.${origin}.insteadOf`, FIXTURE_REMOTE_URL);
   git("fetch", "-q", "origin", "main");
+  // The base commit carries the deploy script, so the checkout materializes
+  // the tree's own copy from git; makeFixture's untracked placeholder would
+  // collide with it.
+  await rm(path.join(fixture.tree, "scripts", "deploy-revision.sh"));
   git("checkout", "-q", "-B", "main", behind);
   for (const n of [1, 2, 3]) {
     await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
@@ -2091,6 +2150,49 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     )!.args[3]!;
     expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
+  });
+
+  it("executes the merged tree's own copy for the post-merge half, so a verification step the deployed commit adds runs in its own deploy", async () => {
+    // Issue 747: bash reads a script incrementally and the fast-forward
+    // rewrites the script file mid-run, so without the re-exec the tail after
+    // `git merge --ff-only` runs from the pre-merge copy and a step commit B
+    // appends never runs in B's own deploy. The tree's own copy is what
+    // starts this run, so the case is the issue's.
+    const { fixture, tip, git } = await makeGitFixture();
+    const originGit = (...args: string[]): string => {
+      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        cwd: path.join(fixture.dir, "origin"),
+        encoding: "utf8",
+        env: { ...process.env, ...HERMETIC_GIT_ENV },
+      });
+      expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+      return result.stdout.trim();
+    };
+    const originScript = path.join(fixture.dir, "origin", "scripts", "deploy-revision.sh");
+    const current = await readFile(originScript, "utf8");
+    await writeFile(originScript, `${current}printf '747-EXTRA-VERIFICATION ran\\n'\n`);
+    originGit("add", "scripts/deploy-revision.sh");
+    originGit("commit", "-q", "-m", "add the verification step the deploy must run");
+    const withStep = originGit("rev-parse", "HEAD");
+    expect(withStep).not.toBe(tip);
+
+    // The premise: the tree's own copy at the behind commit is byte-identical
+    // to the repository's script, so starting the run from it is the issue's
+    // case.
+    const treeCopy = path.join(fixture.tree, "scripts", "deploy-revision.sh");
+    await expect(readFile(treeCopy, "utf8")).resolves.toBe(current);
+
+    const result = await runDeploy(fixture, HERMETIC_GIT_ENV, { ...realGit, scriptPath: treeCopy });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(withStep);
+    expect(result.stdout).toContain("747-EXTRA-VERIFICATION ran");
+    const entries = await readLog(fixture.shimLog);
+    const release = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!.args[3]!;
+    expect(release.endsWith(`-${withStep.slice(0, 7)}`)).toBe(true);
+    await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${withStep}\n`);
   });
 
   /**
