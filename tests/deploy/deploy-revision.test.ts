@@ -1,5 +1,9 @@
-import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from "node:child_process";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -520,10 +524,15 @@ function expectTreeNotMoved(entries: ShimLogEntry[], label = "the fast-forward")
   expect(entries.some((entry) => entry.cmd === "git" && entry.args[0] === "merge"), label).toBe(false);
 }
 
-async function runDeploy(
+type RunDeployOptions = { omitShims?: string[]; scriptPath?: string; openFd9On?: string; spawn?: DeploySpawner };
+
+type DeploySpawner = (command: string, args: readonly string[], options: SpawnSyncOptionsWithStringEncoding) =>
+  SpawnSyncReturns<string>;
+
+async function runDeployAttempt(
   fixture: Fixture,
   extraEnv: Record<string, string> = {},
-  options: { omitShims?: string[]; scriptPath?: string; openFd9On?: string } = {},
+  options: RunDeployOptions = {},
 ) {
   const names = ALL_SHIMS.filter((name) => !(options.omitShims ?? []).includes(name));
   await writeShims(fixture, names);
@@ -534,7 +543,7 @@ async function runDeploy(
   const args = options.openFd9On
     ? ["-c", 'exec 9>"$1"; exec bash "$2"', "deploy-revision", options.openFd9On, options.scriptPath ?? script]
     : [options.scriptPath ?? script];
-  return spawnSync("bash", args, {
+  return (options.spawn ?? spawnSync)("bash", args, {
     encoding: "utf8",
     cwd: fixture.dir,
     timeout: 60_000,
@@ -558,6 +567,118 @@ async function runDeploy(
     },
   });
 }
+
+const MAX_LOST_WAIT_STATUS_RETRIES = 1;
+const LOST_WAIT_STATUS_SIGNATURE = "git ls-files exited -1";
+
+async function runDeploy(
+  fixture: Fixture,
+  extraEnv: Record<string, string> = {},
+  options: RunDeployOptions = {},
+) {
+  let result = await runDeployAttempt(fixture, extraEnv, options);
+  for (let retry = 0; retry < MAX_LOST_WAIT_STATUS_RETRIES; retry += 1) {
+    if (result.status === 0 || !result.stderr.includes(LOST_WAIT_STATUS_SIGNATURE)) break;
+
+    let entries: ShimLogEntry[];
+    try {
+      entries = await readLog(fixture.shimLog);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
+    }
+    if (!entries.some((entry) => entry.cmd === "git" && entry.args[0] === "ls-files")) break;
+
+    // Bash's wait_for can see waitpid(-1) return ECHILD after the process
+    // substitution child was reaped, leaving termination_state at -1; the
+    // script then prints that `$?` as `git ls-files exited -1`. ECHILD proves
+    // the git shim ran, so retry this transient lost status once (issue 754).
+    await writeFile(fixture.shimLog, "");
+    result = await runDeployAttempt(fixture, extraEnv, options);
+  }
+  return result;
+}
+
+const GIT_LS_FILES_LOG_ENTRY = "git\tls-files\t-z\t--others\tenv\t LC_ALL=\n";
+
+function spawnResult(status: number, stderr = ""): SpawnSyncReturns<string> {
+  return { pid: 123, output: ["", "", stderr], stdout: "", stderr, status, signal: null };
+}
+
+function spawnStub(result: SpawnSyncReturns<string>, onCall = () => {}): DeploySpawner {
+  return () => { onCall(); return result; };
+}
+
+function loggedRetrySpawner(fixture: Fixture, results: SpawnSyncReturns<string>[]) {
+  writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
+  const logAtSpawn: string[] = [];
+  let calls = 0;
+  const spawn: DeploySpawner = () => {
+    calls += 1;
+    logAtSpawn.push(readFileSync(fixture.shimLog, "utf8"));
+    if (calls > 1) writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
+    return results[calls - 1]!;
+  };
+  return { spawn, logAtSpawn, get calls() { return calls; } };
+}
+
+describe("runDeploy lost wait status retry", () => {
+  it("retries the lost wait status once and truncates the first attempt log", async () => {
+    const fixture = await makeFixture();
+    const success = spawnResult(0);
+    const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1"), success]);
+    const result = await runDeploy(fixture, {}, { spawn: retry.spawn });
+
+    expect(result).toBe(success);
+    expect(retry.calls).toBe(2);
+    expect(retry.logAtSpawn).toEqual([GIT_LS_FILES_LOG_ENTRY, ""]);
+    expect(readFileSync(fixture.shimLog, "utf8")).toBe(GIT_LS_FILES_LOG_ENTRY);
+    expect((await readLog(fixture.shimLog)).map(describeEntry)).toEqual(["git ls-files -z --others"]);
+  });
+
+  it("does not retry a different git ls-files failure signature", async () => {
+    const fixture = await makeFixture();
+    writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
+    const failure = spawnResult(1, "git ls-files exited 7");
+    let calls = 0;
+    const result = await runDeploy(fixture, {}, { spawn: spawnStub(failure, () => calls++) });
+
+    expect(result).toBe(failure);
+    expect(calls).toBe(1);
+  });
+
+  it("does not retry the lost-status signature when no git ls-files shim entry exists", async () => {
+    const fixture = await makeFixture();
+    const failure = spawnResult(1, "git ls-files exited -1");
+    let calls = 0;
+    const result = await runDeploy(fixture, {}, { spawn: spawnStub(failure, () => calls++) });
+
+    expect(result).toBe(failure);
+    expect(calls).toBe(1);
+  });
+
+  it("returns the second failure when both attempts have the lost-status signature", async () => {
+    const fixture = await makeFixture();
+    const secondFailure = spawnResult(1, "git ls-files exited -1 on second attempt");
+    const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1 on first attempt"), secondFailure]);
+    const result = await runDeploy(fixture, {}, { spawn: retry.spawn });
+
+    expect(result).toBe(secondFailure);
+    expect(retry.calls).toBe(2);
+    expect(retry.logAtSpawn).toEqual([GIT_LS_FILES_LOG_ENTRY, ""]);
+    expect(readFileSync(fixture.shimLog, "utf8")).toBe(GIT_LS_FILES_LOG_ENTRY);
+  });
+
+  it("does not retry a successful first attempt", async () => {
+    const fixture = await makeFixture();
+    const success = spawnResult(0);
+    let calls = 0;
+    const result = await runDeploy(fixture, {}, { spawn: spawnStub(success, () => calls++) });
+
+    expect(result).toBe(success);
+    expect(calls).toBe(1);
+  });
+});
 
 describe("scripts/deploy-revision.sh", () => {
   it("exists, parses as bash, and runs under strict mode with every knob declared", async () => {
