@@ -53,7 +53,13 @@ export function listMigrationNames(entries: readonly string[]): string[] {
   return numberedMigrations(entries).map(({ name }) => name);
 }
 
-export async function runMigrations(options: { upTo?: string } = {}): Promise<string[]> {
+export async function runMigrations(
+  options: {
+    upTo?: string;
+    onMigrationApplied?: (migrationName: string) => void;
+    onMigrationFailed?: (migrationName: string) => void;
+  } = {},
+): Promise<string[]> {
   const numberedNames = listMigrationNames(await readdir(migrationsDirectory));
 
   // The whole directory is checked, not just the part `upTo` selects: bad numbering is a property
@@ -70,54 +76,61 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<st
   const appliedMigrationNames: string[] = [];
 
   for (const migrationName of migrationNames) {
-    if (appliedChecksums.has(migrationName)) {
-      const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
-      const recordedChecksum = appliedChecksums.get(migrationName);
-      const currentChecksum = migrationChecksum(migration);
+    try {
+      if (appliedChecksums.has(migrationName)) {
+        const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+        const recordedChecksum = appliedChecksums.get(migrationName);
+        const currentChecksum = migrationChecksum(migration);
 
-      if (recordedChecksum !== undefined && recordedChecksum !== currentChecksum) {
-        throw new Error(
-          `db/migrations/${migrationName} no longer matches the checksum recorded when this ` +
-            `database applied it (recorded ${recordedChecksum}, file ${currentChecksum}). A ` +
-            "migration a database has applied is immutable: restore the file to its recorded " +
-            "content (the file's history names the pre-edit revision) or rebuild the database " +
-            "from scratch. Never edit an applied migration; write a new migration instead " +
-            "(issue 657).",
-        );
+        if (recordedChecksum !== undefined && recordedChecksum !== currentChecksum) {
+          throw new Error(
+            `db/migrations/${migrationName} no longer matches the checksum recorded when this ` +
+              `database applied it (recorded ${recordedChecksum}, file ${currentChecksum}). A ` +
+              "migration a database has applied is immutable: restore the file to its recorded " +
+              "content (the file's history names the pre-edit revision) or rebuild the database " +
+              "from scratch. Never edit an applied migration; write a new migration instead " +
+              "(issue 657).",
+          );
+        }
+
+        continue;
       }
 
-      continue;
+      const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+      const checksum = migrationChecksum(migration);
+
+      // One transaction per migration, not one for the whole run. A migration may only build on
+      // catalogue state an earlier migration committed: PostgreSQL refuses to read an enum label
+      // added by ALTER TYPE ... ADD VALUE until the adding transaction has committed, so 007 can
+      // only name the labels 006 adds if 006 committed first. Running from empty hid this, because
+      // 001 then created every enum type in the same transaction that extended it.
+      //
+      // The bookkeeping row is written inside the migration's own transaction, so a migration and
+      // the record of it commit together or not at all. A migration that fails leaves the ones
+      // before it applied and recorded, which is what lets a rerun resume rather than restart.
+      await applyAndRecordMigration(appliedMigrationNames, migrationName, () =>
+        withTransaction(async (sql) => {
+          // The shared pool advertises a session-wide statement deadline (issue
+          // 661), and a migration is exactly the legitimate long statement it
+          // exists to interrupt elsewhere: index builds and other DDL can run for
+          // minutes. This is the first statement of the transaction, so the whole
+          // migration runs exempt, and `local` scopes the lift to this
+          // transaction — every later statement on the connection keeps the
+          // deadline.
+          await sql`set local statement_timeout = 0`;
+          await sql.unsafe(migration);
+          await sql`
+            insert into schema_migrations (name, checksum)
+            values (${migrationName}, ${checksum})
+          `;
+        }),
+      );
+    } catch (error) {
+      options.onMigrationFailed?.(migrationName);
+      throw error;
     }
 
-    const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
-    const checksum = migrationChecksum(migration);
-
-    // One transaction per migration, not one for the whole run. A migration may only build on
-    // catalogue state an earlier migration committed: PostgreSQL refuses to read an enum label
-    // added by ALTER TYPE ... ADD VALUE until the adding transaction has committed, so 007 can
-    // only name the labels 006 adds if 006 committed first. Running from empty hid this, because
-    // 001 then created every enum type in the same transaction that extended it.
-    //
-    // The bookkeeping row is written inside the migration's own transaction, so a migration and
-    // the record of it commit together or not at all. A migration that fails leaves the ones
-    // before it applied and recorded, which is what lets a rerun resume rather than restart.
-    await applyAndRecordMigration(appliedMigrationNames, migrationName, () =>
-      withTransaction(async (sql) => {
-        // The shared pool advertises a session-wide statement deadline (issue
-        // 661), and a migration is exactly the legitimate long statement it
-        // exists to interrupt elsewhere: index builds and other DDL can run for
-        // minutes. This is the first statement of the transaction, so the whole
-        // migration runs exempt, and `local` scopes the lift to this
-        // transaction — every later statement on the connection keeps the
-        // deadline.
-        await sql`set local statement_timeout = 0`;
-        await sql.unsafe(migration);
-        await sql`
-          insert into schema_migrations (name, checksum)
-          values (${migrationName}, ${checksum})
-        `;
-      }),
-    );
+    options.onMigrationApplied?.(migrationName);
   }
 
   return appliedMigrationNames;
@@ -403,9 +416,24 @@ async function backfillLegacyMigrationChecksums(
 }
 
 if (isDirectExecution()) {
+  const appliedMigrationNames: string[] = [];
+  let failedMigrationName: string | undefined;
   try {
     await enforceDefaultBranchGuard();
-    printAppliedMigrations(await runMigrations());
+    const completedMigrationNames = await runMigrations({
+      onMigrationApplied: (migrationName) => appliedMigrationNames.push(migrationName),
+      onMigrationFailed: (migrationName) => {
+        failedMigrationName = migrationName;
+      },
+    });
+    printAppliedMigrations(completedMigrationNames);
+  } catch (error) {
+    printAppliedMigrations(appliedMigrationNames);
+    const failedMigration =
+      failedMigrationName === undefined ? "" : ` db/migrations/${failedMigrationName}`;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`migration failed${failedMigration}: ${errorMessage}\n`);
+    process.exitCode = 1;
   } finally {
     await closeSql();
   }

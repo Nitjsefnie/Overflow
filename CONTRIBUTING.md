@@ -129,6 +129,10 @@ pnpm dev
 
 The development server binds port 3000 by default. To use another port, pass
 Next.js's `--port` flag, for example `pnpm dev --port 3130`.
+If you override `POSTGRES_HOST_PORT`, set `DATABASE_URL` to use that host port
+too. If the dev server uses another port, set `APP_URL` and the GitHub OAuth
+callback URL (`<APP_URL>/api/auth/callback/github`) to use it; sign-in and origin
+checks depend on those origins agreeing.
 
 `pnpm db:migrate` runs `scripts/migrate.ts`, which applies every
 `db/migrations/NNN_*.sql` in sorted order and records each name in a

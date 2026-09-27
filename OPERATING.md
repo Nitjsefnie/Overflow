@@ -23,6 +23,8 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    pnpm db:migrate
    ```
 
+   If `POSTGRES_HOST_PORT` is overridden, use that same host port in `DATABASE_URL`.
+
 4. Start the application:
 
    ```bash
@@ -31,6 +33,9 @@ These steps stand up a local copy of the application against a local PostgreSQL 
 
    The development server binds port 3000 by default. To use another port,
    pass Next.js's `--port` flag, for example `pnpm dev --port 3130`.
+   Set `APP_URL` and the GitHub OAuth callback URL
+   (`<APP_URL>/api/auth/callback/github`) to use that port too; sign-in and
+   origin checks depend on those origins agreeing.
 
 Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL`):
 
@@ -290,7 +295,7 @@ See [the container deployment guide](deploy/container.md) for Compose usage.
 
 | Variable | Read site and purpose |
 | --- | --- |
-| `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–78: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
+| `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–88: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
 | `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–13: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
 | `POSTGRES_HOST_PORT` | [docker-compose.yml](docker-compose.yml), lines 9–13: host port for PostgreSQL; defaults to `5432`, while the container port stays `5432`. |
 | `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 41–44: host address for the published app port; defaults to `127.0.0.1`. |
