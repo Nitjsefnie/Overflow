@@ -239,7 +239,7 @@ describe("database client deadlines", () => {
     });
     try {
       const { runMigrations: runFreshRegistryMigrations } = await import("../../scripts/migrate");
-      await expect(runFreshRegistryMigrations()).resolves.toBeUndefined();
+      await runFreshRegistryMigrations();
 
       // The fixture migration committed through the real runner: the sleep ran
       // to completion inside the exempted transaction and the runner recorded

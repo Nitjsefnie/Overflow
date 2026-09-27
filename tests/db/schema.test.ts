@@ -271,7 +271,7 @@ describe("initial PostgreSQL materialization", () => {
       const before = await readIssue();
 
       if (sponsorAuthored) {
-        await expect(runMigrations()).resolves.toBeUndefined();
+        await runMigrations();
       } else {
         await expect(runMigrations()).rejects.toThrow(
           `Opening authority precondition failed: 1 issue(s) have non-sponsor opening evidence. Issue ids: ${issue.id}`,
@@ -341,7 +341,7 @@ describe("initial PostgreSQL materialization", () => {
 
       // Resolving the duplicates lets the upgrade resume and install the constraint.
       await upgradeSql`delete from self_work_calibrations where pull_request_id = ${secondPullRequest.id}`;
-      await expect(runMigrations()).resolves.toBeUndefined();
+      await runMigrations();
       await expect(upgradeSql`
         select name from schema_migrations where name = '033_self_work_calibrations_issue_unique.sql'
       `).resolves.toEqual([{ name: "033_self_work_calibrations_issue_unique.sql" }]);
@@ -381,7 +381,7 @@ describe("initial PostgreSQL materialization", () => {
       `;
       expect(legacy.pull_request_id).toBe(pullRequest.id);
 
-      await expect(runMigrations()).resolves.toBeUndefined();
+      await runMigrations();
       const readClosure = () => upgradeSql`
         select id, issue_id, reason, kind::text, pull_request_id
         from unwritable_closures where id = ${legacy.id}
@@ -602,8 +602,7 @@ describe("initial PostgreSQL materialization", () => {
 
       // Stops at 002: 003 adds an enum value and uses it in the same transaction, which
       // PostgreSQL rejects (55P04) whenever 001 was committed by an earlier run.
-      await expect(runMigrations({ upTo: "002_repository_difficulty_scheme.sql" }))
-        .resolves.toBeUndefined();
+      await runMigrations({ upTo: "002_repository_difficulty_scheme.sql" });
       await expect(upgradeSql`
         select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
       `).resolves.toEqual([{ name: "002_repository_difficulty_scheme.sql" }]);
@@ -657,8 +656,7 @@ describe("initial PostgreSQL materialization", () => {
 
       // Stops at 002: 003 adds an enum value and uses it in the same transaction, which
       // PostgreSQL rejects (55P04) whenever 001 was committed by an earlier run.
-      await expect(runMigrations({ upTo: "002_repository_difficulty_scheme.sql" }))
-        .resolves.toBeUndefined();
+      await runMigrations({ upTo: "002_repository_difficulty_scheme.sql" });
       await expect(upgradeSql`
         select name from schema_migrations where name = '002_repository_difficulty_scheme.sql'
       `).resolves.toEqual([{ name: "002_repository_difficulty_scheme.sql" }]);
@@ -714,7 +712,7 @@ describe("initial PostgreSQL materialization", () => {
 
       // The migration runs inside a transaction, so the added enum value has to
       // survive an ALTER TYPE against a type that predates it.
-      await expect(runMigrations()).resolves.toBeUndefined();
+      await runMigrations();
 
       const issue = await insertIssue(upgradeSql);
       await expect(upgradeSql`
@@ -3720,7 +3718,7 @@ describe("initial PostgreSQL materialization", () => {
       const changedSettlement = { ...firstSettlement, settledPoints: 7 };
       await seedChange(changeRun, firstPullRequest, "CHANGE", changedSettlement);
 
-      await expect(runMigrations()).resolves.toBeUndefined();
+      await runMigrations();
 
       const upgradedChanges = await upgradeSql<{
         recorded_run: string;

@@ -77,9 +77,9 @@ describe("migration checksums", () => {
 
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       try {
-        await expect(runMigrations()).resolves.toBeUndefined();
+        await runMigrations();
         await expect(migrationChecksums(sql)).resolves.toEqual(expectedMigrationChecksums());
-        await expect(runMigrations()).resolves.toBeUndefined();
+        await runMigrations();
         expect(announcedAdoptionNames(stderrWrite.mock.calls.map(([chunk]) => chunk)).sort())
           .toEqual(expectedNames.sort());
       } finally {
