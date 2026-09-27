@@ -165,8 +165,11 @@ beforeEach(() => {
 // file this worker runs (issue 753).
 afterEach(() => {
   vi.unstubAllGlobals();
-  expect(vi.isMockFunction(globalThis.fetch)).toBe(false);
   vi.useRealTimers();
+  expect(
+    vi.isMockFunction(globalThis.fetch),
+    "a fetch stub survived afterEach — unstubAllGlobals did not restore it (issue 753)",
+  ).toBe(false);
 });
 
 /**
