@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrationImmutabilityViolations } from "../../scripts/check-migration-edits";
 
@@ -47,5 +49,18 @@ describe("migration immutability", () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain(migration);
     expect(violations[0]).not.toContain(renamedMigration);
+  });
+
+  it("fails closed when the CLI cannot resolve a revision", () => {
+    const missingRevision = "__task2_missing_base_revision__";
+    const result = spawnSync(
+      process.execPath,
+      [resolve("scripts/check-migration-edits.ts"), missingRevision, "HEAD"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Could not list db/migrations on ${missingRevision}`);
   });
 });
