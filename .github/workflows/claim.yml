@@ -34,4 +34,4 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650
+      - uses: Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9
