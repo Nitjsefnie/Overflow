@@ -49,7 +49,7 @@ async function standingBlock(): Promise<string> {
   return block!;
 }
 
-async function makeFixture(): Promise<Fixture> {
+async function makeFixture(options: { advanceRemote?: boolean } = {}): Promise<Fixture> {
   const dir = await mkdtemp(path.join(tmpdir(), "overflow-readme-fallback-"));
   const seed = path.join(dir, "seed");
   const remote = path.join(dir, "remote.git");
@@ -67,11 +67,14 @@ async function makeFixture(): Promise<Fixture> {
   run("git", ["-C", seed, "push", "-u", "origin", "main"], dir);
   run("git", ["clone", remote, tree], dir);
   const oldSha = run("git", ["-C", tree, "rev-parse", "HEAD"], dir);
-  await writeFile(path.join(seed, "remote-advanced.txt"), "fetched fixture revision\n");
-  run("git", ["-C", seed, "add", "-f", "remote-advanced.txt"], dir);
-  run("git", ["-C", seed, "commit", "-m", "advance remote main after clone"], dir);
-  run("git", ["-C", seed, "push", "origin", "main"], dir);
-  const fetchedSha = run("git", ["-C", seed, "rev-parse", "HEAD"], dir);
+  let fetchedSha = oldSha;
+  if (options.advanceRemote !== false) {
+    await writeFile(path.join(seed, "remote-advanced.txt"), "fetched fixture revision\n");
+    run("git", ["-C", seed, "add", "-f", "remote-advanced.txt"], dir);
+    run("git", ["-C", seed, "commit", "-m", "advance remote main after clone"], dir);
+    run("git", ["-C", seed, "push", "origin", "main"], dir);
+    fetchedSha = run("git", ["-C", seed, "rev-parse", "HEAD"], dir);
+  }
 
   const fakeGitHubRemote = "git@github.com:overflow-fixture/manual-fallback.git";
   run("git", ["-C", tree, "remote", "set-url", "origin", fakeGitHubRemote], dir);
@@ -232,6 +235,53 @@ describe("deploy/README.md manual fallback", () => {
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(fixture.oldSha);
   });
 
+  it("refuses a local commit that diverged from fetched main before install or switch", async () => {
+    const fixture = await makeFixture();
+    await writeFile(path.join(fixture.tree, "tracked.txt"), "local-only revision\n");
+    run("git", ["config", "user.name", "Fallback Fixture"], fixture.tree);
+    run("git", ["config", "user.email", "fallback-fixture@example.test"], fixture.tree);
+    run("git", ["add", "tracked.txt"], fixture.tree);
+    run("git", ["commit", "-m", "local-only revision"], fixture.tree);
+    const localSha = run("git", ["rev-parse", "HEAD"], fixture.tree);
+    expect(localSha).not.toBe(fixture.oldSha);
+    expect(fixture.fetchedSha).not.toBe(fixture.oldSha);
+    run("git", ["fetch", "origin", "main"], fixture.tree);
+    const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", localSha, fixture.fetchedSha], {
+      cwd: fixture.tree,
+      encoding: "utf8",
+    });
+    expect(ancestry.status).toBe(1);
+
+    const result = await runFallback(fixture);
+
+    const output = `${result.stderr}\n${result.stdout}`;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain("is not an ancestor of the fetched main");
+    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(localSha);
+    const entries = await shimLog(fixture);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
+  });
+
+  it("refuses a tracked working-tree deviation before install or switch", async () => {
+    const fixture = await makeFixture();
+    await writeFile(path.join(fixture.tree, "tracked.txt"), "modified after clone\n");
+    const before = run("git", ["rev-parse", "HEAD"], fixture.tree);
+    expect(before).toBe(fixture.oldSha);
+
+    const result = await runFallback(fixture);
+
+    const output = `${result.stderr}\n${result.stdout}`;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain("tracked.txt");
+    expect(output).toContain("working tree in");
+    expect(output).toContain("deviates from HEAD");
+    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(before);
+    const entries = await shimLog(fixture);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
+  });
+
   it.each([
     {
       kind: "absent",
@@ -276,6 +326,22 @@ describe("deploy/README.md manual fallback", () => {
     const release = result.stdout.match(/New build: ([^\n]+)/)?.[1];
     expect(release, "the release created before webhook upgrade").toBeDefined();
     expect(await readdir(path.join(fixture.tree, release!))).not.toContain("REVISION");
+  });
+
+  it("skips a redundant deploy when the serving revision equals unchanged fetched main", async () => {
+    const fixture = await makeFixture({ advanceRemote: false });
+    expect(fixture.fetchedSha).toBe(fixture.oldSha);
+    await writeFile(path.join(fixture.tree, fixture.previousRelease, "REVISION"), `${fixture.fetchedSha}\n`);
+    const before = run("git", ["rev-parse", "HEAD"], fixture.tree);
+
+    const result = await runFallback(fixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain(`Already serving ${realpathSync(path.join(fixture.tree, fixture.previousRelease))} (${fixture.fetchedSha})`);
+    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(before);
+    const entries = await shimLog(fixture);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
   });
 
   it("runs the fetch-first fallback and writes REVISION only after switch, restart and webhook upgrade", async () => {
