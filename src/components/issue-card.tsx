@@ -1,4 +1,4 @@
-import type { EligibleIssueProjection } from "@/lib/dashboard/queries";
+import type { EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 import { formatSigned } from "@/lib/format-signed";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 import { stripNamePrefix } from "@/lib/strip-name-prefix";

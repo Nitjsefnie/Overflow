@@ -10,7 +10,7 @@ type IssuesPageProps = {
 export default async function IssuesPage({ searchParams }: IssuesPageProps = {}) {
   const session = await requireMemberPageSession();
   try {
-    const { listEligibleIssues } = await import("@/lib/dashboard/queries");
+    const { listEligibleIssues } = await import("@/lib/dashboard/eligible-issues");
     const query = searchParams === undefined ? {} : await searchParams;
     const repository = singleValue(query.repository);
     const openingLabel = singleValue(query.openingLabel);

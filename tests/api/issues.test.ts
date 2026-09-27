@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
-import type { EligibleIssueProjection } from "@/lib/dashboard/queries";
+import type { EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 

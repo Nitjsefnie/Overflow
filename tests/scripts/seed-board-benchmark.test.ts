@@ -187,7 +187,7 @@ describe("seeding against PostgreSQL", () => {
   });
 
   it("leaves the board at the planned row count for the bench member", async () => {
-    const { listEligibleIssues } = await import("@/lib/dashboard/queries");
+    const { listEligibleIssues } = await import("@/lib/dashboard/eligible-issues");
     const [member] = await sql<{ id: string }[]>`
       select id from users where github_login = ${benchMemberLogin()}
     `;

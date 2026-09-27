@@ -6,7 +6,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { closeSql, getSql } from "@/lib/db/client";
-import { listEligibleIssues, type EligibleIssueFilters } from "@/lib/dashboard/queries";
+import { listEligibleIssues, type EligibleIssueFilters } from "@/lib/dashboard/eligible-issues";
 
 let sql: Sql;
 let container: StartedTestContainer | undefined;

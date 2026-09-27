@@ -8,7 +8,6 @@ import {
   getSelfWorkCalibrationProof,
   getSettlementProof,
   listAuditCandidates,
-  listEligibleIssues,
   listEnforcementHistory,
   listModerationRepositories,
   listOpenAudits,
@@ -22,6 +21,7 @@ import {
   type DashboardBegin,
   type DashboardSql,
 } from "@/lib/dashboard/queries";
+import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
 
 type QueryCapture = { text: string; values: unknown[] };

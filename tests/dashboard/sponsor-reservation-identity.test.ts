@@ -4,7 +4,8 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { getDashboard, listEligibleIssues } from "@/lib/dashboard/queries";
+import { getDashboard } from "@/lib/dashboard/queries";
+import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 
 /**
  * Reservations are decided by the immutable GitHub account ids, not the mutable
