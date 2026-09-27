@@ -48,13 +48,20 @@ const MAX_LIFETIME_SECONDS = 1800;
 /**
  * The statement deadline, in milliseconds, that every connection of the work
  * pool advertises through its startup packet, so the server — not a
- * client-side race — cancels a statement that runs too long (issue 661).
+ * client-side race — bounds a statement that runs too long (issue 661).
  *
- * Long legitimate statements opt out where they run: the migration runner and
- * the prune script lift the deadline on their own connections/transactions
- * (see those call sites).
+ * The bound this default exists for is not outage detection: a down database
+ * is caught by connect_timeout (5 s) and an unreachable one fails every queued
+ * caller anyway. It is a ceiling on a single statement's lifetime — lock waits
+ * included — that still tolerates legitimate contention: the longest measured
+ * lock-holding transaction is a fold publication at ~93 s (seeded 6,000 rows),
+ * and production reconciliation runs reach p95 207 s, so 600 s sits well
+ * above every observed legitimate hold (~6.5x) while still ending a
+ * pathologically stuck statement or wait. Long legitimate statements opt out
+ * where they run: the migration runner and the prune script lift the deadline
+ * on their own connections/transactions (see those call sites).
  */
-const DEFAULT_STATEMENT_TIMEOUT_MS = "30000";
+const DEFAULT_STATEMENT_TIMEOUT_MS = "600000";
 
 /**
  * The coordination pool advertises NO statement deadline (issue 661, task 5):
