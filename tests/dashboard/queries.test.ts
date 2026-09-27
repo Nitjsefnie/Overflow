@@ -921,8 +921,34 @@ describe("dashboard projections", () => {
       .replace(/\s+/g, " ")
       .toLowerCase();
     expect(normalizedQuery.slice(normalizedQuery.lastIndexOf("order by "))).toBe(
-      "order by ranked.settled_balance desc, ranked.opening_reserve_points desc, ranked.created_at asc",
+      "order by ranked.settled_balance desc, ranked.opening_reserve_points desc, ranked.created_at asc, ranked.id asc limit ? offset ?",
     );
+    // An unpaginated client sees the first page: default limit 200, offset 0.
+    expect(captures[0]?.values?.slice(-2)).toEqual([200, 0]);
+  });
+
+  it("derives limit and offset from the requested board page", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    await listEligibleIssues("member-1", { page: 3, pageSize: 50 }, { sql });
+
+    expect(captures[0]?.values?.slice(-2)).toEqual([50, 100]);
+  });
+
+  it("caps the board page size at the documented maximum and floors fractional pages", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    await listEligibleIssues("member-1", { page: 2.5, pageSize: 99_999 }, { sql });
+
+    expect(captures[0]?.values?.slice(-2)).toEqual([500, 500]);
+  });
+
+  it("clamps a non-positive board page or page size to the smallest page", async () => {
+    const { sql, captures } = sqlHarness([[]]);
+
+    await listEligibleIssues("member-1", { page: 0, pageSize: -5 }, { sql });
+
+    expect(captures[0]?.values?.slice(-2)).toEqual([1, 0]);
   });
 
   it("applies repository, offered-label, and claim-state filters server side and projects operational context", async () => {
