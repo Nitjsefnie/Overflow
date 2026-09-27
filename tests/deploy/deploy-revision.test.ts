@@ -578,7 +578,7 @@ async function runDeploy(
 ) {
   let result = await runDeployAttempt(fixture, extraEnv, options);
   for (let retry = 0; retry < MAX_LOST_WAIT_STATUS_RETRIES; retry += 1) {
-    if (result.status === 0 || !result.stderr.includes(LOST_WAIT_STATUS_SIGNATURE)) break;
+    if (result.status === 0 || !result.stderr?.includes(LOST_WAIT_STATUS_SIGNATURE)) break;
 
     let entries: ShimLogEntry[];
     try {
@@ -628,7 +628,6 @@ describe("runDeploy lost wait status retry", () => {
     const success = spawnResult(0);
     const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1"), success]);
     const result = await runDeploy(fixture, {}, { spawn: retry.spawn });
-
     expect(result).toBe(success);
     expect(retry.calls).toBe(2);
     expect(retry.logAtSpawn).toEqual([GIT_LS_FILES_LOG_ENTRY, ""]);
@@ -642,18 +641,25 @@ describe("runDeploy lost wait status retry", () => {
     const failure = spawnResult(1, "git ls-files exited 7");
     let calls = 0;
     const result = await runDeploy(fixture, {}, { spawn: spawnStub(failure, () => calls++) });
-
     expect(result).toBe(failure);
     expect(calls).toBe(1);
   });
 
   it("does not retry the lost-status signature when no git ls-files shim entry exists", async () => {
     const fixture = await makeFixture();
+    writeFileSync(fixture.shimLog, "gh\tversion\tenv\t LC_ALL=\n");
     const failure = spawnResult(1, "git ls-files exited -1");
     let calls = 0;
     const result = await runDeploy(fixture, {}, { spawn: spawnStub(failure, () => calls++) });
-
     expect(result).toBe(failure);
+    expect(calls).toBe(1);
+  });
+
+  it("returns a spawn failure with absent stderr without retrying", async () => {
+    const fixture = await makeFixture();
+    const failure = { ...spawnResult(1), status: null, stderr: undefined } as unknown as SpawnSyncReturns<string>;
+    let calls = 0;
+    expect(await runDeploy(fixture, {}, { spawn: spawnStub(failure, () => calls++) })).toBe(failure);
     expect(calls).toBe(1);
   });
 
@@ -662,7 +668,6 @@ describe("runDeploy lost wait status retry", () => {
     const secondFailure = spawnResult(1, "git ls-files exited -1 on second attempt");
     const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1 on first attempt"), secondFailure]);
     const result = await runDeploy(fixture, {}, { spawn: retry.spawn });
-
     expect(result).toBe(secondFailure);
     expect(retry.calls).toBe(2);
     expect(retry.logAtSpawn).toEqual([GIT_LS_FILES_LOG_ENTRY, ""]);
@@ -671,10 +676,10 @@ describe("runDeploy lost wait status retry", () => {
 
   it("does not retry a successful first attempt", async () => {
     const fixture = await makeFixture();
-    const success = spawnResult(0);
+    writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
+    const success = spawnResult(0, LOST_WAIT_STATUS_SIGNATURE);
     let calls = 0;
     const result = await runDeploy(fixture, {}, { spawn: spawnStub(success, () => calls++) });
-
     expect(result).toBe(success);
     expect(calls).toBe(1);
   });
