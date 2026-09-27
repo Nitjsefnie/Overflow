@@ -87,7 +87,15 @@ export const EXCLUSIONS: readonly PathClass[] = [
   {
     name: "repository metadata",
     matches: (p) =>
-      /^\.github\/.+\.(yml|json)$/s.test(p) || oneOf([".gitignore", ".dockerignore", ".env.example"])(p),
+      /^\.github\/.+\.(yml|json)$/s.test(p)
+      || oneOf([
+        ".gitignore",
+        ".dockerignore",
+        ".env.example",
+        // The hashed pip requirements file the actionlint workflow installs
+        // zizmor from: reviewed artifact pins, not program code.
+        ".github/requirements-zizmor.txt",
+      ])(p),
   },
   // Package manifests and the lockfile, which pnpm generates.
   {

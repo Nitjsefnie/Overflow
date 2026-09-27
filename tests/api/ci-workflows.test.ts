@@ -19,6 +19,7 @@ type Workflow = {
     env?: Record<string, string>;
     steps: Array<{
       if?: string;
+      id?: string;
       name?: string;
       uses?: string;
       run?: string;
@@ -325,16 +326,98 @@ describe("GitHub Actions release gates", () => {
     };
 
     expect(config.version).toBe(2);
-    expect(config.updates).toHaveLength(1);
-    const [update] = config.updates;
-    expect(update["package-ecosystem"]).toBe("npm");
-    expect(update.directory).toBe("/");
-    expect(update.schedule).toEqual({ interval: "weekly" });
-    expect(update["open-pull-requests-limit"]).toBe(5);
+    const npm = config.updates.find((update) => update["package-ecosystem"] === "npm");
+    expect(npm).toBeDefined();
+    expect(npm!.directory).toBe("/");
+    expect(npm!.schedule).toEqual({ interval: "weekly" });
+    expect(npm!["open-pull-requests-limit"]).toBe(5);
     // An automated postgres bump invalidates patches/postgres@3.4.9.patch and
     // its pnpm-lock.yaml patchedDependencies hash, breaking
     // `pnpm install --frozen-lockfile` — bumps stay by-hand.
-    expect(update.ignore).toEqual([{ "dependency-name": "postgres" }]);
+    expect(npm!.ignore).toEqual([{ "dependency-name": "postgres" }]);
+  });
+
+  it("adds the github-actions and docker ecosystems to the weekly dependabot schedule", async () => {
+    const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
+      updates: Array<{
+        "package-ecosystem": string;
+        directory: string;
+        schedule: { interval: string };
+        "open-pull-requests-limit": number;
+        groups?: Record<
+          string,
+          { "applies-to"?: string; "update-types"?: string[]; patterns?: string[] }
+        >;
+      }>;
+    };
+
+    expect(config.updates.map((update) => update["package-ecosystem"])).toEqual([
+      "npm",
+      "github-actions",
+      "docker",
+    ]);
+    for (const ecosystem of ["github-actions", "docker"]) {
+      const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
+      expect(update.directory, ecosystem).toBe("/");
+      expect(update.schedule, ecosystem).toEqual({ interval: "weekly" });
+      // The npm lane already opens up to five pull requests a week; the new
+      // ecosystems share that cap so the queue cannot flood.
+      expect(update["open-pull-requests-limit"], ecosystem).toBe(5);
+    }
+    // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
+    // decision and dependabot now proposes their SHA bumps; grouping
+    // non-major bumps keeps those, plus the pinned actions/* shas, in one
+    // pull request per week instead of one per action. Version updates only:
+    // a security advisory must still open a single-package pull request.
+    const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
+    expect(actions.groups).toEqual({
+      "minor-and-patch": {
+        "applies-to": "version-updates",
+        "update-types": ["minor", "patch"],
+      },
+    });
+  });
+
+  it("hash-pins the zizmor install through the tracked requirements file", async () => {
+    const workflow = await readWorkflow("actionlint.yml");
+    const steps = workflow.jobs.actionlint!.steps;
+
+    const install = steps.find((step) => step.id === "install_zizmor");
+    expect(install).toBeDefined();
+    expect(install!.name).toBe("Install zizmor");
+    // The hashed requirements file is the only install path: no bare
+    // `pip install zizmor` and no pip upgrade step — upgrading pip itself is
+    // exactly the unhashed supply-chain lane this gate closes.
+    expect(install!.run?.trim()).toBe(
+      "pip install --require-hashes -r .github/requirements-zizmor.txt",
+    );
+    expect(install!.run).not.toContain("upgrade pip");
+    expect(install!.run).not.toContain("pip install zizmor");
+    // The id is load-bearing: the zizmor step's condition skips the scan only
+    // when the install failed.
+    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows/");
+    expect(zizmor).toBeDefined();
+    expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
+  });
+
+  it("hash-pins every artifact in the zizmor requirements file", async () => {
+    const text = await readFile(resolve(".github/requirements-zizmor.txt"), "utf8");
+    const requirements = text.split("\n").filter((line) => {
+      const trimmed = line.trim();
+      return trimmed !== "" && !trimmed.startsWith("#");
+    });
+
+    expect(requirements.length).toBeGreaterThan(0);
+    for (const line of requirements) {
+      expect(line).toContain("--hash=sha256:");
+    }
+    const zizmor = requirements.find((line) => line.startsWith("zizmor=="));
+    expect(zizmor).toBeDefined();
+    expect(zizmor).toContain("zizmor==1.29.0");
+    // Tracked: the deny-by-default policy must name this exact file back,
+    // while other .github/*.txt (the junk counterexamples) stay ignored.
+    expect(checkIgnore(".github/requirements-zizmor.txt")).toBe(1);
+    expect(checkIgnore(".github/junk.txt")).toBe(0);
   });
 
   it("groups the React family so dependabot bumps it in lockstep", async () => {
