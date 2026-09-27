@@ -12,8 +12,10 @@ production on this host.
 `Dockerfile` at the repository root builds the application image in four
 stages: `deps` installs the exact locked dependency tree (including the
 patched `postgres` client) with corepack-pinned pnpm, `build` compiles the
-Next.js production bundle on top of it, `prod-deps` prunes that locked tree
-to production dependencies only, and `runtime` carries the built output, the
+Next.js production bundle on top of it, `prod-deps` replaces that tree with
+a fresh production-only frozen install (a prune in place would leave the dev
+packages behind in pnpm's virtual store), and `runtime` carries the built
+output, the
 migrations, the production-only dependency tree, and the code the start
 command needs onto a clean base. The `deps` and `runtime` stages pin
 `node:24.17.0-bookworm-slim` by digest, and the runtime stage labels every
