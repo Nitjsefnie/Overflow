@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { THIRD_PARTY_LICENCE_TEXTS } from "./third-party-licence-texts.ts";
 
@@ -183,7 +183,9 @@ export function main(): void {
       process.exitCode = 1;
       return;
     }
-    writeFileSync(resolveNoticesOutputPath(), notices.text, "utf8");
+    const outputPath = resolveNoticesOutputPath();
+    mkdirSync(dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, notices.text, "utf8");
   } catch (error) {
     console.error(`Cannot generate third-party notices: ${String(error)}`);
     process.exitCode = 1;
