@@ -366,7 +366,12 @@ exit 0
 `,
   },
   pnpm: {
-    envKeys: ["NEXT_DIST_DIR", "npm_config_package_import_method", "OVERFLOW_FIXTURE_ENV_MARKER"],
+    envKeys: [
+      "NEXT_DIST_DIR",
+      "npm_config_package_import_method",
+      "OVERFLOW_FIXTURE_ENV_MARKER",
+      "OVERFLOW_DEPLOY_MIGRATION_ACK",
+    ],
     dispatch: `
 if [ "$1" = "--silent" ]; then shift; fi
 if [ "$1" = build ]; then
@@ -428,7 +433,16 @@ esac
 `,
   },
   sleep: { envKeys: [], dispatch: "exit 0\n" },
-  node: { envKeys: [], dispatch: "exit 0\n" },
+  node: {
+    envKeys: ["OVERFLOW_FIXTURE_ENV_MARKER"],
+    dispatch: `
+if [ "$1" = "scripts/deploy-migration-status.ts" ]; then
+  printf '%s' "\${OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT:-}"
+  exit "\${OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_EXIT:-0}"
+fi
+exit 0
+`,
+  },
   systemctl: { envKeys: [], dispatch: "exit 0\n" },
   curl: {
     envKeys: ["CURL_FAIL_MATCH"],
@@ -594,7 +608,9 @@ describe("scripts/deploy-revision.sh", () => {
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const servingCache = `${realpathSync(fixture.prevDir)}/cache`;
-    const nodeEntry = entries.find((entry) => entry.cmd === "node")!;
+    const nodeEntry = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!;
     const release = nodeEntry.args[3]!;
     expect(release).toMatch(RELEASE_GRAMMAR);
     expect(release.endsWith(`-${FIXTURE_HASH}`)).toBe(true);
@@ -618,6 +634,7 @@ describe("scripts/deploy-revision.sh", () => {
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
       `pnpm install --frozen-lockfile`,
+      `node scripts/deploy-migration-status.ts`,
       `pnpm db:migrate`,
       `git rev-parse --short=7 HEAD`,
       `node scripts/release.ts prepare ${fixture.tree} ${release}`,
@@ -702,7 +719,9 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    const release = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!.args[3]!;
     const upgradeLog = path.join(fixture.logDir, `webhook-upgrade-${release}.jsonl`);
     await expect(readFile(upgradeLog, "utf8")).resolves.toContain('{"upgradeFixture":true}');
     expect(result.stdout).toContain('{"upgradeFixture":true}');
@@ -714,7 +733,9 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    const release = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!.args[3]!;
     // The captured listing is printed as one contiguous block, descending, so
     // the deploy record shows exactly what the prune guard decided from.
     const listing = [
@@ -1645,7 +1666,9 @@ describe("scripts/deploy-revision.sh", () => {
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    const release = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!.args[3]!;
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${fullSha}\n`);
     expect(result.stdout).toContain(`Source revision: ${fullSha}`);
   });
@@ -1830,6 +1853,85 @@ describe("scripts/deploy-revision.sh", () => {
   });
 });
 
+describe("deploy-revision.sh pending-migration gate", () => {
+  const unmarkedMigration = "052_unmarked.sql";
+  const markedMigration = "053_mixed_version_review.sql";
+
+  it("lists a pending unmarked migration and proceeds to migrate", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: `${unmarkedMigration}\t-\n`,
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("Pending migrations this deploy would apply:");
+    expect(result.stdout).toContain(`${unmarkedMigration}\t-`);
+    const entries = await readLog(fixture.shimLog);
+    const status = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/deploy-migration-status.ts",
+    )!;
+    const migrateAt = entries.findIndex((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate");
+    expect(status.env.OVERFLOW_FIXTURE_ENV_MARKER).toBe("loaded");
+    expect(migrateAt).toBeGreaterThan(entries.indexOf(status));
+  });
+
+  it("refuses a pending marked migration without acknowledgment, before migrate", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: `${markedMigration}\treview\n`,
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(result.stderr).toContain(markedMigration);
+    expect(result.stderr).toContain("OVERFLOW_DEPLOY_MIGRATION_ACK=1");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate")).toBe(false);
+  });
+
+  it("proceeds with a marked migration when acknowledgment is exactly 1", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: `${markedMigration}\treview\n`,
+      OVERFLOW_DEPLOY_MIGRATION_ACK: "1",
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain(`${markedMigration}\treview`);
+    const migrate = (await readLog(fixture.shimLog)).find(
+      (entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate",
+    );
+    expect(migrate?.env.OVERFLOW_DEPLOY_MIGRATION_ACK).toBe("1");
+  });
+
+  it("rejects an unsupported acknowledgment even when pending migrations are unmarked", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: `${unmarkedMigration}\t-\n`,
+      OVERFLOW_DEPLOY_MIGRATION_ACK: "0",
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(result.stderr).toContain("OVERFLOW_DEPLOY_MIGRATION_ACK=0");
+    expect(result.stderr).toContain("not a supported value");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate")).toBe(false);
+  });
+
+  it("refuses when the migration-status script exits nonzero, before migrate", async () => {
+    const fixture = await makeFixture();
+    const result = await runDeploy(fixture, {
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT: `${unmarkedMigration}\t-\n`,
+      OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_EXIT: "2",
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(result.stderr).toContain("Could not list the pending migrations");
+    expect(result.stderr).toContain("node scripts/deploy-migration-status.ts failed");
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "db:migrate")).toBe(false);
+  });
+});
+
 /**
  * The refusal regressions against real git: the shims above make every git
  * call succeed, so only a real repository shows whether a refused deploy has
@@ -1984,7 +2086,9 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     const entries = await readLog(fixture.shimLog);
     // Real git logs nothing; its pin-map read is proved by the gate passing.
     expect(gateLog(entries)).toEqual(gateReads(tip).filter((line) => !line.startsWith("git ")));
-    const release = entries.find((entry) => entry.cmd === "node")!.args[3]!;
+    const release = entries.find(
+      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
+    )!.args[3]!;
     expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
   });
@@ -2087,6 +2191,16 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
 });
 
 describe("deploy/README.md section 10 pins the committed script as the procedure", () => {
+  it("documents the pending-migration review gate and append-only checks", async () => {
+    const section = await section10();
+    expect(section).toContain("scripts/deploy-migration-status.ts");
+    expect(section).toContain("overflow: mixed-version review");
+    expect(section).toContain("OVERFLOW_DEPLOY_MIGRATION_ACK=1");
+    expect(section).toContain("append-only");
+    expect(section).toContain("checksum mismatch");
+    expect(section).toContain("The manual fallback does not");
+  });
+
   it("names scripts/deploy-revision.sh as the procedure to run", async () => {
     expect(await section10()).toContain("bash scripts/deploy-revision.sh");
   });
