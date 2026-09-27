@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { THIRD_PARTY_LICENCE_TEXTS } from "./third-party-licence-texts.ts";
@@ -15,6 +15,11 @@ export interface NoticeEntry {
 }
 
 export type NoticeResult = { ok: true; text: string } | { ok: false; missing: string[] };
+
+export function resolveNoticesOutputPath(env: Record<string, string | undefined> = process.env): string {
+  // Keep this dist-dir convention in step with next.config.ts.
+  return join(env.NEXT_DIST_DIR?.trim() || ".next", "third-party-notices.txt");
+}
 
 type ReadLicenceFile = (directory: string, includeNotice?: boolean) => string | undefined;
 
@@ -178,8 +183,7 @@ export function main(): void {
       process.exitCode = 1;
       return;
     }
-    mkdirSync("public", { recursive: true });
-    writeFileSync("public/third-party-notices.txt", notices.text, "utf8");
+    writeFileSync(resolveNoticesOutputPath(), notices.text, "utf8");
   } catch (error) {
     console.error(`Cannot generate third-party notices: ${String(error)}`);
     process.exitCode = 1;
