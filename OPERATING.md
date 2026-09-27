@@ -14,7 +14,7 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    docker compose ps
    ```
 
-   That service publishes PostgreSQL on loopback only, and its password is a committed, well-known string; `POSTGRES_HOST_BIND` widens that binding, so any address other than a loopback one publishes a database with known credentials to everything that can route to this machine. To reach it from another host, forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` — instead of widening the bind address.
+   That service publishes PostgreSQL on loopback only by default at host port 5432, and its password is a committed, well-known string. `POSTGRES_HOST_BIND` widens that binding, while `POSTGRES_HOST_PORT` overrides the host port; the container port stays 5432. Compose reads both values from your shell or the root `.env`, so any non-loopback bind publishes a database with known credentials to everything that can route to this machine. To reach it from another host, forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` — instead of widening the bind address.
 
 3. Point `DATABASE_URL` at that database, then install and migrate:
 
@@ -28,6 +28,9 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    ```bash
    pnpm dev
    ```
+
+   The development server binds port 3000 by default. To use another port,
+   pass Next.js's `--port` flag, for example `pnpm dev --port 3130`.
 
 Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL`):
 
@@ -288,8 +291,9 @@ See [the container deployment guide](deploy/container.md) for Compose usage.
 | Variable | Read site and purpose |
 | --- | --- |
 | `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–78: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
-| `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–11: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
-| `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 39–42: host address for the published app port; defaults to `127.0.0.1`. |
-| `SOURCE_SHA` | [docker-compose.yml](docker-compose.yml), lines 21–27: optional source revision passed as the app image's build argument; defaults to an empty string when unset. |
+| `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–13: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
+| `POSTGRES_HOST_PORT` | [docker-compose.yml](docker-compose.yml), lines 9–13: host port for PostgreSQL; defaults to `5432`, while the container port stays `5432`. |
+| `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 41–44: host address for the published app port; defaults to `127.0.0.1`. |
+| `SOURCE_SHA` | [docker-compose.yml](docker-compose.yml), lines 23–29: optional source revision passed as the app image's build argument; defaults to an empty string when unset. |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
