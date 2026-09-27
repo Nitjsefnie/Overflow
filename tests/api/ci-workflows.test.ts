@@ -230,6 +230,23 @@ describe("GitHub Actions release gates", () => {
     expect(verify.services?.postgres?.image).toBe("postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675");
     expect(verify.services?.postgres?.options).toContain("pg_isready");
     expect(verify.steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
+    // Keep the reviewed artifact actions exact across jobs: verify uploads
+    // the pair, then the calibration job downloads the summary. The generic
+    // SHA-format check above would accept a different, valid pin.
+    const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
+    const uploadPins = ciSteps
+      .filter((step) =>
+        step.uses?.startsWith("actions/upload-artifact@"))
+      .map((step) => step.uses);
+    expect(uploadPins).toEqual([
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    ]);
+    expect(ciSteps
+      .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+      .map((step) => step.uses)).toEqual([
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    ]);
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
       .toEqual(expect.objectContaining({ "persist-credentials": false }));
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
@@ -344,6 +361,7 @@ describe("GitHub Actions release gates", () => {
         directory: string;
         schedule: { interval: string };
         "open-pull-requests-limit": number;
+        ignore?: Array<{ "dependency-name": string; "update-types"?: string[] }>;
         groups?: Record<
           string,
           { "applies-to"?: string; "update-types"?: string[]; patterns?: string[] }
@@ -365,6 +383,13 @@ describe("GitHub Actions release gates", () => {
       // no single lane floods, but the cap does not pool across ecosystems.
       expect(update["open-pull-requests-limit"], ecosystem).toBe(5);
     }
+    // Only the Docker Node major is declined until it reaches LTS; keep that
+    // exact scope so the ignore cannot drift to another update type.
+    const docker = config.updates.find((u) => u["package-ecosystem"] === "docker")!;
+    expect(docker.ignore).toEqual([{
+      "dependency-name": "node",
+      "update-types": ["version-update:semver-major"],
+    }]);
     // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
     // decision and dependabot now proposes their SHA bumps; grouping
     // non-major bumps keeps those, plus the pinned actions/* shas, in one
