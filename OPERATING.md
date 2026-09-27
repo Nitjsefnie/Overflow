@@ -298,7 +298,6 @@ See [the container deployment guide](deploy/container.md) for Compose usage.
 | `NEXT_DIST_DIR` | [next.config.ts](next.config.ts), lines 6–88: optional trimmed direct-child build output directory. When set, the configuration validates the prepared matching TypeScript config and uses the directory as Next.js `distDir`; unset uses Next.js defaults. |
 | `POSTGRES_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 9–13: host address for the published PostgreSQL port; defaults to `127.0.0.1`. |
 | `POSTGRES_HOST_PORT` | [docker-compose.yml](docker-compose.yml), lines 9–13: host port for PostgreSQL; defaults to `5432`, while the container port stays `5432`. |
-| `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 41–44: host address for the published app port; defaults to `127.0.0.1`. |
-| `SOURCE_SHA` | [docker-compose.yml](docker-compose.yml), lines 23–29: optional source revision passed as the app image's build argument; defaults to an empty string when unset. |
+| `APP_HOST_BIND` | [docker-compose.yml](docker-compose.yml), lines 36–39: host address for the published app port; defaults to `127.0.0.1`. |
 
 Use placeholders only in checked-in configuration. Never commit OAuth credentials, webhook secrets, database passwords, or encryption keys.
