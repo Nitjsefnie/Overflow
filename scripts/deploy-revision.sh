@@ -308,6 +308,25 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . "$env_file"; set +a
+migration_status=$(node scripts/deploy-migration-status.ts) || {
+  printf 'Could not list the pending migrations (node scripts/deploy-migration-status.ts failed); refusing to deploy. Database connection details come from %s.\n' "$env_file" >&2
+  exit 1
+}
+if [ -n "$migration_status" ]; then
+  printf 'Pending migrations this deploy would apply:\n%s\n' "$migration_status"
+else
+  printf 'No pending migrations.\n'
+fi
+marked=$(awk -F'\t' '$2 == "review" { print $1 }' <<<"$migration_status")
+if [ "${OVERFLOW_DEPLOY_MIGRATION_ACK+x}" = "x" ] && [ "$OVERFLOW_DEPLOY_MIGRATION_ACK" != "1" ]; then
+  printf 'OVERFLOW_DEPLOY_MIGRATION_ACK=%s is not a supported value; unset it to enforce the review gate, or set it to exactly 1 after reviewing every marked migration.\n' "$OVERFLOW_DEPLOY_MIGRATION_ACK" >&2
+  exit 1
+fi
+if [ -n "$marked" ] && [ "${OVERFLOW_DEPLOY_MIGRATION_ACK:-}" != "1" ]; then
+  printf '%s\n' "$marked" >&2
+  printf "The pending migrations above need mixed-version review against the previous release's write path; refusing to deploy. Review every listed migration, then set OVERFLOW_DEPLOY_MIGRATION_ACK=1 to confirm and re-run.\n" >&2
+  exit 1
+fi
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"

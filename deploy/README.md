@@ -779,9 +779,22 @@ enforcing statement the previous release already satisfies on every write
 path — `settlements` has carried `settlements_issue_unique` since migration
 003 alongside the writer that maintains it.
 
+After loading the environment and before `pnpm db:migrate`, the deploy script
+runs `node scripts/deploy-migration-status.ts` and lists every migration not
+yet recorded in `schema_migrations`. Each line ends in `-`, or `review` when
+the file contains the literal substring `overflow: mixed-version review`. A
+pending migration with that marker makes the script refuse before migration;
+review every listed marked migration against the previous release's write
+path, then rerun with `OVERFLOW_DEPLOY_MIGRATION_ACK=1` to confirm that review.
+The acknowledgment has no effect when the status command fails, and any value
+other than `1` is refused.
+
 Before running the standing block below, read every migration the run will
 apply for the first time — anything `schema_migrations` does not yet record —
-and apply that test to each. If one fails, stop: do not run it. Land the
+and apply that test to each. New migrations that could break the previous
+release's writes while both releases serve carry the marker in the file when
+filed for review: `overflow: mixed-version review`. If one fails, stop: do not
+run it. Land the
 writer correction in this release and the enforcing statement in the next
 deploy, or shape the constraint so the previous release cannot violate it
 (for example, a partial constraint excluding the shape the old writer can
@@ -795,21 +808,32 @@ all, and where the mark exists (a `CHECK` or `FOREIGN KEY` constraint) it
 defers only the scan of existing rows while still enforcing new-row writes
 immediately, so it does not make a constraint safe to apply before the
 corrected writer is serving.
+Migrations are append-only: edits to applied migration files fail CI, and the
+runner refuses a checksum mismatch with the value recorded in
+`schema_migrations`.
 
 **The fenced blocks below are the manual fallback, for the case where the
 script itself is what broke.** They run under the same fence, with the same
 `--expect-current` anchor and the same release grammar, but they are not the
 script's sequence: they pull first, fast-forwarding the tree before anything
-is checked, and carry neither the tree-cleanliness gate nor the
-required-checks gate. So run the standing block in two parts, in one shell
-so the fd 9 fence and `expected_serving` carry over: stop right after its
-`git pull` line, before `pnpm install` and `pnpm db:migrate`, and confirm by
-hand that `git status` in the tree is clean and that main's
-required checks passed on the pulled commit; if either check fails, do not
-run the rest of the block, since `pnpm db:migrate` would otherwise apply that
-unverified commit's migrations to the production schema. Extract and run them
-only after diagnosing why the script could not, and keep every guard in this
-section in force.
+is checked, and carry neither the tree-cleanliness gate, the required-checks
+gate, nor the automated pending-migration gate. The manual fallback does not
+run this gate: after loading the environment, run
+`node scripts/deploy-migration-status.ts` yourself before `pnpm db:migrate`;
+if it fails, stop. Review every migration it lists and apply the mixed-version
+check above to each `review` entry. `OVERFLOW_DEPLOY_MIGRATION_ACK=1` only
+confirms review in the deploy script and does not add a manual gate. Run the
+standing block in parts, in one shell so the fd 9 fence and `expected_serving`
+carry over: stop right after its `git pull` line, before `pnpm install`, and
+confirm by hand that `git status` in the tree is clean and that main's required
+checks passed on the pulled commit. If either check fails, do not continue:
+`pnpm db:migrate` would otherwise apply that unverified commit's migrations to
+the production schema. After those checks pass, run the install and environment
+load, stop and run the migration-status command, review every listed migration,
+then continue at `pnpm db:migrate`. If the status command fails or a migration
+is not safe for the previous release's writes, do not migrate. Extract and run
+the manual blocks only after diagnosing why the script could not, and keep
+every guard in this section in force.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
