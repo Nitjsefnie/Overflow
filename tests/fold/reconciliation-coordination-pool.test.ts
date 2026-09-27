@@ -100,6 +100,65 @@ describe("reconciliation coordination pool", () => {
     }
   });
 
+  it("carries the reservation's rejection as the cause of its coordination failure", async () => {
+    const rejection = new Error("connect ECONNREFUSED 127.0.0.1:5432");
+    const coordinationSql = {
+      reserve: () => Promise.reject(rejection),
+    } as unknown as SqlClient;
+
+    const failure = await storeOverPool(coordinationSql)
+      .withRepositoryReconciliation("repository-whose-reservation-rejects", async () => undefined)
+      .then(() => { throw new Error("expected withRepositoryReconciliation to reject"); },
+        (error: unknown) => error as Error);
+
+    expect(failure.message).toBe(coordinationFailure);
+    expect(failure.cause).toBe(rejection);
+  });
+
+  it("names the reserve timeout as the cause of its deadline refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      const { coordinationSql } = exhaustedCoordinationPool();
+      const coordinated = storeOverPool(coordinationSql)
+        .withRepositoryReconciliation("repository-whose-reservation-times-out", async () => undefined);
+      const failurePromise = coordinated.then(
+        () => { throw new Error("expected withRepositoryReconciliation to reject"); },
+        (error: unknown) => error as Error,
+      );
+
+      await vi.advanceTimersByTimeAsync(lockWaitDeadlineMs);
+
+      const failure = await awaitWithRealTimeBound(
+        failurePromise,
+        "The wait for a coordination connection did not give up",
+      );
+      expect(failure.message).toBe(coordinationFailure);
+      expect(failure.cause).toBeInstanceOf(Error);
+      expect((failure.cause as Error).message).not.toBe(coordinationFailure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries a failed lock statement as the cause of its coordination failure", async () => {
+    const statementFailure = new Error("terminating connection due to administrator command");
+    const connection = Object.assign(
+      () => Promise.reject(statementFailure),
+      { release: () => {} },
+    ) as unknown as Awaited<ReturnType<SqlClient["reserve"]>>;
+    const coordinationSql = {
+      reserve: () => Promise.resolve(connection),
+    } as unknown as SqlClient;
+
+    const failure = await storeOverPool(coordinationSql)
+      .withRepositoryReconciliation("repository-whose-lock-statement-fails", async () => undefined)
+      .then(() => { throw new Error("expected withRepositoryReconciliation to reject"); },
+        (error: unknown) => error as Error);
+
+    expect(failure.message).toBe(coordinationFailure);
+    expect(failure.cause).toBe(statementFailure);
+  });
+
   it("stops waiting for a coordination connection once the lock-wait deadline passes", async () => {
     vi.useFakeTimers();
     try {
