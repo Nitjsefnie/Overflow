@@ -40,7 +40,10 @@ updates:
   # updates (the intended behavior for the two Nitjsefnie-Actions workflows,
   # which stay SHA-pinned by maintainer decision). Non-major bumps travel in
   # one grouped pull request per week; a security advisory still opens a
-  # single-package pull request.
+  # single-package pull request. That weekly grouped pull request lands red
+  # on arrival by design: tests/api/ci-workflows.test.ts pins those action
+  # SHAs, so the handler completes the second edit (the test pins) before
+  # merging — CONTRIBUTING.md's two-edit regime for a workflow change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -55,6 +58,12 @@ updates:
 
   # Matches the root Dockerfile (the repository's only one). Its base image is
   # digest-pinned, so bumps arrive as tag+digest updates for that one image.
+  # That digest is a shared literal across Dockerfile's two FROM lines, the
+  # provenance LABEL's base.digest (issue 461) and a constant in
+  # tests/deploy/container-image.test.ts, so a FROM-only bump lands red with
+  # the rest stale: the handler makes the coordinated edit (all FROM lines,
+  # LABEL, test constant) or the lane becomes an `ignore` entry by maintainer
+  # decision.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

@@ -360,8 +360,9 @@ describe("GitHub Actions release gates", () => {
       const update = config.updates.find((u) => u["package-ecosystem"] === ecosystem)!;
       expect(update.directory, ecosystem).toBe("/");
       expect(update.schedule, ecosystem).toEqual({ interval: "weekly" });
-      // The npm lane already opens up to five pull requests a week; the new
-      // ecosystems share that cap so the queue cannot flood.
+      // Per-entry cap: each updates entry opens at most five pull requests a
+      // week (the npm lane included), so three entries could reach fifteen —
+      // no single lane floods, but the cap does not pool across ecosystems.
       expect(update["open-pull-requests-limit"], ecosystem).toBe(5);
     }
     // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
