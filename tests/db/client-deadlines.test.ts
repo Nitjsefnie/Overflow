@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import postgres from "postgres";
 import { closeSql, getSql, withTransaction } from "@/lib/db/client";
@@ -9,6 +9,42 @@ import { runMigrations } from "../../scripts/migrate";
 import { runPruneNoopReconciliationChangesCli } from "../../scripts/prune-noop-reconciliation-changes";
 
 const exec = promisify(execFile);
+
+/**
+ * A virtual migration this suite appends to the runner's directory listing so
+ * the migration-exemption test can drive the REAL runMigrations() entry (issue
+ * 661) without committing a migration: the file never touches disk, so the
+ * numbering guards and every other suite's listings see only the real files.
+ * Its single statement deterministically outruns the tight override the test
+ * puts in force, so the runner completes only if its own `set local
+ * statement_timeout = 0` exemption lifted the deadline on the real path.
+ */
+const migrationFixture = vi.hoisted(() => ({
+  name: "999_issue661_statement_deadline_fixture.sql",
+  content: "select pg_sleep(2);",
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: (async (path: Parameters<typeof actual.readdir>[0]) => {
+      const entries = await actual.readdir(path);
+      return [...entries, migrationFixture.name];
+    }) as unknown as typeof actual.readdir,
+    readFile: (async (
+      path: Parameters<typeof actual.readFile>[0],
+      options?: Parameters<typeof actual.readFile>[1],
+    ) => {
+      if (String(path).endsWith(migrationFixture.name)) {
+        return migrationFixture.content;
+      }
+      return options === undefined
+        ? actual.readFile(path)
+        : actual.readFile(path, options);
+    }) as unknown as typeof actual.readFile,
+  };
+});
 
 /**
  * Issue 661: the shared clients are the single choke point every database
@@ -166,29 +202,35 @@ describe("database client deadlines", () => {
     expect(performance.now() - queryStartedAt).toBeLessThan(15_000);
   });
 
-  it("puts the 30 s default deadline in force and lets a migration-shaped transaction outlive it via set local", async () => {
+  it("puts the 30 s default deadline in force and drives the real migration runner's set local exemption", async () => {
     const sql = await openPoolWithStatementTimeout(undefined);
 
     // The startup parameter took effect: the session deadline is the default
     // 30000 ms, not the server's own (0, unlimited).
     expect(await showStatementTimeout(sql)).toBe("30s");
 
-    // The migration runner's exemption pattern: the FIRST statement inside the
-    // transaction lifts the deadline for the rest of it, so long DDL runs to
-    // completion. The sleep is far longer than the 30 s deadline in force
-    // outside, so the transaction only completes if the exemption worked.
-    const transactionStartedAt = performance.now();
-    await expect(
-      withTransaction(async (tx) => {
-        await tx`set local statement_timeout = 0`;
-        await tx`select pg_sleep(31)`;
-      }),
-    ).resolves.toBeUndefined();
-    expect(performance.now() - transactionStartedAt).toBeGreaterThanOrEqual(30_000);
+    // The exemption is proven on the real path: runMigrations() itself, against
+    // this suite's scratch database, with the virtual long migration appended
+    // to its listing (see migrationFixture). Its pg_sleep deterministically
+    // outruns the tight override in force here, so the runner only completes
+    // if the `set local statement_timeout = 0` it runs as every migration
+    // transaction's first statement lifted the deadline — deleting that line
+    // cancels the fixture mid-sleep and fails this test.
+    const tightSql = await openPoolWithStatementTimeout("1000");
+    await expect(runMigrations()).resolves.toBeUndefined();
 
-    // `set local` is transaction-scoped, so the deadline is back in force for
-    // everything after the migration's transaction commits.
-    expect(await showStatementTimeout(sql)).toBe("30s");
+    // The fixture migration committed through the real runner: the sleep ran
+    // to completion inside the exempted transaction and the runner recorded it.
+    const [fixtureRow] = await tightSql<{ name: string }[]>`
+      select name from schema_migrations where name = ${migrationFixture.name}
+    `;
+    expect(fixtureRow?.name).toBe(migrationFixture.name);
+
+    // Control: the override really is in force on this pool after the run —
+    // `set local` did not leak past the migration transactions — so the
+    // exemption above was load-bearing rather than a deadline that was never
+    // set. The same sleep the fixture survived is cancelled here.
+    await expect(tightSql`select pg_sleep(2)`).rejects.toMatchObject({ code: "57014" });
   });
 
   it("cancels a long statement inside a transaction that does not exempt itself", async () => {
@@ -217,6 +259,26 @@ describe("database client deadlines", () => {
     ).resolves.toBeUndefined();
 
     expect(await showStatementTimeout(sql)).toBe("1s");
+  });
+
+  it.each([
+    ["the empty string", ""],
+    ["a non-numeric value", "abc"],
+    ["a negative value", "-5"],
+    ["zero", "0"],
+  ])("refuses %s for DATABASE_STATEMENT_TIMEOUT_MS at client construction", async (_shape, invalid) => {
+    // A set-but-invalid value used to flow into the startup packet as-is: the
+    // empty string in particular silently disabled the deadline the default
+    // exists to guarantee (issue 661). Construction is the loud failure point —
+    // the pool is never built, and the error names the variable and the problem.
+    await expect(openPoolWithStatementTimeout(invalid)).rejects.toThrow(
+      /DATABASE_STATEMENT_TIMEOUT_MS/,
+    );
+  });
+
+  it("keeps the 30000 default when DATABASE_STATEMENT_TIMEOUT_MS is unset", async () => {
+    const sql = await openPoolWithStatementTimeout(undefined);
+    expect(await showStatementTimeout(sql)).toBe("30s");
   });
 
   it("runs the prune script's own pool under a statement deadline to completion", async () => {

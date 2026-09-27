@@ -56,8 +56,27 @@ const MAX_LIFETIME_SECONDS = 1800;
  */
 const DEFAULT_STATEMENT_TIMEOUT_MS = "30000";
 
+/**
+ * Reads the statement deadline the environment names, falling back to the
+ * default only when the variable is UNSET. A set-but-invalid value — empty,
+ * non-numeric, negative, or zero — throws at client construction, naming the
+ * variable and the problem (issue 661): the value rides the startup packet of
+ * every connection this client opens, and an empty string in particular
+ * silently disabled the deadline the default exists to guarantee.
+ */
 function statementTimeoutMs(): string {
-  return process.env.DATABASE_STATEMENT_TIMEOUT_MS ?? DEFAULT_STATEMENT_TIMEOUT_MS;
+  const raw = process.env.DATABASE_STATEMENT_TIMEOUT_MS;
+  if (raw === undefined) {
+    return DEFAULT_STATEMENT_TIMEOUT_MS;
+  }
+  if (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) === 0) {
+    throw new Error(
+      `DATABASE_STATEMENT_TIMEOUT_MS is set but invalid: "${raw}". ` +
+        "It must be a positive whole number of milliseconds, the statement " +
+        "deadline every connection of both pools advertises to the server.",
+    );
+  }
+  return raw;
 }
 
 /**

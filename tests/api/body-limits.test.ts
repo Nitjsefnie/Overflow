@@ -23,6 +23,7 @@ import { createRederivationPostHandler } from "@/app/api/moderation/rederivation
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import { createSettlementOverridePostHandler } from "@/app/api/overrides/route";
 import {
+  createRepositoryDeleteHandler,
   createRepositoryPostHandler,
   type RepositoryRouteDependencies,
 } from "@/app/api/repositories/route";
@@ -382,6 +383,24 @@ describe("over-limit request bodies are refused with 413", () => {
       jsonRequest(
         "/api/repositories",
         paddedBody(`{"reason":`, `}`, REPOSITORIES_LIMIT_BYTES + 1),
+      ),
+    );
+    await expectPayloadTooLarge(response);
+    expect(deps.createRegistrationDependencies).not.toHaveBeenCalled();
+  });
+
+  // The unregistration body shares the registration's limit through its own
+  // reader: parseUnregisterInput bounds the DELETE read with the same
+  // REPOSITORIES_BODY_LIMIT_BYTES. Pinned separately because the POST case
+  // never executes it — unwiring parseUnregisterInput left this suite green
+  // until this case existed (issue 661 review).
+  it("DELETE /api/repositories refuses a body past 128 KiB before the registration wiring", async () => {
+    const deps = repositoryDependencies();
+    const response = await createRepositoryDeleteHandler(deps)(
+      jsonRequest(
+        "/api/repositories",
+        paddedBody(`{"repositoryUrl":`, `}`, REPOSITORIES_LIMIT_BYTES + 1),
+        "DELETE",
       ),
     );
     await expectPayloadTooLarge(response);

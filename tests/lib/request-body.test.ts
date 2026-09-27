@@ -55,16 +55,17 @@ function trackedStream(chunkByteLengths: readonly number[]): {
   return { stream, record };
 }
 
-// Emits one chunk per pull without end. Once the bytes handed out reach the
-// hang threshold — comfortably past anything a correct reader may still be
-// pulling at the limit — pull returns a promise that never resolves, so a
-// reader that drains instead of cancelling hangs the test rather than
-// passing it.
-function neverEndingStream(chunkByteLength: number): {
+// Emits one chunk per pull without end. The hang threshold is derived from the
+// limit the test runs at, not picked independently: a correct reader cancels
+// having pulled at most the limit plus one chunk, so limit + two chunks is one
+// chunk past the widest correct read — any reader still pulling there is
+// draining past the limit, and pull returns a promise that never resolves so
+// the test hangs rather than passes.
+function neverEndingStream(limitBytes: number, chunkByteLength: number): {
   stream: ReadableStream<Uint8Array>;
   record: { handedOutBytes: number; cancelled: boolean };
 } {
-  const HANG_AFTER_BYTES = chunkByteLength * 6;
+  const HANG_AFTER_BYTES = limitBytes + 2 * chunkByteLength;
   let handedOutBytes = 0;
   const record = { handedOutBytes: 0, cancelled: false };
   const stream = new ReadableStream<Uint8Array>(
@@ -93,7 +94,7 @@ describe("readBodyWithinLimit", () => {
   // buffered.
   it("refuses a never-ending stream once the body crosses the limit, cancelling without draining", async () => {
     const CHUNK_BYTES = 4; // 3 chunks = 12 > 10: the crossing lands mid-stream
-    const { stream, record } = neverEndingStream(CHUNK_BYTES);
+    const { stream, record } = neverEndingStream(LIMIT_BYTES, CHUNK_BYTES);
     const result = await readBodyWithinLimit(streamRequest(stream), LIMIT_BYTES);
     expect(result).toBeNull();
     expect(record.cancelled).toBe(true);
@@ -129,6 +130,23 @@ describe("readBodyWithinLimit", () => {
     );
     expect(result).toBeNull();
     expect(record.handedOutBytes).toBe(0);
+  });
+
+  // Strict-greater is the declared-size pre-check's whole semantics, so the
+  // boundary itself is pinned in the module's own suite: a declaration of
+  // exactly the limit passes the pre-check and the body is read in full. The
+  // route suites carry a 25 MiB case for this (tests/api/webhook.test.ts,
+  // tests/api/webhook-gitlab.test.ts); this is where the pre-check's own
+  // off-by-one mutant fails, rather than only where a route happens to.
+  it("accepts a body whose Content-Length declares exactly the limit", async () => {
+    const { stream, record } = trackedStream([LIMIT_BYTES]);
+    const result = await readBodyWithinLimit(
+      streamRequest(stream, { "content-length": String(LIMIT_BYTES) }),
+      LIMIT_BYTES,
+    );
+    expect(result).toStrictEqual(Buffer.alloc(LIMIT_BYTES));
+    expect(record.handedOutBytes).toBe(LIMIT_BYTES);
+    expect(record.cancelled).toBe(false);
   });
 
   // A request with no body at all is the empty byte string, not an error.
