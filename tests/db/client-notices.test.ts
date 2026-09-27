@@ -39,12 +39,7 @@ describe("shared database client notices", () => {
     expect(onnoticeHandlers).toHaveLength(2);
     expect(onnoticeHandlers.every((handler) => typeof handler === "function")).toBe(true);
 
-    const onnotice = onnoticeHandlers[0];
-    if (typeof onnotice !== "function") {
-      return;
-    }
-
-    onnotice({
+    const notice = {
       severity_local: "NOTICE",
       severity: "NOTICE",
       code: "42P07",
@@ -63,9 +58,19 @@ describe("shared database client notices", () => {
       file: "",
       line: "",
       routine: "",
-    });
+    };
 
-    expect(stderrWrite).toHaveBeenCalledWith("NOTICE: relation already exists, skipping\n");
+    for (const onnotice of onnoticeHandlers) {
+      if (typeof onnotice !== "function") {
+        throw new Error("Expected every database pool to have an onnotice handler");
+      }
+      onnotice(notice);
+    }
+
+    expect(stderrWrite.mock.calls).toEqual([
+      ["NOTICE: relation already exists, skipping\n"],
+      ["NOTICE: relation already exists, skipping\n"],
+    ]);
     expect(consoleLog).not.toHaveBeenCalled();
   });
 });

@@ -101,25 +101,36 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<st
     // The bookkeeping row is written inside the migration's own transaction, so a migration and
     // the record of it commit together or not at all. A migration that fails leaves the ones
     // before it applied and recorded, which is what lets a rerun resume rather than restart.
-    await withTransaction(async (sql) => {
-      // The shared pool advertises a session-wide statement deadline (issue
-      // 661), and a migration is exactly the legitimate long statement it
-      // exists to interrupt elsewhere: index builds and other DDL can run for
-      // minutes. This is the first statement of the transaction, so the whole
-      // migration runs exempt, and `local` scopes the lift to this
-      // transaction — every later statement on the connection keeps the
-      // deadline.
-      await sql`set local statement_timeout = 0`;
-      await sql.unsafe(migration);
-      await sql`
-        insert into schema_migrations (name, checksum)
-        values (${migrationName}, ${checksum})
-      `;
-    });
-    appliedMigrationNames.push(migrationName);
+    await applyAndRecordMigration(appliedMigrationNames, migrationName, () =>
+      withTransaction(async (sql) => {
+        // The shared pool advertises a session-wide statement deadline (issue
+        // 661), and a migration is exactly the legitimate long statement it
+        // exists to interrupt elsewhere: index builds and other DDL can run for
+        // minutes. This is the first statement of the transaction, so the whole
+        // migration runs exempt, and `local` scopes the lift to this
+        // transaction — every later statement on the connection keeps the
+        // deadline.
+        await sql`set local statement_timeout = 0`;
+        await sql.unsafe(migration);
+        await sql`
+          insert into schema_migrations (name, checksum)
+          values (${migrationName}, ${checksum})
+        `;
+      }),
+    );
   }
 
   return appliedMigrationNames;
+}
+
+/** Adds a migration to the run's report only after its transaction commits successfully. */
+export async function applyAndRecordMigration(
+  appliedMigrationNames: string[],
+  migrationName: string,
+  transaction: () => Promise<unknown>,
+): Promise<void> {
+  await transaction();
+  appliedMigrationNames.push(migrationName);
 }
 
 /**
