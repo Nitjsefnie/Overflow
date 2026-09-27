@@ -45,6 +45,25 @@ export const ISSUES_BOARD_DEFAULT_PAGE_SIZE = 200;
 export const ISSUES_BOARD_MAX_PAGE_SIZE = 500;
 
 /**
+ * The board's page window as a reader resolves it: the same clamp the query
+ * applies, exported so a page can size its pager from the resolved window
+ * without re-deriving the arithmetic. An unpaginated reader lands on the
+ * first page at the default size.
+ */
+export function resolveIssuesBoardPage(
+  page: number | undefined,
+  pageSize: number | undefined,
+): { page: number; pageSize: number } {
+  const resolvedPageSize =
+    pageSize === undefined || !Number.isFinite(pageSize)
+      ? ISSUES_BOARD_DEFAULT_PAGE_SIZE
+      : Math.min(ISSUES_BOARD_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
+  const resolvedPage =
+    page === undefined || !Number.isFinite(page) ? 1 : Math.max(1, Math.floor(page));
+  return { page: resolvedPage, pageSize: resolvedPageSize };
+}
+
+/**
  * The one clamp every board caller passes through: whatever page and page
  * size reach the query, the SQL is always paged with a limit inside the
  * documented range and an offset no caller can steer outside it.
@@ -53,13 +72,8 @@ function resolveBoardPage(
   page: number | undefined,
   pageSize: number | undefined,
 ): { limit: number; offset: number } {
-  const resolvedPageSize =
-    pageSize === undefined || !Number.isFinite(pageSize)
-      ? ISSUES_BOARD_DEFAULT_PAGE_SIZE
-      : Math.min(ISSUES_BOARD_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
-  const resolvedPage =
-    page === undefined || !Number.isFinite(page) ? 1 : Math.max(1, Math.floor(page));
-  return { limit: resolvedPageSize, offset: (resolvedPage - 1) * resolvedPageSize };
+  const resolved = resolveIssuesBoardPage(page, pageSize);
+  return { limit: resolved.pageSize, offset: (resolved.page - 1) * resolved.pageSize };
 }
 
 type EligibleIssueRow = {

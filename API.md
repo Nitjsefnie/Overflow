@@ -349,7 +349,7 @@ a caller who is a party to that settlement.
 | Endpoint | Parameters | Success body (HTTP `200`) |
 | --- | --- | --- |
 | `GET /api/dashboard` | None. | The dashboard projection the *Ledger* page renders. Each entry of `registeredRepositories` carries `reconciliationLastFailureAt` as an ISO 8601 string, or `null` when there is no recorded failure. |
-| `GET /api/issues` | Query parameters `repository`, `openingLabel`, `claimState`, all optional. | An array of the issue projections the board renders. |
+| `GET /api/issues` | Query parameters `repository`, `openingLabel`, `claimState`, `page`, `pageSize`, all optional. | An array of the issue projections the board renders, one page of them. |
 | `GET /api/settlements` | None. | An array of the settlement-history rows the page renders. |
 | `GET /api/settlements/<id>` | Path parameter `id`. | `{ "settlement": <settlement proof projection>, "corrections": <correction requests raised against the settlement, or null> }`. |
 | `GET /api/calibration` | None. | `{ "comparison": <calibration comparison>, "selfWork": <self-work calibration rows, or null> }`. |
@@ -362,6 +362,15 @@ On `/api/issues`, a filter is applied only when the request names exactly one
 value for it — a parameter named more than once is left unset. `claimState`
 understands `CLAIMED` and `ALL`; anything unrecognized, including no value at
 all, reads the unclaimed board (`OPEN`).
+
+The board is served one page at a time. `page` is 1-based: an omitted,
+malformed, or non-positive value reads as the first page. `pageSize` is rows
+per request: the default is 200, and anything above 500 clamps back to 500.
+A request that sends no paging parameters reads the first page at the default
+size — where a client of the unpaginated board previously received every
+eligible row, it now receives at most 200, with `page` to fetch the further
+pages. A page holding exactly `pageSize` rows is a full page, and a full page
+means a next page may exist; a shorter page is the last one.
 
 Two responses degrade rather than fail. In the settlement proof, `corrections`
 is `null` when the correction history could not be read, and the settlement
@@ -415,7 +424,7 @@ protocol version `2025-06-18`; a notification (a JSON-RPC request with no
 
 | Tool | Purpose |
 | --- | --- |
-| `issues_board` | List the eligible issues on the claim board, optionally filtered by repository, opening label or claim state. |
+| `issues_board` | List the eligible issues on the claim board, optionally filtered by repository, opening label or claim state, and paged with `page` and `pageSize`. |
 | `settlements_list` | List the calling account's priced settlements. |
 | `settlement_get` | Fetch one settlement's proof by its id. |
 | `calibration_compare` | Fetch the calibration comparison for the calling account. |
@@ -431,6 +440,12 @@ Tool errors are not transport errors: the wrapped endpoint's
 result's text content with `isError: true`, so read the text to tell a
 validation refusal from an upstream outage.
 
-On `issues_board`, a filter argument that is not a string is dropped from the
-query rather than rejected, so an omitted argument and a malformed one read
-the same board.
+On `issues_board`, the optional paging arguments `page` (1-based) and
+`pageSize` are positive integers — a string naming a number is accepted as
+that number — and the board they produce matches the endpoint's: an omitted
+paging argument reads as the first page at the default size of 200, values
+above the endpoint's 500 cap clamp to it, and a page holding exactly
+`pageSize` rows means a next page may exist. The other arguments keep their
+shapes: a filter argument that is not a string is dropped from the query
+rather than rejected, so an omitted argument and a malformed one read the
+same board.

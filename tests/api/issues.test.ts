@@ -79,7 +79,7 @@ describe("GET /api/issues", () => {
     await expect(response.json()).resolves.toEqual([eligibleIssue]);
     expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
       memberId,
-      { repository: undefined, openingLabel: undefined, claimState: "OPEN" },
+      { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: undefined, pageSize: undefined },
     );
   });
 
@@ -92,7 +92,7 @@ describe("GET /api/issues", () => {
 
     expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
       memberId,
-      { repository: "octo/overflow", openingLabel: "size/M", claimState: "OPEN" },
+      { repository: "octo/overflow", openingLabel: "size/M", claimState: "OPEN", page: undefined, pageSize: undefined },
     );
   });
 
@@ -105,7 +105,7 @@ describe("GET /api/issues", () => {
 
       expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
         memberId,
-        { repository: undefined, openingLabel: undefined, claimState },
+        { repository: undefined, openingLabel: undefined, claimState, page: undefined, pageSize: undefined },
       );
     },
   );
@@ -121,7 +121,7 @@ describe("GET /api/issues", () => {
 
       expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
         memberId,
-        { repository: undefined, openingLabel: undefined, claimState: "OPEN" },
+        { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: undefined, pageSize: undefined },
       );
     },
   );
@@ -150,5 +150,52 @@ describe("GET /api/issues", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "UPSTREAM_FAILURE", message: "Unable to load the eligible issues." },
     });
+  });
+
+  it("passes the requested page and page size through to the query", async () => {
+    const dependencies = issueDependencies();
+
+    await createIssuesGetHandler(dependencies)(issuesRequest("?page=3&pageSize=50"));
+
+    expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
+      memberId,
+      { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: 3, pageSize: 50 },
+    );
+  });
+
+  it.each(["page", "pageSize"] as const)(
+    "reads %s as absent, so the query's defaults stand, when the value is not a number",
+    async (name) => {
+      const dependencies = issueDependencies();
+
+      await createIssuesGetHandler(dependencies)(issuesRequest(`?${name}=abc`));
+
+      expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
+        memberId,
+        { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: undefined, pageSize: undefined },
+      );
+    },
+  );
+
+  it("parses a repeated page value as absent, as the filters are", async () => {
+    const dependencies = issueDependencies();
+
+    await createIssuesGetHandler(dependencies)(issuesRequest("?page=2&page=3"));
+
+    expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
+      memberId,
+      { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: undefined, pageSize: undefined },
+    );
+  });
+
+  it("passes a fractional page through for the query to clamp", async () => {
+    const dependencies = issueDependencies();
+
+    await createIssuesGetHandler(dependencies)(issuesRequest("?page=2.5"));
+
+    expect(dependencies.listEligibleIssues).toHaveBeenCalledExactlyOnceWith(
+      memberId,
+      { repository: undefined, openingLabel: undefined, claimState: "OPEN", page: 2.5, pageSize: undefined },
+    );
   });
 });
