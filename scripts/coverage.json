@@ -1,10 +1,10 @@
 {
-  "gap": 1.0,
+  "gap": 1,
   "hysteresis": 0.5,
   "languages": {
     "typescript": {
-      "measured": 92.89,
-      "floor": 91.89
+      "measured": 94.2,
+      "floor": 93.2
     }
   }
 }
