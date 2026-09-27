@@ -48,6 +48,8 @@ describe("scripts/ci-base-freshness.sh", () => {
     advanceFiles?: StubFile[];
     /** Canned entries of the pull request files endpoint's list. */
     prFiles?: StubFile[];
+    /** When set, what the compare's `.files | length` query returns instead of the canned entry count. */
+    advanceEntryCount?: string;
   };
 
   /**
@@ -118,7 +120,7 @@ describe("scripts/ci-base-freshness.sh", () => {
         '  ".total_commits") printf \'%s\\n\' "${STUB_TOTAL_COMMITS:-}" ;;',
         '  ".files[] | (.filename, (.previous_filename // empty))") if [ -n "${STUB_ADVANCE_ENTRIES:-}" ]; then printf \'%s\\n\' "$STUB_ADVANCE_ENTRIES" | project_entries; fi ;;',
         '  ".[] | (.filename, (.previous_filename // empty))") if [ -n "${STUB_PR_ENTRIES:-}" ]; then printf \'%s\\n\' "$STUB_PR_ENTRIES" | project_entries; fi ;;',
-        '  ".files | length") count_entries "$STUB_ADVANCE_ENTRIES" ;;',
+        '  ".files | length") if [ -n "${STUB_ADVANCE_ENTRY_COUNT:-}" ]; then printf \'%s\\n\' "$STUB_ADVANCE_ENTRY_COUNT"; else count_entries "$STUB_ADVANCE_ENTRIES"; fi ;;',
         '  *) echo "stub gh: unexpected query: $jq" >&2; exit 3 ;;',
         "esac",
       ].join("\n") + "\n",
@@ -130,7 +132,7 @@ describe("scripts/ci-base-freshness.sh", () => {
     for (const key of [
       "GH_TOKEN", "REPO_SLUG", "BASE_SHA", "BASE_REF", "PR_NUMBER", "HEAD_SHA",
       "STUB_FAIL", "STUB_SILENT", "STUB_CURRENT_SHA", "STUB_TOTAL_COMMITS",
-      "STUB_ADVANCE_ENTRIES", "STUB_PR_ENTRIES",
+      "STUB_ADVANCE_ENTRIES", "STUB_PR_ENTRIES", "STUB_ADVANCE_ENTRY_COUNT",
     ]) {
       delete env[key];
     }
@@ -145,6 +147,7 @@ describe("scripts/ci-base-freshness.sh", () => {
       STUB_TOTAL_COMMITS: config.totalCommits ?? "1",
       STUB_ADVANCE_ENTRIES: encodeEntries(config.advanceFiles ?? []),
       STUB_PR_ENTRIES: encodeEntries(config.prFiles ?? []),
+      STUB_ADVANCE_ENTRY_COUNT: config.advanceEntryCount ?? "",
       STUB_FAIL: config.ghFails ? "1" : "",
     });
     for (const [key, value] of Object.entries(options.env ?? {})) {
@@ -263,6 +266,31 @@ describe("scripts/ci-base-freshness.sh", () => {
       output(result),
       "the refusal must be the truncation bound firing, not an overlap verdict — the bound is what guards the truncated tail the API never listed",
     ).toMatch(/truncation bound/);
+  });
+
+  it("fails closed when the advance reports no changed files while the SHAs differ", async () => {
+    const result = await runScript({
+      currentSha: CURRENT_SHA,
+      totalCommits: "1",
+      advanceFiles: [],
+      prFiles: ["src/app/page.tsx"],
+    });
+
+    expect(result.status, "an empty advance list is an unrepresentable compare — must refuse").not.toBe(0);
+    expect(output(result), "the refusal must name the empty advance list").toMatch(/reports no changed files/);
+  });
+
+  it("fails closed when the compare's file count is not a number", async () => {
+    const result = await runScript({
+      currentSha: CURRENT_SHA,
+      totalCommits: "1",
+      advanceEntryCount: "many",
+      advanceFiles: ["docs/other.md"],
+      prFiles: ["src/app/page.tsx"],
+    });
+
+    expect(result.status, "an uncountable file list is an unrepresentable compare — must refuse").not.toBe(0);
+    expect(output(result), "the refusal must name the file-count failure").toMatch(/no file count/);
   });
 
   it("fails closed when the compare carries more than 200 commits", async () => {
