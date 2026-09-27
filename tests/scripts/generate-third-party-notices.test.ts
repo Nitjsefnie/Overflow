@@ -238,6 +238,35 @@ describe("generator CLI", () => {
     expect(manifest.scripts.build).toBe("next build && node scripts/generate-third-party-notices.ts");
   });
 
+  it("creates a missing dist directory before writing notices", () => {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const packageEntry = entry("fixture", "1.0.0", "MIT", "LICENSE", "fixture licence text\n");
+    const output = {
+      MIT: [{
+        name: packageEntry.name,
+        versions: [packageEntry.version],
+        paths: [packageEntry.directory],
+        license: packageEntry.license,
+      }],
+    };
+    const shim = join(bin, "pnpm");
+    writeFileSync(shim, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(output))});\n`);
+    chmodSync(shim, 0o755);
+
+    const distDir = join(root, "release-dist");
+    expect(existsSync(distDir)).toBe(false);
+    const result = spawnSync(process.execPath, [script], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, NEXT_DIST_DIR: distDir, PATH: `${bin}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(distDir)).toBe(true);
+    expect(readFileSync(join(distDir, "third-party-notices.txt"), "utf8")).toContain("fixture@1.0.0");
+  });
+
   it("exits nonzero, names every unresolved package and writes no file", () => {
     const bin = join(root, "bin");
     mkdirSync(bin);
