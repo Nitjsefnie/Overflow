@@ -21,7 +21,7 @@
  * assignees&disabled or assignees;disabled suffixes, and "assignees"/disabled
  * path concatenation. None guarantees runtime assignment of the commenter.
  */
-import { parse } from "yaml";
+import { parseDocument } from "yaml";
 
 export type ClaimPathEvidence = { path: string; content: string };
 export type ClaimPathAssessment = "EVIDENCE_FOUND" | "NO_EVIDENCE_FOUND";
@@ -40,7 +40,20 @@ export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimP
     let document: unknown;
     try {
       // Maps preserve the boolean key produced by bare `on` in YAML 1.1.
-      document = parse(content, { mapAsMap: true });
+      // issue 673: parse() forwarded every doc warning to process.emitWarning,
+      // and those messages embed decoded contributor bytes. parseDocument
+      // captures them in doc.warnings; they are deliberately not emitted and
+      // not logged — nothing in them is actionable to the server operator, so
+      // nothing needs encoding. A file with parse errors skips to the next
+      // workflow exactly as the old catch did; that error message embeds raw
+      // decoded bytes too and is likewise never logged.
+      // mapAsMap is a toJS-time option on yaml 2.9.1's types (parse()
+      // forwarded it there); apply it to toJS alone.
+      const doc = parseDocument(content);
+      if (doc.errors.length > 0) {
+        continue;
+      }
+      document = doc.toJS({ mapAsMap: true });
     } catch {
       continue;
     }
