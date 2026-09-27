@@ -59,9 +59,11 @@ Run the built image with compose, bringing up the database and app together:
 docker compose --profile app up -d
 ```
 
-Compose consumes `overflow-app` and has no app build path (issue 718). To
-build under another tag, pass it to `scripts/container-build.sh [tag]` and
-point compose at that image with an override file.
+Compose consumes the local `overflow-app` and has no app build path (issue
+718). It never pulls an app image: if that local tag is absent, compose fails;
+build it with the script first. To build under another tag, pass it to
+`scripts/container-build.sh [tag]` and point compose at that image with an
+override file.
 
 The image builds from digest-pinned bases —
 `node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532` for the application image and

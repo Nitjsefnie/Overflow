@@ -6,6 +6,7 @@ import { POSTGRES_IMAGE } from "../support/postgres-container";
 interface ComposeService {
   image?: string;
   build?: { context?: string; args?: Record<string, string> };
+  pull_policy?: string;
   profiles?: string[];
   restart?: string;
   depends_on?: Record<string, { condition?: string }>;
@@ -68,6 +69,7 @@ describe("docker-compose.yml", () => {
     const app = compose.services.app;
     expect(app).not.toHaveProperty("build");
     expect(app.image).toBe("overflow-app");
+    expect(app.pull_policy).toBe("never");
   });
 
   it("leaves the app service's runtime user to the image instead of overriding it", () => {
