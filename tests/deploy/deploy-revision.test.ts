@@ -984,8 +984,11 @@ describe("scripts/deploy-revision.sh", () => {
 
   it("only removes the temporary listing outside release:prune", async () => {
     const source = await readFile(script, "utf8");
-    const rmInvocations = source.split("\n").filter((line) => /^\s*rm(?:\s|$)/.test(line));
-    expect(rmInvocations).toEqual(['  rm -f "$ignored_listing"']);
+    const cleanup = '  rm -f "$ignored_listing"';
+    const lines = source.split("\n");
+    expect(lines.filter((line) => line === cleanup)).toEqual([cleanup]);
+    const remainingSource = lines.filter((line) => line !== cleanup).join("\n");
+    expect(remainingSource).not.toMatch(/(^|[^\w])rm([^\w]|$)/);
     expect(source).not.toContain("-delete");
     expect(source).toContain("release:prune");
   });
