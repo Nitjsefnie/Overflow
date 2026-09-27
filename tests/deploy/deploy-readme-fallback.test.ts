@@ -231,6 +231,7 @@ describe("deploy/README.md manual fallback", () => {
     expect(`${result.stderr}\n${result.stdout}`).toContain("zz-stray.ts");
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tdb:migrate"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(fixture.oldSha);
   });
@@ -260,6 +261,7 @@ describe("deploy/README.md manual fallback", () => {
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(localSha);
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tdb:migrate"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
   });
 
@@ -279,6 +281,7 @@ describe("deploy/README.md manual fallback", () => {
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(before);
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tdb:migrate"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
   });
 
@@ -311,6 +314,7 @@ describe("deploy/README.md manual fallback", () => {
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(fixture.oldSha);
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tdb:migrate"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
   });
 
@@ -341,6 +345,7 @@ describe("deploy/README.md manual fallback", () => {
     expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(before);
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tdb:migrate"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
   });
 
