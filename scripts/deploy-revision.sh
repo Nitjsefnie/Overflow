@@ -339,7 +339,6 @@ curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
 # name the readiness endpoint (its production default does), and any other
 # target derives a wrong smoke URL that fails closed.
 providers_url="${url%/api/readiness}/api/auth/providers"
-providers_url="${url%/api/readiness}/api/auth/providers"
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$providers_url"
 install -d -m 0700 "$log_dir"
