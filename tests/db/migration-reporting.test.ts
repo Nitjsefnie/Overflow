@@ -248,4 +248,41 @@ describe("migration reporting", () => {
     ).toBe(true);
     expect(stdoutWrite).not.toHaveBeenCalled();
   });
+
+  it("reports committed migrations and the failed migration when the direct CLI run rejects", async () => {
+    migrationHarness.failMigration = "002_b.sql";
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const originalEntrypoint = process.argv[1];
+    const originalExitCode = process.exitCode;
+    let importRejected = false;
+    vi.stubEnv("OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD", "skip");
+    process.argv[1] = fileURLToPath(new URL("../../scripts/migrate.ts", import.meta.url));
+
+    try {
+      vi.resetModules();
+      try {
+        await import("../../scripts/migrate");
+      } catch {
+        importRejected = true;
+      }
+
+      const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(stderr).toBe(
+        "OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD=skip: applying every migration the working " +
+          "tree carries without comparing it against the default branch — for a disposable " +
+          "database only (issue 511).\n" +
+          "applied db/migrations/001_a.sql\n" +
+          "applied 1 migration\n" +
+          "migration failed db/migrations/002_b.sql: Failed migration 002_b.sql\n",
+      );
+      expect(importRejected).toBe(false);
+      expect(process.exitCode).toBe(1);
+      expect([...migrationHarness.persistedMigrations.keys()]).toEqual(["001_a.sql"]);
+      expect(stdoutWrite).not.toHaveBeenCalled();
+    } finally {
+      process.argv[1] = originalEntrypoint;
+      process.exitCode = originalExitCode;
+    }
+  });
 });
