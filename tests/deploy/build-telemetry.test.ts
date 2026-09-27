@@ -9,13 +9,18 @@ const deployScript = readFileSync(
   new URL("../../scripts/deploy-revision.sh", import.meta.url),
   "utf8",
 );
+const dockerfile = readFileSync(
+  new URL("../../Dockerfile", import.meta.url),
+  "utf8",
+);
 
 // Issue 688: Next.js phones home and prints its telemetry notice on every
 // production build unless NEXT_TELEMETRY_DISABLED is set; this branch makes
 // both the Dockerfile's build stage and its runtime stage set it, and these
-// pins hold the remaining build paths — CI and the host deploy — to the same
-// opt-out. The Dockerfile's two env lines are pinned in
-// tests/deploy/container-image.test.ts.
+// pins hold every build path to the same opt-out. This file pins both
+// Dockerfile env lines (build stage and runtime stage) plus the CI and host
+// deploy paths; the build-stage line's placement before `RUN pnpm build` is
+// additionally pinned in tests/deploy/container-image.test.ts.
 
 /** The full text of the workflow step whose `- name:` line names `name`. */
 function workflowStep(workflowText: string, name: string): string {
@@ -48,5 +53,20 @@ describe("build telemetry opt-out (issue 688)", () => {
     expect(buildLine).toMatch(/^NEXT_TELEMETRY_DISABLED=1\b/);
     expect(buildLine).toContain('NEXT_DIST_DIR="$release"');
     expect(buildLine).toContain("pnpm build");
+  });
+
+  it("disables Next.js telemetry in the Dockerfile's build stage", () => {
+    const buildStage = dockerfile.split("FROM deps AS build")[1]?.split("\nFROM ")[0] ?? "";
+    expect(buildStage, "the build stage's NEXT_TELEMETRY_DISABLED env line")
+      .toContain("ENV NEXT_TELEMETRY_DISABLED=1");
+  });
+
+  it("disables Next.js telemetry in the Dockerfile's runtime stage", () => {
+    const lines = dockerfile.split("\n");
+    const runtimeAt = lines.findIndex((line) => line.includes("AS runtime"));
+    const envAt = lines.findIndex(
+      (line, index) => index > runtimeAt && line === "ENV NEXT_TELEMETRY_DISABLED=1",
+    );
+    expect(envAt, "the runtime stage's NEXT_TELEMETRY_DISABLED env line").toBeGreaterThan(runtimeAt);
   });
 });
