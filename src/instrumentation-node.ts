@@ -8,6 +8,15 @@ import {
   startReconciliationSweep,
   sweepReconciliations,
 } from "@/lib/fold/sweep";
+import { FailureLogger } from "@/lib/worker/failure-logger";
+
+/**
+ * The drain site's failure key (issue 661): the whole-drain hook the schedule
+ * reports through when the store itself is unreachable. Distinct from the
+ * lease-heartbeat site's key, so one outage does not suppress the other's
+ * first failure.
+ */
+export const RECONCILIATION_DRAIN_FAILURE_KEY = "reconciliation-drain";
 
 /**
  * Everything register() does on the Node.js runtime, split out of
@@ -37,6 +46,11 @@ export async function registerNodejs(): Promise<void> {
     new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
   const markCredentialRejected = (userId: string, identityId: string) =>
     new PostgresForgeIdentityStore(getSql()).markTokenRejected(userId, identityId);
+  // One logger for the worker's two bounded failure sites (issue 661): the
+  // drain's own key below, and the lease-heartbeat site's key inside the
+  // worker. Shared so both sites' quiet windows run on one clock, separate
+  // keys so neither site's outage suppresses the other's first failure.
+  const failureLogger = new FailureLogger();
 
   startReconciliationWorker({
     drain: async () => {
@@ -57,17 +71,30 @@ export async function registerNodejs(): Promise<void> {
               }
             },
           }),
+        // The heartbeat site's failures flow through the shared logger under
+        // the worker's own key, so an outage bounds both sites together.
+        leaseHeartbeatFailureLogger: failureLogger,
         onFailure: (repositoryId, error) => {
           // The job carries its own retry, so this is the operator's only view of
           // a repository that keeps failing to fold.
           console.error(`Reconciliation failed for repository ${repositoryId}`, error);
         },
       });
+      // A drain that resolves is the drain site's positive signal: after a
+      // failed drain it ends the outage with the recovery line (issue 661).
+      failureLogger.success(RECONCILIATION_DRAIN_FAILURE_KEY);
       if (outcomes.length > 0) console.info("Reconciliation drain", countOutcomes(outcomes));
       return outcomes;
     },
     onFailure: (error) => {
-      console.error("Reconciliation worker could not drain the job queue", error);
+      // First failure of an outage passes through in full; the bound lives in
+      // the logger (issue 661). The message passes through with it, so the one
+      // allowed line is exactly the line the unbounded site printed.
+      failureLogger.failure(
+        RECONCILIATION_DRAIN_FAILURE_KEY,
+        "Reconciliation worker could not drain the job queue",
+        error,
+      );
     },
   });
 

@@ -10,6 +10,16 @@ export interface PostgresContainerOptions {
   password: string;
   /** Optional shell scripts copied into /docker-entrypoint-initdb.d/ before start. Test fixtures only. */
   initScripts?: ReadonlyArray<{ name: string; content: string }>;
+  /**
+   * A fixed host port for the private container's 5432, honored again when the
+   * container is stopped and started back up (a dynamically allocated host
+   * port is re-allocated on every start, which would strand every client of
+   * the original URL). Suites that restart their container need this; suites
+   * that do not should keep the default dynamic mapping. Requires the private
+   * path — pass initScripts — and collides loudly, rather than silently
+   * serving the wrong suite, if two runs pick the same port at once.
+   */
+  fixedHostPort?: number;
 }
 
 export interface StartedPostgres {
@@ -214,7 +224,10 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
   const { database, user, password, initScripts = [] } = options;
 
   if (initScripts.length > 0) {
-    return startPrivatePostgres({ database, user, password, initScripts });
+    return startPrivatePostgres(options);
+  }
+  if (options.fixedHostPort !== undefined) {
+    throw new Error("fixedHostPort needs a private container: pass initScripts so the suite owns one");
   }
 
   return startOnSharedServer({ database, user, password });
@@ -226,7 +239,7 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
  * before the shared server existed (issue 626 left them unchanged).
  */
 async function startPrivatePostgres(options: PostgresContainerOptions): Promise<StartedPostgres> {
-  const { database, user, password, initScripts = [] } = options;
+  const { database, user, password, initScripts = [], fixedHostPort } = options;
 
   let container = new GenericContainer(POSTGRES_IMAGE)
     .withEnvironment({
@@ -234,7 +247,7 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
       POSTGRES_PASSWORD: password,
       POSTGRES_USER: user,
     })
-    .withExposedPorts(5432)
+    .withExposedPorts(fixedHostPort === undefined ? 5432 : { container: 5432, host: fixedHostPort })
     .withWaitStrategy(postgresWaitStrategy({ database, user }));
 
   for (const { name, content } of initScripts) {
