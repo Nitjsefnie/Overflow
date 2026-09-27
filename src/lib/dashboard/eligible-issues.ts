@@ -28,7 +28,39 @@ export type EligibleIssueFilters = {
   repository?: string;
   openingLabel?: string;
   claimState?: "OPEN" | "CLAIMED" | "ALL";
+  /** 1-based board page. Undefined, non-finite and non-positive values read as the first page. */
+  page?: number;
+  /** Rows per board page. Undefined and non-finite values read as the default; out-of-range values clamp to 1..500. */
+  pageSize?: number;
 };
+
+/**
+ * The board's page shape for an unpaginated client: the first page at the
+ * default size. A page holding exactly this many rows is a full page, and a
+ * full page means a next page may exist.
+ */
+export const ISSUES_BOARD_DEFAULT_PAGE_SIZE = 200;
+
+/** The largest page size the board serves; anything above clamps back to it. */
+export const ISSUES_BOARD_MAX_PAGE_SIZE = 500;
+
+/**
+ * The one clamp every board caller passes through: whatever page and page
+ * size reach the query, the SQL is always paged with a limit inside the
+ * documented range and an offset no caller can steer outside it.
+ */
+function resolveBoardPage(
+  page: number | undefined,
+  pageSize: number | undefined,
+): { limit: number; offset: number } {
+  const resolvedPageSize =
+    pageSize === undefined || !Number.isFinite(pageSize)
+      ? ISSUES_BOARD_DEFAULT_PAGE_SIZE
+      : Math.min(ISSUES_BOARD_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
+  const resolvedPage =
+    page === undefined || !Number.isFinite(page) ? 1 : Math.max(1, Math.floor(page));
+  return { limit: resolvedPageSize, offset: (resolvedPage - 1) * resolvedPageSize };
+}
 
 type EligibleIssueRow = {
   id: string;
@@ -55,8 +87,24 @@ export async function listEligibleIssues(
   const repositoryFilter = normalizedFilter(filters.repository);
   const openingLabelFilter = normalizedFilter(filters.openingLabel);
   const claimState = filters.claimState ?? "OPEN";
+  const boardPage = resolveBoardPage(filters.page, filters.pageSize);
   const rows = await sql<EligibleIssueRow[]>`
-    with reservations as materialized (
+    with candidate_sponsors as materialized (
+      -- The sponsors whose open issues can reach the board before any
+      -- credit-limit test: every predicate the board and the repayment
+      -- exception apply to a sponsor, minus the presentation filters. Both
+      -- consumers below need a limit only for sponsors this set already
+      -- contains, so scoping the replay to it changes no output row.
+      select distinct repositories.sponsor_id
+      from issues
+      join registered_repositories as repositories on repositories.id = issues.repository_id
+      join users as sponsors on sponsors.id = repositories.sponsor_id
+      where issues.state = 'OPEN'
+        and repositories.active = true and repositories.unavailable_reason is null
+        and sponsors.id <> ${accountId}
+        and sponsors.enforcement_state in ('ACTIVE', 'WARNED', 'UNDER_AUDIT')
+    ),
+    reservations as materialized (
       -- The reservation total is priced once per sponsor here, and joined to
       -- that sponsor's issue rows below, rather than re-derived as correlated
       -- subplans once per output row. Materialized on purpose: a
@@ -85,8 +133,78 @@ export async function listEligibleIssues(
       select account_id, balance from balances
     ),
     sponsor_credit_limits as materialized (
-      -- Replay completed-work history once for all accounts, never per issue.
-      select account_id, credit_limit from account_credit_limits
+      -- The account_credit_limits view's replay (migration 044), scoped to
+      -- the candidate sponsors. The window partitions by account, so the
+      -- replay of a candidate's history is unchanged by every non-candidate's
+      -- events being absent; the scoping keeps a world of settlement-heavy
+      -- accounts that sponsor no open work from pricing the board's limits.
+      -- The predicate sits on the event legs, so a non-candidate row never
+      -- reaches the window.
+      with credit_events as (
+        select
+          legs.account_id,
+          legs.amount,
+          pull_requests.merged_at as occurred_at,
+          0 as event_kind,
+          ''::text as adjustment_key,
+          repositories.provider,
+          coalesce(repositories.instance_url, '') as instance_url,
+          coalesce(repositories.forge_project_id, repositories.github_repository_id) as repository_key,
+          pull_requests.pull_request_number,
+          issues.issue_number
+        from settlements
+        join pull_requests on pull_requests.id = settlements.pull_request_id
+        join issues on issues.id = settlements.issue_id
+        join registered_repositories as repositories on repositories.id = pull_requests.repository_id
+        cross join lateral (values
+          (settlements.creditor_id, settlements.credits),
+          (settlements.debtor_id, -settlements.credits)
+        ) as legs(account_id, amount)
+        where settlements.status = 'SETTLED'
+          and settlements.credits > 0
+          and settlements.creditor_id <> settlements.debtor_id
+          and legs.account_id in (select sponsor_id from candidate_sponsors)
+        union all
+        -- Moderation changes the balance a later contribution repays, but
+        -- neither an adjustment nor its reversal is itself completed work.
+        -- These immutable events use their creation time and UUID; they are
+        -- not re-materialized.
+        select legs.account_id, legs.amount, adjustments.created_at, 1,
+          adjustments.id::text, repositories.provider,
+          coalesce(repositories.instance_url, ''),
+          coalesce(repositories.forge_project_id, repositories.github_repository_id),
+          pull_requests.pull_request_number, issues.issue_number
+        from moderation_credit_adjustments as adjustments
+        join moderation_credit_adjustment_lines as lines on lines.adjustment_id = adjustments.id
+        join settlements on settlements.id = lines.settlement_id
+        join pull_requests on pull_requests.id = settlements.pull_request_id
+        join issues on issues.id = settlements.issue_id
+        join registered_repositories as repositories on repositories.id = pull_requests.repository_id
+        cross join lateral (values
+          (lines.creditor_id, lines.amount),
+          (adjustments.target_account_id, -lines.amount)
+        ) as legs(account_id, amount)
+        where legs.account_id in (select sponsor_id from candidate_sponsors)
+      ),
+      running_balances as (
+        select *, coalesce(sum(amount) over (
+          partition by account_id
+          order by occurred_at nulls first, event_kind, adjustment_key,
+            provider, instance_url, repository_key, pull_request_number, issue_number
+          rows between unbounded preceding and 1 preceding
+        ), 0) as balance_before
+        from credit_events
+      ),
+      repayments as (
+        select account_id,
+          sum(case when event_kind = 0
+            then least(greatest(amount, 0), greatest(-balance_before, 0))
+            else 0 end) as repaid_debt
+        from running_balances
+        group by account_id
+      )
+      select account_id, 10 + floor(repaid_debt / 10) as credit_limit
+      from repayments
     ),
     repayment_issues as materialized (
       -- One unclaimed opening per exhausted sponsor, across all active
@@ -160,7 +278,12 @@ export async function listEligibleIssues(
       -- affect displayed headroom only, without changing ordering or eligibility.
       ranked.settled_balance desc,
       ranked.opening_reserve_points desc,
-      ranked.created_at asc
+      ranked.created_at asc,
+      -- The unique page-cut tiebreaker: rows can tie on everything above, and
+      -- without a final total order a page boundary could drop or duplicate a
+      -- row between requests.
+      ranked.id asc
+    limit ${boardPage.limit} offset ${boardPage.offset}
   `;
 
   return rows.map((row) => {

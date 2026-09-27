@@ -1661,12 +1661,24 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
       );
       create table pull_requests (
         id text primary key,
+        repository_id text,
         pull_request_number integer,
         title text,
         url text,
         merge_commit_oid text,
         merged_at timestamptz,
         proof_sha256 text
+      );
+      create table moderation_credit_adjustments (
+        id text primary key,
+        target_account_id text,
+        created_at timestamptz
+      );
+      create table moderation_credit_adjustment_lines (
+        adjustment_id text,
+        settlement_id text,
+        creditor_id text,
+        amount integer
       );
       create table repository_reconciliation_jobs (repository_id text, state text, last_failure_at timestamptz);
       create table moderation_events (
