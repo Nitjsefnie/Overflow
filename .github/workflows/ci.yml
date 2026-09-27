@@ -8,6 +8,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      simulate-refused-raise:
+        description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -210,12 +215,16 @@ jobs:
         run: bash scripts/ci-base-freshness.sh
 
   # Raises the committed coverage floor when a main push measured higher
-  # than the record by more than the hysteresis. Push-only: a pull request
-  # must never write to the branch it targets. Docs-only runs produce no
-  # coverage summary and are skipped by the verify job's docs_only output.
+  # than the record by more than the hysteresis, and doubles as the calibrate
+  # self-test: a workflow_dispatch carrying simulate-refused-raise fabricates
+  # a coverage raise so the push to main is refused by branch protection —
+  # a bot commit can never carry the required checks — and the job FAILS
+  # visibly, which is the point (issue 684). Push-only otherwise: a pull
+  # request must never write to the branch it targets. Docs-only runs produce
+  # no coverage summary and are skipped by the verify job's docs_only output.
   calibrate:
     needs: verify
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.outputs.docs_only != 'true') || (github.event_name == 'workflow_dispatch' && inputs.simulate-refused-raise == true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -225,6 +234,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # scripts/push-recalibration.ts reads the recorded floor from
+          # HEAD^1 for its refusal message; a depth-1 checkout would degrade
+          # the message to its "floors could not be read" fallback.
+          fetch-depth: 2
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -240,44 +253,34 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download coverage summary
+        if: ${{ inputs.simulate-refused-raise != true }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: coverage-summary
           path: coverage
 
       - name: Calibrate the coverage floor
+        if: ${{ inputs.simulate-refused-raise != true }}
         run: node scripts/calibrate-coverage.ts
 
-      # The job token rides in the push URL only — never persisted to
-      # .git/config. A rejected push (main moved under us) retries once
-      # after a rebase; a second rejection is left to the next main run,
-      # which recalibrates against the newer tree anyway.
+      # The self-test half: in place of a measurement, calibrate-coverage
+      # fabricates a raise off the recorded document alone, so the push below
+      # is guaranteed to be refused and the job's failure is the thing under
+      # test.
+      - name: Fabricate the simulated raise
+        if: ${{ inputs.simulate-refused-raise == true }}
+        run: node scripts/calibrate-coverage.ts --simulate-refused-raise
+
+      # The push half lives in scripts/push-recalibration.ts: it commits
+      # scripts/coverage.json as github-actions[bot] and pushes main, with the
+      # job token riding in the push URL alone — never persisted to
+      # .git/config. A refused push is EXPECTED here — main's branch
+      # protection cannot be satisfied by a GITHUB_TOKEN push — so the script
+      # names the measured and recorded floors in a ::error:: and exits 1:
+      # a refusal fails the job visibly instead of reading as green. On a
+      # warranted raise racing main it fetches, rebases and retries once
+      # before refusing.
       - name: Push the recalibrated floor
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if git diff --quiet -- scripts/coverage.json; then
-            echo "coverage floor already current; nothing to push"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/coverage.json
-          git commit -m "ci: update CI ratchets"
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git push "$remote" "HEAD:refs/heads/main"; then
-            echo "pushed the recalibrated coverage floor"
-            exit 0
-          fi
-          echo "push rejected; retrying once after a rebase onto main"
-          git fetch "$remote" --depth=2 main
-          if git rebase FETCH_HEAD; then
-            if git push "$remote" "HEAD:refs/heads/main"; then
-              echo "pushed the recalibrated coverage floor after rebase"
-            else
-              echo "push rejected twice; leaving the recalibration to the next main run"
-            fi
-          else
-            echo "rebase onto main failed; leaving the recalibration to the next main run"
-            git rebase --abort
-          fi
+        run: node scripts/push-recalibration.ts
