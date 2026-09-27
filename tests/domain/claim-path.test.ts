@@ -49,6 +49,22 @@ describe("claim path assessment", () => {
     expect(assessClaimPath([broken, workflow("on: issue_comment")])).toBe("EVIDENCE_FOUND");
   });
 
+  // Parses cleanly (0 errors, 0 warnings) but doc.toJS() throws a
+  // ReferenceError: chained anchors multiply alias resolutions past yaml's
+  // default maxAliasCount. The catch must convert that throw into the same
+  // skip an unparseable file gets, so the loop still reaches the next file.
+  const aliasBomb = [
+    "a0: &a0 v",
+    ...Array.from({ length: 8 }, (_, i) => `a${i + 1}: &a${i + 1} [*a${i}, *a${i}]`),
+  ].join("\n");
+
+  it("skips a cleanly-parsing workflow whose toJS throws, before a qualifying workflow", () => {
+    expect(assessClaimPath([
+      { path: ".github/workflows/bomb.yml", content: aliasBomb },
+      workflow("on: issue_comment"),
+    ])).toBe("EVIDENCE_FOUND");
+  });
+
   it("rejects unparseable YAML alone", () => {
     expect(assessClaimPath([broken])).toBe("NO_EVIDENCE_FOUND");
   });
