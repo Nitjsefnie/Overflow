@@ -365,7 +365,8 @@ all, reads the unclaimed board (`OPEN`).
 
 The board is served one page at a time. `page` is 1-based: an omitted,
 malformed, or non-positive value reads as the first page. `pageSize` is rows
-per request: the default is 200, and anything above 500 clamps back to 500.
+per request: the default is 200, anything above 500 clamps back to 500, and
+anything below 1 reads as 1.
 A request that sends no paging parameters reads the first page at the default
 size — where a client of the unpaginated board previously received every
 eligible row, it now receives at most 200, with `page` to fetch the further
