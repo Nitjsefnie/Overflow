@@ -122,6 +122,12 @@ describe("the coverage comment workflow", () => {
     expect(downloads).toHaveLength(1);
     const [download] = downloads;
     expect(
+      download.uses,
+      "the cross-run download must stay on the reviewed v8.0.1 pin",
+    ).toBe(
+      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    );
+    expect(
       download.with,
       "the artifact must come from the triggering run's id with an explicit token — without run-id the job reads the latest run's report and comments one pull request's number on another",
     ).toEqual({
