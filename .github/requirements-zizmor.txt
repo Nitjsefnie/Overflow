@@ -5,6 +5,10 @@
 # one pin. Every artifact pip could resolve for it (each published wheel
 # plus the sdist) carries its sha256, so the install works on any platform
 # pip could run the wheel for and still fails closed on an unexpected file.
+# What fails closed means here: the gate rejects downloaded content that
+# matches no allowed hash, not a typo'd hash of a real artifact — pip
+# pre-filters candidates by the index's #sha256= fragment, so a corrupted
+# allowed-hash entry narrows the candidate set instead of failing the install.
 #
 # Regenerate by hand when bumping zizmor (pip-tools):
 #   pip install pip-tools
