@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -63,14 +63,19 @@ describe("ordinary deployment webhook upgrade", () => {
         ${script}
       `], { cwd: fixture, encoding: "utf8", timeout: 10_000 });
       expect(result.error).toBeUndefined();
+      const output = result.stdout;
+      if (readinessStatus !== 0 || upgradeStatus !== 0) {
+        const release = /New build: ([^\n]+)/.exec(output)?.[1];
+        expect(release, "the release created before verification").toBeDefined();
+        expect(await readdir(join(fixture, release!))).not.toContain("REVISION");
+      }
       if (readinessStatus !== 0) {
         await expect(readFile(join(fixture, "upgrade-invocations"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         expect(result.status, result.stderr).toBe(readinessStatus);
-        expect(result.stdout).not.toContain("Webhook upgrade log:");
+        expect(output).not.toContain("Webhook upgrade log:");
         return;
       }
       expect(result.status, result.stderr).toBe(upgradeStatus);
-      const output = result.stdout;
       expect(output.indexOf("BUILD")).toBeLessThan(output.indexOf("SWITCH"));
       expect(output.indexOf("SWITCH")).toBeLessThan(output.indexOf("RESTART"));
       expect(output.indexOf("RESTART")).toBeLessThan(output.indexOf("READY"));

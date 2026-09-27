@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,12 +12,16 @@ const deployScript = fileURLToPath(new URL("../../scripts/deploy-revision.sh", i
 interface Fixture {
   dir: string;
   tree: string;
+  oldSha: string;
+  fetchedSha: string;
   previousRelease: string;
   envFile: string;
   lock: string;
   logDir: string;
   bins: string;
   shimLog: string;
+  checkRunsFile: string;
+  upgradeStatusFile: string;
 }
 
 let liveFixture: Fixture | undefined;
@@ -62,6 +66,12 @@ async function makeFixture(): Promise<Fixture> {
   run("git", ["-C", seed, "remote", "add", "origin", remote], dir);
   run("git", ["-C", seed, "push", "-u", "origin", "main"], dir);
   run("git", ["clone", remote, tree], dir);
+  const oldSha = run("git", ["-C", tree, "rev-parse", "HEAD"], dir);
+  await writeFile(path.join(seed, "remote-advanced.txt"), "fetched fixture revision\n");
+  run("git", ["-C", seed, "add", "-f", "remote-advanced.txt"], dir);
+  run("git", ["-C", seed, "commit", "-m", "advance remote main after clone"], dir);
+  run("git", ["-C", seed, "push", "origin", "main"], dir);
+  const fetchedSha = run("git", ["-C", seed, "rev-parse", "HEAD"], dir);
 
   const fakeGitHubRemote = "git@github.com:overflow-fixture/manual-fallback.git";
   run("git", ["-C", tree, "remote", "set-url", "origin", fakeGitHubRemote], dir);
@@ -77,11 +87,28 @@ async function makeFixture(): Promise<Fixture> {
   const logDir = path.join(dir, "logs");
   const bins = path.join(dir, "bins");
   const shimLog = path.join(dir, "shim-log");
+  const checkRunsFile = path.join(dir, "check-runs.tsv");
+  const upgradeStatusFile = path.join(dir, "upgrade-status");
   await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
+  await writeFile(checkRunsFile, "101\tbuild\tcompleted\tsuccess\n102\tdeploy-gate\tcompleted\tfailure\n103\tdeploy-gate\tcompleted\tsuccess\n");
+  await writeFile(upgradeStatusFile, "0\n");
   await mkdir(logDir);
   await mkdir(bins);
 
-  const fixture = { dir, tree, previousRelease, envFile, lock: path.join(dir, "deploy.lock"), logDir, bins, shimLog };
+  const fixture = {
+    dir,
+    tree,
+    oldSha,
+    fetchedSha,
+    previousRelease,
+    envFile,
+    lock: path.join(dir, "deploy.lock"),
+    logDir,
+    bins,
+    shimLog,
+    checkRunsFile,
+    upgradeStatusFile,
+  };
   liveFixture = fixture;
   await writeShims(fixture);
   return fixture;
@@ -103,12 +130,12 @@ async function writeShims(fixture: Fixture): Promise<void> {
   await writeShim(
     fixture,
     "gh",
-    `case "$2" in
+  `case "$2" in
   */branches/main/protection)
     printf 'build\\ndeploy-gate\\n'
     ;;
   */check-runs*)
-    printf '101\\tbuild\\tcompleted\\tsuccess\\n102\\tdeploy-gate\\tcompleted\\tsuccess\\n'
+    cat "\${CHECK_RUNS_FILE:?}"
     ;;
   *) exit 2 ;;
 esac`,
@@ -123,6 +150,8 @@ if [ "$1" = "webhooks:upgrade" ]; then
   if [ -f "$release/REVISION" ]; then state=present; else state=absent; fi
   printf 'REVISION_AT_WEBHOOK=%s\\n' "$state" >> "\${SHIM_LOG:?}"
   printf '{"upgradeFixture":true}\\n'
+  status=$(cat "\${UPGRADE_STATUS_FILE:?}")
+  exit "$status"
 fi
 exit 0`,
   );
@@ -150,6 +179,8 @@ async function runFallback(fixture: Fixture) {
     env: {
       ...process.env,
       SHIM_LOG: fixture.shimLog,
+      CHECK_RUNS_FILE: fixture.checkRunsFile,
+      UPGRADE_STATUS_FILE: fixture.upgradeStatusFile,
       PATH: `${fixture.bins}${path.delimiter}${process.env.PATH ?? ""}`,
     },
   });
@@ -188,6 +219,8 @@ describe("deploy/README.md manual fallback", () => {
     const fixture = await makeFixture();
     await writeFile(path.join(fixture.tree, "zz-stray.ts"), "ignored source\n");
     const before = run("git", ["rev-parse", "HEAD"], fixture.tree);
+    expect(before).toBe(fixture.oldSha);
+    expect(fixture.fetchedSha).not.toBe(fixture.oldSha);
 
     const result = await runFallback(fixture);
 
@@ -196,7 +229,53 @@ describe("deploy/README.md manual fallback", () => {
     const entries = await shimLog(fixture);
     expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
     expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
-    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(before);
+    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(fixture.oldSha);
+  });
+
+  it.each([
+    {
+      kind: "absent",
+      checkRuns: "101\tbuild\tcompleted\tsuccess\n",
+      pending: "deploy-gate (absent)",
+    },
+    {
+      kind: "non-completed",
+      checkRuns: "101\tbuild\tcompleted\tsuccess\n102\tdeploy-gate\tin_progress\t\n",
+      pending: "deploy-gate (in_progress)",
+    },
+    {
+      kind: "unsuccessful",
+      checkRuns: "101\tbuild\tcompleted\tsuccess\n102\tdeploy-gate\tcompleted\tfailure\n",
+      pending: "deploy-gate (failure)",
+    },
+  ])("refuses before merge when a required check is $kind", async ({ checkRuns, pending }) => {
+    const fixture = await makeFixture();
+    await writeFile(fixture.checkRunsFile, checkRuns);
+
+    const result = await runFallback(fixture);
+
+    const output = `${result.stderr}\n${result.stdout}`;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain(pending);
+    expect(fixture.fetchedSha).not.toBe(fixture.oldSha);
+    expect(run("git", ["rev-parse", "HEAD"], fixture.tree)).toBe(fixture.oldSha);
+    const entries = await shimLog(fixture);
+    expect(entries.some((entry) => entry.startsWith("pnpm\tinstall"))).toBe(false);
+    expect(entries.some((entry) => entry.startsWith("pnpm\trelease:switch"))).toBe(false);
+  });
+
+  it("does not write REVISION when webhook upgrade fails", async () => {
+    const fixture = await makeFixture();
+    await writeFile(fixture.upgradeStatusFile, "17\n");
+
+    const result = await runFallback(fixture);
+
+    const output = result.stderr + "\n" + result.stdout;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toContain("Webhook upgrade exit status: 17");
+    const release = result.stdout.match(/New build: ([^\n]+)/)?.[1];
+    expect(release, "the release created before webhook upgrade").toBeDefined();
+    expect(await readdir(path.join(fixture.tree, release!))).not.toContain("REVISION");
   });
 
   it("runs the fetch-first fallback and writes REVISION only after switch, restart and webhook upgrade", async () => {
@@ -207,6 +286,8 @@ describe("deploy/README.md manual fallback", () => {
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const sha = run("git", ["rev-parse", "HEAD"], fixture.tree);
     expect(sha).toMatch(/^[a-f0-9]{40}$/);
+    expect(fixture.fetchedSha).not.toBe(fixture.oldSha);
+    expect(sha).toBe(fixture.fetchedSha);
     const release = result.stdout.match(/New build: ([^\n]+)/)?.[1];
     expect(release, "the release created by the block").toBeDefined();
     await expect(readFile(path.join(fixture.tree, release!, "REVISION"), "utf8")).resolves.toBe(`${sha}\n`);
