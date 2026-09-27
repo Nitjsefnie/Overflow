@@ -62,6 +62,8 @@ const issuesBoardSchema = z
     repository: z.string().optional(),
     openingLabel: z.string().optional(),
     claimState: z.enum(["OPEN", "CLAIMED", "ALL"]).optional(),
+    page: z.coerce.number().int().positive().optional(),
+    pageSize: z.coerce.number().int().positive().optional(),
   })
   .strict();
 
@@ -136,11 +138,12 @@ export function defineMcpTools(
       {
         name: "issues_board",
         description:
-          "List the eligible issues on the claim board, optionally filtered by repository, opening label or claim state.",
+          "List the eligible issues on the claim board, optionally filtered by repository, opening label or claim state, and paged with page and pageSize.",
         schema: issuesBoardSchema,
         method: "GET",
         handler: dependencies.issuesBoard,
-        pathFor: (args) => withQuery("/api/issues", args, ["repository", "openingLabel", "claimState"]),
+        pathFor: (args) =>
+          withQuery("/api/issues", args, ["repository", "openingLabel", "claimState", "page", "pageSize"]),
       },
       forwarded,
     ),
@@ -328,6 +331,9 @@ function paramsContext(
 /**
  * The issues route reads each filter only when the query names exactly one
  * value, so an argument the client omitted must produce no query key at all.
+ * A paging argument may arrive as a JSON number, so a finite number rides the
+ * query as its decimal form — anything else non-string is dropped, and the
+ * wrapped route's own fallback and clamp stay the only page arithmetic.
  */
 function withQuery(
   path: string,
@@ -339,6 +345,8 @@ function withQuery(
     const value = args[name];
     if (typeof value === "string") {
       query.set(name, value);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      query.set(name, String(value));
     }
   }
   const rendered = query.toString();

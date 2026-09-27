@@ -94,6 +94,27 @@ describe("defineMcpTools", () => {
       expect(result).toEqual({ content: [{ type: "text", text: CANNED_TEXT }] });
     });
 
+    it("issues_board pages with the requested window as numbers in the query", async () => {
+      const deps = dependencies();
+      const tools = defineMcpTools(deps, new Headers());
+      await toolNamed(tools, "issues_board").call({ page: 2, pageSize: 50 });
+
+      const [request] = calledOnce(deps.issuesBoard) as [Request];
+      const url = new URL(request.url);
+      expect([...url.searchParams.keys()]).toEqual(["page", "pageSize"]);
+      expect(url.searchParams.get("page")).toBe("2");
+      expect(url.searchParams.get("pageSize")).toBe("50");
+    });
+
+    it("issues_board forwards a paging argument the client sent as a string verbatim", async () => {
+      const deps = dependencies();
+      const tools = defineMcpTools(deps, new Headers());
+      await toolNamed(tools, "issues_board").call({ page: "3" });
+
+      const [request] = calledOnce(deps.issuesBoard) as [Request];
+      expect(new URL(request.url).searchParams.get("page")).toBe("3");
+    });
+
     it("settlements_list sends a plain GET to /api/settlements", async () => {
       const deps = dependencies();
       const tools = defineMcpTools(deps, new Headers());
@@ -237,6 +258,10 @@ describe("defineMcpTools", () => {
       await toolNamed(tools, "issues_board").call({ openingLabel: "good first issue" });
       const [oneArg] = mockCalls(deps.issuesBoard)[1]! as [Request];
       expect([...new URL(oneArg.url).searchParams.keys()]).toEqual(["openingLabel"]);
+
+      await toolNamed(tools, "issues_board").call({ page: Number.NaN });
+      const [nanPage] = mockCalls(deps.issuesBoard)[2]! as [Request];
+      expect([...new URL(nanPage.url).searchParams.keys()]).toEqual([]);
     });
 
     it("forwards authorization and cookie verbatim when the incoming request carried them", async () => {
@@ -358,6 +383,11 @@ describe("defineMcpTools", () => {
         "CLAIMED",
         "ALL",
       ]);
+      // The exact render of z.coerce.number().int().positive(): an integer at
+      // least one, as the advertised contract — not a hand-written subset.
+      const positiveInt = { type: "integer", exclusiveMinimum: 0, maximum: 9007199254740991 };
+      expect(properties(schemas.issues_board!).page).toEqual(positiveInt);
+      expect(properties(schemas.issues_board!).pageSize).toEqual(positiveInt);
       expect(schemas.issues_board!.required).toBeUndefined();
 
       expect(schemas.audit_open!.required).toEqual([

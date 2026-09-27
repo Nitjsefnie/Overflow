@@ -53,7 +53,10 @@ export const GET = createIssuesGetHandler({
  * The issues page's own filter parsing, over the URL a request carries:
  * a filter reaches the query only when it names exactly one value, and any
  * claim state the page's select cannot produce falls back to the unclaimed
- * board.
+ * board. The paging values ride the same rule — one value each, and anything
+ * the query module would not read as a number stays undefined, so its own
+ * defaults and clamp remain the only page arithmetic (a malformed value is a
+ * fallback to the first page at the default size, never a 400).
  */
 function parseIssueFilters(request: Request): EligibleIssueFilters {
   const searchParams = new URL(request.url).searchParams;
@@ -62,10 +65,25 @@ function parseIssueFilters(request: Request): EligibleIssueFilters {
   const requestedClaimState = singleValue(searchParams, "claimState");
   const claimState =
     requestedClaimState === "CLAIMED" || requestedClaimState === "ALL" ? requestedClaimState : "OPEN";
-  return { repository, openingLabel, claimState };
+  return {
+    repository,
+    openingLabel,
+    claimState,
+    page: numericValue(searchParams, "page"),
+    pageSize: numericValue(searchParams, "pageSize"),
+  };
 }
 
 function singleValue(searchParams: URLSearchParams, name: string): string | undefined {
   const values = searchParams.getAll(name);
   return values.length === 1 ? values[0] : undefined;
+}
+
+function numericValue(searchParams: URLSearchParams, name: string): number | undefined {
+  const value = singleValue(searchParams, name);
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
