@@ -103,11 +103,22 @@ describe("scripts/ci-base-freshness.sh", () => {
         "    esac",
         "  done",
         "}",
+        "count_entries() {",
+        "  # The number of canned ENTRIES — the size of the API's files array,",
+        "  # what '.files | length' returns — never the projected line count that",
+        "  # a rename's previous path inflates.",
+        '  local n=0',
+        '  if [ -n "${1:-}" ]; then',
+        '    while IFS= read -r _; do n=$((n + 1)); done <<< "$1"',
+        "  fi",
+        "  printf '%s\\n' \"$n\"",
+        "}",
         'case "$jq" in',
         '  ".sha") printf \'%s\\n\' "${STUB_CURRENT_SHA:-}" ;;',
         '  ".total_commits") printf \'%s\\n\' "${STUB_TOTAL_COMMITS:-}" ;;',
         '  ".files[] | (.filename, (.previous_filename // empty))") if [ -n "${STUB_ADVANCE_ENTRIES:-}" ]; then printf \'%s\\n\' "$STUB_ADVANCE_ENTRIES" | project_entries; fi ;;',
         '  ".[] | (.filename, (.previous_filename // empty))") if [ -n "${STUB_PR_ENTRIES:-}" ]; then printf \'%s\\n\' "$STUB_PR_ENTRIES" | project_entries; fi ;;',
+        '  ".files | length") count_entries "$STUB_ADVANCE_ENTRIES" ;;',
         '  *) echo "stub gh: unexpected query: $jq" >&2; exit 3 ;;',
         "esac",
       ].join("\n") + "\n",
@@ -230,6 +241,28 @@ describe("scripts/ci-base-freshness.sh", () => {
     });
 
     expect(result.status, "a 300-file compare is the API's truncation bound, not a witnessed list").not.toBe(0);
+  });
+
+  it("refuses a 300-entry truncated compare that renames inflate past 300 projected lines", async () => {
+    const advanceFiles: StubFile[] = [
+      { filename: "src/lib/new-name.ts", previous_filename: "src/lib/old-name.ts", status: "renamed" },
+      "src/app/page.tsx",
+      ...Array.from({ length: 298 }, (_, i) => `dir${i % 7}/filler-${String(i).padStart(3, "0")}.txt`),
+    ];
+    expect(advanceFiles, "the case must sit exactly on the truncation bound").toHaveLength(300);
+
+    const result = await runScript({
+      currentSha: CURRENT_SHA,
+      totalCommits: "50",
+      advanceFiles,
+      prFiles: ["src/app/page.tsx", "src/lib/x.ts"],
+    });
+
+    expect(result.status, "exactly 300 entries is the truncation bound even when renames project extra lines").not.toBe(0);
+    expect(
+      output(result),
+      "the refusal must be the truncation bound firing, not an overlap verdict — the bound is what guards the truncated tail the API never listed",
+    ).toMatch(/truncation bound/);
   });
 
   it("fails closed when the compare carries more than 200 commits", async () => {

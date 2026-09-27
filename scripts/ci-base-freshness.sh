@@ -92,9 +92,20 @@ if [ -z "$advance_files" ]; then
   fail_ "the advance $BASE_SHA..$current reports no changed files while the SHAs differ — an unrepresentable compare. Refusing."
 fi
 
+# The truncation bound counts API ENTRIES, not projected lines: a renamed or
+# copied entry projects to two lines, so a truncated compare inflated past 300
+# lines would slip a -eq 300 line-count check (issue 685). `.files | length`
+# is the entry count the API truncates at exactly 300.
+advance_entry_count=$(gh api "repos/$REPO_SLUG/compare/$BASE_SHA...$current" --jq '.files | length') || {
+  fail_ "could not count the advance's files (gh api failed) — refusing to certify on a failed API call."
+}
+if ! [[ "$advance_entry_count" =~ ^[0-9]+$ ]]; then
+  fail_ "the compare $BASE_SHA...$current returned no file count (got '$advance_entry_count') — an unrepresentable compare. Refusing."
+fi
+
 mapfile -t pr_arr <<< "$pr_files"
 mapfile -t advance_arr <<< "$advance_files"
-if [ "${#advance_arr[@]}" -eq 300 ]; then
+if [ "$advance_entry_count" -eq 300 ]; then
   fail_ "the advance $BASE_SHA..$current lists exactly 300 files — the compare API's truncation bound, so the list may be cut short. Refusing."
 fi
 
@@ -104,5 +115,5 @@ if [ -n "$shared" ]; then
   exit 1
 fi
 
-echo "Base freshness: CERTIFIED — the base advanced from $BASE_SHA to $current ($total_commits commits), and the advance is disjoint from the ${#pr_arr[@]} file(s) this pull request changes: the advanced commits touch none of them, so the required checks cover the merged tree for every file this pull request can affect. Advance range: $BASE_SHA..$current. Pull request head: $HEAD_SHA."
+echo "Base freshness: CERTIFIED — the base advanced from $BASE_SHA to $current ($total_commits commits), and the advance is disjoint from the ${#pr_arr[@]} changed path(s) this pull request touches (a rename or copy counts both its paths): the advanced commits touch none of them, so the required checks cover the merged tree for every file this pull request can affect. Advance range: $BASE_SHA..$current. Pull request head: $HEAD_SHA."
 exit 0
