@@ -97,10 +97,10 @@ describe("the reconciliation worker's drain failure logging during a database ou
       // A private container: only its own init script takes the suite off the
       // shared server, and the outage below stops the database outright.
       initScripts: [{ name: "661_own_container.sql", content: "select 1;" }],
-      // The restart must reach the SAME host port: a dynamic mapping is
-      // re-allocated on start, which would strand the original URL and every
-      // client built from it. Loud, not silent, if two runs ever collide here.
-      fixedHostPort: 45432,
+      // The container's host port is the helper's pick: a free ephemeral port,
+      // published explicitly, so it survives the stop/start below (an explicit
+      // binding is stable across docker restarts) and two concurrent runs of
+      // this suite on one host cannot fight over a fixed port.
     });
     databaseUrl = started.databaseUrl;
     process.env.DATABASE_URL = databaseUrl;
