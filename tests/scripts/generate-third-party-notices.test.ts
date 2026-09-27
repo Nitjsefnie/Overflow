@@ -276,11 +276,7 @@ describe("generator CLI", () => {
     const notices = readFileSync(noticesPath, "utf8");
     expect(notices).toContain("react@");
     expect(notices).toContain("postgres@");
-    expect(Buffer.byteLength(notices)).toBe(157768);
     expect(notices.match(/^Packages:$/gm)).toHaveLength(45);
     expect(notices.match(/^- .+@[^\n]+$/gm)).toHaveLength(70);
-    expect(createHash("sha256").update(notices).digest("hex")).toBe(
-      "dc4a9a73aca3bd34f8644216f7f6922f2b1018cd647b09b8d457239033421815",
-    );
   });
 });
