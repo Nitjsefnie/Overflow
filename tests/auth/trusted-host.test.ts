@@ -132,4 +132,16 @@ describe("the NextAuth configuration derives Auth.js trust from APP_URL", () => 
     const response = await GET(new NextRequest("http://127.0.0.1:3111/api/auth/providers"));
     expect(response.status).toBe(200);
   });
+
+  it("answers /api/auth/providers with 500 when the environment carries no APP_URL", async () => {
+    // The other half of the wiring: production with no APP_URL and no operator
+    // variable must not default to trust. A constant-true trustHost — the
+    // blanket shape the derivation exists to avoid — answers 200 here, so this
+    // case fails for it while every 200 case above still passes.
+    vi.stubEnv("APP_URL", undefined);
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/auth");
+    const response = await GET(new NextRequest("http://127.0.0.1:3111/api/auth/providers"));
+    expect(response.status).toBe(500);
+  });
 });
