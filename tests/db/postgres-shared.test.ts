@@ -207,7 +207,7 @@ describe("the shared-provision survivor audit", () => {
     }
   }, 10_000);
 
-  it("ignores a backend frozen after its client has ended", async () => {
+  it.skipIf(process.platform !== "linux")("ignores a backend frozen after its client has ended", async () => {
     const started = await startPostgresContainer({ database: "shared_audit_exiting", user: "shared_audit_exiting", password: "shared_audit_exiting" });
     const open = postgres(started.databaseUrl, { max: 1 });
     const [{ pid }] = await open<{ pid: number }[]>`select pg_backend_pid() as pid`;
