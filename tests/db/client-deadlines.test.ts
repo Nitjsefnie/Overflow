@@ -11,40 +11,26 @@ import { runPruneNoopReconciliationChangesCli } from "../../scripts/prune-noop-r
 const exec = promisify(execFile);
 
 /**
- * A virtual migration this suite appends to the runner's directory listing so
- * the migration-exemption test can drive the REAL runMigrations() entry (issue
- * 661) without committing a migration: the file never touches disk, so the
- * numbering guards and every other suite's listings see only the real files.
- * Its single statement deterministically outruns the tight override the test
- * puts in force, so the runner completes only if its own `set local
- * statement_timeout = 0` exemption lifted the deadline on the real path.
+ * A virtual migration this suite appends to the real migration runner's
+ * directory listing so the migration-exemption test can drive the REAL
+ * runMigrations() entry (issue 661) without committing a migration: the file
+ * never touches disk, so the numbering guards and every other suite's
+ * listings see only the real files. Its single statement deterministically
+ * outruns the tight override the test puts in force, so the runner completes
+ * only if its own `set local statement_timeout = 0` exemption lifted the
+ * deadline on the real path.
+ *
+ * The wrappers are NOT registered as a module-level vi.mock: under
+ * `isolate: false` another suite's vi.mock of node:fs/promises can displace
+ * this file's registration in the shared worker registry before this suite
+ * runs, which silently removed the fixture from the runner's listing (CI run
+ * 36300214924). The migration-exemption test therefore registers the wrappers
+ * itself, around its own import of the runner — see the vi.doMock there.
  */
 const migrationFixture = vi.hoisted(() => ({
   name: "999_issue661_statement_deadline_fixture.sql",
   content: "select pg_sleep(2);",
 }));
-
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    readdir: (async (path: Parameters<typeof actual.readdir>[0]) => {
-      const entries = await actual.readdir(path);
-      return [...entries, migrationFixture.name];
-    }) as unknown as typeof actual.readdir,
-    readFile: (async (
-      path: Parameters<typeof actual.readFile>[0],
-      options?: Parameters<typeof actual.readFile>[1],
-    ) => {
-      if (String(path).endsWith(migrationFixture.name)) {
-        return migrationFixture.content;
-      }
-      return options === undefined
-        ? actual.readFile(path)
-        : actual.readFile(path, options);
-    }) as unknown as typeof actual.readFile,
-  };
-});
 
 /**
  * Issue 661: the shared clients are the single choke point every database
@@ -221,15 +207,54 @@ describe("database client deadlines", () => {
     // if the `set local statement_timeout = 0` it runs as every migration
     // transaction's first statement lifted the deadline — deleting that line
     // cancels the fixture mid-sleep and fails this test.
+    //
+    // The wrappers are registered HERE, around a fresh import of the runner
+    // (vi.resetModules + vi.doMock), rather than as a file-level vi.mock:
+    // under `isolate: false` another suite's node:fs/promises mock can win the
+    // shared worker registry before this file runs, and the fixture then
+    // silently drops out of the listing (CI run 36300214924). Re-registering
+    // against the fresh registry pins the listing this runner sees.
     const tightSql = await openPoolWithStatementTimeout("1000");
-    await expect(runMigrations()).resolves.toBeUndefined();
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        readdir: (async (path: Parameters<typeof actual.readdir>[0]) => {
+          const entries = await actual.readdir(path);
+          return [...entries, migrationFixture.name];
+        }) as unknown as typeof actual.readdir,
+        readFile: (async (
+          path: Parameters<typeof actual.readFile>[0],
+          options?: Parameters<typeof actual.readFile>[1],
+        ) => {
+          if (String(path).endsWith(migrationFixture.name)) {
+            return migrationFixture.content;
+          }
+          return options === undefined
+            ? actual.readFile(path)
+            : actual.readFile(path, options);
+        }) as unknown as typeof actual.readFile,
+      };
+    });
+    try {
+      const { runMigrations: runFreshRegistryMigrations } = await import("../../scripts/migrate");
+      await expect(runFreshRegistryMigrations()).resolves.toBeUndefined();
 
-    // The fixture migration committed through the real runner: the sleep ran
-    // to completion inside the exempted transaction and the runner recorded it.
-    const [fixtureRow] = await tightSql<{ name: string }[]>`
-      select name from schema_migrations where name = ${migrationFixture.name}
-    `;
-    expect(fixtureRow?.name).toBe(migrationFixture.name);
+      // The fixture migration committed through the real runner: the sleep ran
+      // to completion inside the exempted transaction and the runner recorded
+      // it — with the checksum the ledger now writes beside the name.
+      const [fixtureRow] = await tightSql<{ name: string; checksum: string | null }[]>`
+        select name, checksum from schema_migrations where name = ${migrationFixture.name}
+      `;
+      expect(fixtureRow?.name).toBe(migrationFixture.name);
+      expect(fixtureRow?.checksum).not.toBeNull();
+    } finally {
+      // The fresh import bound a fresh client module; its pools are not the
+      // suite singleton's, so they are closed here, before the container stops.
+      const freshClient = await import("../../src/lib/db/client.ts");
+      await freshClient.closeSql();
+    }
 
     // Control: the override really is in force on this pool after the run —
     // `set local` did not leak past the migration transactions — so the
