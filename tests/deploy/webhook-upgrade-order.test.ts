@@ -23,7 +23,21 @@ describe("ordinary deployment webhook upgrade", () => {
         .replaceAll("/var/log/overflow", join(fixture, "logs"))
         .replaceAll("/run/overflow-deploy.lock", join(fixture, "deploy.lock"));
       const result = spawnSync("bash", ["-c", `
-        git() { if [ "$1" = rev-parse ]; then printf 'abc1234\\n'; fi; }
+        git() {
+          case "$1" in
+            rev-parse) printf 'abc1234\\n';;
+            config) printf 'git@github.com:fixture/repo.git\\n';;
+            fetch|merge-base|status|ls-files|merge) return 0;;
+            *) return 2;;
+          esac
+        }
+        gh() {
+          case "$2" in
+            */branches/main/protection) printf 'build\\n';;
+            */check-runs*) printf '101\\tbuild\\tcompleted\\tsuccess\\n';;
+            *) return 2;;
+          esac
+        }
         pnpm() {
           if [ "$1" = --silent ]; then shift; fi
           case "$1" in
