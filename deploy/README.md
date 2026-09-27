@@ -614,8 +614,10 @@ considered explicitly.
 ## 10. Deploying a new revision
 
 The procedure runs as one committed script. As root, from the tree root, run
-`bash scripts/deploy-revision.sh`; the script performs the whole sequence under
-the same guards the manual fallback below documents: the `flock` fence on
+`bash scripts/deploy-revision.sh`; it runs under the source-tree and
+name-based required-checks guards the manual fallback below documents, plus
+the automated pending-migration and workflow-pinned CI gates: the `flock`
+fence on
 `/run/overflow-deploy.lock` held on fd 9 for up to 900 seconds and refusing
 with the serialization refusal when the lock is not acquired, the `.next`
 anchor taken before the fetch and passed to `release:switch --expect-current`,
@@ -847,27 +849,34 @@ runner refuses a checksum mismatch with the value recorded in
 `schema_migrations`.
 
 **The fenced blocks below are the manual fallback, for the case where the
-script itself is what broke.** They run under the same fence, with the same
-`--expect-current` anchor and the same release grammar, but they are not the
-script's sequence: they pull first, fast-forwarding the tree before anything
-is checked, and carry neither the tree-cleanliness gate, the required-checks
-gate, nor the automated pending-migration gate. The manual fallback does not
-run this gate: after loading the environment, run
-`node scripts/deploy-migration-status.ts` yourself before `pnpm db:migrate`;
-if it fails, stop. Review every migration it lists and apply the mixed-version
-check above to each `review` entry. `OVERFLOW_DEPLOY_MIGRATION_ACK=1` only
-confirms review in the deploy script and does not add a manual gate. Run the
-standing block in parts, in one shell so the fd 9 fence and `expected_serving`
-carry over: stop right after its `git pull` line, before `pnpm install`, and
-confirm by hand that `git status` in the tree is clean and that main's required
-checks passed on the pulled commit. If either check fails, do not continue:
-`pnpm db:migrate` would otherwise apply that unverified commit's migrations to
-the production schema. After those checks pass, run the install and environment
-load, stop and run the migration-status command, review every listed migration,
-then continue at `pnpm db:migrate`. If the status command fails or a migration
-is not safe for the previous release's writes, do not migrate. Extract and run
-the manual blocks only after diagnosing why the script could not, and keep
-every guard in this section in force.
+script itself is what broke.** They use the same fence, `--expect-current`
+anchor and release grammar. They fetch `origin main`, resolve the fetched
+commit, check ancestry, require a clean working tree and reject ignored files
+outside the operational allowlist before `git merge --ff-only`. They skip a
+redundant deploy when the serving release's `REVISION` matches that commit and
+write the record after webhook upgrade succeeds.
+
+The manual path does not carry the script's automated pending-migration gate.
+After loading the environment, stop and run
+`node scripts/deploy-migration-status.ts` by hand; if it fails, stop. Review
+every listed migration and apply the mixed-version check above to each
+`review` entry, then continue at `pnpm db:migrate`. `OVERFLOW_DEPLOY_MIGRATION_ACK=1`
+only confirms review in the deploy script and does not add a manual gate.
+
+The manual required-checks gate trusts check-run names; it does not use
+`.github/required-checks.json` to attribute each name to its producing
+workflow. It does not wait for CI: an absent, non-completed or unsuccessful
+required check refuses the deploy. Once CI completes, rerun the gates part of
+the block. The script's `OVERFLOW_DEPLOY_CI_GATE=skip` setting has no manual
+equivalent.
+
+Run the standing block in parts, in one shell so the fd 9 fence and
+`expected_serving` carry over. If a gate refuses, do not continue to
+`pnpm db:migrate`; that would apply the unverified commit's migrations to the
+production schema. If the status command fails or a migration is not safe for
+the previous release's writes, do not migrate. Extract and run the manual
+blocks only after diagnosing why the script could not, and keep every guard in
+this section in force.
 
 **Existing deployments: complete the ONE-TIME dependency migration below before
 running this standing procedure for the first time.** Fresh installations using
@@ -879,7 +888,107 @@ cd /srv/overflow
 exec 9>/run/overflow-deploy.lock
 flock -w 900 9 || { echo "Could not acquire the deploy lock on /run/overflow-deploy.lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
 expected_serving=$(readlink -f /srv/overflow/.next || printf absent)
-git pull --ff-only origin main
+git fetch origin main
+full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+ancestry_status=0
+git merge-base --is-ancestor HEAD "${full_sha}" || ancestry_status=$?
+if [ "${ancestry_status}" -eq 1 ]; then
+  printf 'HEAD in /srv/overflow is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\n' "${full_sha}" "${full_sha}" >&2
+  exit 1
+elif [ "${ancestry_status}" -ne 0 ]; then
+  printf 'Could not determine whether HEAD in /srv/overflow is an ancestor of the fetched main (%s): git merge-base exited %s; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate the repository state in the tree before re-running.\n' "${full_sha}" "${ancestry_status}" >&2
+  exit 1
+fi
+tree_status=$(git status --porcelain=v1 -uall) || {
+  printf 'Could not read the working-tree state in /srv/overflow; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' >&2
+  exit 1
+}
+if [ -n "${tree_status}" ]; then
+  printf '%s\n' "${tree_status}"
+  printf 'The working tree in /srv/overflow deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "${full_sha}" >&2
+  exit 1
+fi
+allowlist_re='^(\.next/?|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}/|\.next-release-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{7,40}\.tsconfig\.json|\.next-release-notes/|next-env\.d\.ts|node_modules/)$'
+ignored_listing=$(mktemp)
+ignored_status=0
+git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory > "${ignored_listing}" || ignored_status=$?
+mapfile -d '' -t ignored_entries < "${ignored_listing}"
+rm -f "${ignored_listing}"
+if [ "${ignored_status}" -ne 0 ]; then
+  printf 'Could not list the ignored untracked files in /srv/overflow (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\n' "${ignored_status}" >&2
+  exit 1
+fi
+stray_ignored=()
+for entry in "${ignored_entries[@]}"; do
+  [[ "${entry}" =~ ${allowlist_re} ]] || stray_ignored+=("${entry}")
+done
+if [ "${#stray_ignored[@]}" -gt 0 ]; then
+  printf '  %q\n' "${stray_ignored[@]}" >&2
+  printf 'The tree in /srv/overflow holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "${full_sha}" >&2
+  exit 1
+fi
+remote_url=$(git config --get remote.origin.url)
+repo=
+case "${remote_url}" in
+  git@github.com:*) repo="${remote_url#git@github.com:}" ;;
+  https://github.com/*) repo="${remote_url#https://github.com/}" ;;
+esac
+repo="${repo%.git}"
+repo_valid=0
+[[ "${repo}" =~ ^[^/]+/[^/]+$ ]] || repo_valid=$?
+if [ "${repo_valid}" -ne 0 ]; then
+  printf 'Could not parse an OWNER/REPO GitHub slug from remote.origin.url (%s); refusing to deploy.\n' "${remote_url}" >&2
+  exit 1
+fi
+required_status=0
+required=$(gh api "repos/${repo}/branches/main/protection" --jq '([.required_status_checks.contexts[]?] + [.required_status_checks.checks[]?.context]) | unique | .[]') || required_status=$?
+if [ "${required_status}" -ne 0 ] || [ -z "${required}" ]; then
+  printf 'could not determine required checks for main; refusing to deploy\n' >&2
+  exit 1
+fi
+check_runs_status=0
+check_runs=$(gh api "repos/${repo}/commits/${full_sha}/check-runs?filter=all&per_page=100" --paginate \
+    --jq '.check_runs[] | [.id, .name, .status, .conclusion] | @tsv') || check_runs_status=$?
+if [ "${check_runs_status}" -ne 0 ]; then
+  printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "${repo}" "${full_sha}" >&2
+  exit 1
+fi
+pending=()
+while IFS= read -r check; do
+  [ -n "${check}" ] || continue
+  newest_id=0
+  newest_status=
+  newest_conclusion=
+  while IFS=$'\t' read -r id name status conclusion; do
+    [ "${name}" = "${check}" ] || continue
+    [[ "${id}" =~ ^[0-9]+$ ]] || continue
+    if [ "${id}" -gt "${newest_id}" ]; then
+      newest_id=$id
+      newest_status=$status
+      newest_conclusion=$conclusion
+    fi
+  done <<< "${check_runs}"
+  if [ "${newest_id}" -eq 0 ]; then
+    pending+=("${check} (absent)")
+  elif [ "${newest_status}" != completed ]; then
+    pending+=("${check} (${newest_status})")
+  elif [ "${newest_conclusion}" != success ]; then
+    pending+=("${check} (${newest_conclusion})")
+  fi
+done <<< "${required}"
+if [ "${#pending[@]}" -gt 0 ]; then
+  printf '  %s\n' "${pending[@]}" >&2
+  printf 'Required checks are absent, pending or unsuccessful on %s; refusing to deploy. Re-run the gates part of this block once CI completes.\n' "${full_sha}" >&2
+  exit 1
+fi
+git merge --ff-only "$full_sha"
+serving_release=$(readlink -f /srv/overflow/.next || printf absent)
+if [ "${serving_release}" != absent ] && [ -f "${serving_release}/REVISION" ]; then
+  if [ "$(cat "${serving_release}/REVISION")" = "${full_sha}" ]; then
+    printf 'Already serving %s (%s); the tree fast-forwarded to the serving commit, so install, migrate and build are skipped and the existing release stays.\n' "${serving_release}" "${full_sha}"
+    exit 0
+  fi
+fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 set -a; . /etc/overflow/overflow.env; set +a
 pnpm db:migrate
@@ -912,6 +1021,8 @@ pnpm --silent webhooks:upgrade > "$upgrade_log" 2>&1 || upgrade_status=$?
 cat "$upgrade_log"
 printf 'Webhook upgrade log: %s\nWebhook upgrade exit status: %s\n' "$upgrade_log" "$upgrade_status"
 test "$upgrade_status" -eq 0 || exit "$upgrade_status"
+printf '%s\n' "$full_sha" > "$release/REVISION"
+printf 'Source revision: %s\n' "$full_sha"
 ```
 
 **ONE-TIME dependency migration for existing deployments**
