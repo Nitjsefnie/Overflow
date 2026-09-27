@@ -6,6 +6,7 @@ import { afterAll, afterEach, describe, expect, inject, it } from "vitest";
 import {
   assertNoSharedProvisionSurvivors,
   clientSocketIsEstablished,
+  lastSharedSurvivorAuditBranch,
   readClientTcpSockets,
   resolveSharedPostgresFacts,
   sharedAuditSurvivors,
@@ -226,6 +227,7 @@ describe("the shared-provision survivor audit", () => {
 
       await open.end({ timeout: 0 });
       await expect(assertNoSharedProvisionSurvivors()).resolves.toBeUndefined();
+      expect(lastSharedSurvivorAuditBranch()).toBe("calibrated");
     } finally {
       if (stopped) {
         execFileSync("docker", ["exec", "-i", started.container.getId(), "kill", "-CONT", String(pid)]);

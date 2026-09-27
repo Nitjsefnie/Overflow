@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { inject } from "vitest";
 import { GenericContainer, Wait, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
@@ -54,6 +54,13 @@ const SHARED_POSTGRES_KEY = "sharedPostgres";
 // POSTGRES_IMAGE exposes only 5432 inside the container. Docker's userland-proxy
 // adds a second TCP leg whose local port is pg_stat_activity.client_port.
 const CONTAINER_POSTGRES_PORT = 5432;
+type SurvivorAuditBranch = "calibrated" | "strict";
+let survivorAuditBranchLogged = false;
+let lastSurvivorAuditBranch: SurvivorAuditBranch | undefined;
+
+export function lastSharedSurvivorAuditBranch(): SurvivorAuditBranch | undefined {
+  return lastSurvivorAuditBranch;
+}
 
 /**
  * What the shared path has provisioned in THIS worker since the last reset:
@@ -120,11 +127,15 @@ export interface SharedActivityRow {
   client_port: number | null;
 }
 
+function sharedAuditCanRefine(adminPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): boolean {
+  return adminPort !== null && sockets !== null && clientSocketIsEstablished(adminPort, serverPort, sockets);
+}
+
 export function sharedAuditSurvivors(rows: readonly SharedActivityRow[], adminPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): SharedActivityRow[] {
   // Rootless Docker, remote DOCKER_HOST, or DNAT may make the backend's peer
   // invisible here even when /proc is readable. Use our own live admin socket
   // to prove the table covers this topology before trusting absent role sockets.
-  if (adminPort === null || sockets === null || !clientSocketIsEstablished(adminPort, serverPort, sockets)) {
+  if (!sharedAuditCanRefine(adminPort, serverPort, sockets)) {
     return [...rows];
   }
   return rows.filter((row) => clientSocketIsEstablished(row.client_port, serverPort, sockets));
@@ -154,6 +165,14 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
     `;
     const adminPort = ownRows[0]?.client_port ?? null;
     const sockets = readClientTcpSockets();
+    const branch: SurvivorAuditBranch = sharedAuditCanRefine(adminPort, facts.port, sockets) ? "calibrated" : "strict";
+    lastSurvivorAuditBranch = branch;
+    if (!survivorAuditBranchLogged) {
+      writeSync(2, branch === "calibrated"
+        ? "survivor audit: calibrated refinement active\n"
+        : "survivor audit: strict fallback (socket table cannot see this topology)\n");
+      survivorAuditBranchLogged = true;
+    }
     const survivors: { usename: string; datname: string | null }[] = [];
     for (const role of roles) {
       const rows = await admin<SharedActivityRow[]>`
