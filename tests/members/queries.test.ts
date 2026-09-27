@@ -5,7 +5,7 @@ import { runMigrations } from "../../scripts/migrate";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { closeSql, getSql } from "@/lib/db/client";
 import { getDashboard } from "@/lib/dashboard/queries";
-import { listMemberStandings, type MemberStandingsSql } from "@/lib/members/queries";
+import { listMemberStandings, type MemberStanding, type MemberStandingsSql } from "@/lib/members/queries";
 
 type QueryCapture = { text: string; values: unknown[] };
 
@@ -40,7 +40,7 @@ describe("member standings projections", () => {
   it("reads every standing in one query that joins users to their ledger entries", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
-    await listMemberStandings({ sql });
+    await listMemberStandings({}, { sql });
 
     expect(captures).toHaveLength(1);
     const query = captures[0]!.text;
@@ -50,7 +50,7 @@ describe("member standings projections", () => {
   it("computes the two totals with the dashboard arithmetic", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
-    await listMemberStandings({ sql });
+    await listMemberStandings({}, { sql });
 
     const query = captures[0]!.text;
     expect(query).toContain(
@@ -61,10 +61,10 @@ describe("member standings projections", () => {
     );
   });
 
-  it("orders by the combined earned and given volume descending, logins ascending on a tie", async () => {
+  it("orders by the combined earned and given volume descending, logins ascending on a tie, account id last for page cuts", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
-    await listMemberStandings({ sql });
+    await listMemberStandings({}, { sql });
 
     const query = captures[0]!.text.replace(/\s+/g, " ").trim();
     const orderClause = query.slice(query.toLocaleLowerCase().indexOf("order by"));
@@ -74,15 +74,38 @@ describe("member standings projections", () => {
     expect(orderClause).toContain(
       "+ abs(coalesce(sum(ledger_entries.amount) filter (where ledger_entries.amount < 0), 0))",
     );
-    expect(orderClause.toLocaleLowerCase()).toMatch(/\) desc, users\.github_login asc$/);
+    expect(orderClause.toLocaleLowerCase()).toMatch(
+      /\) desc, users\.github_login asc, users\.id asc$/i,
+    );
+  });
+
+  it("pages the query with a clamped limit and offset for every requested window", async () => {
+    const windows: { query: { page?: number; pageSize?: number }; values: number[] }[] = [
+      { query: {}, values: [200, 0] },
+      { query: { page: 3, pageSize: 50 }, values: [50, 100] },
+      { query: { page: 0, pageSize: 0 }, values: [1, 0] },
+      { query: { page: -2, pageSize: -5 }, values: [1, 0] },
+      { query: { page: 2.9, pageSize: 50.9 }, values: [50, 50] },
+      { query: { page: 1, pageSize: 501 }, values: [500, 0] },
+      { query: { page: 1, pageSize: 9999 }, values: [500, 0] },
+      { query: { page: NaN, pageSize: NaN }, values: [200, 0] },
+      { query: { page: Infinity, pageSize: Infinity }, values: [200, 0] },
+    ];
+    for (const window of windows) {
+      const { sql, captures } = sqlHarness([[]]);
+
+      await listMemberStandings(window.query, { sql });
+
+      expect(captures[0]!.values, JSON.stringify(window.query)).toEqual(window.values);
+    }
   });
 
   it("is a global view and not scoped to any viewer", async () => {
     const { sql, captures } = sqlHarness([[]]);
 
-    await listMemberStandings({ sql });
+    await listMemberStandings({}, { sql });
 
-    expect(captures[0]!.values).toEqual([]);
+    expect(captures[0]!.values).toEqual([200, 0]);
   });
 });
 
@@ -127,7 +150,7 @@ describe("member standings in PostgreSQL", () => {
   });
 
   it("agrees with the dashboard projection for every account holding a ledger entry", async () => {
-    const standings = await listMemberStandings({ sql: sql as unknown as MemberStandingsSql });
+    const standings = await listMemberStandings({}, { sql: sql as unknown as MemberStandingsSql });
     const byLogin = new Map(standings.map((standing) => [standing.githubLogin, standing]));
 
     expect(standings.map((standing) => standing.githubLogin)).toEqual([
@@ -161,13 +184,42 @@ describe("member standings in PostgreSQL", () => {
   });
 
   it("breaks an earned-plus-given tie by login ascending", async () => {
-    const standings = await listMemberStandings({ sql: sql as unknown as MemberStandingsSql });
+    const standings = await listMemberStandings({}, { sql: sql as unknown as MemberStandingsSql });
 
     expect(standings.map((standing) => standing.githubLogin)).toEqual([
       "mira", "zeta", "alpha", "pat", "quinn",
     ]);
     const volumes = standings.map((standing) => standing.earnedTotal + standing.givenTotal);
     expect(volumes).toEqual([18, 12, 6, 4, 4]);
+  });
+
+  it("serves the same rows and order as the unpaginated list when the page covers every row", async () => {
+    const client = sql as unknown as MemberStandingsSql;
+    const unpaginated = await listMemberStandings({}, { sql: client });
+    const covered = await listMemberStandings({ page: 1, pageSize: 500 }, { sql: client });
+
+    expect(covered).toEqual(unpaginated);
+    expect(covered.map((standing) => standing.githubLogin)).toEqual([
+      "mira", "zeta", "alpha", "pat", "quinn",
+    ]);
+  });
+
+  it("walks pages without dropping or duplicating a row at a cut", async () => {
+    const client = sql as unknown as MemberStandingsSql;
+    const full = await listMemberStandings({}, { sql: client });
+    const pages: MemberStanding[] = [];
+    let lastPageWasEmpty = false;
+    for (const page of [1, 2, 3, 4]) {
+      const rows = await listMemberStandings({ page, pageSize: 2 }, { sql: client });
+      pages.push(...rows);
+      lastPageWasEmpty = page === 4 && rows.length === 0;
+    }
+
+    expect(lastPageWasEmpty).toBe(true);
+    expect(pages).toEqual(full);
+    expect(pages.map((standing) => standing.githubLogin)).toEqual([
+      "mira", "zeta", "alpha", "pat", "quinn",
+    ]);
   });
 });
 

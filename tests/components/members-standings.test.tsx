@@ -121,4 +121,39 @@ describe("member standings page", () => {
     expect(screen.getByText("earned 0 · given 1234.5 · net −1,234.5")).toBeVisible();
     expect(screen.queryByText("earned 0 · given 1234.5 · net −1234.5")).not.toBeInTheDocument();
   });
+
+  it("turns the query string into the window the standings query is paged with", async () => {
+    respondWith({ standings: [standingRow("mira", 12, 6)] });
+    await MembersStandingsPage({ searchParams: Promise.resolve({ page: "2", pageSize: "3" }) });
+
+    expect(sql.mock.lastCall![1]).toBe(3);
+    expect(sql.mock.lastCall![2]).toBe(3);
+  });
+
+  it("defaults the window to the first page at 200 rows for an unpaginated reader", async () => {
+    respondWith({ standings: [standingRow("mira", 12, 6)] });
+    await MembersStandingsPage();
+
+    expect(sql.mock.lastCall![1]).toBe(200);
+    expect(sql.mock.lastCall![2]).toBe(0);
+  });
+
+  it("offers the next page on a full page and preserves the query state in both links", async () => {
+    respondWith({
+      standings: [standingRow("mira", 12, 6), standingRow("zeta", 6, 6)],
+    });
+    render(
+      await MembersStandingsPage({ searchParams: Promise.resolve({ page: "2", pageSize: "2" }) }),
+    );
+
+    expect(screen.getByRole("link", { name: "Previous page" })).toHaveAttribute(
+      "href",
+      "/members?pageSize=2",
+    );
+    expect(screen.getByRole("link", { name: "Next page" })).toHaveAttribute(
+      "href",
+      "/members?pageSize=2&page=3",
+    );
+    expect(screen.getByRole("navigation", { name: "Member standings pages" })).toBeInTheDocument();
+  });
 });
