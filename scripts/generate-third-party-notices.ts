@@ -16,7 +16,7 @@ export interface NoticeEntry {
 
 export type NoticeResult = { ok: true; text: string } | { ok: false; missing: string[] };
 
-type ReadLicenceFile = (directory: string) => string | undefined;
+type ReadLicenceFile = (directory: string, includeNotice?: boolean) => string | undefined;
 
 function licenceFileRank(name: string): number | undefined {
   const lower = name.toLowerCase();
@@ -28,14 +28,16 @@ function licenceFileRank(name: string): number | undefined {
   return undefined;
 }
 
-export function readLicenceFile(directory: string): string | undefined {
+export function readLicenceFile(directory: string, includeNotice = true): string | undefined {
   let names: string[];
   try {
     names = readdirSync(directory);
   } catch {
     return undefined;
   }
-  const matches = names.filter((name) => licenceFileRank(name) !== undefined);
+  const matches = names.filter((name) =>
+    licenceFileRank(name) !== undefined && (includeNotice || !name.toLowerCase().startsWith("notice")),
+  );
   matches.sort((a, b) =>
     (licenceFileRank(a) ?? 5) - (licenceFileRank(b) ?? 5) ||
     a.length - b.length || a.toLowerCase().localeCompare(b.toLowerCase()),
@@ -50,29 +52,55 @@ export function readLicenceFile(directory: string): string | undefined {
   return undefined;
 }
 
+function readNoticeFiles(directory: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(directory).filter((name) => name.toLowerCase().startsWith("notice"));
+  } catch {
+    return [];
+  }
+  names.sort((a, b) => a.length - b.length || a.toLowerCase().localeCompare(b.toLowerCase()));
+  const texts: string[] = [];
+  for (const name of names) {
+    try {
+      const text = readFileSync(join(directory, name), "utf8");
+      if (text.trim()) texts.push(text);
+    } catch {
+      continue;
+    }
+  }
+  return texts;
+}
+
 export function buildNotices(entries: NoticeEntry[], readLicenceFile: ReadLicenceFile): NoticeResult {
   const missing: string[] = [];
-  const groups = new Map<string, Array<NoticeEntry & { canonical: boolean }>>();
+  const groups = new Map<string, {
+    text: string;
+    notices: string[];
+    packages: Array<NoticeEntry & { canonical: boolean }>;
+  }>();
   for (const entry of entries) {
     const label = `${entry.name}@${entry.version}`;
     if (!entry.license?.trim() || /^unknown$/i.test(entry.license.trim())) {
       missing.push(label);
       continue;
     }
-    const shippedText = readLicenceFile(entry.directory);
+    const shippedText = readLicenceFile(entry.directory, false);
     const canonical = !shippedText?.trim();
     const text = canonical ? THIRD_PARTY_LICENCE_TEXTS[entry.license] : shippedText;
     if (!text?.trim()) {
       missing.push(label);
       continue;
     }
-    const group = groups.get(text) ?? [];
-    group.push({ ...entry, canonical });
-    groups.set(text, group);
+    const notices = readNoticeFiles(entry.directory);
+    const key = JSON.stringify([text, notices]);
+    const group = groups.get(key) ?? { text, notices, packages: [] };
+    group.packages.push({ ...entry, canonical });
+    groups.set(key, group);
   }
   if (missing.length) return { ok: false, missing: [...new Set(missing)].sort() };
 
-  const sections = [...groups.entries()].map(([text, packages]) => {
+  const sections = [...groups.values()].map(({ text, notices, packages }) => {
     const rows = packages
       .sort((a, b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`))
       .map((entry) =>
@@ -82,7 +110,8 @@ export function buildNotices(entries: NoticeEntry[], readLicenceFile: ReadLicenc
           ? `\n  Licence file: none shipped — canonical text of declared licence (${entry.license})`
           : ""),
       );
-    return `Packages:\n${rows.join("\n")}\n\nFull licence text:\n${text}`;
+    return `Packages:\n${rows.join("\n")}\n\nFull licence text:\n${text}` +
+      (notices.length ? `${text.endsWith("\n") ? "\n" : "\n\n"}Notices:\n${notices.join("\n\n")}` : "");
   });
   const header =
     "Third-party notices\n" +
