@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { calibration } from "../../scripts/calibrate-coverage.ts";
+import { calibration, simulateRaise } from "../../scripts/calibrate-coverage.ts";
 import { type CoverageFloorDoc } from "../../scripts/check-coverage-floor.ts";
 
 let root: string;
@@ -57,6 +57,16 @@ describe("coverage calibration decision", () => {
   });
 });
 
+describe("simulated raise for the calibrate self-test", () => {
+  it("fabricates measured = recorded + 5 and floor = measured - gap", () => {
+    const next = simulateRaise(doc(73.46, 72.46));
+    expect(next.languages.typescript.measured).toBe(78.46);
+    expect(next.languages.typescript.floor).toBe(77.46);
+    expect(next.gap).toBe(1.0);
+    expect(next.hysteresis).toBe(0.5);
+  });
+});
+
 describe("coverage calibration CLI", () => {
   const git = (...args: string[]) =>
     spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -75,8 +85,8 @@ describe("coverage calibration CLI", () => {
     );
   };
 
-  const run = () =>
-    spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
 
   it("writes nothing when the measurement is within the hysteresis", () => {
     seed(73.46, 73.46, 72.46);
@@ -99,5 +109,37 @@ describe("coverage calibration CLI", () => {
     expect(rewritten.languages.typescript.floor).toBe(75.1);
     expect(rewritten.gap).toBe(1.0);
     expect(rewritten.hysteresis).toBe(0.5);
+  });
+
+  it("with --simulate-refused-raise ignores any coverage summary and writes the raised doc", () => {
+    seed(99.9, 73.46, 72.46);
+    const result = run("--simulate-refused-raise");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("simulated");
+    expect(result.stdout).toContain("wrote scripts/coverage.json");
+    const rewritten = JSON.parse(
+      readFileSync(join(root, "scripts/coverage.json"), "utf8"),
+    ) as CoverageFloorDoc;
+    expect(rewritten.languages.typescript.measured).toBe(78.46);
+    expect(rewritten.languages.typescript.floor).toBe(77.46);
+    expect(rewritten.gap).toBe(1.0);
+    expect(rewritten.hysteresis).toBe(0.5);
+  });
+
+  it("with --simulate-refused-raise needs no coverage summary at all", () => {
+    git("init", "-q");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, "scripts/coverage.json"),
+      `${JSON.stringify(doc(73.46, 72.46), null, 2)}\n`,
+    );
+    const result = run("--simulate-refused-raise");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("wrote scripts/coverage.json");
+    const rewritten = JSON.parse(
+      readFileSync(join(root, "scripts/coverage.json"), "utf8"),
+    ) as CoverageFloorDoc;
+    expect(rewritten.languages.typescript.measured).toBe(78.46);
+    expect(rewritten.languages.typescript.floor).toBe(77.46);
   });
 });
