@@ -303,6 +303,7 @@ describe("module size families and exclusions", () => {
     ["LICENSE", "documentation"],
     [".github/workflows/ci.yml", "repository metadata"],
     [".github/required-checks.json", "repository metadata"],
+    [".github/requirements-zizmor.txt", "repository metadata"],
     [".gitignore", "repository metadata"],
     [".dockerignore", "repository metadata"],
     [".env.example", "repository metadata"],

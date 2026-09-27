@@ -35,3 +35,28 @@ updates:
           - "react-dom"
           - "@types/react"
           - "@types/react-dom"
+
+  # Workflow actions are SHA-pinned; dependabot proposes their bumps as SHA
+  # updates (the intended behavior for the two Nitjsefnie-Actions workflows,
+  # which stay SHA-pinned by maintainer decision). Non-major bumps travel in
+  # one grouped pull request per week; a security advisory still opens a
+  # single-package pull request.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Matches the root Dockerfile (the repository's only one). Its base image is
+  # digest-pinned, so bumps arrive as tag+digest updates for that one image.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
