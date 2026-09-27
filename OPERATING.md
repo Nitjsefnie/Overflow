@@ -37,7 +37,7 @@ These steps stand up a local copy of the application against a local PostgreSQL 
    (`<APP_URL>/api/auth/callback/github`) to use that port too; sign-in and
    origin checks depend on those origins agreeing.
 
-Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL`):
+Useful verification commands (the geometry check needs a Chrome/Chromium binary and, when it spawns its own server, `DATABASE_URL` and `AUTH_SECRET`, both set in the `.env` configured above):
 
 ```bash
 pnpm test --run
