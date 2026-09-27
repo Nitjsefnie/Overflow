@@ -44,8 +44,9 @@ services:
       # Same readiness probe the image's HEALTHCHECK runs (issue 688), in
       # postgres's healthcheck shape: bookworm-slim has no curl/wget, so the
       # command is a node fetch one-liner whose response status drives the
-      # exit code. During start_period failures do not yet count as
-      # failures, so the app's migrate-then-start boot fits the window.
+      # exit code. The migrate-then-start boot is tolerated by the retry
+      # budget — 12 retries at 5s intervals after the 5s start_period, which
+      # only defers the start of failure counting.
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/readiness').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
       interval: 5s
       timeout: 5s

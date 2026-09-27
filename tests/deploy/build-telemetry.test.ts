@@ -11,10 +11,11 @@ const deployScript = readFileSync(
 );
 
 // Issue 688: Next.js phones home and prints its telemetry notice on every
-// production build unless NEXT_TELEMETRY_DISABLED is set, and the Dockerfile's
-// runtime stage is the only place that sets it. These pins hold every other
-// build path to the same opt-out; the Dockerfile build stage's own env line
-// is pinned in tests/deploy/container-image.test.ts.
+// production build unless NEXT_TELEMETRY_DISABLED is set; this branch makes
+// both the Dockerfile's build stage and its runtime stage set it, and these
+// pins hold the remaining build paths — CI and the host deploy — to the same
+// opt-out. The Dockerfile's two env lines are pinned in
+// tests/deploy/container-image.test.ts.
 
 /** The full text of the workflow step whose `- name:` line names `name`. */
 function workflowStep(workflowText: string, name: string): string {
