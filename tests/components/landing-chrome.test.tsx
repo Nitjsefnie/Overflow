@@ -28,10 +28,11 @@ import HomePage from "@/app/page";
  * The routes this suite has a signed-out render for. "/" is proven by this
  * file's own HomePage render; "/account-data" is a static page with no
  * session read, proven by tests/components/account-data-page.test.tsx, which
- * renders the route signed out. A new public route proves itself the same way
- * and then joins this set.
+ * renders the route signed out. The notices asset is generated into public/
+ * during build, as covered by tests/scripts/generate-third-party-notices.test.ts.
  */
-const PROVEN_PUBLIC_ROUTES = new Set(["/", "/account-data"]);
+// The build generates the notices file into public/, which Next serves without a session.
+const PROVEN_PUBLIC_ROUTES = new Set(["/", "/account-data", "/third-party-notices.txt"]);
 
 // Issue 38: the signed-out entry route rendered a bare main.landing-page with no
 // site chrome, while every signed-in page carried the header, navigation and

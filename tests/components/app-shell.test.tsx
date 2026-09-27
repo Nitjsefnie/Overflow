@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth/sign-out-action", () => ({ signOutAction: mocks.signOutAction }));
 
-import { AppShell } from "@/components/app-shell";
+import { AppShell, PublicAppShell } from "@/components/app-shell";
 
 // Rebind cached consumers to this file's mocks when workers are shared.
 vi.hoisted(() => { vi.resetModules(); });
@@ -134,5 +134,31 @@ describe("application shell sign-out", () => {
     );
 
     expect(screen.queryByRole("link", { name: "Moderation" })).not.toBeInTheDocument();
+  });
+});
+
+describe("third-party notices footer link", () => {
+  it("links the notices file from the signed-in shell footer", () => {
+    render(
+      <AppShell memberName="Lin" isModerator={false}>
+        <p>content</p>
+      </AppShell>,
+    );
+
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getByRole("link", { name: "Third-party notices" }))
+      .toHaveAttribute("href", "/third-party-notices.txt");
+  });
+
+  it("links the notices file from the public shell footer", () => {
+    render(
+      <PublicAppShell>
+        <p>content</p>
+      </PublicAppShell>,
+    );
+
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getByRole("link", { name: "Third-party notices" }))
+      .toHaveAttribute("href", "/third-party-notices.txt");
   });
 });
