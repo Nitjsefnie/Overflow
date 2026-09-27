@@ -17,6 +17,13 @@ const PROBE =
 const ENCODED_WITHOUT_TAG =
   'on: issue_comment\njobs: "%0AFORGED%20audit%20success%1B[2J value"';
 
+// A warning-bearing input that parses CLEANLY (0 errors, 1 warning, verified
+// with a direct parseDocument probe): the errors gate never skips it, so
+// suppression has to hold through the whole parse. Pins the arm where a
+// regression that re-emits doc.warnings after the errors check would hide.
+const WARNING_ONLY =
+  "%TAG !e! tag:example.com,2026:\n---\non: issue_comment\njobs: !e!plain value";
+
 interface CapturedWarning {
   surface: string;
   message: string;
@@ -31,11 +38,13 @@ function containsControlByte(text: string): boolean {
 }
 
 // Wraps the call with a process.emitWarning spy (original implementation kept,
-// so emissions still flow) and a real process "warning" listener, then waits a
+// so emissions still flow), a console.error spy for the stderr surface beyond
+// process warnings, and a real process "warning" listener, then waits a
 // macrotask tick for the deferred emission to land.
 async function captureWarnings<T>(call: () => T): Promise<{ captured: CapturedWarning[]; result: T }> {
   const captured: CapturedWarning[] = [];
   const emitSpy = vi.spyOn(process, "emitWarning");
+  const errorSpy = vi.spyOn(console, "error");
   const listener = (warning: unknown): void => {
     captured.push({ surface: "process warning event", message: String(warning) });
   };
@@ -46,10 +55,14 @@ async function captureWarnings<T>(call: () => T): Promise<{ captured: CapturedWa
     for (const args of emitSpy.mock.calls) {
       captured.push({ surface: "process.emitWarning", message: args.map(String).join(" ") });
     }
+    for (const args of errorSpy.mock.calls) {
+      captured.push({ surface: "console.error", message: args.map(String).join(" ") });
+    }
     return { captured, result };
   } finally {
     process.off("warning", listener);
     emitSpy.mockRestore();
+    errorSpy.mockRestore();
   }
 }
 
@@ -77,6 +90,14 @@ describe("assessClaimPath emits no process warnings from contributor YAML", () =
     const { captured, result } = await captureWarnings(() => assessClaimPath(evidence));
 
     expectClean(captured);
+    expect(captured).toEqual([]);
+    expect(result).toBe("NO_EVIDENCE_FOUND");
+  });
+
+  it("suppresses a clean parse's warning without emitting it anywhere", async () => {
+    const evidence = [{ path: AUDIT_WORKFLOW, content: WARNING_ONLY }];
+    const { captured, result } = await captureWarnings(() => assessClaimPath(evidence));
+
     expect(captured).toEqual([]);
     expect(result).toBe("NO_EVIDENCE_FOUND");
   });

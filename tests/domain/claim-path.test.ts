@@ -307,6 +307,11 @@ describe("reviewed shared claim action evidence", () => {
     expect(assessClaimPath([{ path: "workflow.yml", content }])).toBe("NO_EVIDENCE_FOUND");
   });
 
+  it("rejects a multiple-document stream whose first document qualifies", () => {
+    const content = `on: issue_comment\njobs:\n  claim:\n    steps:\n      - uses: ${action}\n---\nseparate: document\n`;
+    expect(assessClaimPath([{ path: "workflow.yml", content }])).toBe("NO_EVIDENCE_FOUND");
+  });
+
   it("still requires an issue-comment trigger", () => {
     expect(assessClaimPath([caller(action, "on: issues")])).toBe("NO_EVIDENCE_FOUND");
   });
