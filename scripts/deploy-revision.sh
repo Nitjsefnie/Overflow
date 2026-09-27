@@ -9,6 +9,21 @@
 # OVERFLOW_DEPLOY_CI_GATE=skip, reserved for rollback/recovery deploys when
 # main's CI is red. Under production defaults the script must be run as root
 # from the tree root.
+#
+# The script runs in two phases joined by one exec. Bash reads a script
+# incrementally, and the fast-forward below rewrites this file mid-run, so
+# the tail after `git merge --ff-only` would otherwise execute from the
+# pre-merge copy: a verification step the deployed commit adds would not run
+# in its own deploy (issue 747). Phase 1 is everything through the
+# fast-forward, ending in
+#   exec env OVERFLOW_DEPLOY_HANDOFF_SHA="$full_sha" OVERFLOW_DEPLOY_HANDOFF_SERVING="$expected_serving" bash "$tree/scripts/deploy-revision.sh"
+# - the merged tree's own copy, with the deploy lock's fd 9 inherited across
+# the exec. Phase 2 runs from the redundant-deploy skip through the prune and
+# holds no second exec, so the chain cannot loop. The two names
+# OVERFLOW_DEPLOY_HANDOFF_SHA and OVERFLOW_DEPLOY_HANDOFF_SERVING are
+# internal state the script sets itself across the exec, not operator knobs:
+# production never seeds either, and a phase-2 entry without the inherited
+# lock or the serving anchor refuses fail-closed.
 set -euo pipefail
 
 tree="${OVERFLOW_DEPLOY_TREE:-/srv/overflow}"
@@ -212,84 +227,114 @@ is_pinned_path() {
   return 1
 }
 
-cd "$tree"
-exec 9>"$lock"
-flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
-expected_serving=$(readlink -f "$tree/.next" || printf absent)
-# Fetch, gate, then fast-forward: nothing below moves HEAD or the working tree
-# until both gates have passed, so a refused deploy leaves the tree on the
-# commit it was on. The fetch only writes refs (FETCH_HEAD, origin/main).
-git fetch origin main
-# FETCH_HEAD, not origin/main: it records exactly what the fetch above
-# retrieved, whereas origin/main moves only when remote.origin.fetch maps
-# main to it (a single-branch or custom-refspec clone may not). Resolved once;
-# the gates and the fast-forward all use this one value.
-full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
-# The refusal pull --ff-only used to make: HEAD must fast-forward to the
-# fetched commit. A tree ahead of or diverged from main is refused here,
-# before either gate. merge-base answers "no" with exit 1; any other nonzero
-# status is git failing to answer, refused as undetermined rather than
-# reported as a verdict about the tree's history.
-ancestry_status=0
-git merge-base --is-ancestor HEAD "$full_sha" || ancestry_status=$?
-if [ "$ancestry_status" -eq 1 ]; then
-  printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
-  exit 1
-elif [ "$ancestry_status" -ne 0 ]; then
-  printf 'Could not determine whether HEAD in %s is an ancestor of the fetched main (%s): git merge-base exited %s; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate the repository state in the tree before re-running.\n' "$tree" "$full_sha" "$ancestry_status" >&2
-  exit 1
-fi
-# Tree-cleanliness gate: a release is named for the commit it was built from,
-# so the tree must BE that commit. It reads the pre-merge tree in two parts,
-# both before the CI gate and the fast-forward. First git status: tracked
-# modifications, staged changes and untracked non-ignored files all survive a
-# fast-forward. Then the ignored untracked files, which git status never shows
-# (the .gitignore denies by default, so a new source file nobody named back is
-# ignored) and the build still compiles: only the operational allowlist above
-# passes, and any other entry refuses.
-tree_status=$(git status --porcelain=v1 -uall) || {
-  printf 'Could not read the working-tree state in %s; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' "$tree" >&2
-  exit 1
-}
-if [ -n "$tree_status" ]; then
-  printf '%s\n' "$tree_status"
-  printf 'The working tree in %s deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
-  exit 1
-fi
-# NUL-delimited, so a name containing a newline is judged whole; the process
-# substitution's status is read back through wait, so a failed listing refuses
-# even when it printed something first. An ignored empty directory is left out:
-# nothing in it can be compiled.
-mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory)
-ignored_status=0
-wait "$!" || ignored_status=$?
-if [ "$ignored_status" -ne 0 ]; then
-  printf 'Could not list the ignored untracked files in %s (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\n' "$tree" "$ignored_status" >&2
-  exit 1
-fi
-stray_ignored=()
-for entry in "${ignored_entries[@]}"; do
-  is_operational_ignored "$entry" || stray_ignored+=("$entry")
-done
-if [ "${#stray_ignored[@]}" -gt 0 ]; then
-  printf '  %q\n' "${stray_ignored[@]}" >&2
-  printf 'The tree in %s holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "$tree" "$full_sha" >&2
-  exit 1
-fi
-case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
-  skip)
-    printf 'OVERFLOW_DEPLOY_CI_GATE=skip is set; skipping the required-checks gate for %s; CI is NOT verified for this deploy.\n' "$full_sha" >&2
-    ;;
-  '')
-    required_checks_gate
-    ;;
-  *)
-    printf 'OVERFLOW_DEPLOY_CI_GATE=%s is not a supported value; unset it to enforce the gate, or set it to exactly skip for a rollback/recovery deploy when main'"'"'s CI is red.\n' "${OVERFLOW_DEPLOY_CI_GATE}" >&2
+if [ -n "${OVERFLOW_DEPLOY_HANDOFF_SHA:-}" ]; then
+  # Phase 2: the post-fast-forward half, entered through the re-exec at the
+  # end of phase 1. Two fail-closed entry checks run before anything else:
+  # the deploy lock must still be open on fd 9 - the exec inherits it, so an
+  # entry without it did not come from the handoff - and the serving anchor
+  # the handoff carries must be set, since the conditional switch below is
+  # held to it. Neither marker is an operator knob; production sets neither.
+  if ! { : <&9; } 2>/dev/null; then
+    printf 'The deploy handoff reached the post-fast-forward phase of %s without the deploy lock on fd 9; refusing to deploy. The lock is inherited across the handoff exec, so an entry without it did not come from the handoff.\n' "$tree" >&2
     exit 1
-    ;;
-esac
-# Both gates passed: only now does the tree move to the gated commit.
-git merge --ff-only "$full_sha"
+  fi
+  if [ -z "${OVERFLOW_DEPLOY_HANDOFF_SERVING:-}" ]; then
+    printf 'The deploy handoff reached the post-fast-forward phase without a serving anchor (OVERFLOW_DEPLOY_HANDOFF_SERVING is unset or empty); refusing to deploy. The handoff carries the pre-fetch anchor the conditional switch is held to, and the switch must not run without it.\n' >&2
+    exit 1
+  fi
+  full_sha=$OVERFLOW_DEPLOY_HANDOFF_SHA
+  expected_serving=$OVERFLOW_DEPLOY_HANDOFF_SERVING
+  cd "$tree"
+else
+  # Phase 1: the fence, the anchor, the fetch and both gates, then the
+  # fast-forward - and immediately the re-exec, because bash reads a script
+  # incrementally and the fast-forward rewrites this file mid-run: the tail
+  # would otherwise execute from the pre-merge copy, so a verification step
+  # the deployed commit adds would not run in its own deploy (issue 747).
+  # The exec replaces this process with the merged tree's own copy, handing
+  # over the resolved SHA and the pre-fetch anchor; fd 9 travels with it, so
+  # the deploy lock is held across the handoff. Phase 2 holds no second exec,
+  # so the chain cannot loop.
+  cd "$tree"
+  exec 9>"$lock"
+  flock -w 900 9 || { echo "Could not acquire the deploy lock on $lock; refusing to deploy. Consult the deploy procedure's serialization notes before re-running." >&2; exit 1; }
+  expected_serving=$(readlink -f "$tree/.next" || printf absent)
+  # Fetch, gate, then fast-forward: nothing below moves HEAD or the working tree
+  # until both gates have passed, so a refused deploy leaves the tree on the
+  # commit it was on. The fetch only writes refs (FETCH_HEAD, origin/main).
+  git fetch origin main
+  # FETCH_HEAD, not origin/main: it records exactly what the fetch above
+  # retrieved, whereas origin/main moves only when remote.origin.fetch maps
+  # main to it (a single-branch or custom-refspec clone may not). Resolved once;
+  # the gates and the fast-forward all use this one value.
+  full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+  # The refusal pull --ff-only used to make: HEAD must fast-forward to the
+  # fetched commit. A tree ahead of or diverged from main is refused here,
+  # before either gate. merge-base answers "no" with exit 1; any other nonzero
+  # status is git failing to answer, refused as undetermined rather than
+  # reported as a verdict about the tree's history.
+  ancestry_status=0
+  git merge-base --is-ancestor HEAD "$full_sha" || ancestry_status=$?
+  if [ "$ancestry_status" -eq 1 ]; then
+    printf 'HEAD in %s is not an ancestor of the fetched main (%s), so it cannot fast-forward there; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Inspect git log %s..HEAD in the tree before re-running.\n' "$tree" "$full_sha" "$full_sha" >&2
+    exit 1
+  elif [ "$ancestry_status" -ne 0 ]; then
+    printf 'Could not determine whether HEAD in %s is an ancestor of the fetched main (%s): git merge-base exited %s; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate the repository state in the tree before re-running.\n' "$tree" "$full_sha" "$ancestry_status" >&2
+    exit 1
+  fi
+  # Tree-cleanliness gate: a release is named for the commit it was built from,
+  # so the tree must BE that commit. It reads the pre-merge tree in two parts,
+  # both before the CI gate and the fast-forward. First git status: tracked
+  # modifications, staged changes and untracked non-ignored files all survive a
+  # fast-forward. Then the ignored untracked files, which git status never shows
+  # (the .gitignore denies by default, so a new source file nobody named back is
+  # ignored) and the build still compiles: only the operational allowlist above
+  # passes, and any other entry refuses.
+  tree_status=$(git status --porcelain=v1 -uall) || {
+    printf 'Could not read the working-tree state in %s; refusing to build a release whose source identity cannot be attested. Investigate git status in the tree before re-running.\n' "$tree" >&2
+    exit 1
+  }
+  if [ -n "$tree_status" ]; then
+    printf '%s\n' "$tree_status"
+    printf 'The working tree in %s deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
+    exit 1
+  fi
+  # NUL-delimited, so a name containing a newline is judged whole; the process
+  # substitution's status is read back through wait, so a failed listing refuses
+  # even when it printed something first. An ignored empty directory is left out:
+  # nothing in it can be compiled.
+  mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory)
+  ignored_status=0
+  wait "$!" || ignored_status=$?
+  if [ "$ignored_status" -ne 0 ]; then
+    printf 'Could not list the ignored untracked files in %s (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\n' "$tree" "$ignored_status" >&2
+    exit 1
+  fi
+  stray_ignored=()
+  for entry in "${ignored_entries[@]}"; do
+    is_operational_ignored "$entry" || stray_ignored+=("$entry")
+  done
+  if [ "${#stray_ignored[@]}" -gt 0 ]; then
+    printf '  %q\n' "${stray_ignored[@]}" >&2
+    printf 'The tree in %s holds the ignored untracked files above, outside the operational allowlist (.next, release directories and their .tsconfig.json sidecars, .next-release-notes/, next-env.d.ts and node_modules/, each at the tree root). These are ignored untracked files that git status does not show, and the build would compile them into a release named for %s, a commit that does not contain them; refusing to deploy. HEAD, the index and the working tree are untouched; only the fetched refs moved. Remove them, then re-run the deploy.\n' "$tree" "$full_sha" >&2
+    exit 1
+  fi
+  case "${OVERFLOW_DEPLOY_CI_GATE:-}" in
+    skip)
+      printf 'OVERFLOW_DEPLOY_CI_GATE=skip is set; skipping the required-checks gate for %s; CI is NOT verified for this deploy.\n' "$full_sha" >&2
+      ;;
+    '')
+      required_checks_gate
+      ;;
+    *)
+      printf 'OVERFLOW_DEPLOY_CI_GATE=%s is not a supported value; unset it to enforce the gate, or set it to exactly skip for a rollback/recovery deploy when main'"'"'s CI is red.\n' "${OVERFLOW_DEPLOY_CI_GATE}" >&2
+      exit 1
+      ;;
+  esac
+  # Both gates passed: only now does the tree move to the gated commit.
+  git merge --ff-only "$full_sha"
+  exec env OVERFLOW_DEPLOY_HANDOFF_SHA="$full_sha" OVERFLOW_DEPLOY_HANDOFF_SERVING="$expected_serving" bash "$tree/scripts/deploy-revision.sh"
+fi
 # Redundant-deploy skip: the serving release records the exact commit it was
 # built from (REVISION, written only after the deploy verifies), so a
 # fast-forward that left HEAD at that commit means production already serves

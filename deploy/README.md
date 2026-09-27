@@ -640,6 +640,22 @@ The migration-safety analysis and every other guard below govern the script's
 run exactly as they govern the manual block; read this whole section before
 running either.
 
+The script runs in two phases joined by one exec. Bash reads a script
+incrementally, and the fast-forward rewrites the script file mid-run, so the
+tail after the fast-forward would otherwise execute from the pre-merge copy —
+observed on the 2026-09-27 deploy, where the sign-in smoke that PR 745 added
+to the script printed nothing during its own deploy. Phase 1 is everything
+through the fast-forward, run from wherever the deploy was started; it then
+re-executes, handing the resolved SHA and the pre-fetch serving anchor to the
+merged tree's own copy of the script, which runs the install→prune half. The
+deploy lock travels with the exec — the lock is held on the open file
+description, which the re-executed process inherits — so the fence still
+serializes the whole procedure. The handoff names are internal: the script
+sets both itself, production never seeds them, and a re-executed entry that
+starts without the inherited lock or the serving anchor refuses fail-closed.
+So the verification steps a deployed commit adds to the script run in their
+own deploy.
+
 The script's prune is guarded in a way the manual path is not, and this is new
 behaviour, not a restatement of the confirm-first rule below: before pruning,
 the script consults its own retention listing and refuses to prune unless the
