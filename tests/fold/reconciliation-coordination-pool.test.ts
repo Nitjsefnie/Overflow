@@ -115,6 +115,28 @@ describe("reconciliation coordination pool", () => {
     expect(failure.cause).toBe(rejection);
   });
 
+  it("attaches a redacted copy when the reservation rejects with a server error", async () => {
+    const serverError = Object.assign(new Error("coordination failed"), {
+      code: "P0001", severity: "ERROR", routine: "exec_stmt_raise", detail: "synthetic-secret-marker-774",
+    });
+    const coordinationSql = {
+      reserve: () => Promise.reject(serverError),
+    } as unknown as SqlClient;
+
+    const failure = await storeOverPool(coordinationSql)
+      .withRepositoryReconciliation("repository-whose-reservation-server-errors", async () => undefined)
+      .then(() => { throw new Error("expected withRepositoryReconciliation to reject"); },
+        (error: unknown) => error as Error);
+
+    expect(failure.message).toBe(coordinationFailure);
+    expect(failure.cause).not.toBe(serverError);
+    expect((failure.cause as Error).message).toBe("coordination failed");
+    expect((failure.cause as { code?: string }).code).toBe("P0001");
+    expect((failure.cause as { severity?: string }).severity).toBe("ERROR");
+    expect((failure.cause as { routine?: string }).routine).toBe("exec_stmt_raise");
+    expect((failure.cause as { detail?: unknown }).detail).toBeUndefined();
+  });
+
   it("names the reserve timeout as the cause of its deadline refusal", async () => {
     vi.useFakeTimers();
     try {
@@ -134,6 +156,7 @@ describe("reconciliation coordination pool", () => {
       );
       expect(failure.message).toBe(coordinationFailure);
       expect(failure.cause).toBeInstanceOf(Error);
+      expect((failure.cause as Error).message).toContain("Timed out");
       expect((failure.cause as Error).message).not.toBe(coordinationFailure);
     } finally {
       vi.useRealTimers();
@@ -157,6 +180,32 @@ describe("reconciliation coordination pool", () => {
 
     expect(failure.message).toBe(coordinationFailure);
     expect(failure.cause).toBe(statementFailure);
+  });
+
+  it("attaches a redacted copy when the lock statement fails with a server error", async () => {
+    const serverError = Object.assign(new Error("coordination failed"), {
+      code: "P0001", severity: "ERROR", routine: "exec_stmt_raise", detail: "synthetic-secret-marker-774",
+    });
+    const connection = Object.assign(
+      () => Promise.reject(serverError),
+      { release: () => {} },
+    ) as unknown as Awaited<ReturnType<SqlClient["reserve"]>>;
+    const coordinationSql = {
+      reserve: () => Promise.resolve(connection),
+    } as unknown as SqlClient;
+
+    const failure = await storeOverPool(coordinationSql)
+      .withRepositoryReconciliation("repository-whose-lock-statement-server-errors", async () => undefined)
+      .then(() => { throw new Error("expected withRepositoryReconciliation to reject"); },
+        (error: unknown) => error as Error);
+
+    expect(failure.message).toBe(coordinationFailure);
+    expect(failure.cause).not.toBe(serverError);
+    expect((failure.cause as Error).message).toBe("coordination failed");
+    expect((failure.cause as { code?: string }).code).toBe("P0001");
+    expect((failure.cause as { severity?: string }).severity).toBe("ERROR");
+    expect((failure.cause as { routine?: string }).routine).toBe("exec_stmt_raise");
+    expect((failure.cause as { detail?: unknown }).detail).toBeUndefined();
   });
 
   it("stops waiting for a coordination connection once the lock-wait deadline passes", async () => {
