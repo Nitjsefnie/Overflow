@@ -651,6 +651,27 @@ describe("scripts/deploy-revision.sh", () => {
     }
   });
 
+  it("refuses the phase-2 entry when fd 9 is open on a file that is not the deploy lock", async () => {
+    // Open is not enough: the exec inherits fd 9 AS the deploy lock, so an
+    // entry with fd 9 on any other file did not come from the handoff.
+    const fixture = await makeFixture();
+    await writeFile(fixture.shimLog, "");
+    const result = await runDeploy(
+      fixture,
+      {
+        OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH,
+        OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
+      },
+      { openFd9On: fixture.envFile },
+    );
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("not on the deploy lock");
+    expect(result.stderr).toContain(fixture.envFile);
+    expect(result.stderr).toContain(fixture.lock);
+    expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
+  });
+
   it("runs the whole section 10 procedure in order under a successful fence", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture);
@@ -683,6 +704,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git config --get remote.origin.url`,
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
+      `git rev-parse HEAD`,
       `pnpm install --frozen-lockfile`,
       `node scripts/deploy-migration-status.ts`,
       `pnpm db:migrate`,
@@ -1744,6 +1766,7 @@ describe("scripts/deploy-revision.sh", () => {
       `git config --get remote.origin.url`,
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
+      `git rev-parse HEAD`,
     ]);
     const grammarNames = (await readdir(fixture.tree)).filter((name) => RELEASE_GRAMMAR.test(name));
     expect(grammarNames.sort()).toEqual(
@@ -2193,6 +2216,32 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     )!.args[3]!;
     expect(release.endsWith(`-${withStep.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${withStep}\n`);
+  });
+
+  it("refuses the phase-2 entry when the tree is not at the handoff's gated commit", async () => {
+    // The tree sits at the tip; the handoff claims the base is what the
+    // gates blessed. The entry check reads HEAD with real git (unlogged),
+    // refuses naming both SHAs, and nothing else runs.
+    const { fixture, behind, tip, git } = await makeGitFixture();
+    git("fetch", "-q", "origin", "main");
+    git("merge", "-q", "--ff-only", tip);
+    expect(git("rev-parse", "HEAD")).toBe(tip);
+    await writeFile(fixture.shimLog, "");
+    const result = await runDeploy(
+      fixture,
+      {
+        ...HERMETIC_GIT_ENV,
+        OVERFLOW_DEPLOY_HANDOFF_SHA: behind,
+        OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
+      },
+      { ...realGit, openFd9On: fixture.lock },
+    );
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("with HEAD at");
+    expect(result.stderr).toContain(tip);
+    expect(result.stderr).toContain(behind);
+    expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
   });
 
   /**
