@@ -81,13 +81,17 @@ export function createForgeIdentitiesRouteDependencies(): ForgeIdentitiesRouteDe
  */
 export function createForgeIdentitiesGetHandler(dependencies: ForgeIdentitiesRouteDependencies) {
   return async function getForgeIdentities(): Promise<Response> {
-    const session = await dependencies.getSession();
-    if (session === null) {
-      return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+    try {
+      const session = await dependencies.getSession();
+      if (session === null) {
+        return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
+      }
+      const store = dependencies.createIdentityStore();
+      const identities = await listForgeIdentities(store, session.user.id);
+      return Response.json({ identities });
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
     }
-    const store = dependencies.createIdentityStore();
-    const identities = await listForgeIdentities(store, session.user.id);
-    return Response.json({ identities });
   };
 }
 
@@ -98,7 +102,12 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
       return untrusted;
     }
 
-    const session = await dependencies.getSession();
+    let session: ForgeIdentitiesRouteSession | null;
+    try {
+      session = await dependencies.getSession();
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
+    }
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
@@ -117,7 +126,12 @@ export function createForgeIdentitiesPostHandler(dependencies: ForgeIdentitiesRo
     if (tokenEncryptionKey === undefined || tokenEncryptionKey.length === 0) {
       return errorResponse(503, "CONFIGURATION", "Token encryption is not configured.");
     }
-    const store = dependencies.createIdentityStore();
+    let store: ForgeIdentityStore;
+    try {
+      store = dependencies.createIdentityStore();
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
+    }
     try {
       const identity = await linkForgeIdentity(
         { store, tokenEncryptionKey, fetch: dependencies.fetch, claimPastWork: dependencies.claimPastWork },
@@ -137,7 +151,12 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
       return untrusted;
     }
 
-    const session = await dependencies.getSession();
+    let session: ForgeIdentitiesRouteSession | null;
+    try {
+      session = await dependencies.getSession();
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
+    }
     if (session === null) {
       return errorResponse(401, "UNAUTHENTICATED", "Sign in is required.");
     }
@@ -152,7 +171,12 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
     if (input === null) {
       return errorResponse(400, "INVALID_REQUEST", "Invalid forge identity unlink request.");
     }
-    const store = dependencies.createIdentityStore();
+    let store: ForgeIdentityStore;
+    try {
+      store = dependencies.createIdentityStore();
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "The forge identity operation could not complete.");
+    }
     try {
       const deleted = await unlinkForgeIdentity(store, {
         userId: session.user.id,

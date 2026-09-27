@@ -451,7 +451,7 @@ most `4 KiB`; extra body fields are rejected.
 | `POST /api/forge-identities` | `{ "instanceUrl": <string>, "token": <nonempty string> }`. The URL must be an absolute HTTPS instance URL. The GitLab token must verify with `read_api` or `api` scope; re-linking one's own identity refreshes it. | `201` `{ "identity": <linked identity> }`, in the same shape as a GET array entry. |
 | `DELETE /api/forge-identities` | `{ "id": <string> }`, the linked identity id. | `200` `{ "deleted": true }`. Only the caller's own identity can be removed. |
 
-Failures explicitly handled by these methods use `{ "error": { "code": "...", "message": "..." } }`. A failure thrown by session lookup or store construction escapes every method, and a rejected storage read escapes `GET`; those failures surface as the framework's generic error page rather than this JSON error envelope.
+All three methods answer failures through `{ "error": { "code": "...", "message": "..." } }`. A failed session lookup or store construction returns a JSON `502` with `UPSTREAM_FAILURE` and the fixed message below. `GET` gives the same response when the identity list read fails.
 
 | HTTP | Code | Message / meaning |
 | --- | --- | --- |
@@ -466,7 +466,7 @@ Failures explicitly handled by these methods use `{ "error": { "code": "...", "m
 | 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` (writes): the body exceeds `4 KiB`. |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` (writes): a declared non-JSON media type. |
 | 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` (writes): `APP_URL` is absent or malformed. |
-| 502 | `UPSTREAM_FAILURE` | (POST) The live account-role lookup failed, the link service returned this code, or another error was thrown during linking; (DELETE) the live account-role lookup failed, the unlink service returned this code, or another error was thrown during unlinking. The response uses the service's message or `The forge identity operation could not complete.`; `GET` does not map a failed storage read to this response. |
+| 502 | `UPSTREAM_FAILURE` | (All methods) Session lookup or store construction failed; (GET) the identity list read failed; (POST/DELETE) the live account-role lookup failed, the link/unlink service returned this code, or another error was thrown during linking/unlinking. Session, store, list, live-role, and unexpected link/unlink failures use `The forge identity operation could not complete.`; a service `UPSTREAM_FAILURE` uses the service's message. |
 | 503 | `CONFIGURATION` | `Token encryption is not configured.` (POST): set `TOKEN_ENCRYPTION_KEY` on the server. |
 
 ## Account data and deletion
