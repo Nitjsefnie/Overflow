@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { inject } from "vitest";
 import { GenericContainer, Wait, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
@@ -50,6 +51,9 @@ declare module "vitest" {
 }
 
 const SHARED_POSTGRES_KEY = "sharedPostgres";
+// POSTGRES_IMAGE exposes only 5432 inside the container. Docker's userland-proxy
+// adds a second TCP leg whose local port is pg_stat_activity.client_port.
+const CONTAINER_POSTGRES_PORT = 5432;
 
 /**
  * What the shared path has provisioned in THIS worker since the last reset:
@@ -71,12 +75,38 @@ export function resetSharedProvisions(): void {
   provisionedShared.splice(0);
 }
 
+/** A live pool can hand the next file its database only while its TCP socket is still established. */
+export function clientSocketIsEstablished(clientPort: number | null, serverPort: number): boolean {
+  if (clientPort === null) return true;
+
+  let readable = false;
+  for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    let contents: string;
+    try {
+      contents = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    readable = true;
+    for (const line of contents.split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 4) continue;
+      const localPort = Number.parseInt(fields[1].slice(fields[1].lastIndexOf(":") + 1), 16);
+      const remotePort = Number.parseInt(fields[2].slice(fields[2].lastIndexOf(":") + 1), 16);
+      if (localPort === clientPort && (remotePort === serverPort || remotePort === CONTAINER_POSTGRES_PORT) && fields[3] === "01") return true;
+    }
+  }
+  // Where neither proc table is available, keep the original strict audit.
+  return !readable;
+}
+
 /**
  * Throws when any role provisioned since the last reset still holds a client
  * backend on the shared server. vitest.setup.ts runs this in every file's
  * afterAll, so a suite that skipped closeSql() or client end() fails its own
  * file, loudly, in a real run. The audit's own connection is the admin's and
- * drops out of every query on the usename filter.
+ * drops out of every query on the usename filter. Docker's proxy makes two
+ * TCP legs, so the server-reported client port can lead to container port 5432.
  */
 export async function assertNoSharedProvisionSurvivors(): Promise<void> {
   const roles = provisionedSharedRoles();
@@ -91,11 +121,12 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
   try {
     const survivors: { usename: string; datname: string | null }[] = [];
     for (const role of roles) {
-      survivors.push(...await admin<{ usename: string; datname: string | null }[]>`
-        select usename, datname
+      const rows = await admin<{ usename: string; datname: string | null; client_port: number | null }[]>`
+        select usename, datname, client_port
         from pg_stat_activity
         where backend_type = 'client backend' and usename = ${role}
-      `);
+      `;
+      survivors.push(...rows.filter((row) => clientSocketIsEstablished(row.client_port, facts.port)));
     }
     if (survivors.length > 0) {
       const summary = survivors.map((row) => `${row.usename}/${row.datname ?? "(no database)"}`).join(", ");

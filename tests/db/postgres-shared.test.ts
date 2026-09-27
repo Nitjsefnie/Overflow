@@ -1,7 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { once } from "node:events";
+import { connect, createServer, type Socket } from "node:net";
 import postgres, { type Sql } from "postgres";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, inject, it } from "vitest";
 import {
   assertNoSharedProvisionSurvivors,
+  clientSocketIsEstablished,
   resolveSharedPostgresFacts,
   startPostgresContainer,
 } from "../support/postgres-container";
@@ -143,6 +147,76 @@ describe("suites share one postgres server through startPostgresContainer", () =
  * This file pins the audit itself against a real server.
  */
 describe("the shared-provision survivor audit", () => {
+  it.skipIf(process.platform !== "linux")("counts a live TCP client, then stops counting it after FIN", async () => {
+    let peer: Socket | undefined;
+    let client: Socket | undefined;
+    const server = createServer((socket) => { peer = socket; });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("TCP test server has no port");
+      client = connect(address.port, "127.0.0.1");
+      await once(client, "connect");
+      if (client.localPort === undefined) throw new Error("TCP test client has no local port");
+      expect(clientSocketIsEstablished(client.localPort, address.port)).toBe(true);
+
+      client.end();
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && clientSocketIsEstablished(client.localPort, address.port)) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(clientSocketIsEstablished(client.localPort, address.port)).toBe(false);
+    } finally {
+      client?.destroy();
+      peer?.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 10_000);
+
+  it("ignores a backend frozen after its client has ended", async () => {
+    const started = await startPostgresContainer({ database: "shared_audit_exiting", user: "shared_audit_exiting", password: "shared_audit_exiting" });
+    const open = postgres(started.databaseUrl, { max: 1 });
+    const [{ pid }] = await open<{ pid: number }[]>`select pg_backend_pid() as pid`;
+    const role = decodeURIComponent(new URL(started.databaseUrl).username);
+    const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
+    const inspect = postgres(
+      `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${facts.host}:${facts.port}/postgres`,
+      { max: 1 },
+    );
+    let stopped = false;
+
+    try {
+      execFileSync("docker", ["exec", "-i", started.container.getId(), "kill", "-STOP", String(pid)]);
+      stopped = true;
+      const status = execFileSync("docker", ["exec", "-i", started.container.getId(), "cat", `/proc/${pid}/status`], { encoding: "utf8" });
+      expect(status).toMatch(/^State:\s+T\s/m);
+
+      await open.end({ timeout: 0 });
+      await expect(assertNoSharedProvisionSurvivors()).resolves.toBeUndefined();
+    } finally {
+      if (stopped) {
+        execFileSync("docker", ["exec", "-i", started.container.getId(), "kill", "-CONT", String(pid)]);
+      }
+      try {
+        const deadline = Date.now() + 10_000;
+        let remaining = 1;
+        while (Date.now() < deadline) {
+          [{ remaining }] = await inspect<{ remaining: number }[]>`
+            select count(*)::integer as remaining from pg_stat_activity
+            where usename = ${role}
+          `;
+          if (remaining === 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(remaining).toBe(0);
+      } finally {
+        await inspect.end({ timeout: 5 });
+        await open.end({ timeout: 0 });
+      }
+    }
+  }, 30_000);
+
   it("throws while this file's provisioned role still holds a client, and passes once it is closed", async () => {
     const started = await startPostgresContainer({ database: "shared_audit", user: "shared_audit", password: "shared_audit" });
 
