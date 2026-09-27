@@ -167,6 +167,50 @@ describe("the verify workflow's ratchet documents step", () => {
   });
 });
 
+describe("the verify workflow's migration immutability step", () => {
+  let steps: WorkflowStep[] = [];
+
+  const migrationImmutability = () =>
+    steps.filter((step) => step.name === "Migration immutability");
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    const workflow = parse(source) as {
+      jobs?: { verify?: { steps?: WorkflowStep[] } };
+    };
+
+    steps = workflow.jobs?.verify?.steps ?? [];
+  });
+
+  it("exists exactly once in the verify job", () => {
+    expect(
+      migrationImmutability(),
+      "the verify job must keep its Migration immutability step",
+    ).toHaveLength(1);
+  });
+
+  it("runs after Ratchet documents", () => {
+    const ratchetIndex = steps.findIndex((step) => step.name === "Ratchet documents");
+    const migrationIndex = steps.findIndex((step) => step.name === "Migration immutability");
+
+    expect(ratchetIndex).toBeGreaterThan(-1);
+    expect(migrationIndex).toBeGreaterThan(-1);
+    expect(migrationIndex).toBeGreaterThan(ratchetIndex);
+  });
+
+  it("runs only for pull requests and compares the merge-ref parents", () => {
+    const [step] = migrationImmutability();
+
+    expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
+    expect(step?.if).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(step?.run).toBe(
+      'git fetch --depth=2 origin "${GITHUB_SHA}"\n' +
+        "node scripts/check-migration-edits.ts HEAD^1 HEAD^2\n",
+    );
+    expect(Boolean(step?.["continue-on-error"])).toBe(false);
+  });
+});
+
 /**
  * Concurrency is the difference between a superseded pull request branch run
  * (fine to cancel) and a merged SHA's run (never fine): the deploy gate in
