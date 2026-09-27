@@ -651,8 +651,10 @@ merged tree's own copy of the script, which runs the install→prune half. The
 deploy lock travels with the exec — the lock is held on the open file
 description, which the re-executed process inherits — so the fence still
 serializes the whole procedure. The handoff names are internal: the script
-sets both itself, production never seeds them, and a re-executed entry that
-starts without the inherited lock or the serving anchor refuses fail-closed.
+sets both itself, production never seeds them, and a re-executed entry
+refuses fail-closed unless fd 9 is open on the deploy lock itself, the
+serving anchor is set, and the tree is already at the exact commit the
+handoff carries — the one the gates blessed.
 So the verification steps a deployed commit adds to the script run in their
 own deploy.
 

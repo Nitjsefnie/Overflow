@@ -22,8 +22,9 @@
 # holds no second exec, so the chain cannot loop. The two names
 # OVERFLOW_DEPLOY_HANDOFF_SHA and OVERFLOW_DEPLOY_HANDOFF_SERVING are
 # internal state the script sets itself across the exec, not operator knobs:
-# production never seeds either, and a phase-2 entry without the inherited
-# lock or the serving anchor refuses fail-closed.
+# production never seeds either, and a phase-2 entry refuses fail-closed
+# unless fd 9 is open on the deploy lock, the serving anchor is set, and the
+# tree is already at the exact commit the handoff carries.
 set -euo pipefail
 
 tree="${OVERFLOW_DEPLOY_TREE:-/srv/overflow}"
@@ -229,13 +230,20 @@ is_pinned_path() {
 
 if [ -n "${OVERFLOW_DEPLOY_HANDOFF_SHA:-}" ]; then
   # Phase 2: the post-fast-forward half, entered through the re-exec at the
-  # end of phase 1. Two fail-closed entry checks run before anything else:
-  # the deploy lock must still be open on fd 9 - the exec inherits it, so an
-  # entry without it did not come from the handoff - and the serving anchor
-  # the handoff carries must be set, since the conditional switch below is
-  # held to it. Neither marker is an operator knob; production sets neither.
+  # end of phase 1. Four fail-closed entry checks run before anything else,
+  # in order: fd 9 must be open; fd 9 must be THE deploy lock (the exec
+  # inherits it, so an entry without the lock on fd 9 did not come from the
+  # handoff); the serving anchor the handoff carries must be set, since the
+  # conditional switch below is held to it; and the tree must already be the
+  # exact commit the gates blessed. None is an operator knob; production
+  # sets none of them.
   if ! { : <&9; } 2>/dev/null; then
     printf 'The deploy handoff reached the post-fast-forward phase of %s without the deploy lock on fd 9; refusing to deploy. The lock is inherited across the handoff exec, so an entry without it did not come from the handoff.\n' "$tree" >&2
+    exit 1
+  fi
+  fd9_target=$(readlink /proc/self/fd/9) || fd9_target=""
+  if [ "$fd9_target" != "$lock" ]; then
+    printf 'The deploy handoff reached the post-fast-forward phase of %s with fd 9 open on %s, not on the deploy lock %s; refusing to deploy. The lock is inherited across the handoff exec, so an entry whose fd 9 names another file did not come from the handoff.\n' "$tree" "$fd9_target" "$lock" >&2
     exit 1
   fi
   if [ -z "${OVERFLOW_DEPLOY_HANDOFF_SERVING:-}" ]; then
@@ -245,6 +253,14 @@ if [ -n "${OVERFLOW_DEPLOY_HANDOFF_SHA:-}" ]; then
   full_sha=$OVERFLOW_DEPLOY_HANDOFF_SHA
   expected_serving=$OVERFLOW_DEPLOY_HANDOFF_SERVING
   cd "$tree"
+  gated_head=$(git rev-parse HEAD) || {
+    printf 'The deploy handoff reached the post-fast-forward phase of %s, but HEAD there could not be read; refusing to deploy.\n' "$tree" >&2
+    exit 1
+  }
+  if [ "$gated_head" != "$full_sha" ]; then
+    printf 'The deploy handoff reached the post-fast-forward phase of %s with HEAD at %s, but the handoff carries %s; refusing to deploy. The tree must be the exact commit the gates blessed before the post-fast-forward half runs.\n' "$tree" "$gated_head" "$full_sha" >&2
+    exit 1
+  fi
 else
   # Phase 1: the fence, the anchor, the fetch and both gates, then the
   # fast-forward - and immediately the re-exec, because bash reads a script
