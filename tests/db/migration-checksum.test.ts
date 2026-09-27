@@ -70,11 +70,21 @@ describe("migration checksums", () => {
   it("adopts current content for rows recorded before checksums existed", async () => {
     await onNewDatabase("adopt_legacy_checksums", async (sql) => {
       await runMigrations({ upTo: "003_multi_issue_settlements_and_claims.sql" });
-      await sql`update schema_migrations set checksum = null`;
+      const rowsToAdopt = await sql<{ name: string }[]>`
+        update schema_migrations set checksum = null returning name
+      `;
+      const expectedNames = rowsToAdopt.map(({ name }) => name);
 
-      await expect(runMigrations()).resolves.toBeUndefined();
-      await expect(migrationChecksums(sql)).resolves.toEqual(expectedMigrationChecksums());
-      await expect(runMigrations()).resolves.toBeUndefined();
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await expect(runMigrations()).resolves.toBeUndefined();
+        await expect(migrationChecksums(sql)).resolves.toEqual(expectedMigrationChecksums());
+        await expect(runMigrations()).resolves.toBeUndefined();
+        expect(announcedAdoptionNames(stderrWrite.mock.calls.map(([chunk]) => chunk)).sort())
+          .toEqual(expectedNames.sort());
+      } finally {
+        stderrWrite.mockRestore();
+      }
     });
   });
 
@@ -99,18 +109,18 @@ describe("migration checksums", () => {
   });
 
   it("announces when it adopts current content for a legacy row", async () => {
-    await onNewDatabase("announce_checksum_adoption", async () => {
+    await onNewDatabase("announce_checksum_adoption", async (sql) => {
       await runMigrations({ upTo: "003_multi_issue_settlements_and_claims.sql" });
-      await getSql()`update schema_migrations set checksum = null`;
+      const rowsToAdopt = await sql<{ name: string }[]>`
+        update schema_migrations set checksum = null returning name
+      `;
+      const expectedNames = rowsToAdopt.map(({ name }) => name);
 
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       try {
         await runMigrations();
-
-        const expectedLine =
-          "adopting the current content of db/migrations/001_initial.sql as its recorded checksum; " +
-          "it was applied before checksums were recorded (issue 657)";
-        expect(stderrWrite.mock.calls.some(([chunk]) => String(chunk).includes(expectedLine))).toBe(true);
+        expect(announcedAdoptionNames(stderrWrite.mock.calls.map(([chunk]) => chunk)).sort())
+          .toEqual(expectedNames.sort());
       } finally {
         stderrWrite.mockRestore();
       }
@@ -171,6 +181,19 @@ function restoreDatabaseUrl(): void {
   } else {
     process.env.DATABASE_URL = originalDatabaseUrl;
   }
+}
+
+function announcedAdoptionNames(chunks: readonly unknown[]): string[] {
+  return chunks
+    .flatMap((chunk) => String(chunk).split(/\r?\n/))
+    .filter((line) => line.startsWith("adopting "))
+    .map((line) => {
+      const match = /^adopting the current content of db\/migrations\/(\S+) as its recorded checksum;/.exec(line);
+      if (match === null) {
+        throw new Error(`Unexpected migration adoption announcement: ${line}`);
+      }
+      return match[1]!;
+    });
 }
 
 /** Runs one case against a database of its own, then closes its client and restores the admin URL. */
