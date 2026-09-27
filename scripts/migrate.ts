@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,11 @@ const repositoryRoot = path.resolve(
  * migration at all to the runner.
  */
 const migrationFilename = /^(\d+)_.+\.sql$/;
+
+/** The checksum recorded for a migration: sha256 of the file's utf8 bytes, lowercase hex. */
+export function migrationChecksum(contents: string): string {
+  return createHash("sha256").update(contents, "utf8").digest("hex");
+}
 
 /**
  * The collisions this repository is stuck with, each keyed by the number the collision is at and
@@ -59,14 +65,31 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
     (name) => options.upTo === undefined || name <= options.upTo,
   );
 
-  const appliedNames = await readAppliedMigrations();
+  const appliedChecksums = await readAppliedMigrations();
+  await backfillLegacyMigrationChecksums(appliedChecksums, numberedNames);
 
   for (const migrationName of migrationNames) {
-    if (appliedNames.has(migrationName)) {
+    if (appliedChecksums.has(migrationName)) {
+      const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+      const recordedChecksum = appliedChecksums.get(migrationName);
+      const currentChecksum = migrationChecksum(migration);
+
+      if (recordedChecksum !== undefined && recordedChecksum !== currentChecksum) {
+        throw new Error(
+          `db/migrations/${migrationName} no longer matches the checksum recorded when this ` +
+            `database applied it (recorded ${recordedChecksum}, file ${currentChecksum}). A ` +
+            "migration a database has applied is immutable: restore the file to its recorded " +
+            "content (the file's history names the pre-edit revision) or rebuild the database " +
+            "from scratch. Never edit an applied migration; write a new migration instead " +
+            "(issue 657).",
+        );
+      }
+
       continue;
     }
 
     const migration = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+    const checksum = migrationChecksum(migration);
 
     // One transaction per migration, not one for the whole run. A migration may only build on
     // catalogue state an earlier migration committed: PostgreSQL refuses to read an enum label
@@ -80,8 +103,8 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
     await withTransaction(async (sql) => {
       await sql.unsafe(migration);
       await sql`
-        insert into schema_migrations (name)
-        values (${migrationName})
+        insert into schema_migrations (name, checksum)
+        values (${migrationName}, ${checksum})
       `;
     });
   }
@@ -301,7 +324,7 @@ function numberedMigrations(entries: readonly string[]): { name: string; prefix:
 }
 
 /** Creates the migration ledger if this database has none, and reads back what it records. */
-async function readAppliedMigrations(): Promise<Set<string>> {
+async function readAppliedMigrations(): Promise<Map<string, string | null>> {
   return withTransaction(async (sql) => {
     await sql.unsafe(`
       create table if not exists schema_migrations (
@@ -309,13 +332,51 @@ async function readAppliedMigrations(): Promise<Set<string>> {
         applied_at timestamp with time zone not null default now()
       )
     `);
+    await sql.unsafe(`
+      alter table schema_migrations add column if not exists checksum text
+    `);
 
-    const appliedRows = await sql<{ name: string }[]>`
-      select name from schema_migrations
+    const appliedRows = await sql<{ name: string; checksum: string | null }[]>`
+      select name, checksum from schema_migrations
     `;
 
-    return new Set(appliedRows.map((row) => row.name));
+    return new Map(appliedRows.map((row) => [row.name, row.checksum] as const));
   });
+}
+
+/** Adopts the current file contents for applied ledger rows written before checksums existed. */
+async function backfillLegacyMigrationChecksums(
+  appliedChecksums: Map<string, string | null>,
+  migrationNames: readonly string[],
+): Promise<void> {
+  const legacyMigrationNames = migrationNames.filter(
+    (name) => appliedChecksums.get(name) === null,
+  );
+  if (legacyMigrationNames.length === 0) {
+    return;
+  }
+
+  const adoptedChecksums = new Map<string, string>();
+  await withTransaction(async (sql) => {
+    for (const migrationName of legacyMigrationNames) {
+      const contents = await readFile(path.join(migrationsDirectory, migrationName), "utf8");
+      const checksum = migrationChecksum(contents);
+      await sql`
+        update schema_migrations
+        set checksum = ${checksum}
+        where name = ${migrationName} and checksum is null
+      `;
+      adoptedChecksums.set(migrationName, checksum);
+    }
+  });
+
+  for (const [migrationName, checksum] of adoptedChecksums) {
+    appliedChecksums.set(migrationName, checksum);
+    process.stderr.write(
+      `adopting the current content of db/migrations/${migrationName} as its recorded checksum; ` +
+        "it was applied before checksums were recorded (issue 657)\n",
+    );
+  }
 }
 
 if (isDirectExecution()) {
