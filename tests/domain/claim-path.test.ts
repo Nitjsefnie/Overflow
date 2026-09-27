@@ -292,7 +292,7 @@ describe("known limits of textual evidence, not guaranteed runtime assignment", 
 });
 
 describe("reviewed shared claim action evidence", () => {
-  const action = "Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650";
+  const action = "Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9";
   const caller = (reference: string, trigger = "on: issue_comment") => ({
     path: ".github/workflows/claim.yml",
     content: `${trigger}\njobs:\n  claim:\n    steps:\n      - uses: ${reference}\n`,
@@ -303,8 +303,8 @@ describe("reviewed shared claim action evidence", () => {
   });
 
   it.each([
-    ["fake owner", "someone-else/claim@d9976f1f803f7a662eed3be17772800b7925e650"],
-    ["suffixed action", "Nitjsefnie-Actions/claim-extra@d9976f1f803f7a662eed3be17772800b7925e650"],
+    ["fake owner", "someone-else/claim@ceaadaa096fd249cdeecc137342158ec17347cb9"],
+    ["suffixed action", "Nitjsefnie-Actions/claim-extra@ceaadaa096fd249cdeecc137342158ec17347cb9"],
     ["wrong SHA", "Nitjsefnie-Actions/claim@0000000000000000000000000000000000000000"],
     ["floating ref", "Nitjsefnie-Actions/claim@main"],
   ])("rejects a %s", (_reason, reference) => {

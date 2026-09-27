@@ -33,7 +33,7 @@ export type ClaimPathVerdict = ClaimPathAssessment | "NOT_CHECKED";
 const assigneesCollection = /(?<![\w.~%+:=$-])issues\/[^/\r\n]+\/assignees(?=$|[\s"'`;&|)<>?#\\])/;
 const additiveCall = /\baddAssigneesToAssignable\b|\bissues\s*\.\s*addAssignees\b/;
 const deletion = /(?:-X\s*|--method(?:\s+|=))["']?DELETE\b|\bremoveAssignees(?:FromAssignable)?\b/i;
-const reviewedClaimAction = "Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650";
+const reviewedClaimAction = "Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9";
 
 export function assessClaimPath(workflows: readonly ClaimPathEvidence[]): ClaimPathAssessment {
   for (const { content } of workflows) {

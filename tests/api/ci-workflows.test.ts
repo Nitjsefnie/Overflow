@@ -48,7 +48,7 @@ describe("GitHub Actions release gates", () => {
           + "    || contains(github.event.comment.body, '/release'))",
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 5,
-        steps: [{ uses: "Nitjsefnie-Actions/claim@d9976f1f803f7a662eed3be17772800b7925e650" }],
+        steps: [{ uses: "Nitjsefnie-Actions/claim@ceaadaa096fd249cdeecc137342158ec17347cb9" }],
       },
     });
   });
@@ -527,11 +527,11 @@ describe("GitHub Actions release gates", () => {
           with: { "persist-credentials": false },
         },
         {
-          uses: "github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63",
+          uses: "github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
           with: { languages: "javascript-typescript" },
         },
         {
-          uses: "github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63",
+          uses: "github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
           with: { category: "/language:javascript-typescript" },
         },
       ],

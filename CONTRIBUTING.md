@@ -442,7 +442,7 @@ version, configuration or data conditions genuinely matter.
 ### Claim it before you start
 
 The [claim caller](.github/workflows/claim.yml) uses the
-[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/d9976f1f803f7a662eed3be17772800b7925e650).
+[shared claim action at the reviewed revision](https://github.com/Nitjsefnie-Actions/claim/tree/ceaadaa096fd249cdeecc137342158ec17347cb9).
 That SHA-pinned action is the implementation authority for the claim and release
 commands; the caller retains this repository's event, permission and concurrency
 policy.
