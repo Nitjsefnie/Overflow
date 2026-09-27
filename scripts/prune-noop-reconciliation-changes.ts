@@ -88,10 +88,16 @@ export async function runPruneNoopReconciliationChangesCli(
   }
   try {
     const client = dependencies?.sql ?? getSql();
-    if (parsed.execute) {
-      await executePrune(client, write, parsed.batchSize ?? DEFAULT_BATCH_SIZE);
+    const batchSize = parsed.batchSize ?? DEFAULT_BATCH_SIZE;
+    const run = (database: Sql): Promise<void> =>
+      parsed.execute ? executePrune(database, write, batchSize) : reportCounts(database, write);
+    if (dependencies?.sql === undefined) {
+      // The deadline being lifted belongs to the pool this script opened, so
+      // a caller that injects its own client keeps that client's posture —
+      // the tests do exactly that.
+      await withStatementDeadlineExemption(client, run);
     } else {
-      await reportCounts(client, write);
+      await run(client);
     }
     return 0;
   } catch (error) {
@@ -144,6 +150,37 @@ function usage(): string {
     "",
     "With no options: dry run, counts only. --help alone shows this usage.",
   ].join("\n");
+}
+
+/**
+ * Runs the prune's statements on a connection the shared pool's statement
+ * deadline (issue 661) does not apply to.
+ *
+ * The script does not transact — each batch is one committed statement — so
+ * there is no transaction to `set local` inside; instead a connection is
+ * reserved for the whole run and the deadline is lifted on it with a
+ * session-scoped SET. The previous value is captured first and restored
+ * before the connection returns to the pool, so no later borrower inherits
+ * the lift.
+ */
+async function withStatementDeadlineExemption<T>(client: Sql, run: (database: Sql) => Promise<T>): Promise<T> {
+  const reserved = await client.reserve();
+  try {
+    const [setting] = await reserved<{ statement_timeout: string }[]>`
+      select current_setting('statement_timeout') as statement_timeout
+    `;
+    const previousTimeout = setting?.statement_timeout;
+    await reserved`set statement_timeout = 0`;
+    try {
+      return await run(reserved);
+    } finally {
+      if (typeof previousTimeout === "string" && previousTimeout.length > 0) {
+        await reserved`select set_config('statement_timeout', ${previousTimeout}, false)`;
+      }
+    }
+  } finally {
+    reserved.release();
+  }
 }
 
 async function reportCounts(client: Sql, write: (line: string) => void): Promise<void> {

@@ -101,6 +101,14 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
     // the record of it commit together or not at all. A migration that fails leaves the ones
     // before it applied and recorded, which is what lets a rerun resume rather than restart.
     await withTransaction(async (sql) => {
+      // The shared pool advertises a session-wide statement deadline (issue
+      // 661), and a migration is exactly the legitimate long statement it
+      // exists to interrupt elsewhere: index builds and other DDL can run for
+      // minutes. This is the first statement of the transaction, so the whole
+      // migration runs exempt, and `local` scopes the lift to this
+      // transaction — every later statement on the connection keeps the
+      // deadline.
+      await sql`set local statement_timeout = 0`;
       await sql.unsafe(migration);
       await sql`
         insert into schema_migrations (name, checksum)
