@@ -3,7 +3,7 @@ import {
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
 } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -576,6 +576,12 @@ async function runDeploy(
   extraEnv: Record<string, string> = {},
   options: RunDeployOptions = {},
 ) {
+  let servingAnchor: string | undefined;
+  try {
+    servingAnchor = realpathSync(path.join(fixture.tree, ".next"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   let result = await runDeployAttempt(fixture, extraEnv, options);
   for (let retry = 0; retry < MAX_LOST_WAIT_STATUS_RETRIES; retry += 1) {
     if (result.status === 0 || !result.stderr?.includes(LOST_WAIT_STATUS_SIGNATURE)) break;
@@ -594,6 +600,12 @@ async function runDeploy(
     // script then prints that `$?` as `git ls-files exited -1`. ECHILD proves
     // the git shim ran, so retry this transient lost status once (issue 754).
     await writeFile(fixture.shimLog, "");
+    if (servingAnchor !== undefined) {
+      // Fetch may repoint `.next` before the lost status is observed.
+      const servingLink = path.join(fixture.tree, ".next");
+      await rm(servingLink, { force: true });
+      await symlink(servingAnchor, servingLink);
+    }
     result = await runDeployAttempt(fixture, extraEnv, options);
   }
   return result;
@@ -609,12 +621,13 @@ function spawnStub(result: SpawnSyncReturns<string>, onCall = () => {}): DeployS
   return () => { onCall(); return result; };
 }
 
-function loggedRetrySpawner(fixture: Fixture, results: SpawnSyncReturns<string>[]) {
+function loggedRetrySpawner(fixture: Fixture, results: SpawnSyncReturns<string>[], onCall?: (call: number) => void) {
   writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
   const logAtSpawn: string[] = [];
   let calls = 0;
   const spawn: DeploySpawner = () => {
     calls += 1;
+    onCall?.(calls);
     logAtSpawn.push(readFileSync(fixture.shimLog, "utf8"));
     if (calls > 1) writeFileSync(fixture.shimLog, GIT_LS_FILES_LOG_ENTRY);
     return results[calls - 1]!;
@@ -623,13 +636,21 @@ function loggedRetrySpawner(fixture: Fixture, results: SpawnSyncReturns<string>[
 }
 
 describe("runDeploy lost wait status retry", () => {
-  it("retries the lost wait status once and truncates the first attempt log", async () => {
+  it("retries once, truncates the log, and restores the pre-retry serving anchor", async () => {
     const fixture = await makeFixture();
+    const link = path.join(fixture.tree, ".next");
+    const originalAnchor = realpathSync(link);
+    const repointed = ".next-release-20260907T000000Z-def5678";
+    const retryAnchors: string[] = [];
     const success = spawnResult(0);
-    const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1"), success]);
+    const retry = loggedRetrySpawner(fixture, [spawnResult(1, "git ls-files exited -1"), success], (call) => {
+      if (call === 1) { rmSync(link); symlinkSync(repointed, link); }
+      else retryAnchors.push(realpathSync(link));
+    });
     const result = await runDeploy(fixture, {}, { spawn: retry.spawn });
     expect(result).toBe(success);
     expect(retry.calls).toBe(2);
+    expect(retryAnchors).toEqual([originalAnchor]);
     expect(retry.logAtSpawn).toEqual([GIT_LS_FILES_LOG_ENTRY, ""]);
     expect(readFileSync(fixture.shimLog, "utf8")).toBe(GIT_LS_FILES_LOG_ENTRY);
     expect((await readLog(fixture.shimLog)).map(describeEntry)).toEqual(["git ls-files -z --others"]);
@@ -737,7 +758,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("refuses at the fence without invoking git, pnpm or node when the lock is taken", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { FLOCK_STATUS: "1" });
-
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(refusalFor(fixture.lock));
     expect(refusalFor(DEFAULT_LOCK)).toBe(
@@ -756,7 +776,6 @@ describe("scripts/deploy-revision.sh", () => {
       OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH,
       OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
     });
-
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("without the deploy lock on fd 9");
     expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
@@ -769,7 +788,6 @@ describe("scripts/deploy-revision.sh", () => {
       const extraEnv: Record<string, string> = { OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH };
       if (serving !== undefined) extraEnv.OVERFLOW_DEPLOY_HANDOFF_SERVING = serving;
       const result = await runDeploy(fixture, extraEnv, { openFd9On: fixture.lock });
-
       expect(result.status, `${String(serving)}: ${result.stderr}`).not.toBe(0);
       expect(result.stderr, String(serving)).toContain("OVERFLOW_DEPLOY_HANDOFF_SERVING");
       expect(await readLog(fixture.shimLog), String(serving)).toEqual([]);
@@ -790,7 +808,6 @@ describe("scripts/deploy-revision.sh", () => {
       },
       { openFd9On: fixture.envFile },
     );
-
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("not on the deploy lock");
     expect(result.stderr).toContain(fixture.envFile);
@@ -801,7 +818,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("runs the whole section 10 procedure in order under a successful fence", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture);
-
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const servingCache = `${realpathSync(fixture.prevDir)}/cache`;
@@ -901,7 +917,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("aborts when the serving release has no cache directory, before touching ownership", async () => {
     const fixture = await makeFixture({ servingCache: false });
     const result = await runDeploy(fixture);
-
     expect(result.status).not.toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.cmd === "find")).toBe(false);
@@ -914,7 +929,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("prints the webhook upgrade's output to the transcript through its log", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture);
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const release = entries.find(
@@ -928,7 +942,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("prints the retention listing to the deploy record", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture);
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const release = entries.find(
@@ -959,7 +972,6 @@ describe("scripts/deploy-revision.sh", () => {
     // release, and the conditional switch must still receive the old one.
     const repointed = ".next-release-20260701T000000Z-abc1234";
     const result = await runDeploy(fixture, { GIT_SHIM_FETCH_REPOINT: repointed });
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const [switchEntry] = entries.filter((entry) => entry.args[0] === "release:switch");
@@ -976,7 +988,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("aborts on a failed readiness check before the webhook upgrade and the prune", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { CURL_STATUS: "7" });
-
     expect(result.status).toBe(7);
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
@@ -991,7 +1002,6 @@ describe("scripts/deploy-revision.sh", () => {
     // first and the failure is the smoke's.
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { CURL_FAIL_MATCH: "/api/auth/providers" });
-
     expect(result.status, result.stderr).toBe(7);
     const entries = await readLog(fixture.shimLog);
     const curlUrls = entries
@@ -1009,7 +1019,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("exits with the webhook upgrade's status after the restart, and never prunes", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { UPGRADE_STATUS: "7" });
-
     expect(result.status).toBe(7);
     expect(result.stdout).toContain("Webhook upgrade exit status: 7");
     const entries = await readLog(fixture.shimLog);
@@ -1030,7 +1039,6 @@ describe("scripts/deploy-revision.sh", () => {
       ],
     });
     const result = await runDeploy(fixture);
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
@@ -1057,7 +1065,6 @@ describe("scripts/deploy-revision.sh", () => {
       ],
     });
     const result = await runDeploy(fixture);
-
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries.map(describeEntry)).toContain(`pnpm release:prune ${fixture.tree} --keep 3`);
@@ -1076,7 +1083,6 @@ describe("scripts/deploy-revision.sh", () => {
       ],
     });
     const result = await runDeploy(fixture);
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
@@ -1091,7 +1097,6 @@ describe("scripts/deploy-revision.sh", () => {
   it("satisfies the fence with the real flock binary, proving the fd 9 wiring", async () => {
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, {}, { omitShims: ["flock"] });
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries[0]!.cmd).toBe("git");
@@ -1142,7 +1147,6 @@ describe("scripts/deploy-revision.sh", () => {
       ["deploy-gate", "completed", "success"],
     ]);
     const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: failed });
-
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("verify");
     expect(result.stderr).toContain("failure");
@@ -1168,7 +1172,6 @@ describe("scripts/deploy-revision.sh", () => {
     const result = await runDeploy(fixture, {
       GH_SHIM_GATE_SEQUENCE: `${absent}:${fixture.gateSuccess}`,
     });
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const isCheckRuns = (entry: ShimLogEntry) =>
@@ -1193,7 +1196,6 @@ describe("scripts/deploy-revision.sh", () => {
       GH_SHIM_GATE_SEQUENCE: absent,
       OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
     });
-
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate (absent)");
     expect(result.stderr).toContain("HEAD, the index and the working tree are untouched; only the fetched refs moved");
@@ -1218,7 +1220,6 @@ describe("scripts/deploy-revision.sh", () => {
     const result = await runDeploy(fixture, {
       GH_SHIM_GATE_SEQUENCE: `${absent}:${appeared}`,
     });
-
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate");
     expect(result.stderr).toContain("concluded failure");
@@ -1239,7 +1240,6 @@ describe("scripts/deploy-revision.sh", () => {
     const result = await runDeploy(fixture, {
       GH_SHIM_GATE_SEQUENCE: `${pending}:${fixture.gateSuccess}`,
     });
-
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
     const isCheckRuns = (entry: ShimLogEntry) =>
@@ -1292,7 +1292,6 @@ describe("scripts/deploy-revision.sh", () => {
     // A deadline so a regression toward waiting fails the assertions below
     // rather than spawnSync's kill; a correct gate refuses on the first poll.
     const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
-
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("verify");
     const entries = await readLog(fixture.shimLog);
