@@ -53,7 +53,7 @@ export function listMigrationNames(entries: readonly string[]): string[] {
   return numberedMigrations(entries).map(({ name }) => name);
 }
 
-export async function runMigrations(options: { upTo?: string } = {}): Promise<void> {
+export async function runMigrations(options: { upTo?: string } = {}): Promise<string[]> {
   const numberedNames = listMigrationNames(await readdir(migrationsDirectory));
 
   // The whole directory is checked, not just the part `upTo` selects: bad numbering is a property
@@ -67,6 +67,7 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
 
   const appliedChecksums = await readAppliedMigrations();
   await backfillLegacyMigrationChecksums(appliedChecksums, numberedNames);
+  const appliedMigrationNames: string[] = [];
 
   for (const migrationName of migrationNames) {
     if (appliedChecksums.has(migrationName)) {
@@ -115,7 +116,10 @@ export async function runMigrations(options: { upTo?: string } = {}): Promise<vo
         values (${migrationName}, ${checksum})
       `;
     });
+    appliedMigrationNames.push(migrationName);
   }
+
+  return appliedMigrationNames;
 }
 
 /**
@@ -390,10 +394,20 @@ async function backfillLegacyMigrationChecksums(
 if (isDirectExecution()) {
   try {
     await enforceDefaultBranchGuard();
-    await runMigrations();
+    printAppliedMigrations(await runMigrations());
   } finally {
     await closeSql();
   }
+}
+
+/** Prints the migrations applied during a command-line run, keeping the library entry point quiet. */
+export function printAppliedMigrations(migrationNames: readonly string[]): void {
+  for (const migrationName of migrationNames) {
+    process.stderr.write(`applied db/migrations/${migrationName}\n`);
+  }
+
+  const count = migrationNames.length;
+  process.stderr.write(`applied ${count} ${count === 1 ? "migration" : "migrations"}\n`);
 }
 
 /**

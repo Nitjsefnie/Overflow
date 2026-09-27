@@ -73,6 +73,19 @@ const DEFAULT_STATEMENT_TIMEOUT_MS = "600000";
  */
 const COORDINATION_STATEMENT_TIMEOUT_MS = "0";
 
+type PostgresNotice = {
+  severity?: string;
+  severity_local?: string;
+  message?: string;
+};
+
+/** Keeps PostgreSQL notices readable and separate from structured stdout. */
+function reportPostgresNotice(notice: PostgresNotice): void {
+  const severity = notice.severity_local ?? notice.severity ?? "NOTICE";
+  const message = (notice.message ?? "PostgreSQL notice").replace(/[\r\n]+/g, " ");
+  process.stderr.write(`${severity}: ${message}\n`);
+}
+
 /**
  * Reads the statement deadline the environment names, falling back to the
  * default only when the variable is UNSET. A set-but-invalid value — empty,
@@ -109,6 +122,7 @@ function openPool(max: number, statementTimeout: string): SqlClient {
     connect_timeout: CONNECT_TIMEOUT_SECONDS,
     idle_timeout: IDLE_TIMEOUT_SECONDS,
     max_lifetime: MAX_LIFETIME_SECONDS,
+    onnotice: reportPostgresNotice,
     connection: {
       // The startup packet carries every parameter as text (the library
       // renders each one with `k + N + v`), so the value stays the string the
