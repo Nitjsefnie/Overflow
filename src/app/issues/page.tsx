@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { IssueCard } from "@/components/issue-card";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
-import type { EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
+import type { EligibleIssueFilters, EligibleIssueProjection } from "@/lib/dashboard/eligible-issues";
 
 type IssuesPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -112,7 +112,7 @@ function claimStateValue(queryState: Record<string, string | string[] | undefine
  * produce falls back to the unclaimed board — the same reading the API route
  * applies to its query string.
  */
-function readFilters(query: Record<string, string | string[] | undefined>) {
+function readFilters(query: Record<string, string | string[] | undefined>): EligibleIssueFilters {
   const repository = singleValue(query.repository);
   const openingLabel = singleValue(query.openingLabel);
   const requestedClaimState = singleValue(query.claimState);
