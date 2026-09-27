@@ -411,6 +411,16 @@ describe("GitHub Actions release gates", () => {
     for (const line of requirements) {
       expect(line).toContain("--hash=sha256:");
     }
+    // Floor for the all-platform shape the file header claims: a
+    // regeneration that collapsed the pin to a single artifact's hash (one
+    // wheel) must fail here instead of silently narrowing both the platforms
+    // the install resolves on and the pin's tamper-resistance.
+    const hashes = new Set(
+      requirements.flatMap((line) =>
+        [...line.matchAll(/--hash=sha256:([0-9a-f]+)/g)].map((match) => match[1]),
+      ),
+    );
+    expect(hashes.size).toBeGreaterThanOrEqual(2);
     const zizmor = requirements.find((line) => line.startsWith("zizmor=="));
     expect(zizmor).toBeDefined();
     expect(zizmor).toContain("zizmor==1.29.0");
