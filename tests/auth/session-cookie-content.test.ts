@@ -164,6 +164,7 @@ beforeEach(() => {
 // stub belong to this file alone — a stub left installed would leak into every later
 // file this worker runs (issue 753).
 afterEach(() => {
+  vi.unstubAllGlobals();
   expect(vi.isMockFunction(globalThis.fetch)).toBe(false);
   vi.useRealTimers();
 });
