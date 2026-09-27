@@ -49,6 +49,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
+    # Use the local scripts/container-build.sh image; fail rather than pull and bypass its revision-label check.
+    pull_policy: never
 
 volumes:
   overflow-postgres-data:
