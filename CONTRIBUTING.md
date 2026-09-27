@@ -352,13 +352,21 @@ number.
 
 The floor was seeded from the tree that introduced it: the first real
 measurement, 92.89% lines, with the floor one point below it. From there the
-number moves in one direction only. After a `main` push that measured more
-than 0.5 points above the record, CI recalibrates through
-`node scripts/calibrate-coverage.ts`: the new measurement is recorded and the
-floor rises to one point below it. A drop, or a rise within that hysteresis,
-changes nothing. **The floor is never lowered by hand.** A red floor means
-coverage regressed, and the remedy is to test the code you changed — not to
-edit the record.
+number moves in one direction only. After a `main` push whose measurement
+beat the record by more than 0.5 points, CI attempts to record the raise:
+the calibrate job rewrites `scripts/coverage.json` and pushes it to `main`.
+That push is always refused — a bot commit can never carry the checks main's
+branch protection requires — so the calibrate job fails visibly, naming the
+measured and recorded floors in its error. The refusal is the alarm, not a
+regression: the raise is then recorded by hand. Run the suite with coverage,
+run `node scripts/calibrate-coverage.ts`, commit `scripts/coverage.json`,
+and open an ordinary pull request; the ratchet guard permits a raise to the
+floor and only a raise. A raise that lands without the failed job — an
+automatic push through a token that can bypass protection — waits on the
+GitHub App route. A drop, or a rise within the hysteresis, changes nothing.
+**The floor is never lowered by hand.** A red floor means coverage
+regressed, and the remedy is to test the code you changed — not to edit the
+record.
 
 ## Pull-request admission
 
