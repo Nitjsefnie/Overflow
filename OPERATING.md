@@ -6,7 +6,7 @@ Reference for running a development copy or a deployment of Overflow. Using Over
 
 These steps stand up a local copy of the application against a local PostgreSQL database.
 
-1. Copy `.env.example` to `.env` and replace every placeholder. `AUTH_SECRET` can be generated with `npx auth secret`; `TOKEN_ENCRYPTION_KEY` must be an unpadded base64url encoding of 32 random bytes.
+1. Copy `.env.example` to `.env` and replace every placeholder. Generate `AUTH_SECRET` with `openssl rand -base64 32`; generate `TOKEN_ENCRYPTION_KEY` with `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"`, which prints the exact 43-character unpadded base64url form the service accepts.
 2. Use an already-installed PostgreSQL 17 server **or** start the local Compose service:
 
    ```bash
