@@ -227,6 +227,53 @@ angle-bracketed text is substituted at runtime:
 | 503 | `ROLLBACK_INCOMPLETE` | `The repository registration could not be saved, and the project webhook Overflow created for it could not be deleted on GitLab. Nothing was registered; retry the registration, and a later successful registration or unregistration removes the abandoned webhook.` | The save failed and the compensating hook deletion failed too, so a hook Overflow created still exists on the instance. Nothing was registered and nothing is lost by retrying; the recorded hook is cleaned up by a later successful registration or unregistration. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to initialize repository registration.` | Every other failure of a read against the instance — a path the instance does not answer, a token it no longer accepts, a transport failure — as well as an unavailable GitHub credential for the account. Check the project path, the linked token and the instance, then retry. |
 
+### Reading a repository's existing labels
+
+`GET /api/repositories/labels` lists the difficulty labels a repository or
+project already carries. A catalog may only pick labels that already exist —
+labels are never created here, and registration verifies server-side that the
+submitted catalog names only labels the repository has. The route answers to
+the signed-in browser session only: an API token is refused with the same
+`401` a signed-out browser gets, because the route exists for the
+registration form's catalog selectboxes. Like the ledger reads below, it is
+answered without an origin check — a same-origin browser `fetch()` GET sends
+no `Origin` header, so guarding the read would refuse the form itself.
+
+The query names the repository in exactly one of two shapes; any other key
+set is refused:
+
+- GitHub: `owner` and `name`, each a repository path segment (a `.git`
+  suffix on the name is stripped).
+- GitLab: `provider=gitlab`, `instance` (the instance's URL), and `project`
+  (the numeric id or its path with namespace).
+
+Success is HTTP `200` with `{ "labels": ["<label name>", …] }`. Errors use
+the registration error envelope. The GitHub arm reuses registration's
+credential vocabulary for the account's stored GitHub authorization; the
+GitLab arm reads the labels through the submitter's verified linked identity,
+exactly as a GitLab registration does:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `Invalid repository labels request.` | The query matched neither shape above. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | No signed-in session. The route refuses an API token: sign in through GitHub in the browser. |
+| 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.` | (GitHub query) The stored authorization expired or was revoked. Sign out and back in, then retry. |
+| 403 | `GITHUB_ACCESS` | `GitHub refused to read the repository labels (HTTP 403). GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes. Wait a minute and retry before changing anything. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.` | (GitHub query) Wait a minute and retry first; the answer cannot separate a missing authorization from a temporary limit. |
+| 403 | `GITHUB_ACCESS` | `GitHub answered 404 for the request to read the repository labels. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted. This may be caused by missing authorization for the Overflow OAuth application. Review Overflow's authorization at https://github.com/settings/applications, then retry.` | (GitHub query) GitHub hid the labels read; treat it as missing authorization until checked. |
+| 429 | `GITHUB_RATE_LIMITED` | `GitHub rate-limited the request to read the repository labels (HTTP <status>). Please retry later.` | (GitHub query) GitHub limited the read; GitHub may append a `Retry after <N> seconds.` sentence when it supplies a delay. Wait out any delay, then retry. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to read the repository labels on GitHub.` | (GitHub query) The account's stored GitHub credential was unavailable, or the read failed after the repository was found. |
+| 503 | `CONFIGURATION` | `Token encryption is not configured.` | (GitLab query) The deployment has no `TOKEN_ENCRYPTION_KEY`, so linked identities cannot be read. Fix the server configuration; nothing about the request will help. |
+| 400 | `INVALID_REQUEST` | `The instance URL must be an absolute URL.` / `The instance URL must use https.` / `The instance URL must name a host.` | (GitLab query) The `instance` value is malformed. Submit the instance's `https` URL. |
+| 400 | `INVALID_REQUEST` | `The GitLab project id must be a positive integer.` / `Submit the GitLab project as a positive numeric id or a path with namespace, like group/project.` | (GitLab query) The `project` value is malformed. |
+| 404 | `NOT_FOUND` | `No GitLab identity is linked for <instance>. Link one on the dashboard's Forge identities page, then retry.` | (GitLab query) Link a GitLab identity for exactly this instance, then retry. |
+| 404 | `NOT_FOUND` | `No GitLab project with that id or path is visible through your linked identity. Check the project id or path and that the identity still has access, then retry.` | (GitLab query) The instance hid the project or the identity lost access to it. |
+| 403 | `FORBIDDEN` | `GitLab refused the labels read through your linked identity (HTTP <status>). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry.` | (GitLab query) The instance rejected or refused the identity's token. Re-link the identity, then retry. |
+| 429 | `RATE_LIMITED` | `GitLab rate-limited the labels read (HTTP <status>). Please retry later.` | (GitLab query) Wait, then retry. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to read the repository labels on GitLab.` | (GitLab query) The identity lookup or the read behind the endpoint failed. |
+
+Angle-bracketed text in the `Exact message` column is a value substituted at
+runtime.
+
 ### Registration responses
 
 Success is HTTP `201`. Example body (identifiers vary):
@@ -262,7 +309,7 @@ status and code, then use the message to distinguish causes:
 | 400 | `INVALID_INPUT` | `Submit one GitHub repository as owner/name or a canonical GitHub URL.` | Correct the repository reference. |
 | 400 | `INVALID_INPUT` | `The repository is missing the difficulty labels <labels>. Create them on GitHub, then register again.` | The repository's existing labels do not include every label the submitted catalog names; `<labels>` is the backticked list of the missing ones. Create those labels on GitHub, then register again. |
 | 400 | `INVALID_INPUT` | Catalog validation message listed below. | Correct the catalog names, labels, or points. |
-| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — tokens live 90 days and nothing extends them, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
 | 401 | `GITHUB_CREDENTIALS` | `GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to <step>. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry registration.` | GitHub rejected the stored GitHub authorization for the account (expired or revoked); the account's Overflow session is fine. Refresh the authorization by signing out and back in, then retry the registration. `<step>` is `read its granted permissions` when the rejection came from the granted-scope check that precedes every GitHub registration, otherwise the lookup, label-read, or webhook-create step that died. |
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | A browser (session-cookie) request carried no `Origin` header or one that is not the origin of `APP_URL`. A bearer-token request never reaches this: its origin is not consulted. |
@@ -324,6 +371,67 @@ Errors have the same shape as the registration errors above; the change path
 answers `CONFLICT` for an unregistered repository, and `FORBIDDEN` for anyone
 but the repository's sponsor or an account that is not eligible to change
 repository catalogs.
+
+### Unregister a repository
+
+Send `DELETE /api/repositories` with the same credential rules the other
+registration methods state — bearer token or browser session, with
+`Content-Type: application/json` either way — and a JSON body naming exactly
+one registration. A GitHub registration is named by `repositoryUrl` alone; a
+GitLab project by `provider: "gitlab"`, `instanceUrl`, and `project` (the
+numeric id or its path with namespace) — the reference fields a GitLab
+registration takes, and nothing else; extra fields are rejected.
+
+Unregistration removes the registration from the ledger and deletes the
+webhook Overflow installed on the forge. Only the registration's sponsor can
+issue it — not another member, and not a moderator — and the sponsor check
+runs before anything is touched on the forge, so a refusal leaves the
+registration and its webhook exactly as they were. A GitLab unregistration
+resolves the submitter's verified linked identity for the instance exactly as
+a GitLab registration does, and is refused the same way without one.
+
+The flow is idempotent: unregistering an already-unregistered registration
+succeeds and reports it, so a repeated request is never an error.
+
+Success is HTTP `200` with the repository projection registration returns,
+plus two flags:
+
+```json
+{
+  "repository": { "…": "the same repository object registration returns" },
+  "webhookDeleted": true,
+  "alreadyUnregistered": false
+}
+```
+
+`webhookDeleted` reports whether this request deleted the forge webhook: the
+forge answering 404 for the hook — it was already gone — is the desired end
+state, so the unregistration proceeds and reports `false`, and a registration
+from before the webhook path has nothing to delete and reports `false` the
+same way. `alreadyUnregistered` is `true` when the row had been unregistered
+before the request arrived.
+
+Errors use the registration error envelope. The authentication, origin,
+content-type and oversize answers are the ones the registration responses
+table lists. The distinctive answers:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | `Invalid repository unregistration request.` | Invalid JSON, extra fields, or wrong field types. Correct the body. |
+| 400 | `INVALID_INPUT` | `Submit one GitHub repository as owner/name or a canonical GitHub URL.` | (GitHub shape) `repositoryUrl` is missing or malformed. |
+| 400 | `INVALID_INPUT` | `A GitLab unregistration requires the instance URL and the project id or path.` | (GitLab shape) `instanceUrl` or `project` is missing or empty. |
+| 400 | `INVALID_INPUT` | `The instance URL must be an absolute URL.` / `The instance URL must use https.` / `The instance URL must name a host.` | (GitLab shape) Correct `instanceUrl` to the instance's `https` URL. |
+| 400 | `INVALID_INPUT` | `The GitLab project id must be a positive integer.` / `Submit the GitLab project as a positive numeric id or a path with namespace.` | (GitLab shape) Correct `project`. |
+| 403 | `FORBIDDEN` | `Only the repository's sponsor can unregister it.` | The credential's account is not the registration's sponsor. |
+| 404 | `NOT_FOUND` | `No registration holds the GitHub path <owner/name>, so there is nothing to unregister.` | (GitHub shape) Nothing is registered under that reference. |
+| 404 | `NOT_FOUND` | `No GitLab registration matches that instance and project, so there is nothing to unregister.` | (GitLab shape) Nothing is registered for that instance and project. |
+| 409 | `CONFLICT` | `<GitHub repository|GitLab project> <id> collides with forge id <id> already registered as provider '<provider>'. An id's forge history never migrates between forges; unregistration refused.` | The stored row moved to another forge; resolve that registration first. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to unregister the repository.` | Registration wiring or the final write failed; check service health before retrying. |
+
+A webhook deletion that fails for any reason other than the hook already
+being gone leaves the local row untouched and surfaces as registration's
+`GITHUB_CREDENTIALS`, `GITHUB_ACCESS`, `GITHUB_RATE_LIMITED` or
+`UPSTREAM_FAILURE` vocabulary for the forge step that died.
 
 ## Reading the ledger over the API
 
@@ -392,7 +500,7 @@ code, then use the message to distinguish causes:
 
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
-| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token). Check the copied token or generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid token format or is unknown (including a revoked token, and an expired one — tokens live 90 days and nothing extends them, so an expired token is refused exactly like an unknown one). Check the copied token or generate a replacement in the browser. |
 | 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized bearer credential and no signed-in session. Supply the bearer header or sign in. |
 | 403 | `FORBIDDEN` | `A member account is required.` | The credential resolved to an account that no longer exists: the member gate re-reads the account's role from the database at request time, so a session or token outliving its account is refused. |
 | 404 | `NOT_FOUND` | `Settlement proof is not available.` | (`GET /api/settlements/<id>`) No settlement with this id, or the caller is not a party to it. Both are the same refusal. |
@@ -402,6 +510,144 @@ code, then use the message to distinguish causes:
 | 502 | `UPSTREAM_FAILURE` | `Unable to load the settlement proof.` | (`GET /api/settlements/<id>`) The read behind the endpoint failed; retry when the service recovers. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to load the calibration comparison.` | (`GET /api/calibration`) The read behind the endpoint failed; retry when the service recovers. |
 | 502 | `UPSTREAM_FAILURE` | `Unable to load the dashboard.` | (`GET /api/dashboard`) The read behind the endpoint failed; retry when the service recovers. |
+
+## Moderation
+
+The moderation queue, its audits, and the recalibration, credit-adjustment
+and re-derivation tools behind the moderator page (`/moderation`). Every
+moderation route requires a moderator: the request's credential — an `ovf_`
+token or a signed-in session, under the same rules and precedence the
+registration and ledger sections state — names the acting account, and the
+account's `MODERATOR` role is re-read from the database at request time
+rather than trusted to the credential. A token therefore works exactly where
+its owner's browser session works.
+
+The credential answers are shared by every moderation route:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 401 | `UNAUTHENTICATED` | `The supplied API token was not accepted.` | The bearer credential has an invalid format, or is unknown, revoked, or expired. Generate a replacement in the browser. |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` | No recognized credential. Supply the bearer header or sign in. |
+| 403 | `FORBIDDEN` | `Moderator authorization is required.` | The credential resolved to an account whose live role is not `MODERATOR`. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to authorize the moderator request.` | Credential or role lookup failed; retry when the service recovers. |
+
+Mutating requests run the same credential guard registration runs: a
+browser-session mutation is same-origin only, while a bearer-token mutation
+is exempt from the origin check and still requires `Content-Type:
+application/json`. The GET routes take no origin check at all — a
+same-origin browser `fetch()` GET sends no `Origin` header, so guarding them
+would refuse the moderation page itself. Every moderation body is a small
+JSON document whose free-text fields (`reason`, `plan`) are trimmed and
+capped at 2000 characters after trimming, and a body read past its route's
+limit answers `413` `PAYLOAD_TOO_LARGE`. Extra fields are rejected on every
+moderation body, and a query parameter named more than once is refused.
+
+### The routes
+
+| Method and path | Request | Success |
+| --- | --- | --- |
+| `GET /api/moderation/audits` | None. | `200`: the array of open account audits the moderation queue renders. |
+| `GET /api/moderation/cohort` | Query: `targetAccountId` (required), `sampleStartedAt`, `sampleEndedAt` (required timestamps), `repositoryId` (optional). | `200` `{ "preview": <calibration cohort preview> }`. |
+| `GET /api/moderation/recalibration` | Query: `targetAccountId` (required). | `200` `{ "preview": <the recalibration figure> }` — the trigger verdict over the latest substantiated audit's stored snapshot, beside every credit adjustment already applied. |
+| `GET /api/moderation/rederivation` | None. | `200` `{ "rederivation": <per-repository derived-row status>, "startupRecoverySkipped": <boolean> }`. |
+| `GET /api/moderation/moderators` | None. | `200` `{ "moderators": <the moderator roster> }`. |
+| `POST /api/moderation` | `{ "targetAccountId": <uuid>, "repositoryId": <uuid, optional>, "sampleStartedAt": <timestamp>, "sampleEndedAt": <timestamp>, "reason": <nonblank, ≤2000 characters> }`. The sample end must be after the sample start. | `201` `{ "audit": <the opened account audit> }`. |
+| `PATCH /api/moderation/<id>` | `{ "action": "dismiss" \| "substantiate", "reason": <nonblank, ≤2000 characters> }`. | `200` `{ "audit": <the decided audit> }`. |
+| `PATCH /api/moderation` | `{ "targetAccountId": <uuid>, "plan": <nonblank, ≤2000 characters> }`. | `200` `{ "recalibration": <the closed recalibration> }`. |
+| `POST /api/moderation/recalibration/adjustment` | `{ "targetAccountId": <uuid>, "reason": <trimmed, may be blank, ≤2000 characters> }`. | `201` `{ "adjustment": <the applied credit adjustment> }` — the compensating adjustment the latest substantiated audit's snapshot supports. |
+| `POST /api/moderation/adjustments/reversal` | `{ "adjustmentId": <uuid>, "reason": <nonblank, ≤2000 characters> }`. | `201` `{ "reversal": <the mirroring adjustment> }` — negative lines and its own moderation event; the original adjustment row is untouched. |
+| `POST /api/moderation/rederivation` | `{ "repositoryId": <uuid> }`. | `200` `{ "request": <the queued re-derivation request> }`. |
+
+Body limits: `32 KiB` on every moderation route except
+`PATCH /api/moderation/<id>`, whose single-reason body is read under `8 KiB`.
+
+### Moderation responses
+
+A body that is missing, unparsable, or schema-invalid answers `422`
+`INVALID_REQUEST`: message `Invalid moderation request.` on the moderation
+routes, `Invalid re-derivation request.` on
+`POST /api/moderation/rederivation`, and `Invalid moderator role request.`
+on `POST /api/moderation/moderators`. A service refusal keeps the same
+envelope with a fixed message, `Unable to process moderation request.`, and
+the code tells the causes apart:
+
+| HTTP | Code | Cause |
+| --- | --- | --- |
+| 403 | `FORBIDDEN` | The acting account is not allowed the action. |
+| 404 | `NOT_FOUND` | The named record does not exist. |
+| 409 | `CONFLICT` | The record's transition is not available from its current state. |
+| 422 | `INVALID_INPUT` | The input broke a rule the service judges: a blank reason, an inverted sample window, a malformed timestamp. |
+| 422 | `INSUFFICIENT_SAMPLES` | The calibration sample is too small to judge. |
+| 500 | `INTERNAL_ERROR` | The moderation handler failed; retry when the service recovers. |
+
+Two routes depart from the fixed message. `GET /api/moderation/audits`
+degrades on a failed read with `502` `UPSTREAM_FAILURE` and message
+`Unable to load the moderation queue.` The moderator roster route passes the
+service's own message instead of the fixed one — `403`/`404`/`409` keep the
+code and name the cause in the message, any other service code answers
+`422` — and an outage behind it is `502` `UPSTREAM_FAILURE` with `Unable to
+complete the moderator request.`
+
+## Settlement and calibration overrides
+
+A priced outcome a member believes is wrong is sent to correction: the member
+opens a correction request, and a moderator grants or declines it. Over HTTP
+these are `POST /api/overrides` and `PATCH /api/overrides/<id>` — the same
+two flows the MCP tools `correction_open` and `correction_decide` expose.
+
+Opening a correction needs any member's credential; deciding one needs a
+moderator. The credential rules are the ones the registration and moderation
+sections state, and the member gate's answers are the read responses'
+own — including `403` `FORBIDDEN` `A member account is required.` for a
+credential whose account no longer exists.
+
+`POST /api/overrides` corrects exactly one priced outcome. The body is
+either `{ "settlementId": <uuid>, "reason": … }` or
+`{ "calibrationId": <uuid>, "reason": … }` — a body naming both matches
+neither — with the reason trimmed, nonblank, and capped at 2000 characters.
+Only a party to the outcome can open a correction against it: the creditor
+or the debtor of the settlement, or the account a self-work calibration
+belongs to. Success is HTTP `200` with
+`{ "request": <the recorded correction request> }`.
+
+`PATCH /api/overrides/<id>` decides a correction request. The body is either
+`{ "action": "grant", "settledPoints": <integer 1 through 10>, "reason": … }`
+or `{ "action": "decline", "reason": … }`. Success is HTTP `200` with
+`{ "request": <the decided correction request> }`.
+
+Bodies are read under `32 KiB` on the POST and `8 KiB` on the PATCH: a body
+past its limit answers `413` `PAYLOAD_TOO_LARGE`, and an unparsable or
+schema-invalid one answers `422` `INVALID_REQUEST` — `Invalid settlement
+correction request.` on the POST, `Invalid settlement correction decision.`
+on the PATCH. Service refusals pass the service's own message through the
+error envelope:
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 403 | `FORBIDDEN` | `Only the creditor or the debtor of a settlement, or the account a self-work calibration belongs to, can report it as incorrect.` | The credential's account is not a party to the named outcome. |
+| 403 | `FORBIDDEN` | `Moderator authorization is required.` | (PATCH) The credential's account is not a moderator. |
+| 404 | `NOT_FOUND` | `No settlement, calibration or correction request was found under that identifier.` | Check the identifier. |
+| 409 | `CONFLICT` | `This issue already has a correction request awaiting a moderator.` | (POST) The outcome already has an open request; wait for it to be decided instead of opening another. |
+| 409 | `CONFLICT` | `This correction request has already been decided.` | (PATCH) Another moderator decided it first. |
+| 422 | `INVALID_INPUT` | The message names the rule. | A blank reason, a missing identifier, or settled points outside 1 through 10. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to complete the settlement correction request.` | The service behind the route failed; retry when it recovers. |
+
+## Readiness probe
+
+`GET /api/readiness` answers whether the deployment is ready to serve. It
+takes no credential and no body, and answers `Cache-Control: no-store` with:
+
+- `200` `{ "status": "ready" }` when the database is reachable and every
+  migration this build bundles is recorded applied, and
+- `503` `{ "status": "unavailable" }` for every other outcome — a
+  rejection, a probe past its 2-second query budget (under a 3-second hard
+  cap), or a schema behind the build. A schema ahead of the build stays
+  ready: that is the state a rollback to an older release runs against.
+
+At most one probe runs per three-second window no matter how many requests
+arrive — concurrent requests share the in-flight probe and its answer is
+cached until the window expires — so the unauthenticated endpoint costs an
+attacker at most one query per window.
 
 ## Calling Overflow from an agent harness
 
