@@ -98,11 +98,27 @@ The last command must print `10.33.0`, the version `package.json` pins.
 
 ## 4. Create the environment file
 
-The secrets file holds `DATABASE_URL`, `AUTH_SECRET`, the OAuth credentials,
+The environment file holds `DATABASE_URL`, `AUTH_SECRET`, the OAuth credentials,
 `TOKEN_ENCRYPTION_KEY` (with `TOKEN_ENCRYPTION_KEY_PREVIOUS` beside it only
-while section 11's key rotation is under way) and the webhook secret; the repository's own `README.md`
-says what each one is. This section is only about where the file lives and who
+while section 11's key rotation is under way), and the public callback URLs in
+`GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL`. Each registration gets its own
+webhook secret, generated at registration time; the environment file does not
+carry a shared webhook secret. The [Environment reference in `OPERATING.md`](../OPERATING.md#environment-reference)
+describes each variable. This section is only about where the file lives and who
 may read it.
+
+The reverse proxy must allow request bodies of at least 25 MiB on
+`/api/github/webhooks` and `/api/gitlab/webhooks`, matching the application's
+delivery limit. nginx defaults `client_max_body_size` to 1 MiB, so the default
+proxy rejects deliveries larger than 1 MiB and up to 25 MiB before they reach
+the application. The application also enforces JSON body limits by route: 4 KiB
+on `/api/account` and `/api/forge-identities`; 8 KiB on `/api/moderation/[id]`
+and `/api/overrides/[id]`; 32 KiB on `/api/moderation`,
+`/api/moderation/adjustments/reversal`, `/api/moderation/moderators`,
+`/api/moderation/recalibration/adjustment`, `/api/moderation/rederivation`, and
+`/api/overrides`; 128 KiB on `/api/repositories`; and 1 MiB on `/api/mcp`. For
+example, the production host currently caps `client_max_body_size` at 64k on
+its moderation and overrides locations.
 
 systemd reads `EnvironmentFile=` as PID 1, before it drops to `User=overflow`,
 so the service account does not need to read the file and is not given a way

@@ -76,10 +76,16 @@ default:
   credentials. Its callback URL is `<APP_URL>/api/auth/callback/github`.
 - `TOKEN_ENCRYPTION_KEY` — 32 random bytes as unpadded base64url. This is the
   AES-256-GCM key for stored OAuth tokens, so it is a real key even locally.
-- `APP_URL`, `GITHUB_WEBHOOK_URL`, `GITHUB_WEBHOOK_SECRET` — the public
-  application URL and the webhook endpoint GitHub must be able to reach over
-  public HTTPS, plus the shared secret. You only need these to exercise the
-  webhook path end to end; the test suite does not.
+- `APP_URL` — the public application URL.
+- `GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL` — public HTTPS callback URLs
+  their forges must be able to reach. You need the callback URLs to exercise
+  webhook registration and delivery end to end; the test suite does not.
+- `DATABASE_STATEMENT_TIMEOUT_MS` — optional deadline for database statements;
+  see the [Environment reference](OPERATING.md#environment-reference) for its
+  default and validation behavior.
+- `GITHUB_GRAPHQL_BUDGET_RESERVE` — optional GraphQL admission threshold for
+  worker passes; see the [Environment reference](OPERATING.md#environment-reference)
+  for its default and behavior.
 - `MODERATOR_GITHUB_USER_IDS` — comma-separated GitHub account ids granted the moderator role at sign-in (`gh api users/<login> --jq .id`).
 
 Placeholders only in anything checked in. Never commit OAuth credentials,
@@ -135,16 +141,20 @@ corrected.
 
 ## The checks
 
-CI is one workflow with one job. `.github/workflows/ci.yml` defines `verify`,
-which runs on pushes to `main`, on pull requests targeting `main`, and on
-manual dispatch. It stands up PostgreSQL 17 as a service, installs the pinned
-toolchain, and then runs five commands after applying the migrations. Run the
-same six locally, in this order:
+CI is defined by `.github/workflows/ci.yml`: `verify` runs on pushes to `main`,
+pull requests targeting `main`, and manual dispatch, and a separate `calibrate`
+job handles eligible `main` pushes and the manual refusal self-test. `verify`
+starts PostgreSQL 17, installs the pinned toolchain, applies migrations, and
+runs tests, lint, module-size, typecheck, build and page-geometry checks, with
+coverage, ratchet, migration-immutability and freshness checks as applicable.
+Docs-only changes run the test suite without coverage; other changes also
+measure coverage and check the floor. Run this local baseline in the same order:
 
 ```bash
 pnpm db:migrate
 pnpm test --run
 pnpm lint
+node scripts/check-module-size.ts
 pnpm typecheck
 pnpm build
 node scripts/check-page-geometry.mjs
