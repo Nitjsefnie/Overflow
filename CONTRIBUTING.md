@@ -66,9 +66,9 @@ pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
 installs through corepack. Use those versions; the lockfile is installed frozen,
 so a different pnpm is the first thing that will argue with you.
 
-Copy `.env.example` to `.env` and replace **every** placeholder — every value
-in that file is an angle-bracket placeholder, and none of them is a working
-default:
+Copy `.env.example` to `.env` and replace the angle-bracket placeholders with
+your local values. The optional `GITHUB_GRAPHQL_BUDGET_RESERVE=500` default can
+stay as-is:
 
 - `DATABASE_URL` — a PostgreSQL 17 connection string.
 - `AUTH_SECRET` — generate with `npx auth secret`.
