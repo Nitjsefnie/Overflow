@@ -334,7 +334,11 @@ curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
 # documented environment cannot sign in passed the check above. GET
 # /api/auth/providers runs the Auth.js configuration and answers 500
 # ([auth][error] UntrustedHost) on exactly that misconfiguration; refuse the
-# deploy unless it answers 200.
+# deploy unless it answers 200. The URL derives from the readiness URL knob by
+# replacing its trailing /api/readiness — OVERFLOW_DEPLOY_URL is contracted to
+# name the readiness endpoint (its production default does), and any other
+# target derives a wrong smoke URL that fails closed.
+providers_url="${url%/api/readiness}/api/auth/providers"
 providers_url="${url%/api/readiness}/api/auth/providers"
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$providers_url"
@@ -345,7 +349,7 @@ pnpm --silent webhooks:upgrade > "$upgrade_log" 2>&1 || upgrade_status=$?
 cat "$upgrade_log"
 printf 'Webhook upgrade log: %s\nWebhook upgrade exit status: %s\n' "$upgrade_log" "$upgrade_status"
 test "$upgrade_status" -eq 0 || exit "$upgrade_status"
-# The record attests a fully deployed release — built (after whose clean step it must be written), switched, restarted, readiness-verified and webhook-upgraded — so a redundant deploy may trust it; a failed deploy leaves no record and its retry re-runs everything.
+# The record attests a fully deployed release — built (after whose clean step it must be written), switched, restarted, readiness- and sign-in-smoke-verified and webhook-upgraded — so a redundant deploy may trust it; a failed deploy leaves no record and its retry re-runs everything.
 printf '%s\n' "$full_sha" > "$release/REVISION"
 printf 'Source revision: %s\n' "$full_sha"
 

@@ -687,7 +687,11 @@ for the test harness; production sets none of them and runs on the defaults:
 `OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
 `OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/api/readiness`),
 `OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`) and
-`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). One further override is
+`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). The deployment URL must name the
+readiness endpoint: the sign-in smoke derives its own URL from
+`OVERFLOW_DEPLOY_URL` by replacing the trailing `/api/readiness` with
+`/api/auth/providers`, so any other target derives a wrong smoke URL and
+refuses the deploy — failing closed. One further override is
 operator-facing, not a test knob: `OVERFLOW_DEPLOY_CI_GATE`, whose only
 accepted non-default value is `skip` (the gate paragraph above).
 
