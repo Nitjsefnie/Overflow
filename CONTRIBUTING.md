@@ -66,27 +66,35 @@ pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
 installs through corepack. Use those versions; the lockfile is installed frozen,
 so a different pnpm is the first thing that will argue with you.
 
-Copy `.env.example` to `.env` and replace the angle-bracket placeholders with
-your local values. The optional `GITHUB_GRAPHQL_BUDGET_RESERVE=500` default can
-stay as-is. Replace these placeholders:
+Copy `.env.example` to `.env` and set or adjust the following variables as
+needed. Replace angle-bracket placeholders with local values; optional values
+can stay at their defaults or be omitted as noted:
 
-- `DATABASE_URL` — a PostgreSQL 17 connection string.
-- `AUTH_SECRET` — generate with `npx auth secret`.
-- `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` — a GitHub OAuth application's
-  credentials. Its callback URL is `<APP_URL>/api/auth/callback/github`.
-- `TOKEN_ENCRYPTION_KEY` — 32 random bytes as unpadded base64url. This is the
-  AES-256-GCM key for stored OAuth tokens, so it is a real key even locally.
-- `APP_URL` — the public application URL.
-- `GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL` — public HTTPS callback URLs
-  their forges must be able to reach. You need the callback URLs to exercise
-  webhook registration and delivery end to end; the test suite does not.
+- `DATABASE_URL` — set to a PostgreSQL 17 connection string.
+- `AUTH_SECRET` — set to a secret generated with `npx auth secret`.
+- `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` — set to a GitHub OAuth
+  application's credentials. Its callback URL is
+  `<APP_URL>/api/auth/callback/github`.
+- `TOKEN_ENCRYPTION_KEY` — set to 32 random bytes as unpadded base64url. This
+  is the AES-256-GCM key for stored OAuth tokens, so it is a real key even
+  locally.
+- `APP_URL` — set to the public application URL.
+- `GITHUB_WEBHOOK_URL` and `GITLAB_WEBHOOK_URL` — set to public HTTPS callback
+  URLs their forges must be able to reach. You need the callback URLs to
+  exercise webhook registration and delivery end to end; the test suite does
+  not.
 - `DATABASE_STATEMENT_TIMEOUT_MS` — optional deadline for database statements;
-  see the [Environment reference](OPERATING.md#environment-reference) for its
-  default and validation behavior.
+  this variable is not in `.env.example` and can be added to `.env` when you
+  want to set it. See the [Environment reference](OPERATING.md#environment-reference)
+  for its default and validation behavior.
 - `GITHUB_GRAPHQL_BUDGET_RESERVE` — optional GraphQL admission threshold for
-  worker passes; see the [Environment reference](OPERATING.md#environment-reference)
-  for its default and behavior.
-- `MODERATOR_GITHUB_USER_IDS` — comma-separated GitHub account ids granted the moderator role at sign-in (`gh api users/<login> --jq .id`).
+  worker passes. `.env.example` includes the default `500`, which can stay as-is
+  or be changed or omitted. See the
+  [Environment reference](OPERATING.md#environment-reference) for its default
+  and behavior.
+- `MODERATOR_GITHUB_USER_IDS` — optional comma-separated GitHub account ids
+  granted the moderator role at sign-in. `.env.example` shows placeholders to
+  replace if you use this setting (`gh api users/<login> --jq .id`).
 
 Placeholders only in anything checked in. Never commit OAuth credentials,
 webhook secrets, database passwords or encryption keys.
