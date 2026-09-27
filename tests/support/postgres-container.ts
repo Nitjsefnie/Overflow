@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeSync } from "node:fs";
+import { createServer } from "node:net";
 import { inject } from "vitest";
-import { GenericContainer, Wait, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
+import { GenericContainer, Wait, getContainerRuntimeClient, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
 
 export interface PostgresContainerOptions {
@@ -10,16 +11,6 @@ export interface PostgresContainerOptions {
   password: string;
   /** Optional shell scripts copied into /docker-entrypoint-initdb.d/ before start. Test fixtures only. */
   initScripts?: ReadonlyArray<{ name: string; content: string }>;
-  /**
-   * A fixed host port for the private container's 5432, honored again when the
-   * container is stopped and started back up (a dynamically allocated host
-   * port is re-allocated on every start, which would strand every client of
-   * the original URL). Suites that restart their container need this; suites
-   * that do not should keep the default dynamic mapping. Requires the private
-   * path — pass initScripts — and collides loudly, rather than silently
-   * serving the wrong suite, if two runs pick the same port at once.
-   */
-  fixedHostPort?: number;
 }
 
 export interface StartedPostgres {
@@ -226,11 +217,49 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
   if (initScripts.length > 0) {
     return startPrivatePostgres(options);
   }
-  if (options.fixedHostPort !== undefined) {
-    throw new Error("fixedHostPort needs a private container: pass initScripts so the suite owns one");
-  }
-
   return startOnSharedServer({ database, user, password });
+}
+
+/** Docker preserves explicit host port bindings when the same container restarts. */
+async function pickPrivateHostPort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "0.0.0.0", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        reject(new Error("could not determine the private postgres host port"));
+        return;
+      }
+      server.close((error) => error ? reject(error) : resolve(address.port));
+    });
+  });
+}
+
+class TrackedPrivatePostgresContainer extends GenericContainer {
+  createdContainerId: string | undefined;
+
+  protected override async containerCreated(containerId: string): Promise<void> {
+    this.createdContainerId = containerId;
+  }
+}
+
+/** A failed Docker start can leave the created container behind. */
+async function removeFailedPrivateContainer(id: string | undefined): Promise<void> {
+  if (id === undefined) return;
+  try {
+    const client = await getContainerRuntimeClient();
+    const container = client.container.getById(id);
+    try {
+      await client.container.stop(container);
+    } catch {
+      // It may never have started.
+    }
+    await client.container.remove(container, { removeVolumes: true });
+  } catch {
+    // A failure before creation leaves nothing to remove.
+  }
 }
 
 /**
@@ -239,29 +268,40 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
  * before the shared server existed (issue 626 left them unchanged).
  */
 async function startPrivatePostgres(options: PostgresContainerOptions): Promise<StartedPostgres> {
-  const { database, user, password, initScripts = [], fixedHostPort } = options;
+  const { database, user, password, initScripts = [] } = options;
 
-  let container = new GenericContainer(POSTGRES_IMAGE)
-    .withEnvironment({
-      POSTGRES_DB: database,
-      POSTGRES_PASSWORD: password,
-      POSTGRES_USER: user,
-    })
-    .withExposedPorts(fixedHostPort === undefined ? 5432 : { container: 5432, host: fixedHostPort })
-    .withWaitStrategy(postgresWaitStrategy({ database, user }));
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const hostPort = await pickPrivateHostPort();
+    let container = new TrackedPrivatePostgresContainer(POSTGRES_IMAGE)
+      .withEnvironment({
+        POSTGRES_DB: database,
+        POSTGRES_PASSWORD: password,
+        POSTGRES_USER: user,
+      })
+      .withExposedPorts({ container: 5432, host: hostPort })
+      .withWaitStrategy(postgresWaitStrategy({ database, user }));
 
-  for (const { name, content } of initScripts) {
-    container = container.withCopyContentToContainer([
-      { content, target: `/docker-entrypoint-initdb.d/${name}`, mode: 0o755 },
-    ]);
+    for (const { name: scriptName, content } of initScripts) {
+      container = container.withCopyContentToContainer([
+        { content, target: `/docker-entrypoint-initdb.d/${scriptName}`, mode: 0o755 },
+      ]);
+    }
+
+    try {
+      const started = await container.start();
+      return {
+        container: started,
+        databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}?client_min_messages=warning`,
+      };
+    } catch (error) {
+      await removeFailedPrivateContainer(container.createdContainerId);
+      if (!(error instanceof Error && /userland proxy:.*address already in use/i.test(error.message)) || attempt === 3) {
+        throw error;
+      }
+    }
   }
 
-  const started = await container.start();
-
-  return {
-    container: started,
-    databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}?client_min_messages=warning`,
-  };
+  throw new Error("private postgres port retry limit exceeded");
 }
 
 /**
