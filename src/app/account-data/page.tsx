@@ -149,7 +149,8 @@ export function AccountDataNotice() {
         </ul>
         <p>
           None of the free text is retained: a reconciliation pass writes no issue, pull request, or comment
-          body text, and unregistering a repository scrubs what earlier passes stored.
+          body text, and unregistering a repository scrubs what earlier passes stored (unless a settlement from
+          the last few minutes is still being computed).
         </p>
         <p>Overflow stores no avatar and no display name for someone who has not signed in.</p>
         <p>
@@ -159,8 +160,8 @@ export function AccountDataNotice() {
           its dashboard, settlement history, and settlement proof and calibration pages; a member credited with a
           settlement sees the same titles on their own dashboard and settlement history and on that
           settlement&apos;s proof page. Moderators see the moderation notes, and issue and pull request titles in
-          the moderation queues and closure history. Descriptions, comment text, the cache, and the change log
-          are displayed to no one. The site operator administers the database.
+          the moderation queues and closure history. The cache and the change log are displayed to no one. The
+          site operator administers the database.
         </p>
         <p>How long it is kept:</p>
         <ul>
@@ -168,7 +169,7 @@ export function AccountDataNotice() {
             While the repository stays registered, reconciliation re-reads it. A pass re-reads from GitHub or
             GitLab only the issues updated since the last pass and takes the rest from the cache; a full re-read
             replaces the whole cache. Each pass overwrites the stored logins and pull request fields from that
-            copy, and an issue&apos;s title and description whenever the forge&apos;s copy is at least as new. An
+            copy, and an issue&apos;s title whenever the forge&apos;s copy is at least as new. An
             unattended sweep runs every six hours, and a pass does a full re-read once six hours have passed since
             the last one, so while the repository can still be read, an edit or deletion on GitHub or GitLab
             normally reaches Overflow&apos;s copy within twelve hours. An issue or pull request that a later pass
@@ -185,8 +186,10 @@ export function AccountDataNotice() {
             that removes only entries recording no actual change.
           </li>
           <li>
-            Unregistering a repository deletes none of this. It stops the re-reads, so the copy stored for that
-            repository is kept indefinitely.
+            Unregistering a repository deletes none of this — the logins, numeric ids, titles, change-log
+            entries, and closing-PR diffs and reviews all stay — and it stops the re-reads. Its free text is
+            the exception: the stored body and comment text are removed, unless a settlement from the last few
+            minutes is still being computed.
           </li>
           <li>The daily database backups described in the How long it is kept section below hold this data too.</li>
         </ul>
