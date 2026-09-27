@@ -315,13 +315,15 @@ else
     printf 'The working tree in %s deviates from HEAD; fast-forwarding it to %s would not make it that commit. A release is named for the commit it was built from; refusing to build one from a tree that is not that commit. Resolve every deviation above (git status), then re-run the deploy.\n' "$tree" "$full_sha" >&2
     exit 1
   fi
-  # NUL-delimited, so a name containing a newline is judged whole; the process
-  # substitution's status is read back through wait, so a failed listing refuses
-  # even when it printed something first. An ignored empty directory is left out:
-  # nothing in it can be compiled.
-  mapfile -d '' -t ignored_entries < <(git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory)
+  # NUL-delimited, so a name containing a newline is judged whole. Capture the
+  # git ls-files status directly from its simple command, so no wait/ECHILD race
+  # can lose it; a failed listing still refuses even if it printed entries
+  # first. An ignored empty directory is left out: nothing in it can be compiled.
+  ignored_listing=$(mktemp)
   ignored_status=0
-  wait "$!" || ignored_status=$?
+  git ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory > "$ignored_listing" || ignored_status=$?
+  mapfile -d '' -t ignored_entries < "$ignored_listing"
+  rm -f "$ignored_listing"
   if [ "$ignored_status" -ne 0 ]; then
     printf 'Could not list the ignored untracked files in %s (git ls-files exited %s); refusing to build a release whose source identity cannot be attested. HEAD, the index and the working tree are untouched; only the fetched refs moved. Investigate git ls-files in the tree before re-running.\n' "$tree" "$ignored_status" >&2
     exit 1
