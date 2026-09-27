@@ -14,27 +14,27 @@ const migrationHarness = vi.hoisted(() => ({
   closeSql: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs/promises")>()),
-  readdir: () => Promise.resolve(migrationHarness.entries),
-  readFile: (fileName: string) => {
-    const migrationName = fileName.split(/[\\/]/).at(-1) ?? "";
-    const contents = migrationHarness.contents.get(migrationName);
-    return contents === undefined
-      ? Promise.reject(new Error(`Unexpected migration read: ${fileName}`))
-      : Promise.resolve(contents);
-  },
-}));
-
-vi.mock("../../src/lib/db/client.ts", () => ({
-  withTransaction: migrationHarness.withTransaction,
-  closeSql: migrationHarness.closeSql,
-}));
-
-import * as migrationModule from "../../scripts/migrate";
-import { applyAndRecordMigration } from "../../scripts/migrate";
-
 type TransactionWork = (sql: unknown) => Promise<unknown>;
+
+async function loadMigrationModule(): Promise<typeof import("../../scripts/migrate")> {
+  vi.resetModules();
+  vi.doMock("node:fs/promises", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("node:fs/promises")>()),
+    readdir: () => Promise.resolve(migrationHarness.entries),
+    readFile: (fileName: string) => {
+      const migrationName = fileName.split(/[\\/]/).at(-1) ?? "";
+      const contents = migrationHarness.contents.get(migrationName);
+      return contents === undefined
+        ? Promise.reject(new Error(`Unexpected migration read: ${fileName}`))
+        : Promise.resolve(contents);
+    },
+  }));
+  vi.doMock("../../src/lib/db/client.ts", () => ({
+    withTransaction: migrationHarness.withTransaction,
+    closeSql: migrationHarness.closeSql,
+  }));
+  return import("../../scripts/migrate");
+}
 
 function installTransactionDouble(): void {
   migrationHarness.withTransaction.mockImplementation(async (work: TransactionWork) => {
@@ -116,12 +116,20 @@ describe("migration reporting", () => {
     installTransactionDouble();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
+  afterEach(async () => {
+    try {
+      await migrationHarness.closeSql();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      vi.doUnmock("node:fs/promises");
+      vi.doUnmock("../../src/lib/db/client.ts");
+      vi.resetModules();
+    }
   });
 
   it("returns the names of migrations whose transactions committed and stays library-quiet", async () => {
+    const migrationModule = await loadMigrationModule();
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -142,6 +150,7 @@ describe("migration reporting", () => {
   });
 
   it("does not settle or persist a migration after a later migration fails", async () => {
+    const migrationModule = await loadMigrationModule();
     migrationHarness.failMigration = "002_b.sql";
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -171,6 +180,7 @@ describe("migration reporting", () => {
   });
 
   it("records a migration name only after its transaction resolves", async () => {
+    const migrationModule = await loadMigrationModule();
     const appliedNames: string[] = [];
     let settleTransaction!: () => void;
     const transaction = vi.fn(
@@ -180,7 +190,11 @@ describe("migration reporting", () => {
         }),
     );
 
-    const recording = applyAndRecordMigration(appliedNames, "001_a.sql", transaction);
+    const recording = migrationModule.applyAndRecordMigration(
+      appliedNames,
+      "001_a.sql",
+      transaction,
+    );
 
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(appliedNames).toEqual([]);
@@ -190,10 +204,11 @@ describe("migration reporting", () => {
   });
 
   it("does not record a migration name when its transaction rejects", async () => {
+    const migrationModule = await loadMigrationModule();
     const appliedNames: string[] = [];
 
     await expect(
-      applyAndRecordMigration(appliedNames, "002_b.sql", async () => {
+      migrationModule.applyAndRecordMigration(appliedNames, "002_b.sql", async () => {
         throw new Error("transaction rolled back");
       }),
     ).rejects.toThrow("transaction rolled back");
@@ -209,8 +224,7 @@ describe("migration reporting", () => {
     process.argv[1] = fileURLToPath(new URL("../../scripts/migrate.ts", import.meta.url));
 
     try {
-      vi.resetModules();
-      await import("../../scripts/migrate");
+      await loadMigrationModule();
     } finally {
       process.argv[1] = originalEntrypoint;
     }
@@ -236,8 +250,7 @@ describe("migration reporting", () => {
     process.argv[1] = fileURLToPath(new URL("../../scripts/migrate.ts", import.meta.url));
 
     try {
-      vi.resetModules();
-      await import("../../scripts/migrate");
+      await loadMigrationModule();
     } finally {
       process.argv[1] = originalEntrypoint;
     }
@@ -260,9 +273,8 @@ describe("migration reporting", () => {
     process.argv[1] = fileURLToPath(new URL("../../scripts/migrate.ts", import.meta.url));
 
     try {
-      vi.resetModules();
       try {
-        await import("../../scripts/migrate");
+        await loadMigrationModule();
       } catch {
         importRejected = true;
       }
