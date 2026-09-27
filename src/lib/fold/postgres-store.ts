@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { JSONValue } from "postgres";
-import { getCoordinationSql, getSql } from "@/lib/db/client";
+import { getCoordinationSql, getSql, redactPostgresError } from "@/lib/db/client";
 import {
   type EnforcementState,
   type IssueState,
@@ -457,7 +457,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       try {
         connection = await this.reserveCoordinationConnection(deadline - Date.now());
       } catch (cause) {
-        throw new Error(repositoryCoordinationFailure, { cause });
+        throw new Error(repositoryCoordinationFailure, { cause: redactPostgresError(cause) });
       }
 
       let locked = false;
@@ -559,7 +559,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         if (locked) {
           throw error;
         }
-        throw new Error(repositoryCoordinationFailure, { cause: error });
+        throw new Error(repositoryCoordinationFailure, { cause: redactPostgresError(error) });
       } finally {
         // A connection whose session might still hold the repository's lock never goes back into
         // the pool; `reclaimCoordinationConnection` says whether this one is fit to.

@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import type { SqlClient, TransactionCallback } from "@/lib/db/types";
+export { redactPostgresError } from "@/lib/db/redact-postgres-error";
 
 /** Connections available for ordinary application work. */
 const WORK_POOL_MAX = 10;
