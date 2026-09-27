@@ -69,18 +69,13 @@ describe.each(["github", "gitlab"] as const)("%s scoped webhook authentication",
   );
 
   it("never falls back to the global credential for unknown or legacy hooks", async () => {
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", credential.secret);
-    try {
-      const deliveries: unknown[] = [];
-      const response = await factory({
-        lookupCredential: async () => null,
-        processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
-      })(request());
-      expect(response.status).toBe(401);
-      expect(deliveries).toEqual([]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const deliveries: unknown[] = [];
+    const response = await factory({
+      lookupCredential: async () => null,
+      processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; },
+    })(request());
+    expect(response.status).toBe(401);
+    expect(deliveries).toEqual([]);
   });
 
   it("sanitizes lookup and decryption failures without processing", async () => {

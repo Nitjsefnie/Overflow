@@ -758,7 +758,6 @@ function productionGitLabWiring() {
   vi.stubEnv("TOKEN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
   vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
   vi.stubEnv("GITLAB_WEBHOOK_URL", gitlabWebhookUrl);
-  vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
   const getForgeToken = vi.spyOn(PostgresForgeIdentityStore.prototype, "getForgeToken")
     .mockResolvedValue({ token: "glpat-production-wire", identityId: "identity-1" });
   const requests: Request[] = [];
@@ -961,7 +960,6 @@ describe("Overflow token registration", () => {
       const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
         .mockResolvedValue("BANNED");
       vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-      vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
       const fetchGitHub = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
       vi.stubGlobal("fetch", fetchGitHub);
       const response = await POST(path === "token" ? authorizedRequest() : jsonRequest(validInput()));
@@ -987,7 +985,6 @@ describe("Overflow token registration", () => {
       vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-oauth-token");
       vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
       vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-      vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
       // The granted-scope probe (issue 599) precedes the gateway: /user
       // answers with webhook administration; everything else is GraphQL.
       const request = vi.fn<typeof fetch>(async (input) =>
@@ -1023,7 +1020,6 @@ describe("Overflow token registration", () => {
   // GitHub callback and reads the sponsor's PAT through the identity store.
   it("installs the GitLab hook at GITLAB_WEBHOOK_URL through the production POST wiring", async () => {
     const forge = productionGitLabWiring();
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "");
     const project = gitlabProjectPayload();
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationState").mockResolvedValue(null);
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryProviderById").mockResolvedValue(null);
@@ -1107,7 +1103,6 @@ describe("Overflow token registration", () => {
     const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
       .mockResolvedValue("ACTIVE");
     vi.stubEnv("GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "webhook-secret");
     // The granted-scope probe (issue 599) precedes the repository read: /user
     // answers with webhook administration so the flow proceeds, and the
     // repository read answers an outage.
@@ -1904,7 +1899,6 @@ describe("DELETE /api/repositories", () => {
   // route constructs, and nothing else in this suite drives that wiring.
   it("deletes the GitLab hook through the sponsor's forge token via the production DELETE wiring", async () => {
     const forge = productionGitLabWiring();
-    vi.stubEnv("GITHUB_WEBHOOK_SECRET", "");
     const target = gitlabTarget(tokenAccount.id);
     vi.spyOn(PostgresRepositoryStore.prototype, "findRepositoryRegistrationStateByForgeIdentity")
       .mockResolvedValue({ repository: target, unregisteredAt: null });
