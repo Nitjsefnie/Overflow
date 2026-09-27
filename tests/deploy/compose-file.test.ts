@@ -40,7 +40,7 @@ describe("docker-compose.yml", () => {
     expect(postgres.image).toBe("postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73");
     expect(postgres.restart).toBe("unless-stopped");
     expect(postgres.healthcheck).toBeDefined();
-    expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"]);
+    expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"]);
   });
 
   it("healthchecks the app against the readiness endpoint (issue 688)", () => {

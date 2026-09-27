@@ -112,9 +112,10 @@ That service is `postgres:17-alpine` with database, user and password
 `overflow` / `overflow` / `overflow_local_only`, published on loopback only,
 and a `pg_isready` healthcheck, so `docker compose ps` telling you it is
 healthy is the signal to continue. `POSTGRES_HOST_BIND` widens that binding on
-purpose; Compose reads it from your shell or from the same root `.env` the
-application uses, so a value left in that file widens the binding for every
-later `docker compose up`. That password is committed and well known, so any
+purpose, and `POSTGRES_HOST_PORT` overrides the host port (default `5432`, with
+the container port remaining `5432`). Compose reads both from your shell or
+from the same root `.env` the application uses, so values left in that file
+affect every later `docker compose up`. That password is committed and well known, so any
 address other than a loopback one publishes a database with known credentials
 to everything that can route to this machine. To reach it from elsewhere,
 forward the loopback port over SSH — `ssh -L 5432:127.0.0.1:5432 <host>` —
@@ -125,6 +126,9 @@ pnpm install --frozen-lockfile
 pnpm db:migrate
 pnpm dev
 ```
+
+The development server binds port 3000 by default. To use another port, pass
+Next.js's `--port` flag, for example `pnpm dev --port 3130`.
 
 `pnpm db:migrate` runs `scripts/migrate.ts`, which applies every
 `db/migrations/NNN_*.sql` in sorted order and records each name in a

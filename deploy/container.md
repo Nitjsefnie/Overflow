@@ -85,7 +85,9 @@ reaches the app.
 
 By default both services bind to loopback — the app on `127.0.0.1:3000`, the
 database on `127.0.0.1:5432` — and `APP_HOST_BIND` / `POSTGRES_HOST_BIND`
-move or widen those binds deliberately. `APP_URL` must name the real browsable
+change their host bind addresses deliberately. `POSTGRES_HOST_PORT` changes
+the database's host port from its default of `5432`; the container port stays
+`5432`. `APP_URL` must name the real browsable
 host, because it is what the Auth.js configuration trusts for sign-in: Auth.js
 itself never reads `APP_URL` — its own derivation trusts a host only from
 `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES` — so the configuration
