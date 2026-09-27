@@ -67,6 +67,55 @@ describe("Dockerfile", () => {
   });
 });
 
+// Issue 688: the runtime image must ship production dependencies only,
+// declare its health against the readiness endpoint, and be able to write
+// its cache as the unprivileged user. These pins hold the Dockerfile text to
+// the fix; the "built image" suite below proves the properties on an actual
+// build.
+describe("production runtime image (issue 688)", () => {
+  it("copies the runtime node_modules from a production-only stage, not the build stage", () => {
+    expect(dockerfile).toContain("FROM deps AS prod-deps");
+    // The wipe matters: a plain `pnpm install --prod` on top of the full
+    // install leaves every dev package in the .pnpm virtual store on disk,
+    // so the stage must reinstall fresh, not prune in place.
+    expect(dockerfile).toContain("rm -rf node_modules");
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --prod");
+    expect(dockerfile).toContain("COPY --from=prod-deps /app/node_modules ./node_modules");
+    // The build stage's node_modules carries the dev tree (vitest,
+    // testcontainers, eslint, jsdom, typescript and ssh2's test-fixture
+    // keys); sourcing the runtime copy from it is exactly the defect.
+    expect(dockerfile).not.toContain("COPY --from=build /app/node_modules");
+  });
+
+  it("declares a HEALTHCHECK probing the readiness endpoint", () => {
+    const lines = dockerfile.split("\n");
+    const healthcheckAt = lines.findIndex((line) => line.startsWith("HEALTHCHECK"));
+    expect(healthcheckAt, "a HEALTHCHECK line in the Dockerfile").toBeGreaterThanOrEqual(0);
+    const healthcheck = lines.slice(healthcheckAt, healthcheckAt + 3).join("\n");
+    // bookworm-slim ships neither curl nor wget, so the probe is a node
+    // fetch one-liner whose response status drives the exit code.
+    expect(healthcheck).toContain("node -e");
+    expect(healthcheck).toContain("/api/readiness");
+  });
+
+  it("hands .next/cache to the runtime user before dropping privileges", () => {
+    const lines = dockerfile.split("\n");
+    const runtimeAt = lines.findIndex((line) => line.includes("AS runtime"));
+    const cacheAt = lines.findIndex((line) => line.includes("chown -R node:node .next/cache"));
+    const userAt = lines.findIndex((line) => line === "USER node");
+    expect(cacheAt, "the .next/cache ownership line").toBeGreaterThan(runtimeAt);
+    expect(userAt, "USER node after the cache handover").toBeGreaterThan(cacheAt);
+    expect(dockerfile).toContain("chmod -R u=rwX,g=rX,o=");
+  });
+
+  it("disables Next.js telemetry in the build stage before the bundle compiles", () => {
+    const buildStage = dockerfile.split("FROM deps AS build")[1]?.split("\nFROM ")[0] ?? "";
+    expect(buildStage).toContain("ENV NEXT_TELEMETRY_DISABLED=1");
+    expect(buildStage.indexOf("ENV NEXT_TELEMETRY_DISABLED=1"))
+      .toBeLessThan(buildStage.indexOf("RUN pnpm build"));
+  });
+});
+
 // Issue 461: an image built from this Dockerfile must be traceable to the
 // reviewed source that produced it. A preserved image used to report
 // Config.Labels=null — nothing tied the running bytes to a source tree, and
@@ -195,6 +244,72 @@ describe("built image", () => {
       const [uid] = configUser.split(":");
       expect(uid.toLowerCase(), "the image runtime user").not.toBe("root");
       expect(uid, "the image runtime uid").not.toBe("0");
+    },
+  );
+
+  it(
+    "ships production dependencies only, with no dev packages left in the virtual store",
+    { timeout: 1_200_000 },
+    () => {
+      const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+      const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      }).trim();
+      execFileSync(
+        "docker",
+        [
+          "build",
+          "--build-arg",
+          `SOURCE_SHA=${sourceSha}`,
+          "-t",
+          "overflow-688-prod-only",
+          ".",
+        ],
+        {
+          cwd: repoRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      // Both surfaces are asserted because a plain `pnpm install --prod` on
+      // top of a full install empties the top level while leaving every dev
+      // package's bytes in the .pnpm virtual store — the deficient first
+      // shape of this fix passed the text pins with vitest, ssh2's
+      // test-fixture keys and the rest still in the image.
+      const devPackages = ["vitest", "eslint", "jsdom", "typescript", "testcontainers", "ssh2"];
+      const topLevel = execFileSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--entrypoint",
+          "ls",
+          "overflow-688-prod-only",
+          "/app/node_modules",
+        ],
+        { encoding: "utf8" },
+      );
+      const entries = topLevel.split("\n").filter((line) => line !== "");
+      const virtualStore = execFileSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--entrypoint",
+          "ls",
+          "overflow-688-prod-only",
+          "/app/node_modules/.pnpm",
+        ],
+        { encoding: "utf8" },
+      );
+      const storeEntries = virtualStore.split("\n").filter((line) => line !== "");
+      for (const devPackage of devPackages) {
+        expect(entries, "the image's top-level node_modules").not.toContain(devPackage);
+        expect(
+          storeEntries.filter((entry) => entry.split("@")[0] === devPackage),
+          `the .pnpm virtual store must not carry ${devPackage}`,
+        ).toEqual([]);
+      }
     },
   );
 });

@@ -43,6 +43,20 @@ describe("docker-compose.yml", () => {
     expect(postgres.ports).toEqual(["${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"]);
   });
 
+  it("healthchecks the app against the readiness endpoint (issue 688)", () => {
+    const healthcheck = compose.services.app.healthcheck as Record<string, unknown> | undefined;
+    expect(healthcheck, "an app healthcheck beside postgres's").toBeDefined();
+    const probe = Array.isArray(healthcheck?.test)
+      ? (healthcheck.test as string[]).join(" ")
+      : String(healthcheck?.test ?? "");
+    expect(probe).toContain("CMD-SHELL");
+    expect(probe).toContain("/api/readiness");
+    expect(healthcheck?.interval).toBeDefined();
+    expect(healthcheck?.timeout).toBeDefined();
+    expect(healthcheck?.retries).toBeDefined();
+    expect(healthcheck?.start_period).toBeDefined();
+  });
+
   it("starts the app only after postgres reports healthy, on a loopback port by default", () => {
     const app = compose.services.app;
     expect(app.restart).toBe("unless-stopped");
