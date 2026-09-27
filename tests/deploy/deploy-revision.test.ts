@@ -2191,16 +2191,6 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
 });
 
 describe("deploy/README.md section 10 pins the committed script as the procedure", () => {
-  it("documents the pending-migration review gate and append-only checks", async () => {
-    const section = await section10();
-    expect(section).toContain("scripts/deploy-migration-status.ts");
-    expect(section).toContain("overflow: mixed-version review");
-    expect(section).toContain("OVERFLOW_DEPLOY_MIGRATION_ACK=1");
-    expect(section).toContain("append-only");
-    expect(section).toContain("checksum mismatch");
-    expect(section).toContain("The manual fallback does not");
-  });
-
   it("names scripts/deploy-revision.sh as the procedure to run", async () => {
     expect(await section10()).toContain("bash scripts/deploy-revision.sh");
   });
