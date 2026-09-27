@@ -201,7 +201,21 @@ describe("GitHub Actions release gates", () => {
     expect(workflow.on).toEqual(expect.objectContaining({
       push: { branches: ["main"] },
       pull_request: { branches: ["main"] },
-      workflow_dispatch: null,
+      // The dispatch trigger carries the calibrate self-test's input: a
+      // boolean, defaulting false, whose fabricated raise must be refused by
+      // branch protection so the calibrate job fails visibly (issue 684).
+      // Pinned in full so a retyped, re-defaulted or renamed input — the
+      // difference between a self-test dispatch and an accidental
+      // fabrication — fails here.
+      workflow_dispatch: {
+        inputs: {
+          "simulate-refused-raise": {
+            description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)",
+            type: "boolean",
+            default: false,
+          },
+        },
+      },
     }));
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on.pull_request).not.toHaveProperty("paths");
