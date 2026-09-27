@@ -426,7 +426,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       return await Promise.race([
         reservation,
         new Promise<never>((_resolve, reject) => {
-          expiry = setTimeout(() => reject(new Error(repositoryCoordinationFailure)), remainingMs);
+          expiry = setTimeout(() => reject(new Error("Timed out waiting for a coordination connection.")), remainingMs);
         }),
       ]);
     } catch (error) {
@@ -456,8 +456,8 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       let connection: Awaited<ReturnType<SqlClient["reserve"]>>;
       try {
         connection = await this.reserveCoordinationConnection(deadline - Date.now());
-      } catch {
-        throw new Error(repositoryCoordinationFailure);
+      } catch (cause) {
+        throw new Error(repositoryCoordinationFailure, { cause });
       }
 
       let locked = false;
@@ -559,7 +559,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         if (locked) {
           throw error;
         }
-        throw new Error(repositoryCoordinationFailure);
+        throw new Error(repositoryCoordinationFailure, { cause: error });
       } finally {
         // A connection whose session might still hold the repository's lock never goes back into
         // the pool; `reclaimCoordinationConnection` says whether this one is fit to.
