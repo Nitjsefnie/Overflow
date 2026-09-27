@@ -9,16 +9,23 @@ production on this host.
 
 ## What you get
 
-`Dockerfile` at the repository root builds the application image in three
+`Dockerfile` at the repository root builds the application image in four
 stages: `deps` installs the exact locked dependency tree (including the
 patched `postgres` client) with corepack-pinned pnpm, `build` compiles the
-Next.js production bundle on top of it, and `runtime` carries only the built
-output, the migrations, and the code the start command needs onto a clean
-base. Both stages pin `node:24.17.0-bookworm-slim` by digest, and the runtime
-stage labels every image with the full source revision it was built from — an
-image without that label cannot be built (issue 461). `docker-compose.yml`
-defines an `app` service behind the `app` profile alongside a `postgres`
-service pinned by digest, so a plain `docker compose up -d` still starts the
+Next.js production bundle on top of it, `prod-deps` prunes that locked tree
+to production dependencies only, and `runtime` carries the built output, the
+migrations, the production-only dependency tree, and the code the start
+command needs onto a clean base. The `deps` and `runtime` stages pin
+`node:24.17.0-bookworm-slim` by digest, and the runtime stage labels every
+image with the full source revision it was built from — an image without
+that label cannot be built (issue 461) — declares a `HEALTHCHECK` against
+`/api/readiness`, the endpoint that answers 200 only when the database is
+reachable and every migration this build bundles is applied, and hands
+`.next/cache` to the runtime user so the server can write its cache, the way
+the host path hands the release cache to the service user. `docker-compose.yml`
+defines an `app` service behind the `app` profile — carrying the same
+readiness healthcheck, in postgres's shape — alongside a `postgres` service
+pinned by digest, so a plain `docker compose up -d` still starts the
 database alone.
 
 ## Build and run
@@ -117,11 +124,16 @@ deployable unit.
 runtime stage selects `USER node` (UID 1000, shipped by the base image), so
 the pre-start migration step and the long-lived server share one non-root
 identity: they are the same Node workload, needing only network egress to
-Postgres and read access to `/app`, and neither writes to the filesystem, so
-a second identity would bound nothing. `docker-compose.yml` deliberately
-carries no `user:` override — the image's `USER` is the single source of
-truth for the runtime identity, and a test pins both the selection and the
-absent override.
+Postgres, read access to `/app`, and one writable directory. The server
+writes its Next.js cache to `.next/cache` at runtime, so the runtime stage
+hands that directory to `node` with `chown -R node:node` and
+`chmod -R u=rwX,g=rX,o=` — the exact mode the host deploy gives the release
+cache — while everything else under `/app` stays root-owned and read-only.
+That single writable directory is not a second capability a dedicated
+identity would bound further, so a second identity would still bound
+nothing. `docker-compose.yml` deliberately carries no `user:` override — the
+image's `USER` is the single source of truth for the runtime identity, and a
+test pins both the selection and the absent override.
 
 **Rollback redeploys a recorded immutable identity, not a mutable tag.**
 Where the host path flips `.next` back to the previous release directory with

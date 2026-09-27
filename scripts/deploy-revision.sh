@@ -392,7 +392,7 @@ pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
 node scripts/release.ts prepare "$tree" "$release"
-NEXT_DIST_DIR="$release" pnpm build
+NEXT_TELEMETRY_DISABLED=1 NEXT_DIST_DIR="$release" pnpm build
 previous_release=$(readlink -f "$tree/.next")
 serving_cache="$previous_release/cache"
 test -d "$serving_cache"

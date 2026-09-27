@@ -40,6 +40,17 @@ services:
       # Loopback only by default, like postgres; set APP_HOST_BIND to widen.
       # APP_URL must still name the address users browse to.
       - "${APP_HOST_BIND:-127.0.0.1}:3000:3000"
+    healthcheck:
+      # Same readiness probe the image's HEALTHCHECK runs (issue 688), in
+      # postgres's healthcheck shape: bookworm-slim has no curl/wget, so the
+      # command is a node fetch one-liner whose response status drives the
+      # exit code. During start_period failures do not yet count as
+      # failures, so the app's migrate-then-start boot fits the window.
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/readiness').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
 volumes:
   overflow-postgres-data:

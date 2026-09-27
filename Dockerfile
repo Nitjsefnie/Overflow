@@ -20,7 +20,25 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY . .
+# Next.js prints its telemetry notice and phones home on every production
+# build unless disabled (issue 688): the build host opts out the same way the
+# runtime stage below already does.
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
+
+# Production-only dependency stage (issue 688): `deps` installs the dev tree
+# too (vitest, testcontainers, eslint, jsdom, typescript, and the ssh2
+# package's test-fixture keys through testcontainers), and the runtime image
+# must ship none of it. A plain `pnpm install --prod` on top of the full
+# install empties the top level but LEAVES THE DEV PACKAGES in the .pnpm
+# virtual store on disk (observed: `Packages: -519` reported yet 591 entries
+# remain, ssh2's test-fixture keys included) — so node_modules is wiped and
+# the prod-only frozen install runs fresh, hardlinking out of the store this
+# stage inherits. The patched postgres client still resolves at the
+# lockfile's patch hash.
+FROM deps AS prod-deps
+RUN rm -rf node_modules \
+  && pnpm install --frozen-lockfile --prod
 
 FROM node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532 AS runtime
 # Immutable provenance (issue 461). An image built from this Dockerfile must
@@ -43,7 +61,7 @@ LABEL org.opencontainers.image.revision=$SOURCE_SHA \
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY --from=build /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
@@ -52,6 +70,20 @@ COPY --from=build /app/db ./db
 COPY --from=build /app/src/lib/db ./src/lib/db
 COPY --from=build /app/scripts/migrate.ts ./scripts/migrate.ts
 COPY --from=build /app/LICENSE ./LICENSE
+# Next.js writes its cache (.next/cache) at runtime, and the unprivileged
+# server cannot create it under the root-owned .next the build stage copied.
+# The host deploy hands the release cache to the service user with exactly
+# this mode (scripts/deploy-revision.sh); the container mirrors it (issue
+# 688). Runs as root, before the privilege drop.
+RUN mkdir -p .next/cache \
+  && chown -R node:node .next/cache \
+  && chmod -R u=rwX,g=rX,o= .next/cache
+# Health against the readiness endpoint (issue 439, 688): it answers 200 only
+# when the database is reachable and every migration this build bundles is
+# applied. bookworm-slim ships neither curl nor wget, so the probe is a node
+# fetch one-liner whose response status drives the exit code.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/readiness').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 # The base image's built-in non-root account: the migration step and the server
 # share it (see deploy/container.md, "Decisions").
 USER node
