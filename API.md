@@ -794,9 +794,10 @@ protocol version `2025-06-18`; a notification (a JSON-RPC request with no
 `id`) is answered with an empty HTTP `202`.
 
 The MCP endpoint shares the HTTP API's version and stability policy: the
-served version is `serverInfo.version` in the `initialize` answer, and
-`GET /api/version` reports the same number. The Stability and versioning
-section above is the contract both surfaces follow.
+served version — not the protocol version above — is `serverInfo.version`
+in the `initialize` answer, and `GET /api/version` reports the same
+number. The Stability and versioning section above is the contract both
+surfaces follow.
 
 ### The tools
 
