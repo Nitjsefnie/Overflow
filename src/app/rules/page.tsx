@@ -35,6 +35,10 @@ function RulesSections() {
       <section className="page-heading" aria-labelledby="rules-title">
         <h1 id="rules-title">Rules</h1>
         <p>How work earns credits and how accounts are reviewed.</p>
+        <p>
+          The <Link href="/terms">terms page</Link> is the short version, with the hosted
+          instance&apos;s terms.
+        </p>
       </section>
 
       <section className="surface rules-card" aria-labelledby="rules-maintainers-heading">

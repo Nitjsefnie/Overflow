@@ -13,7 +13,7 @@ code review, and commit messages. Two neighboring subjects are deliberately
 out of scope. How work is claimed, priced and settled is
 [CONTRIBUTING.md](CONTRIBUTING.md)'s subject. How accounts are moderated
 inside the running ledger is the Rules page's subject — served in-product at
-the deployed instance, <https://overflow.nitjsefni.eu> (sign in to read it) —
+the deployed instance, <https://overflow.nitjsefni.eu> —
 which also defines the moderation ladder, audit → warn → recalibrate → ban,
 that account-level enforcement follows. Where another document owns a
 question, it answers it; this one is about how people treat each other, and

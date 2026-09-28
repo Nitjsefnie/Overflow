@@ -78,6 +78,29 @@ describe("landing page", () => {
     expect(container.querySelector(".landing-mark")).toBeNull();
   });
 
+  // Issue 680: a new user can read the terms and the rules before any account
+  // exists, so both links sit with the account-data link, after the two
+  // sign-in forms.
+  it("links /terms and /rules beside the /account-data link, after the sign-in forms", () => {
+    render(<LandingPage />);
+
+    const terms = screen.getByRole("link", { name: "Terms" });
+    const rules = screen.getByRole("link", { name: "Rules" });
+    expect(terms).toHaveAttribute("href", "/terms");
+    expect(rules).toHaveAttribute("href", "/rules");
+
+    const accountData = screen.getByRole("link", { name: "What Overflow stores about your account" });
+    const contributor = screen.getByRole("button", { name: "Sign in with GitHub" });
+    const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
+    const hero = contributor.closest(".landing-hero");
+    for (const link of [terms, rules]) {
+      expect(link.closest(".landing-hero")).toBe(hero);
+      expect(contributor.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(registration.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(accountData.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it("does not present churn as a member metric", () => {
     render(<LandingPage />);
 
