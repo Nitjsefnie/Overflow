@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeSync } from "node:fs";
-import { createServer, isIP } from "node:net";
+import { createServer } from "node:net";
 import { inject } from "vitest";
 import { GenericContainer, Wait, getContainerRuntimeClient, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
@@ -15,7 +15,7 @@ export interface PostgresContainerOptions {
 
 export interface StartedPostgres {
   container: StartedTestContainer;
-  /** postgresql://user:password@host:mappedPort/database, with IPv6 hosts bracketed. */
+  /** postgresql://user:password@host:mappedPort/database; local URLs use a published IPv4 port. */
   databaseUrl: string;
 }
 
@@ -25,9 +25,10 @@ export interface StartedPostgres {
  * the main process; these facts are what crosses into each worker, so they
  * carry the container's id too — a worker never holds the container object
  * itself, and the id is how the facade forwards getId() (backup-restore execs
- * pg_dump and pg_restore through it). For a local Docker runtime, host is an
- * IP literal whose family matches the published port, so Node cannot fall
- * back to a different address family on that port.
+ * pg_dump and pg_restore through it). For a local Docker runtime, host is the
+ * IPv4 loopback literal with its published port, so Node cannot fall back to
+ * another family. IPv6-only publication is unsupported because the pinned
+ * postgres client cannot parse a bracketed IPv6 URL host.
  */
 export interface SharedPostgresFacts {
   host: string;
@@ -59,7 +60,7 @@ const SHARED_POSTGRES_KEY = "sharedPostgres";
 const CONTAINER_POSTGRES_PORT = 5432;
 type DockerPortBinding = { HostIp: string; HostPort: string };
 
-/** Selects the literal matching Docker's published port for a local runtime. */
+/** Selects a published IPv4 port locally; remote runtime endpoints pass through. */
 export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly DockerPortBinding[] | null | undefined, mappedPort: number): { host: string; port: number } {
   if (runtimeHost !== "localhost" && runtimeHost !== "127.0.0.1" && runtimeHost !== "::1") {
     return { host: runtimeHost, port: mappedPort };
@@ -72,13 +73,12 @@ export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly D
     throw new Error(`no usable host-port binding for container port ${CONTAINER_POSTGRES_PORT}/tcp`);
   }
   const ipv4 = usable.find(({ HostIp }) => HostIp === "0.0.0.0" || HostIp === "127.0.0.1");
-  const ipv6 = usable.find(({ HostIp }) => HostIp === "::" || HostIp === "::1");
   const dualStack = usable.length === 1 && usable[0].HostIp === "" ? usable[0] : undefined;
-  const selected = ipv4 ?? ipv6 ?? dualStack;
+  const selected = ipv4 ?? dualStack;
   if (selected === undefined) {
-    throw new Error(`no usable host-port binding for container port ${CONTAINER_POSTGRES_PORT}/tcp`);
+    throw new Error(`IPv6-only publication of container port ${CONTAINER_POSTGRES_PORT}/tcp is unsupported because the pinned postgres client cannot parse a bracketed IPv6 URL host`);
   }
-  return { host: selected === ipv6 ? "::1" : "127.0.0.1", port: Number(selected.HostPort) };
+  return { host: "127.0.0.1", port: Number(selected.HostPort) };
 }
 
 /** Inspect the started container rather than pairing a mapped port with an unrelated host family. */
@@ -86,10 +86,6 @@ export async function startedPostgresEndpoint(started: StartedTestContainer): Pr
   const client = await getContainerRuntimeClient();
   const inspected = await client.container.inspect(client.container.getById(started.getId()));
   return selectPostgresEndpoint(started.getHost(), inspected.NetworkSettings.Ports?.[`${CONTAINER_POSTGRES_PORT}/tcp`], started.getMappedPort(CONTAINER_POSTGRES_PORT));
-}
-
-function urlHost(host: string): string {
-  return isIP(host) === 6 ? `[${host}]` : host;
 }
 
 interface PostgresConnectionUrlOptions {
@@ -103,7 +99,7 @@ interface PostgresConnectionUrlOptions {
 
 export function postgresConnectionUrl({ host, port, user, password, database, clientMinMessagesWarning = false }: PostgresConnectionUrlOptions): string {
   const query = clientMinMessagesWarning ? "?client_min_messages=warning" : "";
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${urlHost(host)}:${port}/${database}${query}`;
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}${query}`;
 }
 
 type SurvivorAuditBranch = "calibrated" | "strict";
