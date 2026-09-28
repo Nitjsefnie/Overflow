@@ -17,6 +17,7 @@ afterEach(() => {
   vi.doUnmock("@/lib/fold/postgres-store");
   vi.doUnmock("@/lib/fold/reconciliation-worker");
   vi.doUnmock("@/lib/fold/sweep");
+  vi.resetModules();
 });
 
 describe("repository re-derivation", () => {
@@ -103,6 +104,7 @@ describe("repository re-derivation", () => {
     // register() checks the runtime literally, before any mocked predicate is
     // reachable, so the test presents the Node.js runtime it wires for.
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.resetModules();
     const { register } = await import("@/instrumentation");
     await register();
     await startWorker.mock.calls[0][0].drain();

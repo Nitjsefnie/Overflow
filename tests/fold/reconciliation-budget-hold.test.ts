@@ -21,6 +21,7 @@ afterEach(() => {
   vi.doUnmock("@/lib/fold/sweep");
   vi.doUnmock("@/lib/fold/postgres-store");
   vi.doUnmock("@/lib/fold/reconcile-as-sponsor");
+  vi.resetModules();
 });
 
 function reading(remaining: number, observedAt = now): budgets.GitHubGraphqlBudgetReading {
@@ -843,6 +844,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     // register() checks the runtime literally, before any mocked predicate is
     // reachable, so the test presents the Node.js runtime it wires for.
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.resetModules();
     const { register } = await import("@/instrumentation");
     await register();
     const schedule = startWorker.mock.calls[0][0] as { drain(): Promise<unknown> };

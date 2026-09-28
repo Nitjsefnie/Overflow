@@ -252,8 +252,13 @@ describe("database client deadlines", () => {
     } finally {
       // The fresh import bound a fresh client module; its pools are not the
       // suite singleton's, so they are closed here, before the container stops.
-      const freshClient = await import("../../src/lib/db/client.ts");
-      await freshClient.closeSql();
+      try {
+        const freshClient = await import("../../src/lib/db/client.ts");
+        await freshClient.closeSql();
+      } finally {
+        vi.doUnmock("node:fs/promises");
+        vi.resetModules();
+      }
     }
 
     // Control: the override really is in force on this pool after the run —
