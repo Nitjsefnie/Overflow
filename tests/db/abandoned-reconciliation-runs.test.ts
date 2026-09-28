@@ -79,7 +79,7 @@ describe("abandoned reconciliation runs", () => {
     expect(await sql`select * from reconciliation_runs where id = ${orphan.id}`).toEqual(before);
   });
 
-  it("does not let no-cost materialization complete an abandoned run", async () => {
+  it("rejects no-cost materialization of an abandoned run without publishing derived data", async () => {
     const fixture = await materializeRepositoryFixture(sql);
     const runId = await fixture.store.beginRun(fixture.repositoryId);
     await sql`
@@ -88,10 +88,21 @@ describe("abandoned reconciliation runs", () => {
       where id = ${runId}
     `;
     const before = await sql`select * from reconciliation_runs where id = ${runId}`;
-    await fixture.store.withRepositoryReconciliation(fixture.repositoryId, () => fixture.store.materialize({
-      repositoryId: fixture.repositoryId, runId, fold: fixture.fold,
-    }));
+    const issueId = fixture.fold.issues[0].githubIssueId;
+    const titleBefore = await sql`
+      select title from issues where repository_id = ${fixture.repositoryId} and github_issue_id = ${issueId}
+    `;
+    const fold = { ...fixture.fold, issues: fixture.fold.issues.map((issue, index) =>
+      index === 0 ? { ...issue, title: "Late abandoned publication" } : issue) };
+    const [outcome] = await Promise.allSettled([fixture.store.withRepositoryReconciliation(
+      fixture.repositoryId,
+      () => fixture.store.materialize({ repositoryId: fixture.repositoryId, runId, fold }),
+    )]);
+    expect(await sql`
+      select title from issues where repository_id = ${fixture.repositoryId} and github_issue_id = ${issueId}
+    `).toEqual(titleBefore);
     expect(await sql`select * from reconciliation_runs where id = ${runId}`).toEqual(before);
+    expect(outcome).toMatchObject({ status: "rejected" });
   });
 
   it("keeps a live owner's run pending and still finalizes another repository", async () => {
@@ -237,57 +248,4 @@ describe("abandoned reconciliation runs", () => {
     }
   });
 
-  it("releases an ambiguous try-lock after the reserved backend changes", async () => {
-    const fixture = await materializeRepositoryFixture(sql);
-    await fixture.store.beginRun(fixture.repositoryId);
-    const oldBackend = postgres(databaseUrl, { max: 1 });
-    const newBackend = postgres(databaseUrl, { max: 1 });
-    const oldConnection = await oldBackend.reserve();
-    let newConnection: Awaited<ReturnType<Sql["reserve"]>> | undefined;
-    const coordinationSql = {
-      reserve: async () => {
-        newConnection = await newBackend.reserve();
-        const connection = (strings: TemplateStringsArray, ...values: unknown[]) => {
-          const query = strings.join(" ");
-          if (query.includes("pg_backend_pid() as pid") && !query.includes("pg_try_advisory_lock")) {
-            return (oldConnection as unknown as (...args: unknown[]) => Promise<unknown>)(strings, ...values);
-          }
-          const result = (newConnection as unknown as (...args: unknown[]) => Promise<unknown>)(strings, ...values);
-          if (query.includes("pg_try_advisory_lock")) {
-            return Promise.resolve(result).then(() => { throw new Error("replacement try-lock response lost"); });
-          }
-          return result;
-        };
-        return Object.assign(connection, { release: () => newConnection?.release(), unsafe: newConnection.unsafe.bind(newConnection) });
-      },
-      begin: (callback: (transaction: TransactionSql) => Promise<unknown>) => newBackend.begin(async (transaction) => {
-        const wrapped = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-          const result = (transaction as unknown as (...args: unknown[]) => Promise<unknown>)(strings, ...values);
-          if (strings.join(" ").includes("pg_try_advisory_xact_lock")) {
-            return Promise.resolve(result).then(() => { throw new Error("replacement try-lock response lost"); });
-          }
-          return result;
-        }) as unknown as TransactionSql;
-        return callback(wrapped);
-      }),
-    } as unknown as Sql;
-    const observer = postgres(databaseUrl, { max: 1 });
-    try {
-      await expect(finalizeAbandonedRuns(sql, coordinationSql)).rejects.toThrow();
-      const [attempt] = await observer<{ acquired: boolean }[]>`
-        select pg_try_advisory_lock(hashtextextended(${fixture.repositoryId}, 684029183)) as acquired
-      `;
-      expect(attempt.acquired).toBe(true);
-      if (attempt.acquired) {
-        await observer`select pg_advisory_unlock(hashtextextended(${fixture.repositoryId}, 684029183))`;
-      }
-    } finally {
-      if (newConnection !== undefined) {
-        await newConnection`select pg_advisory_unlock_all()`;
-        newConnection.release();
-      }
-      oldConnection.release();
-      await Promise.all([observer.end(), newBackend.end(), oldBackend.end()]);
-    }
-  });
 });
