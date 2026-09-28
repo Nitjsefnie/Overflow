@@ -5,7 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
-import { CACHED_COMMENT_BODY_PLACEHOLDER } from "@/lib/fold/reconciliation-evidence";
+import { CACHED_COMMENT_BODY_PLACEHOLDER, RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { parseGitHubWebhookDelivery } from "@/lib/github/webhook-schema";
 import * as repositoryFold from "@/lib/fold/repository-fold";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
@@ -191,6 +191,39 @@ describe("incremental reconciliation", () => {
     expect(f.scans.at(-1)).toBeUndefined();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues.find(({ id }) => id === issue.id))
       .toMatchObject({ stateReason: "NOT_PLANNED" });
+  });
+
+  it("removes a persisted missing closing PR for a duplicate closure using current evidence", async () => {
+    const f = await fixture();
+    const issue = f.issues[1]!;
+    issue.stateReason = "DUPLICATE";
+    issue.closingPullRequests = [];
+    await f.run();
+
+    // Seed a row written by the old fold while retaining the current-format
+    // cached DUPLICATE reason. The insert is a no-op until the guard is fixed.
+    await sql`
+      insert into unwritable_closures (issue_id, pull_request_id, kind, reason)
+      select id, null, 'NO_CLOSING_PULL_REQUEST', 'No merged GitHub GraphQL closing pull request was found.'
+      from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}
+      on conflict (issue_id) do nothing
+    `;
+    const closures = () => sql`
+      select unwritable_closures.kind::text from unwritable_closures
+      join issues on issues.id = unwritable_closures.issue_id
+      where issues.repository_id = ${f.id} and issues.github_issue_id = ${issue.id}
+    `;
+    expect(await closures()).toEqual([{ kind: "NO_CLOSING_PULL_REQUEST" }]);
+    const [evidence] = await sql`select format_version from repository_reconciliation_evidence where repository_id = ${f.id}`;
+    expect(evidence!.format_version).toBe(RECONCILIATION_EVIDENCE_FORMAT);
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues.find(({ id }) => id === issue.id))
+      .toMatchObject({ stateReason: "DUPLICATE" });
+
+    f.clock = new Date("2026-09-08T10:02:00Z");
+    await f.run();
+
+    expect(f.issueReads).toEqual([]);
+    expect(await closures()).toEqual([]);
   });
 
   it.each([1, 2])("refreshes legacy evidence format %s before an unchanged timeline can reach the fold", async (format) => {

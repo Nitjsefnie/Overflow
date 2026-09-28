@@ -31,6 +31,6 @@ re-derive. The 2→3 bump recovered two previously rejected settlements.
 If the bump is deliberate, update the pinned literal in this test in the same
 change. If it is not deliberate, restore the constant in
 src/lib/fold/fold-revision.ts.`,
-    ).toBe(3);
+    ).toBe(4);
   });
 });

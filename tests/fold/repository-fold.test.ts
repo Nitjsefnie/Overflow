@@ -19,6 +19,13 @@ describe("foldRepository", () => {
     expect(result.settlements).toEqual([]);
   });
 
+  it("does not record a missing closing PR for a duplicate closure", () => {
+    const snapshot = outsiderFixture();
+    snapshot.issues[0] = { ...snapshot.issues[0]!, stateReason: "DUPLICATE", closingPullRequests: [] };
+
+    expect(foldRepository(snapshot).unwritableClosures).toEqual([]);
+  });
+
   it.each(["COMPLETED", "REOPENED", null])("records a missing closing PR for a closed issue with reason %s", (stateReason) => {
     const snapshot = outsiderFixture();
     snapshot.issues[0] = { ...snapshot.issues[0]!, stateReason, closingPullRequests: [] };
