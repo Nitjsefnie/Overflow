@@ -7,6 +7,10 @@ const auth = vi.hoisted(() => vi.fn());
 
 vi.mock("@/auth", () => ({ auth }));
 
+const currentRole = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: currentRole }));
+
 import { PublicRulesContent, RulesContent } from "@/app/rules/page";
 
 async function renderRulesPage(): Promise<void> {
@@ -17,6 +21,7 @@ async function renderRulesPage(): Promise<void> {
 describe("rules page", () => {
   afterEach(() => {
     auth.mockReset();
+    currentRole.mockReset();
   });
 
   it.each([false, true])("renders the Rules heading with isModerator=%s", (isModerator) => {
@@ -78,6 +83,7 @@ describe("rules page", () => {
 
   it("keeps the member view for a member session", async () => {
     auth.mockResolvedValue({ user: { id: "u1", name: "Ada Lovelace", role: "MEMBER" } });
+    currentRole.mockResolvedValue("MEMBER");
     await renderRulesPage();
 
     expect(screen.getByText("Ada Lovelace")).toBeVisible();
@@ -85,8 +91,51 @@ describe("rules page", () => {
 
   it("keeps the moderator flag for a moderator session", async () => {
     auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MODERATOR" } });
+    currentRole.mockResolvedValue("MODERATOR");
     await renderRulesPage();
 
     expect(screen.getByRole("link", { name: "Moderation" })).toBeVisible();
+  });
+
+  it("renders the member view with no Moderation link when the ledger demotes a JWT moderator", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MODERATOR" } });
+    currentRole.mockResolvedValue("MEMBER");
+    await renderRulesPage();
+
+    expect(screen.queryByRole("link", { name: "Moderation" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Signed in as/)).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeVisible();
+  });
+
+  it("renders the Moderation link when the ledger promotes a JWT member", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MEMBER" } });
+    currentRole.mockResolvedValue("MODERATOR");
+    await renderRulesPage();
+
+    expect(screen.getByRole("link", { name: "Moderation" })).toBeVisible();
+  });
+
+  it("falls back to the public view when the ledger has no record for the session's id", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MODERATOR" } });
+    currentRole.mockResolvedValue(null);
+    await renderRulesPage();
+
+    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+    const main = document.querySelector("main.page-content");
+    expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
+    expect(main).toHaveAttribute("id", "main-content");
+  });
+
+  it("falls back to the public view when the ledger lookup fails", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MODERATOR" } });
+    currentRole.mockRejectedValue(new Error("the ledger is unreachable"));
+    await renderRulesPage();
+
+    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+    const main = document.querySelector("main.page-content");
+    expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
+    expect(main).toHaveAttribute("id", "main-content");
   });
 });
