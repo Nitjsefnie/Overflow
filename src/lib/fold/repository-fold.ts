@@ -496,11 +496,11 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
           reason: crossRepositoryReason(selection.pullRequest, snapshot.repository),
         });
       } else if (
-        // Contract gap 1, forge-neutral: the gate reads the presence of a
-        // NOT_PLANNED reason, and GitLab issues carry no state_reason at all
-        // (contract item 16) — an absent reason is not-not-planned, so GitLab
-        // rows are never skipped here.
-        issue.stateReason !== "NOT_PLANNED" && evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)
+        // Contract gap 1, forge-neutral: only explicit NOT_PLANNED or DUPLICATE
+        // reasons exempt a closure. GitLab carries no state_reason (contract
+        // item 16), so its absent reason never skips a missing-PR row here.
+        issue.stateReason !== "NOT_PLANNED" && issue.stateReason !== "DUPLICATE"
+          && evidenceWindowReachable(evidenceWindowClosedAt, registeredAtTime)
       ) {
         unwritableClosures.push({
           githubIssueId: issue.id,

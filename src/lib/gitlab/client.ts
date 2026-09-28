@@ -746,8 +746,8 @@ function toGitHubIssue(
     url: object.web_url,
     // GitLab's two states map exactly onto the ledger's two.
     state: object.state === "opened" ? "OPEN" : "CLOSED",
-    // Contract item 16: GitLab carries no state_reason. The NOT_PLANNED gate
-    // is skipped for GitLab rows — recorded here where the absence is made.
+    // Contract item 16: GitLab carries no state_reason. An absent reason is
+    // exempt from neither NOT_PLANNED nor DUPLICATE, so the missing-PR gate applies.
     stateReason: null,
     createdAt: normalizeTimestamp(object.created_at),
     updatedAt: normalizeTimestamp(object.updated_at),
