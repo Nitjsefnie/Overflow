@@ -16,9 +16,17 @@ const { productionAuth, productionRole } = vi.hoisted(() => ({
 vi.mock("@/auth", () => ({ auth: productionAuth }));
 vi.mock("@/lib/moderation/current-role", () => ({ getCurrentUserRole: productionRole }));
 
-import { createSettlementOverridePostHandler } from "@/app/api/overrides/route";
+import {
+  createSettlementOverrideListGetHandler,
+  createSettlementOverridePostHandler,
+  GET as productionGet,
+} from "@/app/api/overrides/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
-import { SettlementOverrideError, type SettlementOverrideRequest } from "@/lib/overrides/service";
+import {
+  SettlementOverrideError,
+  type OpenSettlementOverrideRequest,
+  type SettlementOverrideRequest,
+} from "@/lib/overrides/service";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
@@ -70,6 +78,83 @@ async function expectInvalidRequest(
     error: { code: "INVALID_REQUEST", message },
   });
 }
+
+describe("GET /api/overrides", () => {
+  const openRequests: OpenSettlementOverrideRequest[] = [{
+    id: requestId,
+    reason: "The rationale comment was late.",
+    requestedAt: "2026-09-05T10:00:00.000Z",
+    requesterLogin: "requester",
+    repositoryName: "octo/overflow",
+    issueNumber: 780,
+    issueTitle: "Correction queue",
+    issueUrl: "https://github.com/octo/overflow/issues/780",
+    settlement: null,
+    calibration: null,
+  }];
+
+  function listDependencies(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+    return {
+      getSession: vi.fn().mockResolvedValue({ user: { id: moderatorId, role: "MODERATOR" } }),
+      findAccountByTokenHash: vi.fn().mockResolvedValue(null),
+      getCurrentRole: vi.fn().mockResolvedValue("MODERATOR"),
+      listOpenRequests: vi.fn().mockResolvedValue(openRequests),
+      ...overrides,
+    };
+  }
+
+  function getRequest(): Request {
+    return new Request(new URL("/api/overrides", requestHost));
+  }
+
+  it("refuses an anonymous request before listing correction requests", async () => {
+    const deps = listDependencies({ getSession: vi.fn().mockResolvedValue(null) });
+    const response = await createSettlementOverrideListGetHandler(deps)(getRequest());
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+    expect(deps.listOpenRequests).not.toHaveBeenCalled();
+  });
+
+  it("refuses an authenticated member before listing correction requests", async () => {
+    const deps = listDependencies({ getCurrentRole: vi.fn().mockResolvedValue("MEMBER") });
+    const response = await createSettlementOverrideListGetHandler(deps)(getRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+    });
+    expect(deps.listOpenRequests).not.toHaveBeenCalled();
+  });
+
+  it("returns an array of open correction requests for the moderator", async () => {
+    const deps = listDependencies();
+    const response = await createSettlementOverrideListGetHandler(deps)(getRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(openRequests);
+    expect(deps.listOpenRequests).toHaveBeenCalledExactlyOnceWith({ id: moderatorId, role: "MODERATOR" });
+  });
+
+  it("reports a correction request read failure as a 502", async () => {
+    const deps = listDependencies({ listOpenRequests: vi.fn().mockRejectedValue(new Error("db down")) });
+    const response = await createSettlementOverrideListGetHandler(deps)(getRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UPSTREAM_FAILURE", message: "Unable to load the open correction requests." },
+    });
+  });
+
+  it("refuses an unauthenticated request through the production export", async () => {
+    productionAuth.mockResolvedValue(null);
+    const response = await productionGet(getRequest());
+
+    expect(response.status).toBe(401);
+  });
+});
 
 describe("settlement override request API", () => {
   it("records a member's request against a settlement", async () => {
