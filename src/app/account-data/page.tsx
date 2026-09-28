@@ -13,6 +13,28 @@ export function AccountDataNotice() {
         </p>
       </section>
 
+      <section className="surface" aria-labelledby="account-data-controller-heading">
+        <h2 id="account-data-controller-heading">Controller and contact</h2>
+        <p>
+          The controller for the data this notice describes is the operator of this site — the
+          maintainer of the Nitjsefnie/Overflow project, personally. This notice describes that
+          hosted instance, the one you are reading it on, not the project&apos;s codebase.
+        </p>
+        <p>
+          Two contact routes exist, both on GitHub. For an ordinary request, open an issue at{" "}
+          <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
+            github.com/Nitjsefnie/Overflow/issues
+          </a>{" "}
+          — the tracker is public, so the request and any reply are public too. For anything
+          sensitive — a request carrying personal data you would not post publicly, for example —
+          use the private vulnerability reporting form at{" "}
+          <a href="https://github.com/Nitjsefnie/Overflow/security" rel="noreferrer">
+            github.com/Nitjsefnie/Overflow/security
+          </a>
+          , which is private. No email address is published.
+        </p>
+      </section>
+
       <section className="surface" aria-labelledby="account-data-stored-heading">
         <h2 id="account-data-stored-heading">What sign-in and linking store</h2>
         <p>You sign in with GitHub and can also link a GitLab identity for each GitLab instance you use.</p>
@@ -198,9 +220,10 @@ export function AccountDataNotice() {
           <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
             github.com/Nitjsefnie/Overflow/issues
           </a>{" "}
-          from the account the request is about. No private channel exists, and opening an issue needs a GitHub
-          account. Overflow has no removal feature for people who have not signed in, so the operator handles a
-          request by hand. Content still on GitHub or GitLab in a registered repository is read again at the next
+          from the account the request is about. For a public request no private channel exists, and opening an
+          issue needs a GitHub account; the Controller and contact section names the private route for a request
+          you would not post publicly. Overflow has no removal feature for people who have not signed in, so the
+          operator handles a request by hand. Content still on GitHub or GitLab in a registered repository is read again at the next
           pass, so removing it there first is what keeps it out of Overflow.
         </p>
       </section>
@@ -223,6 +246,64 @@ export function AccountDataNotice() {
           repository&apos;s owner and name, which may be a person&apos;s username, and error details; a database
           or forge error can quote part of the record being written or read, such as an issue description or
           comment text.
+        </p>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-purposes-heading">
+        <h2 id="account-data-purposes-heading">Purposes and legal bases</h2>
+        <p>Each activity this notice describes, and the basis it relies on:</p>
+        <ul>
+          <li>
+            running the service for signed-in members — accounts, the shared ledger, claims, and
+            dashboards — under performance of a contract: your use of the service
+          </li>
+          <li>
+            reading public forge data about people who have never signed in — reconciliation, the
+            ledger, and settlement proofs — under legitimate interests: operating a public
+            work-attribution tracker, weighed against their rights and freedoms
+          </li>
+          <li>
+            server logs, database backups, and abuse and security handling, including
+            Cloudflare&apos;s — under legitimate interests: securing and operating the service
+          </li>
+          <li>
+            automated scoring and moderation, described under Scoring and sanctions below — under
+            legitimate interests: keeping the ledger&apos;s records accurate and its rules
+            enforceable
+          </li>
+        </ul>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-recipients-heading">
+        <h2 id="account-data-recipients-heading">Recipients and transfers</h2>
+        <p>Operating the service involves these recipients:</p>
+        <ul>
+          <li>
+            Cloudflare, Inc. (US) — the site is served through Cloudflare, so every request&apos;s
+            metadata (IP address, time, path, user agent), the session cookie, and everything
+            submitted in transit, including GitLab tokens, necessarily passes through it
+          </li>
+          <li>
+            GitHub, Inc. (US) — sign-in reads your numeric id, login, and avatar URL from
+            GitHub&apos;s API; requests are filed on the public issue tracker; and Overflow reads
+            the registered repositories&apos; issues, pull requests, reviews, and diffs from GitHub
+          </li>
+          <li>
+            GitLab — each linked identity&apos;s own instance: gitlab.com is operated by GitLab,
+            Inc. (US), and a self-hosted instance is wherever its operator hosts it. The instance
+            receives the token-verified reads of its registered repositories
+          </li>
+          <li>
+            the hosting provider that runs the server — it holds the account rows, the ledger, and
+            the backups. The repository names no provider, so no region is stated for it
+          </li>
+        </ul>
+        <p>
+          Using this site from outside the US therefore means data is transferred to these
+          US-based recipients, and to a self-hosted GitLab instance wherever it is hosted. You can
+          complain about a transfer to your local supervisory authority, under Your rights below.
+          No transfer mechanism — standard contractual clauses, an adequacy decision, or a
+          certification — is claimed here: the operator documents none.
         </p>
       </section>
 
@@ -267,6 +348,74 @@ export function AccountDataNotice() {
             Daily database backups taken before a deletion keep pre-deletion data on the same host as the
             database. Each backup is pruned once it is more than 14 days old — in practice about 15 days —
             and pruning happens only after a later backup succeeds, so failing backups keep them longer.
+          </li>
+        </ul>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-scoring-heading">
+        <h2 id="account-data-scoring-heading">Scoring and sanctions</h2>
+        <p>Part of the ledger is computed without a person in the loop:</p>
+        <ul>
+          <li>
+            When an issue settles, an automated pass — the fold, part of reconciliation — computes
+            the settlement from the repository&apos;s own records: the settled difficulty label the
+            sponsor applied and the points that label carries, the closing pull request&apos;s
+            merge record, and the review rounds that stood when it merged. The credit is the
+            settled points less the number of distinct review rounds, never below zero, and the
+            ledger entry credits the author and debits the sponsor with that figure.
+          </li>
+          <li>
+            A credit limit is computed per account from its history of repaying settled work: ten
+            points plus one for every ten points of repaid debt. Once an account&apos;s settled
+            balance falls to minus that limit, its repositories&apos; open issues leave the issues
+            board — all but one repayment issue — until completed work restores the balance.
+          </li>
+          <li>
+            Every account row carries an enforcement state — active, warned, under audit,
+            recalibrating, or banned — and a confirmed-miscalibration count. The enforcement state
+            decides whether an account&apos;s repositories can keep issues on the issues board; a
+            recalibrating or banned account&apos;s issues leave it entirely.
+          </li>
+          <li>
+            Moderators — people — apply sanctions: they move an account along warned,
+            recalibrating, and banned as its confirmed miscalibrations accumulate, and they can
+            adjust credit balances by hand.
+          </li>
+        </ul>
+      </section>
+
+      <section className="surface" aria-labelledby="account-data-rights-heading">
+        <h2 id="account-data-rights-heading">Your rights</h2>
+        <ul>
+          <li>
+            <strong>Access and export</strong> — download an export of the data stored about your
+            account from your dashboard (see Your controls below); if you cannot sign in, request
+            it by opening an issue.
+          </li>
+          <li>
+            <strong>Rectification</strong> — much of it self-corrects: signing in again re-reads
+            your GitHub login and avatar, re-linking a GitLab identity refreshes its stored
+            verification, and reconciliation keeps overwriting the forge data it re-reads. For the
+            rest, contact the operator (see Controller and contact above).
+          </li>
+          <li>
+            <strong>Erasure</strong> — delete your account from your dashboard (What deletion
+            means, below, describes what deletion keeps as pseudonymised rows); if you cannot sign
+            in, request it by opening an issue.
+          </li>
+          <li>
+            <strong>Restriction and objection</strong> — contact the operator. Concretely, the
+            operator can unregister a repository, which stops new reads of it; content removed on
+            GitHub or GitLab stays out of Overflow from the next pass, as People who have never
+            signed in describes.
+          </li>
+          <li>
+            <strong>Portability</strong> — the export: it contains the fields stored about your
+            account and every record that holds a link to it, as Your controls describes.
+          </li>
+          <li>
+            <strong>Complaint</strong> — you can complain to your local supervisory authority; the
+            contact routes are under Controller and contact above.
           </li>
         </ul>
       </section>
@@ -316,7 +465,9 @@ export function AccountDataNotice() {
             <a href="https://github.com/Nitjsefnie/Overflow/issues" rel="noreferrer">
               github.com/Nitjsefnie/Overflow/issues
             </a>{" "}
-            from the GitHub account the request is about. No private channel exists.
+            from the GitHub account the request is about. For a public request no private channel
+            exists; the Controller and contact section names the private route for anything
+            sensitive.
           </li>
           <li>
             An export contains the fields stored about your account — a stored secret appears only as
