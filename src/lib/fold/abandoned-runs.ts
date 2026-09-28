@@ -17,16 +17,30 @@ export async function finalizeAbandonedRuns(
   for (const { repository_id: repositoryId } of repositories) {
     const connection = await coordinationSql.reserve();
     let locked = false;
-    // An unanswered try-lock may already have taken the lock on the server.
-    let lockMayStillBeHeld = true;
+    let lockMayStillBeHeld = false;
     let owningSession: { pid: number; backendStart: string } | undefined;
     try {
+      // Identify this reserved session before the try-lock: if PostgreSQL takes
+      // the lock but its answer is lost, reclamation can still guard its unlock.
+      const [session] = await connection<{ pid: number; backend_start: string }[]>`
+        select pg_backend_pid() as pid,
+          (select backend_start::text from pg_stat_activity where pid = pg_backend_pid()) as backend_start
+      `;
+      if (!session?.pid || !session.backend_start) {
+        throw new Error("Could not identify abandoned reconciliation lock session.");
+      }
+      owningSession = { pid: session.pid, backendStart: session.backend_start };
+      // An unanswered try-lock may already have taken the lock on the server.
+      lockMayStillBeHeld = true;
       const [lock] = await connection<{ acquired: boolean; pid: number; backend_start: string }[]>`
         select pg_try_advisory_lock(hashtextextended(${repositoryId}, ${repositoryLockNamespace})) as acquired,
           pg_backend_pid() as pid,
           (select backend_start::text from pg_stat_activity where pid = pg_backend_pid()) as backend_start
       `;
-      locked = lock?.acquired === true;
+      if (typeof lock?.acquired !== "boolean") {
+        throw new Error("Could not determine abandoned reconciliation lock state.");
+      }
+      locked = lock.acquired;
       lockMayStillBeHeld = locked;
       if (!locked) {
         skippedLocked += 1;
