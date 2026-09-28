@@ -21,6 +21,7 @@ afterEach(() => {
   vi.doUnmock("@/lib/fold/sweep");
   vi.doUnmock("@/lib/fold/postgres-store");
   vi.doUnmock("@/lib/fold/reconcile-as-sponsor");
+  vi.doUnmock("@/lib/fold/abandoned-runs");
   vi.resetModules();
 });
 
@@ -840,6 +841,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       startReconciliationSweep: vi.fn(), sweepReconciliations: vi.fn() }));
     vi.doMock("@/lib/fold/postgres-store", () => ({ PostgresFoldStore: class {} }));
     vi.doMock("@/lib/fold/reconcile-as-sponsor", () => ({ reconcileRepositoryAsSponsor: vi.fn() }));
+    vi.doMock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: vi.fn().mockResolvedValue({ finalized: 0, skippedLocked: 0 }) }));
     const informed = vi.spyOn(console, "info").mockImplementation(() => {});
     // register() checks the runtime literally, before any mocked predicate is
     // reachable, so the test presents the Node.js runtime it wires for.
