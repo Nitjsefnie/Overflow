@@ -344,6 +344,7 @@ tests/dashboard/*
 !tests/db/
 tests/db/*
 !tests/db/*.ts
+!tests/db/postgres-url-host.test.ts
 !tests/db/reconciliation-evidence.test.ts
 !tests/db/reconciliation-cost.test.ts
 !tests/db/policy-violation-recording.test.ts
