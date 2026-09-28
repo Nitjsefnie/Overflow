@@ -136,8 +136,9 @@ defense in depth for the same property, not the mechanism.
 `db-backup.sh` prunes `overflow-*.dump` files older than 14 days
 (`--retention-days`, default 14) after each successful dump — 15 daily dumps
 are retained at the steady state, and nothing not matching `overflow-*.dump`
-in the directory is ever deleted. After the drill of 2026-09-10 the directory
-holds the first real backup, `overflow-20260910T154923Z.dump` (22.7 MB).
+in the directory is ever deleted. The first real backup was
+`overflow-20260910T154923Z.dump` (22.7 MB), taken during the 2026-09-10 drill;
+it later aged out under the 14-day retention policy.
 
 The directory is on the same filesystem as the database. That is fine for the
 failure modes this runbook targets — a bad migration, a bad deploy, a dropped
@@ -206,6 +207,11 @@ keeping the dump:
 sudo -u postgres dropdb "$scratch"
 rm /tmp/overflow-drill-dump-staging.dump /tmp/overflow-drill-restore.sh
 ```
+
+The latest drill (2026-09-28) measured `db-backup.sh` at 48.8 s and
+`db-restore.sh` at 75.1 s wall clock against a 167.7 MB dump covering 28
+public tables and about 1,342,000 rows. Its full measurements and per-table
+comparison are in the latest entry of `/var/backups/overflow/drill-log.md`.
 
 ### (e.2) Replacing the live database
 
