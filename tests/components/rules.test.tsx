@@ -87,6 +87,7 @@ describe("rules page", () => {
     await renderRulesPage();
 
     expect(screen.getByText("Ada Lovelace")).toBeVisible();
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
   it("keeps the moderator flag for a moderator session", async () => {
@@ -95,6 +96,7 @@ describe("rules page", () => {
     await renderRulesPage();
 
     expect(screen.getByRole("link", { name: "Moderation" })).toBeVisible();
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
   it("renders the member view with no Moderation link when the ledger demotes a JWT moderator", async () => {
@@ -105,6 +107,7 @@ describe("rules page", () => {
     expect(screen.queryByRole("link", { name: "Moderation" })).not.toBeInTheDocument();
     expect(screen.getByText(/Signed in as/)).toBeVisible();
     expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeVisible();
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
   it("renders the Moderation link when the ledger promotes a JWT member", async () => {
@@ -113,6 +116,7 @@ describe("rules page", () => {
     await renderRulesPage();
 
     expect(screen.getByRole("link", { name: "Moderation" })).toBeVisible();
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
   it("falls back to the public view when the ledger has no record for the session's id", async () => {
@@ -125,6 +129,7 @@ describe("rules page", () => {
     const main = document.querySelector("main.page-content");
     expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
     expect(main).toHaveAttribute("id", "main-content");
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 
   it("falls back to the public view when the ledger lookup fails", async () => {
@@ -137,5 +142,16 @@ describe("rules page", () => {
     const main = document.querySelector("main.page-content");
     expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
     expect(main).toHaveAttribute("id", "main-content");
+    expect(currentRole).toHaveBeenCalledWith("u1");
+  });
+
+  it("renders the member view for a session with no role claim when the ledger vouches", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada" } });
+    currentRole.mockResolvedValue("MEMBER");
+    await renderRulesPage();
+
+    expect(screen.getByText(/Signed in as/)).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeVisible();
+    expect(currentRole).toHaveBeenCalledWith("u1");
   });
 });
