@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("postgres host parsing", () => {
   it.each([
@@ -33,6 +33,7 @@ describe("postgres host parsing", () => {
 
   it.each([
     ["bare IPv6", "::1", ["::1"]],
+    ["full bare IPv6", "2001:db8::1", ["2001:db8::1"]],
     ["bracketed IPv6", "[::1]", ["::1"]],
   ])("parses %s from the host option", async (_name, host, hosts) => {
     const sql = postgres({ host, port: 5434 });
@@ -41,6 +42,21 @@ describe("postgres host parsing", () => {
       expect(sql.options.port).toEqual([5434]);
     } finally {
       await sql.end();
+    }
+  });
+
+  it("parses bare IPv6 from PGHOST", async () => {
+    vi.stubEnv("PGHOST", "2001:db8::2");
+    try {
+      const sql = postgres({ port: 5435 });
+      try {
+        expect(sql.options.host).toEqual(["2001:db8::2"]);
+        expect(sql.options.port).toEqual([5435]);
+      } finally {
+        await sql.end();
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
