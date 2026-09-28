@@ -12,8 +12,10 @@ import {
 import { createModerationUnwritableClosuresGetHandler } from "@/app/api/moderation/unwritable-closures/route";
 import { createSettlementOverrideListGetHandler } from "@/app/api/overrides/route";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
-import type { ToolDefinition } from "@/lib/mcp/protocol";
-import { MCP_SERVER_VERSION } from "@/lib/mcp/protocol";
+import {
+  MCP_SERVER_VERSION,
+  type ToolDefinition,
+} from "@/lib/mcp/protocol";
 
 // Bind the page/route graph to this file's mocks and release it afterward.
 vi.hoisted(() => { vi.resetModules(); });
