@@ -43,32 +43,50 @@ function firstParentOfMerge(fields: string[]): string | undefined {
   return fields.length >= 3 ? fields[1] : undefined;
 }
 
+function pickBase({
+  parentFields,
+  mergeBase,
+  headParentResolved,
+}: {
+  parentFields: string[];
+  mergeBase?: string;
+  headParentResolved?: string;
+}): string | undefined {
+  const firstParent = firstParentOfMerge(parentFields);
+  if (firstParent !== undefined) return firstParent;
+  if (mergeBase && mergeBase !== parentFields[0]) return mergeBase;
+  return headParentResolved;
+}
+
 function baseCommit(): string {
   const override = process.env.MCP_SNAPSHOT_BASE_COMMIT;
   if (override !== undefined) {
     return git(["rev-parse", "--verify", "--end-of-options", `${override}^{commit}`]);
   }
 
-  const headAndParents = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
-  const firstParent = firstParentOfMerge(headAndParents);
-  if (firstParent !== undefined) return firstParent;
-
-  if (git(["rev-parse", "--is-shallow-repository"]) === "true") {
-    throw new Error(
-      "The MCP snapshot base could not be resolved reliably from shallow history; " +
-        "git fetch origin main and fetch full history with git fetch --unshallow.",
-    );
-  }
+  const parentFields = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
+  const mergeParent = pickBase({ parentFields });
+  if (mergeParent !== undefined) return mergeParent;
 
   const result = spawnSync("git", ["merge-base", "HEAD", "origin/main"], {
     cwd: repoRoot,
     encoding: "utf8",
   });
-  const base = result.stdout.trim();
-  if (result.status !== 0 || base === "") {
-    throw new Error("The MCP snapshot base could not be resolved; git fetch origin main and rerun the test.");
-  }
-  return base;
+  const mergeBase = result.status === 0 ? result.stdout.trim() || undefined : undefined;
+  const branchBase = pickBase({ parentFields, mergeBase });
+  if (branchBase !== undefined) return branchBase;
+
+  const parentResult = spawnSync("git", ["rev-parse", "--verify", "HEAD^1"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  const headParentResolved = parentResult.status === 0 ? parentResult.stdout.trim() || undefined : undefined;
+  const base = pickBase({ parentFields, mergeBase, headParentResolved });
+  if (base !== undefined) return base;
+  throw new Error(
+    "The MCP snapshot base could not be resolved; git fetch origin main, " +
+      "and if this is a shallow checkout fetch full history with git fetch --unshallow.",
+  );
 }
 
 describe("MCP tool surface snapshot", () => {
@@ -122,5 +140,45 @@ describe("MCP tool surface snapshot", () => {
     { label: "single-parent commit", fields: ["head", "first"], expected: undefined },
   ])("selects the snapshot base for a $label", ({ fields, expected }) => {
     expect(firstParentOfMerge(fields)).toBe(expected);
+  });
+
+  it.each([
+    {
+      label: "merge commit",
+      parentFields: ["head", "first", "second"],
+      mergeBase: "other-base",
+      headParentResolved: "head-parent",
+      expected: "first",
+    },
+    {
+      label: "PR branch with a distinct merge base",
+      parentFields: ["head", "head-parent"],
+      mergeBase: "branch-base",
+      headParentResolved: "head-parent",
+      expected: "branch-base",
+    },
+    {
+      label: "main tip whose merge base is HEAD",
+      parentFields: ["head", "head-parent"],
+      mergeBase: "head",
+      headParentResolved: "head-parent",
+      expected: "head-parent",
+    },
+    {
+      label: "missing merge base with a resolved HEAD parent",
+      parentFields: ["head", "head-parent"],
+      mergeBase: undefined,
+      headParentResolved: "head-parent",
+      expected: "head-parent",
+    },
+    {
+      label: "unavailable base",
+      parentFields: ["head"],
+      mergeBase: undefined,
+      headParentResolved: undefined,
+      expected: undefined,
+    },
+  ])("picks the snapshot base for a $label", ({ parentFields, mergeBase, headParentResolved, expected }) => {
+    expect(pickBase({ parentFields, mergeBase, headParentResolved })).toBe(expected);
   });
 });
