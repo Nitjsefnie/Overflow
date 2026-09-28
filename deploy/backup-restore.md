@@ -170,12 +170,15 @@ bash scripts/db-backup.sh
 scratch="overflow_drill_$(date +%s)"
 sudo -u postgres createdb "$scratch"
 
-# The backup directory is root-only, so stage a postgres-readable copy of the
-# dump; the restore runs as the postgres OS user over peer auth.
+# The backup directory is root-only, and the deployed restore script is 0750
+# root:overflow, unreadable by postgres. Stage postgres-readable copies of both;
+# the restore runs as the postgres OS user over peer auth.
 install -o postgres -g postgres -m 0400 \
   /var/backups/overflow/overflow-<stamp>.dump /tmp/overflow-drill-dump-staging.dump
+install -o postgres -g postgres -m 0500 \
+  /srv/overflow/scripts/db-restore.sh /tmp/overflow-drill-restore.sh
 sudo -u postgres env DATABASE_URL=postgresql:///"$scratch" \
-  bash scripts/db-restore.sh --allow-live "$scratch" \
+  bash /tmp/overflow-drill-restore.sh --allow-live "$scratch" \
   /tmp/overflow-drill-dump-staging.dump
 ```
 
@@ -195,12 +198,13 @@ done
 ```
 
 Record the outputs — dump bytes, backup and restore durations, per-table
-counts, pg_restore stderr — in the drill log. Then clean up, keeping the
-dump:
+counts, pg_restore stderr — in the drill log. Append the entry to
+`/var/backups/overflow/drill-log.md` (root:root `0600`). Then clean up,
+keeping the dump:
 
 ```bash
 sudo -u postgres dropdb "$scratch"
-rm /tmp/overflow-drill-dump-staging.dump
+rm /tmp/overflow-drill-dump-staging.dump /tmp/overflow-drill-restore.sh
 ```
 
 ### (e.2) Replacing the live database
@@ -313,11 +317,14 @@ lowering if disk pressure says so. For a sub-hour RPO, PostgreSQL WAL
 archiving is the real mechanism and is out of scope here.
 
 **RTO (time to restored service): machine time seconds, end-to-end minutes.**
-The drill of 2026-09-10 measured, against the 22.7 MB production dump
-(25 tables, about 149,000 rows): `db-backup.sh` 3 s, `db-restore.sh` 4 s
-wall clock, empty pg_restore stderr, and all 25 public tables matching
-production row counts. Machine time scales with the dump size; the dominant
-RTO terms are the operator steps of (e.2) — create the replacement, verify,
+The drill of 2026-09-28 measured, against the 167.7 MB production dump
+(28 tables, about 1,342,000 rows): `db-backup.sh` 48.8 s and
+`db-restore.sh` 75.1 s wall clock, with empty pg_restore stderr. At comparison
+time, 26 public tables matched; the write-active
+`repository_reconciliation_dirty_subjects` (29 production vs 25 scratch) and
+`webhook_deliveries` (13,686 vs 13,675) tables had drifted between the dump
+and the live count. Machine time scales with the dump size; the dominant RTO
+terms are the operator steps of (e.2) — create the replacement, verify,
 rename, restart the service — so budget tens of minutes including human
 response time, not seconds.
 
@@ -329,6 +336,8 @@ response time, not seconds.
   exec'd inside the container, mutates the source after the dump, and asserts
   the restored rows equal the seed.
 - **Manual drill: at least quarterly.** Run (e.1) end to end, compare all
-  public tables, and record the outputs where the deployment records live. A
-  restore that has not been rehearsed is an assumption; the drill is what
-  keeps this runbook true.
+  public tables, and record the outputs where the deployment records live.
+  Re-run the drill and re-measure when the newest dump has grown to roughly
+  twice the size recorded in the latest drill-log entry. A restore that has
+  not been rehearsed is an assumption; the drill is what keeps this runbook
+  true.
