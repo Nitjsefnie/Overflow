@@ -28,11 +28,20 @@ import HomePage from "@/app/page";
  * The routes this suite has a signed-out render for. "/" is proven by this
  * file's own HomePage render; "/account-data" is a static page with no
  * session read, proven by tests/components/account-data-page.test.tsx, which
- * renders the route signed out. The notices file is generated into the dist
- * dir during build and served by its route handler.
+ * renders the route signed out; "/rules" and "/terms" render for a visitor
+ * with no session, proven by tests/components/rules.test.tsx and
+ * tests/components/terms-page.test.tsx, which render those routes signed
+ * out. The notices file is generated into the dist dir during build and
+ * served by its route handler.
  */
 // The notices route serves its dist-dir file without a session.
-const PROVEN_PUBLIC_ROUTES = new Set(["/", "/account-data", "/third-party-notices.txt"]);
+const PROVEN_PUBLIC_ROUTES = new Set([
+  "/",
+  "/account-data",
+  "/rules",
+  "/terms",
+  "/third-party-notices.txt",
+]);
 
 // Issue 38: the signed-out entry route rendered a bare main.landing-page with no
 // site chrome, while every signed-in page carried the header, navigation and
