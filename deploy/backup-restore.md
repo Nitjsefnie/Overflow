@@ -353,9 +353,11 @@ response time, not seconds.
 ## (h) Failure alerts
 
 A failed `overflow-backup.service` run starts
-`overflow-alert@overflow-backup.service` through the unit's `OnFailure=`,
-which mails the backup unit's current-boot journal tail — the `pg_dump`
-error among it — to the address in `/etc/overflow/alert-recipient`. That
+`overflow-alert@overflow-backup.service.service` — the alert template with
+the failed unit's full name as the instance — through the unit's
+`OnFailure=`, which mails the backup unit's current-boot journal tail — the
+`pg_dump` error among it — to the address in `/etc/overflow/alert-recipient`.
+That
 file is host configuration (root only, one line) and is never committed;
 [README.md section 12](README.md#12-failure-alerts) installs the route and
 verifies it.
