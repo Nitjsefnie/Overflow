@@ -85,7 +85,7 @@ Two parts of an instance's data survival belong to the maintainer rather than to
 
 When `overflow.service` or `overflow-backup.service` fails, systemd's `OnFailure=` starts `overflow-alert@<failed unit>.service`, which mails the failed unit's journal tail to the address in `/etc/overflow/alert-recipient` — host configuration, root-only, never committed — through the host's exim4 smarthost. The route works by design only while the host's mail route works; that dependence is a property of the design, not a defect of it, and the alert unit's own journal shows a submission that could not go out.
 
-On an alert: read the failed unit's journal with `journalctl -b -u <unit>`, then follow [deploy/backup-restore.md](deploy/backup-restore.md) for a failed backup and [deploy/README.md section 10](deploy/README.md#10-deploying-a-new-revision) for a failed service.
+On an alert: read the failed unit's journal with `journalctl -b -u <unit>`, then follow [deploy/backup-restore.md](deploy/backup-restore.md) for a failed backup and [deploy/README.md section 10](deploy/README.md#10-deploying-a-new-revision) for a failed service. When the failed unit is `overflow.service`, a start within five minutes of the crash loop's give-up is refused with `Start request repeated too quickly` until `systemctl reset-failed overflow.service` runs or the 300-second window elapses.
 
 ## Reconciliation
 
