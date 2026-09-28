@@ -135,6 +135,41 @@ describe("docs-only CLI against a git repository", () => {
     expect(result.stdout).toBe("false\n");
   });
 
+  it("rejects a range where a code change was reverted before the endpoint", async () => {
+    const repo = await scratchRepo();
+    const before = git(repo, "rev-parse", "HEAD");
+    await commitFiles(repo, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
+    await commitFiles(repo, { "src/lib/format-signed.ts": "export const formatSigned = (n: number) => `${n}`;\n" }, "revert code");
+    await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
+
+    const result = classify(repo, before);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("false\n");
+  });
+
+  it("accepts a multi-commit docs-only range", async () => {
+    const repo = await scratchRepo();
+    const before = git(repo, "rev-parse", "HEAD");
+    await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs one");
+    await commitFiles(repo, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
+
+    const result = classify(repo, before);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("true\n");
+  });
+
+  it("rejects a valid commit that is not an ancestor of HEAD", async () => {
+    const repo = await scratchRepo();
+    git(repo, "checkout", "--quiet", "-b", "other");
+    const other = await commitFiles(repo, { "README.md": "# other\n" }, "other");
+    git(repo, "checkout", "--quiet", "main");
+    await commitFiles(repo, { "README.md": "# main\n" }, "main");
+
+    const result = classify(repo, other);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("false\n");
+  });
+
   it("prints false for an undecidable base and still exits 0", async () => {
     const repo = await scratchRepo();
     await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");

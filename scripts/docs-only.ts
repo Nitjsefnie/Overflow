@@ -4,15 +4,16 @@
 //
 //   node scripts/docs-only.ts <base-revision>
 //
-// Diffs <base-revision> against HEAD and prints "true" when every changed
-// path is documentation — the .md, .txt, .rst and .adoc extensions, plus the
-// LICENSE file — and "false" otherwise. Rename detection is off (issue 646),
-// so a rename lists its source path as a deletion beside its destination as
-// an addition, and a code file renamed to a doc is classified as code.
+// Prints "true" only when the base is an ancestor of HEAD, the endpoint diff
+// is docs-only, and every commit on the first-parent chain from base to HEAD
+// changes only documentation against its first parent. Merge commits therefore
+// use their first-parent diff. Docs are .md, .txt, .rst, .adoc and LICENSE.
+// Rename detection is off (issue 646), so a code file renamed to a doc still
+// exposes its code source path.
 //
 // Everything undecidable prints "false" so the change is measured: an empty
-// diff, a missing, empty or all-zero base, and any git failure. The exit
-// status is 0 whenever the verdict is printed.
+// diff or range, a non-ancestor, missing history, an empty or all-zero base,
+// and any git failure. The exit status is 0 whenever the verdict is printed.
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -48,20 +49,42 @@ export function parseNulList(input: string): string[] {
  * keeps an option-shaped base from being read as a flag, and the trailing
  * `--` keeps a path-shaped one from being read as a pathspec.
  */
-function changedPaths(base: string): string[] | undefined {
+function changedPaths(base: string, head = "HEAD"): string[] | undefined {
   if (base.length === 0 || /^0+$/.test(base)) return undefined;
   const result = spawnSync(
     "git",
-    ["diff", "--no-renames", "--name-only", "-z", "--end-of-options", base, "HEAD", "--"],
+    ["diff", "--no-renames", "--name-only", "-z", "--end-of-options", base, head, "--"],
     { encoding: "utf8" },
   );
   if (result.error !== undefined || result.status !== 0) return undefined;
   return parseNulList(result.stdout);
 }
 
+function docsOnlyRange(base: string): boolean {
+  const endpoint = changedPaths(base);
+  if (endpoint === undefined || !isDocsOnly(endpoint)) return false;
+
+  const resolved = spawnSync("git", ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`], { encoding: "utf8" });
+  if (resolved.error !== undefined || resolved.status !== 0) return false;
+  const baseCommit = resolved.stdout.trim();
+  const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", baseCommit, "HEAD"], { encoding: "utf8" });
+  if (ancestor.error !== undefined || ancestor.status !== 0) return false;
+
+  const range = spawnSync("git", ["rev-list", "--first-parent", "--reverse", `${baseCommit}..HEAD`], { encoding: "utf8" });
+  if (range.error !== undefined || range.status !== 0) return false;
+  const commits = range.stdout.trim().split("\n").filter(Boolean);
+  if (commits.length === 0) return false;
+  for (const commit of commits) {
+    const parent = spawnSync("git", ["rev-parse", "--verify", `${commit}^1`], { encoding: "utf8" });
+    if (parent.error !== undefined || parent.status !== 0) return false;
+    const paths = changedPaths(parent.stdout.trim(), commit);
+    if (paths === undefined || !isDocsOnly(paths)) return false;
+  }
+  return true;
+}
+
 function main(): void {
-  const paths = changedPaths(process.argv[2] ?? "");
-  const docsOnly = paths !== undefined && isDocsOnly(paths);
+  const docsOnly = docsOnlyRange(process.argv[2] ?? "");
   process.stdout.write(docsOnly ? "true\n" : "false\n");
 }
 

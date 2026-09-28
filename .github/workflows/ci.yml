@@ -9,6 +9,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      base:
+        description: "Full SHA of the main commit to measure this dispatch against"
+        required: false
+        type: string
       simulate-refused-raise:
         description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)"
         type: boolean
@@ -78,29 +82,46 @@ jobs:
 
       # A change that touched only documentation cannot move coverage, so the
       # measurement below would compare the same tree against itself. Detect
-      # it instead of measuring it: pick a base, and let scripts/docs-only.ts
-      # diff it against HEAD and decide (issue 646). A pull_request or
-      # workflow_dispatch run diffs the checkout commit's first parent, which
-      # on a pull request is already the whole change. A push diffs the push's
-      # before SHA instead, because a rebase merge lands several commits at
-      # once and the last one alone can be docs-only while earlier ones
-      # changed code. The script turns rename detection off, so a code file
-      # renamed to a doc is classified by its source path too. An empty diff,
-      # an empty or all-zero before SHA and a base that cannot be fetched all
-      # count as code, so an undecidable change is measured.
+      # it instead of measuring it: the script checks the endpoint diff and
+      # every first-parent commit since the base. A pull_request uses the
+      # merge ref's first parent (the whole PR change), a push uses its before
+      # SHA, and a dispatch uses its validated optional base. A dispatch with
+      # no base, an unknown event, or an undecidable push counts as code.
+      # Rename detection is off, so a code source renamed to a doc counts as
+      # code (issue 646).
       - name: Detect docs-only change
         id: detect-docs
         env:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_BASE: ${{ inputs.base }}
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
-          base=HEAD^1
-          if [ "${EVENT_NAME}" = push ]; then
+          base=""
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            base=HEAD^1
+          elif [ "${EVENT_NAME}" = push ]; then
             base="${PUSH_BEFORE}"
             if [ -z "${base}" ] || [ -z "${base//0/}" ] \
               || ! git fetch --depth=1 origin "${base}"; then
               base=""
+            else
+              git fetch --no-tags --unshallow origin "${GITHUB_SHA}"
+            fi
+          elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then
+            base="${DISPATCH_BASE}"
+            if [[ ! "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Dispatch base has invalid format; expected 40 lowercase hexadecimal characters" >&2
+              exit 1
+            fi
+            if [ "${base}" = "${GITHUB_SHA}" ]; then
+              echo "::error::Dispatch base must differ from the dispatched commit" >&2
+              exit 1
+            fi
+            git fetch --no-tags --unshallow origin "${GITHUB_SHA}"
+            if ! git merge-base --is-ancestor "${base}" "${GITHUB_SHA}"; then
+              echo "::error::Dispatch base must be an ancestor of the dispatched commit" >&2
+              exit 1
             fi
           fi
           changed=$(node scripts/docs-only.ts "${base}")

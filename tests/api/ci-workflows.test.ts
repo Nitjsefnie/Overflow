@@ -301,6 +301,11 @@ fi
       // fabrication — fails here.
       workflow_dispatch: {
         inputs: {
+          base: {
+            description: "Full SHA of the main commit to measure this dispatch against",
+            required: false,
+            type: "string",
+          },
           "simulate-refused-raise": {
             description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the job fails visibly (issue 684)",
             type: "boolean",

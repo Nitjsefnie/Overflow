@@ -18,9 +18,9 @@ type WorkflowStep = {
 /**
  * The verify job's "Detect docs-only change" step picks the diff base and
  * hands it to scripts/docs-only.ts (issue 646): the merge commit's first
- * parent on pull_request and workflow_dispatch runs, the push's `before` SHA
- * on push runs, so a push is judged by every commit it carries rather than by
- * its last one. Every undecidable base must end in docs_only=false.
+ * parent on pull_request runs, the push's `before` SHA on push runs, and an
+ * optional validated base on workflow_dispatch runs. A dispatch without a
+ * base and every undecidable push must end in docs_only=false.
  *
  * The wiring is pinned on the parsed YAML, and the step's own run script is
  * then executed with bash -e (GitHub's default shell) inside scratch
@@ -53,6 +53,7 @@ describe("the verify workflow's docs-only detection step", () => {
     expect(step?.env).toEqual({
       EVENT_NAME: "${{ github.event_name }}",
       PUSH_BEFORE: "${{ github.event.before }}",
+      DISPATCH_BASE: "${{ inputs.base }}",
     });
     expect(step?.run).toBeDefined();
     expect(step?.run?.includes("${{")).toBe(false);
@@ -100,7 +101,7 @@ describe("the verify workflow's docs-only detection step", () => {
      * Runs the step's run script the way the runner would: a depth-1 checkout
      * of `sha` fetched from the origin, bash -e, and a GITHUB_OUTPUT file.
      */
-    async function runStep(origin: string, sha: string, env: { EVENT_NAME: string; PUSH_BEFORE: string }) {
+    async function runStep(origin: string, sha: string, env: { EVENT_NAME: string; PUSH_BEFORE: string; DISPATCH_BASE?: string }) {
       counter += 1;
       const checkout = join(root, `checkout-${counter}`);
       await mkdir(checkout);
@@ -215,14 +216,51 @@ describe("the verify workflow's docs-only detection step", () => {
       expect(result.output).toBe("docs_only=true\n");
     });
 
-    it("diffs a workflow_dispatch run against its first parent", async () => {
+    it("measures the issue 797 code then docs landing with no dispatch base", async () => {
       const origin = await upstream();
+      const before = git(origin, "rev-parse", "HEAD");
       await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code");
       const head = await commitFiles(origin, { "README.md": "# scratch, edited\n" }, "docs");
 
       const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "" });
       expect(result.status, result.stderr).toBe(0);
+      expect(result.output).toBe("docs_only=false\n");
+
+      const ranged = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "", DISPATCH_BASE: before });
+      expect(ranged.status, ranged.stderr).toBe(0);
+      expect(ranged.output).toBe("docs_only=false\n");
+    });
+
+    it("classifies a valid docs-only dispatch range as docs-only", async () => {
+      const origin = await upstream();
+      const before = git(origin, "rev-parse", "HEAD");
+      await commitFiles(origin, { "README.md": "# scratch, first edit\n" }, "docs one");
+      const head = await commitFiles(origin, { "CONTRIBUTING.md": "# contributing\n" }, "docs two");
+
+      const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: "", DISPATCH_BASE: before });
+      expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=true\n");
+    });
+
+    it("rejects malformed, equal and non-ancestor dispatch bases visibly", async () => {
+      const origin = await upstream();
+      const unrelated = git(origin, "rev-parse", "HEAD");
+      git(origin, "checkout", "--quiet", "-b", "other");
+      const other = await commitFiles(origin, { "README.md": "# other\n" }, "other");
+      git(origin, "checkout", "--quiet", "main");
+      const head = await commitFiles(origin, { "README.md": "# main\n" }, "main");
+
+      for (const [base, problem] of [
+        ["not-a-sha", "format"],
+        ["$(touch /tmp/overflow-797-injection)", "format"],
+        [head, "differ"],
+        [other, "ancestor"],
+      ]) {
+        const result = await runStep(origin, head, { EVENT_NAME: "workflow_dispatch", PUSH_BEFORE: unrelated, DISPATCH_BASE: base });
+        expect(result.status, base).not.toBe(0);
+        expect(result.stderr, base).toContain("::error::");
+        expect(result.stderr, base).toContain(problem);
+      }
     });
   });
 });
