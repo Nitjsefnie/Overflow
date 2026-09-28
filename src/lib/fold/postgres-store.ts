@@ -1019,7 +1019,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     await this.sql`
       update reconciliation_runs
       set status = ${"FAILED"}, completed_at = now(), error_message = ${"Reconciliation failed."}
-      where id = ${runId}
+      where id = ${runId} and status = 'PENDING'
     `;
   }
 
@@ -1027,7 +1027,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     await this.sql`
       update reconciliation_runs
       set status = ${"COMPLETED"}, completed_at = now(), error_message = null
-      where id = ${runId}
+      where id = ${runId} and status = 'PENDING'
     `;
   }
 
@@ -1140,7 +1140,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         await transaction`
           update reconciliation_runs
           set status = ${"COMPLETED"}, completed_at = now(), error_message = null
-          where id = ${input.runId}
+          where id = ${input.runId} and status = 'PENDING'
         `;
       }
       return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
