@@ -32,10 +32,16 @@ export async function registerNodejs(): Promise<void> {
   }
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
+  const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
   const { reconcileRepositoryAsSponsor } = await import("@/lib/fold/reconcile-as-sponsor");
   const { PostgresForgeIdentityStore } = await import("@/lib/forge/postgres-identities-store");
-  const { getSql } = await import("@/lib/db/client");
+  const { getSql, getCoordinationSql } = await import("@/lib/db/client");
   const store = new PostgresFoldStore();
+  try {
+    await finalizeAbandonedRuns(getSql(), getCoordinationSql());
+  } catch (error) {
+    console.error("Could not finalize abandoned reconciliation runs on startup", error);
+  }
   // GitLab repositories fold with the sponsor's linked identity's PAT, resolved
   // and decrypted at first read through the same memoization, and a rejection
   // of that credential stamps the identity's re-verification marker. Both
@@ -99,6 +105,7 @@ export async function registerNodejs(): Promise<void> {
   });
 
   startReconciliationSweep({
+    finalizeAbandonedRuns: () => finalizeAbandonedRuns(getSql(), getCoordinationSql()),
     runSweep: async () => {
       const summary = await sweepReconciliations({
         listActiveRepositoryIds: () => store.listActiveRepositoryIds(),

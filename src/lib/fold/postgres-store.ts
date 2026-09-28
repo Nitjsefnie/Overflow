@@ -214,7 +214,7 @@ type ReconciliationChangeKind = "ADD" | "CHANGE" | "REMOVE";
 const repositoryLockWaitDeadlineMs = 60_000;
 const repositoryLockInitialRetryMs = 10;
 const repositoryLockMaximumRetryMs = 250;
-const repositoryLockNamespace = 684029183;
+export const repositoryLockNamespace = 684029183;
 const repositoryCoordinationFailure = "Unable to coordinate repository reconciliation.";
 
 /**
@@ -268,7 +268,7 @@ function warnCoordinationStatementFailed(
  * connection is retired unreleased, costing the coordination pool a connection until the process
  * restarts. The warnings this function emits are the only trace of it.
  */
-async function reclaimCoordinationConnection(
+export async function reclaimCoordinationConnection(
   connection: Awaited<ReturnType<SqlClient["reserve"]>>,
   repositoryId: string,
   owningSession: { pid: number; backendStart: string } | undefined,
