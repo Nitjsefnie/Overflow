@@ -13,6 +13,7 @@ import { createModerationUnwritableClosuresGetHandler } from "@/app/api/moderati
 import { createSettlementOverrideListGetHandler } from "@/app/api/overrides/route";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 import type { ToolDefinition } from "@/lib/mcp/protocol";
+import { MCP_SERVER_VERSION } from "@/lib/mcp/protocol";
 
 // Bind the page/route graph to this file's mocks and release it afterward.
 vi.hoisted(() => { vi.resetModules(); });
@@ -186,7 +187,9 @@ describe("POST /api/mcp", () => {
       result: {
         protocolVersion: "2025-06-18",
         capabilities: { tools: {} },
-        serverInfo: { name: "overflow", version: "0.3.0" },
+        // The value itself is guarded by tests/lib/api-version.test.ts;
+        // this test pins the metadata shape around it.
+        serverInfo: { name: "overflow", version: MCP_SERVER_VERSION },
       },
     });
   });
