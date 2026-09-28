@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { MCP_SERVER_VERSION } from "@/lib/mcp/protocol";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
@@ -21,6 +25,43 @@ const dependencies: McpToolDependencies = {
 const snapshot = JSON.parse(
   readFileSync(new URL("../../scripts/mcp-surface-snapshot.json", import.meta.url), "utf8"),
 ) as { mcpServerVersion: string; tools: unknown[] };
+const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const snapshotPath = "scripts/mcp-surface-snapshot.json";
+
+function git(args: string[]): string {
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.error?.message ?? result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
+}
+
+function baseCommit(): string {
+  const override = process.env.MCP_SNAPSHOT_BASE_COMMIT;
+  if (override !== undefined) {
+    return git(["rev-parse", "--verify", "--end-of-options", `${override}^{commit}`]);
+  }
+
+  const headAndParents = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
+  if (headAndParents.length === 3) return headAndParents[1]!;
+
+  if (git(["rev-parse", "--is-shallow-repository"]) === "true") {
+    throw new Error(
+      "The MCP snapshot base could not be resolved reliably from shallow history; " +
+        "git fetch origin main and fetch full history with git fetch --unshallow.",
+    );
+  }
+
+  const result = spawnSync("git", ["merge-base", "HEAD", "origin/main"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  const base = result.stdout.trim();
+  if (result.status !== 0 || base === "") {
+    throw new Error("The MCP snapshot base could not be resolved; git fetch origin main and rerun the test.");
+  }
+  return base;
+}
 
 describe("MCP tool surface snapshot", () => {
   it("records the served names, descriptions, and input schemas", () => {
@@ -38,5 +79,32 @@ describe("MCP tool surface snapshot", () => {
       snapshot.mcpServerVersion,
       `scripts/mcp-surface-snapshot.json records ${snapshot.mcpServerVersion} but MCP_SERVER_VERSION is ${MCP_SERVER_VERSION}. The snapshot and MCP_SERVER_VERSION move together: run the update script (it moves both) or edit both to the same value.`,
     ).toBe(MCP_SERVER_VERSION);
+  });
+
+  it("never changes the recorded surface without moving the server version", () => {
+    const base = baseCommit();
+    const listing = git(["--literal-pathspecs", "ls-tree", "-z", base, "--", snapshotPath])
+      .split("\0")[0]!;
+    if (listing === "") {
+      // This branch introduces the snapshot, so the base has no surface to compare.
+      return;
+    }
+    const [entry, path] = listing.split("\t", 2);
+    if (path !== snapshotPath || !entry?.startsWith("100644 blob ")) {
+      throw new Error(`${snapshotPath} at ${base} is not a regular file`);
+    }
+
+    let previous: { mcpServerVersion: string; tools: unknown[] };
+    try {
+      previous = JSON.parse(git(["show", `${base}:${snapshotPath}`])) as typeof previous;
+    } catch (error) {
+      throw new Error(`${snapshotPath} at ${base} could not be parsed: ${error}`);
+    }
+    if (isDeepStrictEqual(previous.tools, snapshot.tools)) return;
+
+    expect(
+      snapshot.mcpServerVersion,
+      `The recorded MCP tool surface changed relative to ${base.slice(0, 8)} but the version did not move (${previous.mcpServerVersion}). Bump MCP_SERVER_VERSION in src/lib/mcp/protocol.ts and record it in scripts/mcp-surface-snapshot.json in the same change.`,
+    ).not.toBe(previous.mcpServerVersion);
   });
 });
