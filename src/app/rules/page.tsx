@@ -1,5 +1,5 @@
-import { AppShell } from "@/components/app-shell";
-import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
+import Link from "next/link";
+import { AppShell, PublicAppShell } from "@/components/app-shell";
 
 type RulesContentProps = {
   memberName: string;
@@ -9,6 +9,29 @@ type RulesContentProps = {
 export function RulesContent({ memberName, isModerator }: RulesContentProps) {
   return (
     <AppShell memberName={memberName} isModerator={isModerator}>
+      <RulesSections />
+    </AppShell>
+  );
+}
+
+/**
+ * The rules for a visitor with no session. PublicAppShell supplies no main of
+ * its own, so this renders the main.page-content the skip link targets, the
+ * way the account-data notice does.
+ */
+export function PublicRulesContent() {
+  return (
+    <PublicAppShell>
+      <main className="page-content" id="main-content">
+        <RulesSections />
+      </main>
+    </PublicAppShell>
+  );
+}
+
+function RulesSections() {
+  return (
+    <>
       <section className="page-heading" aria-labelledby="rules-title">
         <h1 id="rules-title">Rules</h1>
         <p>How work earns credits and how accounts are reviewed.</p>
@@ -68,11 +91,25 @@ export function RulesContent({ memberName, isModerator }: RulesContentProps) {
           <li>Moderation applies to accounts, and every step requires supporting evidence.</li>
         </ul>
       </section>
-    </AppShell>
+    </>
   );
 }
 
 export default async function RulesPage() {
-  const session = await requireMemberPageSession();
-  return <RulesContent memberName={session.user.name} isModerator={isModeratorSession(session)} />;
+  const { auth } = await import("@/auth");
+  const session = await auth();
+  const user = session?.user as { id?: unknown; name?: unknown; role?: unknown } | undefined;
+  if (typeof user?.id === "string" && (user.role === "MEMBER" || user.role === "MODERATOR")) {
+    return (
+      <RulesContent memberName={displayName(user.name)} isModerator={user.role === "MODERATOR"} />
+    );
+  }
+  return <PublicRulesContent />;
+}
+
+function displayName(name: unknown): string {
+  if (typeof name === "string" && name.trim().length > 0) {
+    return name;
+  }
+  return "Member";
 }
