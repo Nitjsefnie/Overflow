@@ -104,14 +104,39 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # Dispatch checks out the last certified main tip, whose copy of the
-      # ratchet script is trusted. Later commits are read only as git data.
+      # Dispatch checks out the supplied base only after format/ref checks.
+      # Prove it is a trusted main ancestor before any setup action can probe
+      # checkout-controlled files such as Yarn configuration.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           ref: ${{ inputs.base }}
           persist-credentials: false
           fetch-depth: 0
+
+      # Fetch the dispatched tip as git objects only. A missed push can span
+      # multiple commits, so HEAD^1 is not the last certified baseline.
+      - name: Fetch the dispatched commit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: git fetch --no-tags origin "$DISPATCHED_SHA"
+
+      # Both objects are present. Fail before setup-node, whose Yarn probe
+      # could execute checkout-controlled configuration from an arbitrary SHA.
+      - name: Validate dispatch ancestry
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
+            echo "::error::Dispatch base must differ from the dispatched commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
+            echo "::error::Dispatch base must be an ancestor of the dispatched commit"
+            exit 1
+          fi
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -165,31 +190,10 @@ jobs:
           PUSHED_SHA: ${{ github.sha }}
         run: node scripts/check-ratchets.ts HEAD "$PUSHED_SHA"
 
-      # Fetch the dispatched tip as objects only. A missed push can span
-      # multiple commits, so comparing HEAD^1 would omit uncaught changes.
-      - name: Fetch the dispatched commit
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          DISPATCHED_SHA: ${{ github.sha }}
-        run: git fetch --no-tags origin "$DISPATCHED_SHA"
-
-      # Fail before executing the checked-out script if the supplied base is
-      # the tip itself or not an ancestor. Both objects are present now.
-      - name: Validate dispatch ancestry
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          DISPATCHED_SHA: ${{ github.sha }}
-        run: |
-          if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
-            echo "::error::Dispatch base must differ from the dispatched commit"
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
-            echo "::error::Dispatch base must be an ancestor of the dispatched commit"
-            exit 1
-          fi
-
       # HEAD is the last certified main tip; the dispatched tip remains data.
+      # The two endpoint documents are compared as one interval change, like
+      # a push run on a multi-commit push. Intermediate relaxations that are
+      # later re-tightened past the base are not reported by this comparison.
       - name: Ratchet documents against the last certified main tip
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:

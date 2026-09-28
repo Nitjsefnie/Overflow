@@ -709,8 +709,11 @@ If the gate waits on `(absent)` for every required check and
 `actions/runs?head_sha=<sha>` lists no push runs, recover main's **current**
 tip with workflow dispatches. A dispatch on `main` runs for main's tip, so it
 cannot certify an older tip. For `ratchet-guard`, `base` must be the newest
-main commit that already has a successful ratchet-guard run; this compares
-every commit since the last certified tip.
+main commit that already has a successful ratchet-guard run. The dispatch
+judges the interval from that tip to main's tip as one endpoint change, just
+as a push run does for a multi-commit push. If several consecutive pushes
+were dropped, this is coarser than their separate push runs: a relaxation
+later re-tightened past the base is not flagged.
 
 ```sh
 base=$(gh api 'repos/Nitjsefnie/Overflow/actions/workflows/ratchet-guard.yml/runs?branch=main&status=success&per_page=50' --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha')

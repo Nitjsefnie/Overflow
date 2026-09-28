@@ -127,14 +127,15 @@ describe("GitHub Actions release gates", () => {
     // expression: the pull_request_target step has no ref input at all, so
     // it is visibly the default checkout (main's tip, exempt from
     // checkout's fork guard), and the push step visibly pins the previous
-    // main tip. Dispatch pins the last certified main tip, validating its
-    // format before checkout and its ancestry before executing its script.
+    // main tip. Dispatch takes the last certified main tip as input, validates
+    // its format before checkout, then fetches the dispatched tip and checks
+    // ancestry before setup-node can probe checkout-controlled Yarn files.
     // On a push GitHub always sets `before` to a 40-hex SHA. No step installs
-    // or builds anything: untrusted content enters only as git objects
-    // (refs/remotes/pr/head under pull_request_target, FETCH_HEAD under push
-    // and dispatch), and the only script that runs is a main-side
-    // scripts/check-ratchets.ts reading those objects with `git show`. The
-    // base of the comparison is the
+    // or builds anything. The PR head and pushed tip enter only as git
+    // objects; dispatch checks out the candidate base but runs only git
+    // commands until it proves main ancestry. The ratchet script then comes
+    // from the trusted checked-out base and reads the target with `git show`.
+    // The base of the comparison is the
     // checked-out commit itself (HEAD) under all three events, never the event's
     // base.sha: under pull_request_target that value is recorded when the
     // pull request opens and can trail main, and after a rebase onto a newer
@@ -144,9 +145,12 @@ describe("GitHub Actions release gates", () => {
     // non-forced push, a direct ancestor of the pushed SHA, so the merge
     // base is the previous tip
     // itself and the comparison is exactly "did this push relax a ratchet
-    // document relative to the main it replaced". Dispatch compares all
-    // commits since the last certified tip, not only HEAD^1. Every event
-    // value travels through env, never ${{ }} in run:.
+    // document relative to the main it replaced". Dispatch judges the
+    // interval from the last certified tip to main's tip as one endpoint
+    // change, like a multi-commit push. It is coarser than separate push
+    // runs when consecutive pushes were dropped: an intermediate relaxation
+    // later re-tightened past the base is not flagged. Every event value
+    // travels through env, never ${{ }} in run:.
     expect(workflow.jobs).toEqual({
       "ratchet-guard": {
         "runs-on": "ubuntu-latest",
@@ -201,6 +205,26 @@ fi
             },
           },
           {
+            name: "Fetch the dispatched commit",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { DISPATCHED_SHA: "${{ github.sha }}" },
+            run: 'git fetch --no-tags origin "$DISPATCHED_SHA"',
+          },
+          {
+            name: "Validate dispatch ancestry",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { DISPATCHED_SHA: "${{ github.sha }}" },
+            run: `if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
+  echo "::error::Dispatch base must differ from the dispatched commit"
+  exit 1
+fi
+if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
+  echo "::error::Dispatch base must be an ancestor of the dispatched commit"
+  exit 1
+fi
+`,
+          },
+          {
             uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
             with: { "node-version": "24.17.0" },
           },
@@ -227,26 +251,6 @@ fi
             name: "Ratchet documents against the previous main",
             env: { PUSHED_SHA: "${{ github.sha }}" },
             run: 'node scripts/check-ratchets.ts HEAD "$PUSHED_SHA"',
-          },
-          {
-            name: "Fetch the dispatched commit",
-            if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { DISPATCHED_SHA: "${{ github.sha }}" },
-            run: 'git fetch --no-tags origin "$DISPATCHED_SHA"',
-          },
-          {
-            name: "Validate dispatch ancestry",
-            if: "${{ github.event_name == 'workflow_dispatch' }}",
-            env: { DISPATCHED_SHA: "${{ github.sha }}" },
-            run: `if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
-  echo "::error::Dispatch base must differ from the dispatched commit"
-  exit 1
-fi
-if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
-  echo "::error::Dispatch base must be an ancestor of the dispatched commit"
-  exit 1
-fi
-`,
           },
           {
             name: "Ratchet documents against the last certified main tip",
