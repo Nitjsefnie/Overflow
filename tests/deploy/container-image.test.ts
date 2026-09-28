@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createDockerImageSuite } from "../support/docker-images";
 
 const dockerfile = readFileSync(
   new URL("../../Dockerfile", import.meta.url),
@@ -163,6 +164,8 @@ describe("image provenance (issue 461)", () => {
 // a text-only guard could not tell a USER line the build ignores from one the
 // image carries. The build is slow, so this test owns a long timeout.
 describe("built image", () => {
+  const images = createDockerImageSuite((command, args, options) => execFileSync(command, args, options));
+
   it(
     "ships a non-empty project LICENSE at /app/LICENSE",
     { timeout: 1_200_000 },
@@ -172,39 +175,26 @@ describe("built image", () => {
         cwd: repoRoot,
         encoding: "utf8",
       }).trim();
-      execFileSync(
-        "docker",
-        [
-          "build",
-          "--build-arg",
-          `SOURCE_SHA=${sourceSha}`,
-          "-t",
-          "overflow-576-license",
-          ".",
-        ],
-        {
-          cwd: repoRoot,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      // Check the image's file without starting the app or its migrations;
-      // --rm cleans up the container even when the license check fails.
-      expect(
-        () => execFileSync(
-          "docker",
-          [
-            "run",
-            "--rm",
-            "--entrypoint",
-            "test",
-            "overflow-576-license",
-            "-s",
-            "/app/LICENSE",
-          ],
-          { stdio: ["ignore", "pipe", "pipe"] },
-        ),
-        "the built image's /app/LICENSE must exist and be non-empty",
-      ).not.toThrow();
+      images.withBuiltImage("overflow-576-license", repoRoot, sourceSha, (tag) => {
+        // Check the image's file without starting the app or its migrations;
+        // --rm cleans up the container even when the license check fails.
+        expect(
+          () => execFileSync(
+            "docker",
+            [
+              "run",
+              "--rm",
+              "--entrypoint",
+              "test",
+              tag,
+              "-s",
+              "/app/LICENSE",
+            ],
+            { stdio: ["ignore", "pipe", "pipe"] },
+          ),
+          "the built image's /app/LICENSE must exist and be non-empty",
+        ).not.toThrow();
+      });
     },
   );
 
@@ -223,38 +213,25 @@ describe("built image", () => {
         cwd: repoRoot,
         encoding: "utf8",
       }).trim();
-      execFileSync(
-        "docker",
-        [
-          "build",
-          "--build-arg",
-          `SOURCE_SHA=${sourceSha}`,
-          "-t",
-          "overflow-444-configuser",
-          ".",
-        ],
-        {
-          cwd: repoRoot,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const configUser = JSON.parse(
-        execFileSync(
-          "docker",
-          [
-            "image",
-            "inspect",
-            "--format",
-            "{{json .Config.User}}",
-            "overflow-444-configuser",
-          ],
-          { encoding: "utf8" },
-        ),
-      ) as string;
-      expect(configUser, "the built image's Config.User").not.toBe("");
-      const [uid] = configUser.split(":");
-      expect(uid.toLowerCase(), "the image runtime user").not.toBe("root");
-      expect(uid, "the image runtime uid").not.toBe("0");
+      images.withBuiltImage("overflow-444-configuser", repoRoot, sourceSha, (tag) => {
+        const configUser = JSON.parse(
+          execFileSync(
+            "docker",
+            [
+              "image",
+              "inspect",
+              "--format",
+              "{{json .Config.User}}",
+              tag,
+            ],
+            { encoding: "utf8" },
+          ),
+        ) as string;
+        expect(configUser, "the built image's Config.User").not.toBe("");
+        const [uid] = configUser.split(":");
+        expect(uid.toLowerCase(), "the image runtime user").not.toBe("root");
+        expect(uid, "the image runtime uid").not.toBe("0");
+      });
     },
   );
 
@@ -267,60 +244,47 @@ describe("built image", () => {
         cwd: repoRoot,
         encoding: "utf8",
       }).trim();
-      execFileSync(
-        "docker",
-        [
-          "build",
-          "--build-arg",
-          `SOURCE_SHA=${sourceSha}`,
-          "-t",
-          "overflow-688-prod-only",
-          ".",
-        ],
-        {
-          cwd: repoRoot,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      // Both surfaces are asserted because a plain `pnpm install --prod` on
-      // top of a full install empties the top level while leaving every dev
-      // package's bytes in the .pnpm virtual store — the deficient first
-      // shape of this fix passed the text pins with vitest, ssh2's
-      // test-fixture keys and the rest still in the image.
-      const devPackages = ["vitest", "eslint", "jsdom", "typescript", "testcontainers", "ssh2"];
-      const topLevel = execFileSync(
-        "docker",
-        [
-          "run",
-          "--rm",
-          "--entrypoint",
-          "ls",
-          "overflow-688-prod-only",
-          "/app/node_modules",
-        ],
-        { encoding: "utf8" },
-      );
-      const entries = topLevel.split("\n").filter((line) => line !== "");
-      const virtualStore = execFileSync(
-        "docker",
-        [
-          "run",
-          "--rm",
-          "--entrypoint",
-          "ls",
-          "overflow-688-prod-only",
-          "/app/node_modules/.pnpm",
-        ],
-        { encoding: "utf8" },
-      );
-      const storeEntries = virtualStore.split("\n").filter((line) => line !== "");
-      for (const devPackage of devPackages) {
-        expect(entries, "the image's top-level node_modules").not.toContain(devPackage);
-        expect(
-          storeEntries.filter((entry) => entry.split("@")[0] === devPackage),
-          `the .pnpm virtual store must not carry ${devPackage}`,
-        ).toEqual([]);
-      }
+      images.withBuiltImage("overflow-688-prod-only", repoRoot, sourceSha, (tag) => {
+        // Both surfaces are asserted because a plain `pnpm install --prod` on
+        // top of a full install empties the top level while leaving every dev
+        // package's bytes in the .pnpm virtual store — the deficient first
+        // shape of this fix passed the text pins with vitest, ssh2's
+        // test-fixture keys and the rest still in the image.
+        const devPackages = ["vitest", "eslint", "jsdom", "typescript", "testcontainers", "ssh2"];
+        const topLevel = execFileSync(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--entrypoint",
+            "ls",
+            tag,
+            "/app/node_modules",
+          ],
+          { encoding: "utf8" },
+        );
+        const entries = topLevel.split("\n").filter((line) => line !== "");
+        const virtualStore = execFileSync(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--entrypoint",
+            "ls",
+            tag,
+            "/app/node_modules/.pnpm",
+          ],
+          { encoding: "utf8" },
+        );
+        const storeEntries = virtualStore.split("\n").filter((line) => line !== "");
+        for (const devPackage of devPackages) {
+          expect(entries, "the image's top-level node_modules").not.toContain(devPackage);
+          expect(
+            storeEntries.filter((entry) => entry.split("@")[0] === devPackage),
+            `the .pnpm virtual store must not carry ${devPackage}`,
+          ).toEqual([]);
+        }
+      });
     },
   );
 });

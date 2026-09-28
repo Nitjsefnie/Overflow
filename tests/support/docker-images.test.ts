@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+
+import { createDockerImageSuite } from "./docker-images";
+
+type Command = { command: string; args: string[] };
+
+function recorder() {
+  const commands: Command[] = [];
+  const run = (command: string, args: string[]) => {
+    commands.push({ command, args });
+    return args[0] === "image" && args[1] === "inspect" ? "sha256:built-image\n" : "";
+  };
+  return { commands, run };
+}
+
+function builtTag(commands: Command[]) {
+  const build = commands.find(({ args }) => args[0] === "build");
+  expect(build).toBeDefined();
+  return build!.args[build!.args.indexOf("-t") + 1]!;
+}
+
+describe("Docker image suite", () => {
+  it("gives concurrent suites distinct lowercase tags and labels", () => {
+    const first = recorder();
+    const second = recorder();
+
+    createDockerImageSuite(first.run).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+    createDockerImageSuite(second.run).withBuiltImage("overflow-576-license", "/repo", "source", () => {});
+
+    const firstTag = builtTag(first.commands);
+    const secondTag = builtTag(second.commands);
+    expect(firstTag).toMatch(/^overflow-576-license:[a-z0-9-]+$/);
+    expect(secondTag).toMatch(/^overflow-576-license:[a-z0-9-]+$/);
+    expect(firstTag).not.toBe(secondTag);
+    for (const commands of [first.commands, second.commands]) {
+      const build = commands.find(({ args }) => args[0] === "build")!;
+      const label = build.args[build.args.indexOf("--label") + 1]!;
+      expect(label).toBe(`overflow.test-run=${builtTag(commands).split(":")[1]}`);
+    }
+  });
+
+  it("removes each built tag after its body finishes", () => {
+    const { commands, run } = recorder();
+    const suite = createDockerImageSuite(run);
+    const inspected: string[] = [];
+
+    for (const base of ["overflow-576-license", "overflow-444-configuser", "overflow-688-prod-only"]) {
+      suite.withBuiltImage(base, "/repo", "source", (tag) => inspected.push(tag));
+    }
+
+    expect(inspected).toEqual(commands.filter(({ args }) => args[0] === "build").map(({ args }) => args[args.indexOf("-t") + 1]));
+    expect(commands.filter(({ args }) => args[0] === "image" && args[1] === "rm").map(({ args }) => args[2])).toEqual(inspected);
+    expect(new Set(inspected.map((tag) => tag.split(":")[1])).size).toBe(1);
+  });
+
+  it("removes its tag and preserves the body failure", () => {
+    const { commands, run } = recorder();
+    const failure = new Error("assertion failed");
+
+    expect(() => createDockerImageSuite(run).withBuiltImage("overflow-576-license", "/repo", "source", () => {
+      throw failure;
+    })).toThrow(failure);
+    expect(commands.some(({ args }) => args[0] === "image" && args[1] === "rm" && args[2] === builtTag(commands))).toBe(true);
+  });
+
+  it("attempts removal when the build throws and tolerates the absent tag", () => {
+    const commands: Command[] = [];
+    const buildFailure = new Error("build failed");
+    const run = (command: string, args: string[]) => {
+      commands.push({ command, args });
+      if (args[0] === "build") throw buildFailure;
+      if (args[0] === "image" && args[1] === "rm") throw new Error("rm failed");
+      if (args[0] === "image" && args[1] === "inspect") {
+        throw Object.assign(new Error("missing"), { stderr: Buffer.from(`Error: No such image: ${args[2]}`) });
+      }
+      return "";
+    };
+
+    expect(() => createDockerImageSuite(run).withBuiltImage("overflow-576-license", "/repo", "source", () => {})).toThrow(buildFailure);
+    expect(commands.map(({ args }) => args.slice(0, 2))).toEqual([["build", "--build-arg"], ["image", "rm"], ["image", "inspect"]]);
+  });
+
+  it("surfaces a removal failure while the image still exists", () => {
+    const removalFailure = new Error("image is in use");
+    const run = (_command: string, args: string[]) => {
+      if (args[0] === "image" && args[1] === "rm") throw removalFailure;
+      return args[0] === "image" && args[1] === "inspect" ? "sha256:built-image\n" : "";
+    };
+
+    expect(() => createDockerImageSuite(run).withBuiltImage("overflow-576-license", "/repo", "source", () => {})).toThrow(removalFailure);
+  });
+
+  it("reports both the body failure and a real removal failure", () => {
+    const bodyFailure = new Error("assertion failed");
+    const removalFailure = new Error("image is in use");
+    const run = (_command: string, args: string[]) => {
+      if (args[0] === "image" && args[1] === "rm") throw removalFailure;
+      return args[0] === "image" && args[1] === "inspect" ? "sha256:built-image\n" : "";
+    };
+
+    try {
+      createDockerImageSuite(run).withBuiltImage("overflow-576-license", "/repo", "source", () => {
+        throw bodyFailure;
+      });
+      expect.fail("both failures must be reported");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([bodyFailure, removalFailure]);
+    }
+  });
+});
