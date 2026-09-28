@@ -1,11 +1,13 @@
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
-import { POSTGRES_IMAGE, postgresWaitStrategy, type ParkedSharedPostgresFailure, type SharedPostgresFacts } from "./postgres-container";
+import { POSTGRES_IMAGE, postgresWaitStrategy, startedPostgresEndpoint, type ParkedSharedPostgresFailure, type SharedPostgresFacts } from "./postgres-container";
 
 /**
  * Vitest globalSetup for the ONE postgres container every DB suite in a run
  * shares (issue 626): setup() starts it once and provides its connection
- * facts, teardown() stops it. A suite asks startPostgresContainer, which
- * provisions a per-suite role and database on this server.
+ * facts, teardown() stops it. Local facts use an IP literal and its matching
+ * published port, so socket address-family fallback cannot reach another port.
+ * A suite asks startPostgresContainer, which provisions a per-suite role and
+ * database on this server.
  *
  * If the container cannot start (no Docker, and so on), the failure is parked
  * as a message string instead of thrown: non-DB suites must still pass on a
@@ -41,9 +43,10 @@ export async function setup(vitest: GlobalSetupVitest): Promise<void> {
       .start();
 
     container = started;
+    const endpoint = await startedPostgresEndpoint(started);
     vitest.provide("sharedPostgres", {
-      host: started.getHost(),
-      port: started.getMappedPort(5432),
+      host: endpoint.host,
+      port: endpoint.port,
       adminUser: SHARED.user,
       adminPassword: SHARED.password,
       containerId: started.getId(),
