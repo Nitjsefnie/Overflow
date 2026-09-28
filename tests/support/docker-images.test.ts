@@ -23,12 +23,12 @@ function builtTag(commands: Command[]) {
 describe("Docker image suite", () => {
   it("reports the built tag and image ID through the supplied logger", () => {
     const { commands, run } = recorder();
-    const lines: string[] = [];
+    const records: unknown[] = [];
 
-    createDockerImageSuite(run, (line) => lines.push(line))
+    createDockerImageSuite(run, (record) => records.push(record))
       .withBuiltImage("overflow-576-license", "/repo", "source", () => {});
 
-    expect(lines).toEqual([`Built test image ${builtTag(commands)} sha256:built-image`]);
+    expect(records).toEqual([{ event: "built", tag: builtTag(commands), imageId: "sha256:built-image" }]);
   });
 
   it("gives concurrent suites distinct lowercase tags and labels", () => {
