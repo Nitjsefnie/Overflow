@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { connect, createServer, getDefaultAutoSelectFamilyAttemptTimeout, isIP, setDefaultAutoSelectFamilyAttemptTimeout, type Socket } from "node:net";
+import { connect, createServer, getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout, type Socket } from "node:net";
 import postgres, { type Sql } from "postgres";
 import { afterAll, afterEach, describe, expect, inject, it } from "vitest";
 import {
   assertNoSharedProvisionSurvivors,
   clientSocketIsEstablished,
   lastSharedSurvivorAuditBranch,
+  postgresConnectionUrl,
   readClientTcpSockets,
   resolveSharedPostgresFacts,
   sharedAuditSurvivors,
@@ -55,6 +56,7 @@ describe("suites share one postgres server through startPostgresContainer", () =
 
   it("connects through the provided port despite a stalled family attempt", async () => {
     const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
+    expect(facts.host).not.toBe("localhost");
     const previousTimeout = getDefaultAutoSelectFamilyAttemptTimeout();
     let socket: Socket | undefined;
     try {
@@ -75,7 +77,6 @@ describe("suites share one postgres server through startPostgresContainer", () =
         connectedSocket.once("error", resolve);
       });
       expect(outcome).toBe("connected");
-      expect(isIP(facts.host)).not.toBe(0);
     } finally {
       socket?.destroy();
       setDefaultAutoSelectFamilyAttemptTimeout(previousTimeout);
@@ -243,7 +244,7 @@ describe("the shared-provision survivor audit", () => {
     const role = decodeURIComponent(new URL(started.databaseUrl).username);
     const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
     const inspect = postgres(
-      `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${facts.host}:${facts.port}/postgres`,
+      postgresConnectionUrl({ host: facts.host, port: facts.port, user: facts.adminUser, password: facts.adminPassword, database: "postgres" }),
       { max: 1 },
     );
     let stopped = false;

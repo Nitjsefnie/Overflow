@@ -4,8 +4,10 @@ import { POSTGRES_IMAGE, postgresWaitStrategy, startedPostgresEndpoint, type Par
 /**
  * Vitest globalSetup for the ONE postgres container every DB suite in a run
  * shares (issue 626): setup() starts it once and provides its connection
- * facts, teardown() stops it. Local facts use an IP literal and its matching
- * published port, so socket address-family fallback cannot reach another port.
+ * facts, teardown() stops it. Local facts use the IPv4 loopback literal and
+ * its published port, so socket address-family fallback cannot reach another
+ * port. IPv6-only publication is rejected because the pinned postgres client
+ * cannot parse a bracketed IPv6 URL host.
  * A suite asks startPostgresContainer, which provisions a per-suite role and
  * database on this server.
  *
