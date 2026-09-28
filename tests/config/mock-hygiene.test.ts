@@ -47,13 +47,17 @@ function callbackOwner(node: ts.Node): string | undefined {
   return undefined;
 }
 
-function enclosingCallback(node: ts.Node): string | undefined {
-  for (let parent = node.parent; parent; parent = parent.parent) {
+function hasUnconditionalFinallyPath(node: ts.TryStatement): boolean {
+  let child: ts.Node = node;
+  for (let parent = node.parent; parent; child = parent, parent = parent.parent) {
     if (ts.isArrowFunction(parent) || ts.isFunctionExpression(parent) || ts.isFunctionDeclaration(parent)) {
-      return callbackOwner(parent);
+      return ["it", "test", "afterEach", "afterAll"].includes(callbackOwner(parent) ?? "");
     }
+    if (ts.isBlock(parent)) continue;
+    if (ts.isTryStatement(parent) && (parent.tryBlock === child || parent.finallyBlock === child)) continue;
+    return false;
   }
-  return undefined;
+  return false;
 }
 
 function violations(file: string): string[] {
@@ -74,9 +78,10 @@ function violations(file: string): string[] {
       ? body.statements.filter(ts.isExpressionStatement).map((statement) => statement.expression)
       : [body];
     for (const expression of expressions) {
-      if (viCall(expression, "resetModules")) exitReset = true;
-      if (viCall(expression, "doUnmock")) {
-        const id = literalId(expression);
+      const call = ts.isAwaitExpression(expression) ? expression.expression : expression;
+      if (viCall(call, "resetModules")) exitReset = true;
+      if (viCall(call, "doUnmock")) {
+        const id = literalId(call);
         if (id !== undefined) exitUnmocked.add(id);
       }
     }
@@ -104,8 +109,7 @@ function violations(file: string): string[] {
         recordExit(callback.body);
       }
     }
-    if (ts.isTryStatement(node) && node.finallyBlock
-      && ["it", "test", "afterEach", "afterAll"].includes(enclosingCallback(node) ?? "")) {
+    if (ts.isTryStatement(node) && node.finallyBlock && hasUnconditionalFinallyPath(node)) {
       recordExit(node.finallyBlock);
     }
     ts.forEachChild(node, visit);
