@@ -728,7 +728,7 @@ error envelope:
 | HTTP | Code | Exact message | Meaning / next step |
 | --- | --- | --- | --- |
 | 403 | `FORBIDDEN` | `Only the creditor or the debtor of a settlement, or the account a self-work calibration belongs to, can report it as incorrect.` | The credential's account is not a party to the named outcome. |
-| 403 | `FORBIDDEN` | `Moderator authorization is required.` | (PATCH) The credential's account is not a moderator. |
+| 403 | `FORBIDDEN` | `Moderator authorization is required.` | (GET/PATCH) The credential's account is not a moderator. |
 | 404 | `NOT_FOUND` | `No settlement, calibration or correction request was found under that identifier.` | Check the identifier. |
 | 409 | `CONFLICT` | `This issue already has a correction request awaiting a moderator.` | (POST) The outcome already has an open request; wait for it to be decided instead of opening another. |
 | 409 | `CONFLICT` | `This correction request has already been decided.` | (PATCH) Another moderator decided it first. |
