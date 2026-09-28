@@ -61,6 +61,9 @@ type DockerPortBinding = { HostIp: string; HostPort: string };
 
 /** Selects the literal matching Docker's published port for a local runtime. */
 export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly DockerPortBinding[] | null | undefined, mappedPort: number): { host: string; port: number } {
+  if (runtimeHost !== "localhost" && runtimeHost !== "127.0.0.1" && runtimeHost !== "::1") {
+    return { host: runtimeHost, port: mappedPort };
+  }
   const usable = (bindings ?? []).filter(({ HostPort }) => {
     const port = Number(HostPort);
     return Number.isInteger(port) && port > 0 && port <= 65535;
@@ -68,10 +71,6 @@ export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly D
   if (usable.length === 0) {
     throw new Error(`no usable host-port binding for container port ${CONTAINER_POSTGRES_PORT}/tcp`);
   }
-  if (runtimeHost !== "localhost" && runtimeHost !== "127.0.0.1" && runtimeHost !== "::1") {
-    return { host: runtimeHost, port: mappedPort };
-  }
-
   const ipv4 = usable.find(({ HostIp }) => HostIp === "0.0.0.0" || HostIp === "127.0.0.1");
   const ipv6 = usable.find(({ HostIp }) => HostIp === "::" || HostIp === "::1");
   const dualStack = usable.length === 1 && usable[0].HostIp === "" ? usable[0] : undefined;
@@ -91,6 +90,20 @@ export async function startedPostgresEndpoint(started: StartedTestContainer): Pr
 
 function urlHost(host: string): string {
   return isIP(host) === 6 ? `[${host}]` : host;
+}
+
+interface PostgresConnectionUrlOptions {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  clientMinMessagesWarning?: boolean;
+}
+
+export function postgresConnectionUrl({ host, port, user, password, database, clientMinMessagesWarning = false }: PostgresConnectionUrlOptions): string {
+  const query = clientMinMessagesWarning ? "?client_min_messages=warning" : "";
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${urlHost(host)}:${port}/${database}${query}`;
 }
 
 type SurvivorAuditBranch = "calibrated" | "strict";
@@ -195,7 +208,7 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
   }
   const facts = sharedPostgresFacts();
   const admin = postgres(
-    `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${urlHost(facts.host)}:${facts.port}/postgres`,
+    postgresConnectionUrl({ host: facts.host, port: facts.port, user: facts.adminUser, password: facts.adminPassword, database: "postgres" }),
     { max: 1 },
   );
   try {
@@ -329,7 +342,7 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
       const endpoint = await startedPostgresEndpoint(started);
       return {
         container: started,
-        databaseUrl: `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${urlHost(endpoint.host)}:${endpoint.port}/${database}?client_min_messages=warning`,
+        databaseUrl: postgresConnectionUrl({ ...endpoint, user, password, database, clientMinMessagesWarning: true }),
       };
     } catch (error) {
       await removeFailedPrivateContainers(attemptId);
@@ -360,7 +373,7 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
   // The postgres maintenance database always exists, whatever POSTGRES_DB the
   // shared container was booted with.
   const admin = postgres(
-    `postgresql://${encodeURIComponent(shared.adminUser)}:${encodeURIComponent(shared.adminPassword)}@${urlHost(shared.host)}:${shared.port}/postgres`,
+    postgresConnectionUrl({ host: shared.host, port: shared.port, user: shared.adminUser, password: shared.adminPassword, database: "postgres" }),
     { max: 1 },
   );
   try {
@@ -378,7 +391,7 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
 
   return {
     container: sharedServerFacade(shared),
-    databaseUrl: `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${urlHost(shared.host)}:${shared.port}/${databaseName}?client_min_messages=warning`,
+    databaseUrl: postgresConnectionUrl({ host: shared.host, port: shared.port, user: role, password, database: databaseName, clientMinMessagesWarning: true }),
   };
 }
 

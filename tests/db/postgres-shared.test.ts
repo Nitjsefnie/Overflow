@@ -56,26 +56,28 @@ describe("suites share one postgres server through startPostgresContainer", () =
   it("connects through the provided port despite a stalled family attempt", async () => {
     const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
     const previousTimeout = getDefaultAutoSelectFamilyAttemptTimeout();
-    setDefaultAutoSelectFamilyAttemptTimeout(10);
-    const socket = connect({ host: facts.host, port: facts.port });
-    socket.on("connectionAttempt", (_address, _port, family) => {
-      if (family === 6) {
-        process.nextTick(() => {
-          const until = Date.now() + 100;
-          while (Date.now() < until) { /* Hold the event loop past the attempt timer. */ }
-        });
-      }
-    });
-
+    let socket: Socket | undefined;
     try {
+      setDefaultAutoSelectFamilyAttemptTimeout(10);
+      const connectedSocket = connect({ host: facts.host, port: facts.port });
+      socket = connectedSocket;
+      connectedSocket.on("connectionAttempt", (_address, _port, family) => {
+        if (family === 6) {
+          process.nextTick(() => {
+            const until = Date.now() + 100;
+            while (Date.now() < until) { /* Hold the event loop past the attempt timer. */ }
+          });
+        }
+      });
+
       const outcome = await new Promise<"connected" | Error>((resolve) => {
-        socket.once("connect", () => resolve("connected"));
-        socket.once("error", resolve);
+        connectedSocket.once("connect", () => resolve("connected"));
+        connectedSocket.once("error", resolve);
       });
       expect(outcome).toBe("connected");
       expect(isIP(facts.host)).not.toBe(0);
     } finally {
-      socket.destroy();
+      socket?.destroy();
       setDefaultAutoSelectFamilyAttemptTimeout(previousTimeout);
     }
   });
