@@ -102,7 +102,7 @@ describe("dispatchJsonRpc methods", () => {
         result: {
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
-          serverInfo: { name: "overflow", version: "0.2.0" },
+          serverInfo: { name: "overflow", version: "0.3.0" },
         },
       },
     });

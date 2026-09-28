@@ -1,5 +1,5 @@
 {
-  "mcpServerVersion": "0.2.0",
+  "mcpServerVersion": "0.3.0",
   "tools": [
     {
       "name": "issues_board",
@@ -83,6 +83,15 @@
     {
       "name": "moderation_queue",
       "description": "List the account audits currently open in the moderation queue.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "unwritable_closures",
+      "description": "List the unwritable closures in the rejected-evidence queue and its history, including each closure's settlement or calibration id and latest correction state.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -232,6 +241,15 @@
           }
         ],
         "type": "object"
+      }
+    },
+    {
+      "name": "correction_list",
+      "description": "List open settlement-correction requests with their ids for correction_decide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
       }
     },
     {

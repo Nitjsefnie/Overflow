@@ -26,9 +26,11 @@ const dependencies: McpToolDependencies = {
   calibrationCompare: stub,
   dashboardSummary: stub,
   moderationQueue: stub,
+  unwritableClosures: stub,
   auditOpen: stub,
   auditDecide: stub,
   correctionOpen: stub,
+  correctionList: stub,
   correctionDecide: stub,
 };
 const surface = defineMcpTools(dependencies, new Headers()).map(
