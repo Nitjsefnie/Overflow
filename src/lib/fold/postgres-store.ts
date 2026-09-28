@@ -1049,16 +1049,14 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
       throw new Error("Invalid reconciliation cost observation.");
     }
     return this.withRepositoryPublication(input.repositoryId, async (transaction) => {
-      if (cost !== undefined) {
-        const [run] = await transaction<{ status: string; graphql_cost_sponsor_id: string | null }[]>`
-          select status, graphql_cost_sponsor_id from reconciliation_runs
-          where id = ${input.runId} and repository_id = ${input.repositoryId} for update
-        `;
-        // Reject before synchronization: retrying an already charged run must
-        // neither charge again nor replay any publication side effect.
-        if (run?.status !== "PENDING" || run.graphql_cost_sponsor_id !== null) {
-          throw new Error("Reconciliation cost publication requires a pending run.");
-        }
+      const [run] = await transaction<{ status: string; graphql_cost_sponsor_id: string | null }[]>`
+        select status, graphql_cost_sponsor_id from reconciliation_runs
+        where id = ${input.runId} and repository_id = ${input.repositoryId} for update
+      `;
+      // Reject terminal or charged runs before any derived write.
+      if (run?.status !== "PENDING" || (cost !== undefined && run.graphql_cost_sponsor_id !== null)) {
+        throw new Error(cost === undefined ? "Reconciliation publication requires a pending run."
+          : "Reconciliation cost publication requires a pending run.");
       }
       if (input.synchronization !== undefined) {
         await synchronizeReconciliationEvidence(transaction, input.repositoryId, input.synchronization);
@@ -1137,11 +1135,13 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
         `;
         if (completed.length !== 1) throw new Error("Reconciliation cost publication requires a pending run.");
       } else {
-        await transaction`
+        const completed = await transaction`
           update reconciliation_runs
           set status = ${"COMPLETED"}, completed_at = now(), error_message = null
-          where id = ${input.runId} and status = 'PENDING'
+          where id = ${input.runId} and repository_id = ${input.repositoryId} and status = 'PENDING'
+          returning id
         `;
+        if (completed.length !== 1) throw new Error("Reconciliation publication requires a pending run.");
       }
       return combineDeltas(settlementDeltas, selfWorkDeltas, unwritableClosureDeltas, removalDeltas);
     });
