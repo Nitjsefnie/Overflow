@@ -282,6 +282,11 @@ describe("postgres@3.4.9 patch guard", () => {
       expect(files.length, `${PATCH_PATH} parsed to no file headers`).toBeGreaterThan(0);
     });
 
+    it("patches the ESM host parser that the IPv6 behavior tests exercise", () => {
+      const index = files.find((file) => file.path === "src/index.js");
+      expect(index?.hunks.some((hunk) => hunk.added.includes("function parseHost(x) {"))).toBe(true);
+    });
+
     for (const file of files) {
       describe(file.path, () => {
         file.hunks.forEach((hunk) => {

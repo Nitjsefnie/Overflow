@@ -252,7 +252,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..772ce992513267703818d1a69cd54fce
  
    function addArrayType(oid, typarray) {
 diff --git a/src/index.js b/src/index.js
-index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e21511d4c 100644
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..874d8096f78bfe90a42134c1c7d411ef8f232d0d 100644
 --- a/src/index.js
 +++ b/src/index.js
 @@ -51,6 +51,7 @@ function Postgres(a, b) {
@@ -365,6 +365,31 @@ index c7fba3dace20173f4cb13f3f138bb6d213b43683..b0088cee4d1757ba7ed2452b4529bc5e
    }
  }
  
+@@ -463,8 +519,8 @@ function parseOptions(a, b) {
+   }
+ 
+   return {
+-    host            : Array.isArray(host) ? host : host.split(',').map(x => x.split(':')[0]),
+-    port            : Array.isArray(port) ? port : host.split(',').map(x => parseInt(x.split(':')[1] || port)),
++    host            : Array.isArray(host) ? host : host.split(',').map(x => parseHost(x)[0]),
++    port            : Array.isArray(port) ? port : host.split(',').map(x => parseInt(parseHost(x)[1] || port)),
+     path            : o.path || host.indexOf('/') > -1 && host + '/.s.PGSQL.' + port,
+     database        : o.database || o.db || (url.pathname || '').slice(1) || env.PGDATABASE || user,
+     user            : user,
+@@ -500,6 +556,13 @@ function parseOptions(a, b) {
+   }
+ }
+ 
++function parseHost(x) {
++  const bracketed = /^\[([^\]]+)\](?::(.*))?$/.exec(x)
++  return bracketed
++    ? [bracketed[1], bracketed[2]]
++    : x.indexOf(':') !== x.lastIndexOf(':') ? [x] : x.split(':')
++}
++
+ function tsa(o, url, env) {
+   const x = o.target_session_attrs || url.searchParams.get('target_session_attrs') || env.PGTARGETSESSIONATTRS
+   if (!x || ['read-write', 'read-only', 'primary', 'standby', 'prefer-standby'].includes(x))
 diff --git a/src/queue.js b/src/queue.js
 index c4ef97164f057db99dce1b9af3401dbb1af37e31..8fba891b879e8f5c7fdb03ea0590753663c824c3 100644
 --- a/src/queue.js
