@@ -23,6 +23,19 @@ function anchorByHref(href: string): HTMLAnchorElement {
   return anchor as HTMLAnchorElement;
 }
 
+function sectionLabelledBy(headingId: string): Element {
+  const heading = document.getElementById(headingId);
+  expect(heading, `expected a heading with id "${headingId}"`).not.toBeNull();
+  const section = heading!.closest("section.surface");
+  expect(section, `expected "${headingId}" inside a section.surface`).not.toBeNull();
+  expect(section).toHaveAttribute("aria-labelledby", headingId);
+  return section!;
+}
+
+function follows(earlier: Element, later: Element): boolean {
+  return (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
 describe("account-data notice page", () => {
   it("renders the page-heading structure and one labelled section per disclosure area", async () => {
     await renderAccountDataPage();
@@ -43,6 +56,10 @@ describe("account-data notice page", () => {
       expect(section.querySelector(`#${CSS.escape(labelledBy!)}`)).not.toBeNull();
       expect(section.querySelector("h2")).not.toBeNull();
     }
+    expect(
+      new Set(sections.map((section) => section.getAttribute("aria-labelledby"))).size,
+      "no labelledby id names two sections",
+    ).toBe(sections.length);
   });
 
   it("keeps every internal link on a page route or the generated notices asset", async () => {
@@ -147,17 +164,6 @@ describe("account-data notice page", () => {
   it("places the non-member and server-log sections between access and retention", async () => {
     await renderAccountDataPage();
 
-    const sectionLabelledBy = (headingId: string): Element => {
-      const heading = document.getElementById(headingId);
-      expect(heading, `expected a heading with id "${headingId}"`).not.toBeNull();
-      const section = heading!.closest("section.surface");
-      expect(section, `expected "${headingId}" inside a section.surface`).not.toBeNull();
-      expect(section).toHaveAttribute("aria-labelledby", headingId);
-      return section!;
-    };
-    const follows = (earlier: Element, later: Element): boolean =>
-      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-
     const access = sectionLabelledBy("account-data-access-heading");
     const nonMember = sectionLabelledBy("account-data-non-member-heading");
     const logs = sectionLabelledBy("account-data-logs-heading");
@@ -205,22 +211,15 @@ describe("account-data notice page", () => {
   it("places the scoring and rights sections before the controls and deletion sections", async () => {
     await renderAccountDataPage();
 
-    const sectionLabelledBy = (headingId: string): Element => {
-      const heading = document.getElementById(headingId);
-      expect(heading, `expected a heading with id "${headingId}"`).not.toBeNull();
-      const section = heading!.closest("section.surface");
-      expect(section, `expected "${headingId}" inside a section.surface`).not.toBeNull();
-      expect(section).toHaveAttribute("aria-labelledby", headingId);
-      return section!;
-    };
-    const follows = (earlier: Element, later: Element): boolean =>
-      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-
+    const purposes = sectionLabelledBy("account-data-purposes-heading");
+    const recipients = sectionLabelledBy("account-data-recipients-heading");
     const scoring = sectionLabelledBy("account-data-scoring-heading");
     const rights = sectionLabelledBy("account-data-rights-heading");
     const controls = sectionLabelledBy("account-data-controls-heading");
     const deletion = sectionLabelledBy("account-data-deletion-heading");
 
+    expect(follows(purposes, scoring), "scoring follows the purposes list that points at it below").toBe(true);
+    expect(follows(recipients, rights), "your rights follow the transfers text that points at them below").toBe(true);
     expect(follows(scoring, controls), "the scoring section precedes your controls").toBe(true);
     expect(follows(rights, controls), "the rights section precedes your controls").toBe(true);
     expect(follows(controls, deletion), "deletion follows your controls").toBe(true);
