@@ -1,16 +1,24 @@
 /** @vitest-environment jsdom */
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/dashboard/session", () => ({
-  isModeratorSession: vi.fn(() => false),
-  requireMemberPageSession: vi.fn(),
-}));
+const auth = vi.hoisted(() => vi.fn());
 
-import { RulesContent } from "@/app/rules/page";
+vi.mock("@/auth", () => ({ auth }));
+
+import { PublicRulesContent, RulesContent } from "@/app/rules/page";
+
+async function renderRulesPage(): Promise<void> {
+  const { default: RulesPage } = await import("@/app/rules/page");
+  render(await RulesPage());
+}
 
 describe("rules page", () => {
+  afterEach(() => {
+    auth.mockReset();
+  });
+
   it.each([false, true])("renders the Rules heading with isModerator=%s", (isModerator) => {
     render(<RulesContent memberName="Ada" isModerator={isModerator} />);
 
@@ -39,5 +47,46 @@ describe("rules page", () => {
     for (const region of regions) {
       expect(region).toHaveAccessibleName();
     }
+  });
+
+  it("renders the rules for a signed-out visitor inside the public shell, with no session", async () => {
+    auth.mockResolvedValue(null);
+    await renderRulesPage();
+
+    expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeVisible();
+    const regions = screen.getAllByRole("region");
+    expect(regions).toHaveLength(6);
+    for (const region of regions) {
+      expect(region).toHaveAccessibleName();
+    }
+    // No member chrome: no session stamp, no sign-out control, and no main
+    // supplied by the member shell — the public view brings its own.
+    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+    const main = document.querySelector("main.page-content");
+    expect(main, "the public rules view supplies its own main.page-content").not.toBeNull();
+    expect(main).toHaveAttribute("id", "main-content");
+  });
+
+  it("renders the same public view with no session read at all", () => {
+    render(<PublicRulesContent />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeVisible();
+    expect(screen.getAllByRole("region")).toHaveLength(6);
+    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the member view for a member session", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada Lovelace", role: "MEMBER" } });
+    await renderRulesPage();
+
+    expect(screen.getByText("Ada Lovelace")).toBeVisible();
+  });
+
+  it("keeps the moderator flag for a moderator session", async () => {
+    auth.mockResolvedValue({ user: { id: "u1", name: "Ada", role: "MODERATOR" } });
+    await renderRulesPage();
+
+    expect(screen.getByRole("link", { name: "Moderation" })).toBeVisible();
   });
 });
