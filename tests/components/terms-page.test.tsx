@@ -3,8 +3,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { TermsNotice } from "@/app/terms/page";
-
 async function renderTermsPage(): Promise<void> {
   const { default: TermsPage } = await import("@/app/terms/page");
   render(<TermsPage />);
