@@ -1660,9 +1660,15 @@ Both watched units must name the alert template:
 systemctl show overflow.service overflow-backup.service -p OnFailure
 ```
 
-Each line must read `OnFailure=overflow-alert@%n.service`. Then send a real
-message through the whole route with a throwaway instance — the instance name
-need not be a unit that exists:
+Each line must name the alert template with that unit's own name as the
+instance: `OnFailure=overflow-alert@overflow.service.service` for the web
+unit and `OnFailure=overflow-alert@overflow-backup.service.service` for the
+backup unit. systemd replaces the units' `%n` specifier when it loads them,
+so the readback shows the expanded name — including the template's own
+`.service` suffix, doubled next to the instance — not the raw
+`OnFailure=overflow-alert@%n.service` line the repository's unit files
+carry. Then send a real message through the whole route with a throwaway
+instance — the instance name need not be a unit that exists:
 
 ```bash
 systemctl start overflow-alert@test.service
@@ -1672,7 +1678,8 @@ tail -n 20 /var/log/exim4/mainlog
 
 The alert unit's journal must show a clean exit, and the exim mainlog must
 show the delivery (or the relay attempt) to the address in the recipient
-file; the message's subject names `test.service` as the failed unit. Delete
+file; the message's subject names the throwaway instance —
+`[overflow] test failed on <host>`. Delete
 nothing afterwards: the throwaway instance leaves no state behind.
 
 ### Rollback
