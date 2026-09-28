@@ -1,5 +1,5 @@
 {
-  "mcpServerVersion": "0.3.0",
+  "mcpServerVersion": "1.0.0",
   "tools": [
     {
       "name": "issues_board",

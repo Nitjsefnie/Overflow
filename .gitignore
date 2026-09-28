@@ -128,6 +128,9 @@ src/app/api/moderation/rederivation/*
 !src/app/api/readiness/
 src/app/api/readiness/*
 !src/app/api/readiness/*.ts
+!src/app/api/version/
+src/app/api/version/*
+!src/app/api/version/*.ts
 !src/app/api/overrides/
 src/app/api/overrides/*
 !src/app/api/overrides/*.ts
@@ -198,6 +201,7 @@ src/lib/*
 !src/lib/format-signed.ts
 !src/lib/plural.ts
 !src/lib/strip-name-prefix.ts
+!src/lib/version.ts
 !src/lib/accounts/
 src/lib/accounts/*
 !src/lib/accounts/*.ts
