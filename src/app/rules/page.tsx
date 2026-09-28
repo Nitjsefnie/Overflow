@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell, PublicAppShell } from "@/components/app-shell";
+import { getCurrentUserRole } from "@/lib/moderation/current-role";
 
 type RulesContentProps = {
   memberName: string;
@@ -102,11 +103,22 @@ function RulesSections() {
 export default async function RulesPage() {
   const { auth } = await import("@/auth");
   const session = await auth();
-  const user = session?.user as { id?: unknown; name?: unknown; role?: unknown } | undefined;
-  if (typeof user?.id === "string" && (user.role === "MEMBER" || user.role === "MODERATOR")) {
-    return (
-      <RulesContent memberName={displayName(user.name)} isModerator={user.role === "MODERATOR"} />
-    );
+  const user = session?.user as { id?: unknown; name?: unknown } | undefined;
+  // The rendered chrome follows the ledger's current role, not the JWT's role
+  // claim: the claim freezes whatever the session carried at sign-in, so a
+  // demoted moderator's live session would keep showing the Moderation link
+  // (issue 810). A null role (account gone or pseudonymised) or a failed
+  // lookup falls back to the public view rather than crashing the page.
+  if (typeof user?.id === "string") {
+    const currentRole = await getCurrentUserRole(user.id).catch(() => null);
+    if (currentRole !== null) {
+      return (
+        <RulesContent
+          memberName={displayName(user.name)}
+          isModerator={currentRole === "MODERATOR"}
+        />
+      );
+    }
   }
   return <PublicRulesContent />;
 }
