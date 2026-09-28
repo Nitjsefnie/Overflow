@@ -11,7 +11,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
  * reconciliation, and that the sweep enqueues under its own reason.
  */
 
-const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns } = vi.hoisted(() => ({
+const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns, workSql, coordinationSql } = vi.hoisted(() => ({
   enqueued: [] as { repositoryId: string; reason: string }[],
   startSweep: vi.fn(),
   startWorker: vi.fn(),
@@ -20,6 +20,8 @@ const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejec
   resolveToken: vi.fn(),
   markRejected: vi.fn(),
   finalizeRuns: vi.fn(),
+  workSql: vi.fn(),
+  coordinationSql: vi.fn(),
 }));
 
 vi.mock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: finalizeRuns }));
@@ -34,7 +36,7 @@ vi.mock("@/lib/fold/sweep", async (importActual) => ({
   startReconciliationSweep: startSweep,
   sweepReconciliations: sweep,
 }));
-vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn(), getCoordinationSql: () => vi.fn() }));
+vi.mock("@/lib/db/client", () => ({ getSql: () => workSql, getCoordinationSql: () => coordinationSql }));
 // The GitLab gateway's default transport refuses a non-public instance and
 // cannot be injected through register(); route it to this file's stubbed
 // global fetch so the planted 401 still reaches the real gateway.
@@ -96,6 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -121,6 +124,10 @@ describe("server instrumentation", () => {
     expect(startSweep).toHaveBeenCalledTimes(1);
   });
 
+  it("restores the startup error logger before the next case", () => {
+    expect(vi.isMockFunction(console.error)).toBe(false);
+  });
+
   it("starts the worker and the sweep, and sweeps under the sweep's own reason", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NEXT_PHASE", "");
@@ -135,6 +142,10 @@ describe("server instrumentation", () => {
     // The reason is only reachable through the dependencies the hook builds, so
     // the sweep it wired is run and its enqueue called the way the sweep calls it.
     const schedule = startSweep.mock.calls[0]![0] as ReconciliationSweepSchedule;
+    expect(schedule.finalizeAbandonedRuns).toBeTypeOf("function");
+    finalizeRuns.mockClear();
+    await schedule.finalizeAbandonedRuns!();
+    expect(finalizeRuns).toHaveBeenCalledExactlyOnceWith(workSql, coordinationSql);
     await schedule.runSweep();
     const dependencies = sweep.mock.calls[0]![0] as { enqueue(id: string): Promise<unknown> };
     await dependencies.enqueue("repository-1");
