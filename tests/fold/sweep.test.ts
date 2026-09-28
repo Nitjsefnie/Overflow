@@ -26,6 +26,42 @@ afterEach(() => {
 });
 
 describe("scheduled reconciliation sweep", () => {
+  it("finalizes abandoned runs on each periodic tick even when startup enqueue is skipped", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const timer = createTimer();
+    const events: string[] = [];
+    startReconciliationSweep({
+      finalizeAbandonedRuns: async () => { events.push("finalize"); },
+      runSweep: async () => { events.push("enqueue"); },
+      schedule: timer.schedule,
+    });
+    await timer.settle();
+    expect(events).toEqual([]);
+    await timer.tick();
+    await timer.tick();
+    expect(events).toEqual(["finalize", "enqueue", "finalize", "enqueue"]);
+  });
+
+  it("logs a finalizer failure and still runs the sweep on that and later ticks", async () => {
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const timer = createTimer();
+    const events: string[] = [];
+    const failure = new Error("finalizer unavailable");
+    startReconciliationSweep({
+      finalizeAbandonedRuns: async () => { throw failure; },
+      runSweep: async () => { events.push("enqueue"); },
+      schedule: timer.schedule,
+    });
+    await timer.tick();
+    await timer.tick();
+    expect(events).toEqual(["enqueue", "enqueue"]);
+    expect(errors).toHaveBeenCalledTimes(2);
+    expect(errors.mock.calls[0]?.[1]).toBe(failure);
+  });
+
   it("skips only the startup pass when explicitly opted out, retaining the six-hour recovery sweep", async () => {
     vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
     const warnings: unknown[][] = [];

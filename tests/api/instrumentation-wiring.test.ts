@@ -11,7 +11,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
  * reconciliation, and that the sweep enqueues under its own reason.
  */
 
-const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected } = vi.hoisted(() => ({
+const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejected, finalizeRuns } = vi.hoisted(() => ({
   enqueued: [] as { repositoryId: string; reason: string }[],
   startSweep: vi.fn(),
   startWorker: vi.fn(),
@@ -19,7 +19,10 @@ const { enqueued, startSweep, startWorker, sweep, drain, resolveToken, markRejec
   drain: vi.fn(),
   resolveToken: vi.fn(),
   markRejected: vi.fn(),
+  finalizeRuns: vi.fn(),
 }));
+
+vi.mock("@/lib/fold/abandoned-runs", () => ({ finalizeAbandonedRuns: finalizeRuns }));
 
 vi.mock("@/lib/fold/reconciliation-worker", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/fold/reconciliation-worker")>()),
@@ -31,7 +34,7 @@ vi.mock("@/lib/fold/sweep", async (importActual) => ({
   startReconciliationSweep: startSweep,
   sweepReconciliations: sweep,
 }));
-vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn() }));
+vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn(), getCoordinationSql: () => vi.fn() }));
 // The GitLab gateway's default transport refuses a non-public instance and
 // cannot be injected through register(); route it to this file's stubbed
 // global fetch so the planted 401 still reaches the real gateway.
@@ -89,6 +92,7 @@ beforeEach(() => {
   });
   resolveToken.mockReset().mockResolvedValue({ token: "token-a", identityId: "identity-a" });
   markRejected.mockReset().mockResolvedValue(undefined);
+  finalizeRuns.mockReset().mockResolvedValue({ finalized: 0, skippedLocked: 0 });
 });
 
 afterEach(() => {
@@ -99,6 +103,24 @@ afterEach(() => {
 afterAll(() => { vi.resetModules(); });
 
 describe("server instrumentation", () => {
+  it("finalizes on startup even when startup enqueue is skipped, and keeps background work on failure", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NEXT_PHASE", "");
+    vi.stubEnv("OVERFLOW_DISABLE_RECONCILIATION_SWEEP", "");
+    vi.stubEnv("OVERFLOW_SKIP_STARTUP_RECONCILIATION", "1");
+    const failure = new Error("finalizer unavailable");
+    finalizeRuns.mockRejectedValue(failure);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { register } = await import("@/instrumentation");
+
+    await register();
+
+    expect(finalizeRuns).toHaveBeenCalledTimes(1);
+    expect(errors.mock.calls.some((call) => call.includes(failure))).toBe(true);
+    expect(startWorker).toHaveBeenCalledTimes(1);
+    expect(startSweep).toHaveBeenCalledTimes(1);
+  });
+
   it("starts the worker and the sweep, and sweeps under the sweep's own reason", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NEXT_PHASE", "");
