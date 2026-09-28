@@ -20,9 +20,9 @@ const dockerignore = readFileSync(
  * both the FROM lines and the `base.digest` label below — they are a shared
  * literal, and a digest that drifts between them names a different image.
  */
-const NODE_BASE_TAG = "node:24.17.0-bookworm-slim";
+const NODE_BASE_TAG = "node:24.21.0-bookworm-slim";
 const NODE_BASE_DIGEST =
-  "sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532";
+  "sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6";
 
 describe("Dockerfile", () => {
   it("pins the deps and runtime stages to the bookworm-slim base image by digest", () => {

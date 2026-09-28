@@ -18,7 +18,7 @@ packages behind in pnpm's virtual store), and `runtime` carries the built
 output, the
 migrations, the production-only dependency tree, and the code the start
 command needs onto a clean base. The `deps` and `runtime` stages pin
-`node:24.17.0-bookworm-slim` by digest, and the runtime stage labels every
+`node:24.21.0-bookworm-slim` by digest, and the runtime stage labels every
 image with the full source revision it was built from — an image without
 that label cannot be built (issue 461) — declares a `HEALTHCHECK` against
 `/api/readiness`, the endpoint that answers 200 only when the database is
@@ -66,7 +66,7 @@ build it with the script first. To build under another tag, pass it to
 override file.
 
 The image builds from digest-pinned bases —
-`node:24.17.0-bookworm-slim@sha256:862263c612aa437e3037674b85419622a9d93bff80aa1eee5398dfe686375532` for the application image and
+`node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6` for the application image and
 `postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73` for the database — so the same source always resolves the
 same base bytes. A bare `docker build` without `--build-arg SOURCE_SHA=...`
 fails loudly in the Dockerfile's guard instead of producing an unlabelled
@@ -114,9 +114,10 @@ context because the script exports only committed files with `git archive`;
 the tracked placeholder `.env.example` does enter. Compose supplies `.env`
 variables at runtime through `env_file`; it does not build an image.
 
-**The image builds in-image on `node:24.17.0-bookworm-slim`.** The same base
+**The image builds in-image on `node:24.21.0-bookworm-slim`.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and
-`engines` in `package.json` pins that Node version for both. Copying the
+the image's Node base moves on its own patch updates, while `engines` in
+`package.json` pins the Node version CI and the host deployment use. Copying the
 built release out of the image (the host path's release directories) was
 rejected because it reintroduces the artifact-out-of-band problem the
 container exists to close: the image, not the tree it was built from, is the
