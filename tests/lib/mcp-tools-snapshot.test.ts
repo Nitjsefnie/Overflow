@@ -38,6 +38,11 @@ function git(args: string[]): string {
   return result.stdout.trim();
 }
 
+function firstParentOfMerge(fields: string[]): string | undefined {
+  // CI merge refs and rebase merges use first parent; ordinary local HEADs fall through to merge-base.
+  return fields.length >= 3 ? fields[1] : undefined;
+}
+
 function baseCommit(): string {
   const override = process.env.MCP_SNAPSHOT_BASE_COMMIT;
   if (override !== undefined) {
@@ -45,7 +50,8 @@ function baseCommit(): string {
   }
 
   const headAndParents = git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
-  if (headAndParents.length === 3) return headAndParents[1]!;
+  const firstParent = firstParentOfMerge(headAndParents);
+  if (firstParent !== undefined) return firstParent;
 
   if (git(["rev-parse", "--is-shallow-repository"]) === "true") {
     throw new Error(
@@ -108,5 +114,13 @@ describe("MCP tool surface snapshot", () => {
       snapshot.mcpServerVersion,
       `The recorded MCP tool surface changed relative to ${base.slice(0, 8)} but the version did not move (${previous.mcpServerVersion}). Bump MCP_SERVER_VERSION in src/lib/mcp/protocol.ts and record it in scripts/mcp-surface-snapshot.json in the same change.`,
     ).not.toBe(previous.mcpServerVersion);
+  });
+
+  it.each([
+    { label: "two-parent merge", fields: ["head", "first", "second"], expected: "first" },
+    { label: "octopus merge", fields: ["head", "first", "second", "third"], expected: "first" },
+    { label: "single-parent commit", fields: ["head", "first"], expected: undefined },
+  ])("selects the snapshot base for a $label", ({ fields, expected }) => {
+    expect(firstParentOfMerge(fields)).toBe(expected);
   });
 });
