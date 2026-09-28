@@ -34,6 +34,9 @@ const testState = vi.hoisted(() => ({
   ticks: 0,
 }));
 
+vi.hoisted(() => { vi.resetModules(); });
+afterAll(() => { vi.resetModules(); });
+
 vi.mock("@/lib/db/client", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/db/client")>()),
   getSql: () => testState.sql,
