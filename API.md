@@ -2,6 +2,29 @@
 
 The programmatic surface of an Overflow instance: registering repositories and changing their catalogs, reading the ledger, and the MCP endpoint for agent harnesses. [README.md](README.md) is the guide to using Overflow; [OPERATING.md](OPERATING.md) is the operator reference.
 
+## Stability and versioning
+
+The programmatic surface — the HTTP API and the MCP endpoint together — is
+versioned with one version number, following
+[SemVer 2.0.0](https://semver.org/spec/v2.0.0.html). `GET /api/version`
+answers `{ "version": "<version>" }` — no credential, like the readiness
+probe — and an MCP `initialize` answer carries the same value as
+`serverInfo.version`. Both always carry the same value, so a client can pin
+what it was built against with either.
+
+Within a major version, the response shapes documented on this page and every
+MCP tool schema stay compatible: adding a field, a route, or a tool is not
+breaking; removing or changing a documented shape is. A breaking change
+requires a new major version and at least 30 days' notice, and during the
+notice window the served old shape keeps working unchanged.
+
+**Current deprecations:** none. An announced deprecation will be listed in
+this section, with its removal version and date.
+
+The advertised version is independent of package.json's `version` field: it
+moves only as this section's policy moves it, never with npm release
+bookkeeping.
+
 ## Programmatic repository registration
 
 Members can register repositories with an **Overflow-issued API token**. Account
@@ -769,6 +792,11 @@ The transport is stateless streamable HTTP — one JSON-RPC request per
 `POST`, and no session state between calls. `initialize` answers with
 protocol version `2025-06-18`; a notification (a JSON-RPC request with no
 `id`) is answered with an empty HTTP `202`.
+
+The MCP endpoint shares the HTTP API's version and stability policy: the
+served version is `serverInfo.version` in the `initialize` answer, and
+`GET /api/version` reports the same number. The Stability and versioning
+section above is the contract both surfaces follow.
 
 ### The tools
 
