@@ -21,21 +21,39 @@ fi
 
 unit=$1
 
-if [ ! -r /etc/overflow/alert-recipient ]; then
-  echo "overflow-alert.sh: /etc/overflow/alert-recipient is missing or unreadable" >&2
+# The path is overridable through OVERFLOW_ALERT_RECIPIENT_FILE only so
+# tests/scripts/overflow-alert.test.ts can drive this script against a scratch
+# file; the alert unit sets no such variable, so a deployed run always reads
+# the default path below.
+recipient_file=${OVERFLOW_ALERT_RECIPIENT_FILE:-/etc/overflow/alert-recipient}
+
+if [ ! -r "$recipient_file" ]; then
+  echo "overflow-alert.sh: $recipient_file is missing or unreadable" >&2
   exit 2
 fi
 
-recipient=$(cat /etc/overflow/alert-recipient)
+recipient=$(cat "$recipient_file")
 if [ -z "$recipient" ]; then
-  echo "overflow-alert.sh: /etc/overflow/alert-recipient is empty" >&2
+  echo "overflow-alert.sh: $recipient_file is empty" >&2
   exit 2
 fi
 
+# Exactly one address on one line. A newline or carriage return would break
+# the To: header out of its line and hand the daemon injected recipients, so
+# a multi-line value is refused, naming the file: the recipient file is
+# root-only host configuration, which makes a second line a misconfiguration
+# to report, not a message to send.
+cr=$(printf '\r')
+nl='
+'
 case "$recipient" in
+  *"$nl"*|*"$cr"*)
+    echo "overflow-alert.sh: $recipient_file carries more than one line" >&2
+    exit 2
+    ;;
   *@*) ;;
   *)
-    echo "overflow-alert.sh: /etc/overflow/alert-recipient carries no @: \"$recipient\"" >&2
+    echo "overflow-alert.sh: $recipient_file carries no @: \"$recipient\"" >&2
     exit 2
     ;;
 esac
