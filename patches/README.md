@@ -6,7 +6,7 @@ Applied by `pnpm install` from the `patchedDependencies` entries in
 
 ## `postgres@3.4.9.patch`
 
-Eight groups of defects. The first is a shutdown that stalls after a backend
+Nine groups of defects. The first is a shutdown that stalls after a backend
 loss, during reconnect backoff, or around a reservation; the second is a
 reconnect loop that retries with no delay at all; the third is a `reserve()`
 that never settles; the fourth answers a dead backend's error to the query that
@@ -16,11 +16,12 @@ pool accepted is neither run nor refused; the seventh builds a new connection's
 first query before the array types it fetched are applied, so an `sql.array()`
 parameter in that query binds as a scalar; the eighth leaves a failed
 array-type fetch rejected with no handler, which terminates the process, and
-opens the connection it failed on with no array types. The shutdown and
+opens the connection it failed on with no array types; the ninth splits an IPv6
+host at its first colon instead of connecting to that address. The shutdown and
 reconnect repairs share the first section below; the remaining groups each have
 their own.
 
-`git` renders the patch as seventeen hunks: eleven in `src/connection.js`, four
+`git` renders the patch as nineteen hunks: eleven in `src/connection.js`, six
 in `src/index.js`, one in `src/queue.js`, and one in `cjs/src/index.js` — the
 CJS load guard, which repairs nothing and has its own section below. The
 array-type repair is a single edit to one function that `git` renders as two of
@@ -874,6 +875,22 @@ Like every repair above, it is deliberately absent from `cjs/`.
 This is Overflow issue 719. It reproduces on stock `postgres@3.4.9`, and is
 reported upstream as https://github.com/porsager/postgres/issues/1192.
 
+### An IPv6 URL host is split instead of connected
+
+Two hunks in the package's own `src/index.js`: `parseOptions()` uses the new
+`parseHost()` helper for each comma-separated host entry, and the helper is
+defined below it. A WHATWG URL retains the brackets in an IPv6 hostname, so
+stock `host.split(':')` turns `[::1]` into `[` and can read an address segment
+as a port. The helper removes the brackets, takes a port after `]:` when
+present, and keeps a bare multi-colon host from the `host` option or `PGHOST`
+whole with the fallback port. Ordinary hostname, IPv4, and `host:port` entries
+keep their previous parsing. `tests/db/postgres-url-host.test.ts` checks the
+resolved options and a real TCP dial to `::1`.
+
+This is Overflow issue 801, reported upstream as
+https://github.com/porsager/postgres/issues/1232, with the proposed repair at
+https://github.com/porsager/postgres/pull/1233.
+
 ### `require('postgres')` throws instead of silently running the stock client
 
 One hunk, in the package's prebuilt CommonJS entry `cjs/src/index.js` — the
@@ -912,7 +929,7 @@ guard. The correct-proof recipe, updated:
 - `readlink -f node_modules/postgres` resolves into a store directory whose
   `_patch_hash=` equals the `hash:` under `patchedDependencies` in
   `pnpm-lock.yaml`, which equals the patch file's sha256;
-- the hunks — seventeen — are present verbatim in the installed files the patch
+- the hunks — nineteen — are present verbatim in the installed files the patch
   names; and
 - the require probe throws.
 
@@ -920,8 +937,8 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
 
 ### Housekeeping
 
-- **The repairs land only in the ESM build.** Sixteen of the seventeen hunks
-  land in `src/`; the seventeenth is the CJS load guard (the section above). The package
+- **The repairs land only in the ESM build.** Eighteen of the nineteen hunks
+  land in `src/`; the nineteenth is the CJS load guard (the section above). The package
   also ships `cjs/src/` and `cf/src/` copies, and both still leave the dead
   query in the slot in `error()`, leave `closed()` without the settle and with
   the stale `errorResponse`, still take the connect-phase early return above
@@ -936,7 +953,7 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   released reservation to a pool that is ending, still build a new
   connection's first query before its fetched array types are applied, still
   discard the array-type fetch's promise and open the connection that fetch
-  failed on, and carry no `peek` in their
+  failed on, split IPv6 hosts at the first colon, and carry no `peek` in their
   `queue.js` — the same as on `main`, so this is a standing property of the
   patch rather than something a release regressed. It does not bite today: the package's
   `exports` map sends `import` to `src/`, and `next build` bundles that build
@@ -963,6 +980,7 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   `tests/db/reserve-contract.test.ts`,
   `tests/db/reserve-shutdown-race.test.ts`,
   `tests/db/postgres-queue.test.ts`,
+  `tests/db/postgres-url-host.test.ts`,
   `tests/db/sql-array-cold-client.test.ts`,
   `tests/db/types-fetch-failure.test.ts` and
   `tests/fold/reconciliation-stranded-reservation.test.ts` between them say
