@@ -722,11 +722,18 @@ gh workflow run actionlint.yml --ref main
 gh workflow run ratchet-guard.yml --ref main -f base="$base"
 ```
 
+After fetching main, check `git rev-parse origin/main`: if `$base` is empty or
+`null` (no qualifying run among the 50 most recent successful ones) or equals
+that SHA (the tip is already certified), do not dispatch `ratchet-guard`.
+Find the base by hand from older runs or stop.
+
 The gate accepts these runs because it identifies each producer by its pinned
 workflow path and job name, never by event. The newest run decides, so a
 failed dispatch is superseded only by a newer successful one. An empty-commit
 re-push is refused by branch protection. Issue 797 remains open: a dispatched
-`ci` run measures coverage only against the tip's first parent.
+`ci` run decides whether the change is docs-only by diffing only the tip's
+first parent, so it can skip the coverage floor when the tip commit alone
+touches documentation.
 
 Each required check is resolved to the job of the workflow file
 `.github/required-checks.json` pins it to, and a same-named check-run from
