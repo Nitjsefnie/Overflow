@@ -696,12 +696,35 @@ immediately, and a check whose latest run is queued, in progress or has not
 been created yet makes the script wait, polling every 15 seconds until
 `OVERFLOW_DEPLOY_CI_TIMEOUT` (default 900) seconds elapse, then refusing with
 the still-pending checks named, an absent run reported as `<check> (absent)`.
-Every required check must therefore report on a push to main: a check that
-runs only on pull requests never runs on the SHA a rebase merge lands, so the
-gate would wait it out as `<check> (absent)` and refuse. `ratchet-guard`
-reports on both — `pull_request_target` for pull requests and `push` for
-the tip each push lands. The deploy gate checks only the fetched tip of
-main, which is always a pushed tip.
+Every required check must therefore report on the exact main tip being
+deployed: a check that runs only on pull requests never runs on the SHA a
+rebase merge lands, so the gate would wait it out as `<check> (absent)` and
+refuse. `ratchet-guard` normally reports on both — `pull_request_target`
+for pull requests and `push` for the tip each push lands. The deploy gate
+checks only the fetched tip of main.
+
+### Recovering a main tip whose push launched no runs
+
+If the gate waits on `(absent)` for every required check and
+`actions/runs?head_sha=<sha>` lists no push runs, recover main's **current**
+tip with workflow dispatches. A dispatch on `main` runs for main's tip, so it
+cannot certify an older tip. For `ratchet-guard`, `base` must be the newest
+main commit that already has a successful ratchet-guard run; this compares
+every commit since the last certified tip.
+
+```sh
+base=$(gh api 'repos/Nitjsefnie/Overflow/actions/workflows/ratchet-guard.yml/runs?branch=main&status=success&per_page=50' --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha')
+gh workflow run ci.yml --ref main
+gh workflow run actionlint.yml --ref main
+gh workflow run ratchet-guard.yml --ref main -f base="$base"
+```
+
+The gate accepts these runs because it identifies each producer by its pinned
+workflow path and job name, never by event. The newest run decides, so a
+failed dispatch is superseded only by a newer successful one. An empty-commit
+re-push is refused by branch protection. Issue 797 remains open: a dispatched
+`ci` run measures coverage only against the tip's first parent.
+
 Each required check is resolved to the job of the workflow file
 `.github/required-checks.json` pins it to, and a same-named check-run from
 any other producer holds the deploy as pending, so it is refused at the

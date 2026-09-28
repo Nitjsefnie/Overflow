@@ -10,9 +10,13 @@ name: ratchet guard
 # is a brand-new commit that no pull_request run covered, and every push to
 # main must carry a ratchet-guard run for the check to be required and for
 # the deploy gate (scripts/deploy-revision.sh) to pass on the tip it lands —
-# the gate checks only the fetched tip of main, which is always a pushed
-# tip. Under push the executed script comes from the previous main tip
-# (github.event.before) and the pushed commit is read only as git objects.
+# the gate checks only the fetched tip of main. Under push the executed
+# script comes from the previous main tip (github.event.before) and the
+# pushed commit is read only as git objects. A dropped push event (issue 796)
+# can leave a main tip with no runs; workflow_dispatch recovers that tip by
+# comparing it against the last certified main tip, not HEAD^1 or a guessed
+# `before`. The dispatched SHA enters only as git objects. All executed code
+# comes from the checked-out, trusted main ancestor, never untrusted content.
 on:
   pull_request_target:  # zizmor: ignore[dangerous-triggers]
     # main only: a PR retargeted to main (an edited event) gets no new run,
@@ -24,6 +28,12 @@ on:
   # the tip it lands wait out `ratchet-guard (absent)` and refuse.
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Full SHA of the newest main commit carrying a successful ratchet-guard run
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -43,11 +53,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Each event must have a comparison path; otherwise a new trigger could
+      # produce a green job that ran only setup-node.
+      - name: Refuse unhandled events
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request_target" && "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "::error::Unhandled ratchet-guard event: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
+      # Reject an invalid dispatch before checkout touches the supplied ref.
+      # The input enters the shell only through env, never expression interpolation.
+      - name: Validate dispatch base and ref
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          BASE_SHA: ${{ inputs.base }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Dispatch must target refs/heads/main"
+            exit 1
+          fi
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Dispatch base must be a full lowercase 40-character SHA"
+            exit 1
+          fi
+
       # Under pull_request_target no ref input at all: GitHub points
       # GITHUB_REF at the default branch and GITHUB_SHA at its last commit,
       # so the default checkout is the trusted base, never the merge ref,
       # and actions/checkout's fork guard exempts exactly that. main
-      # provides scripts/check-ratchets.ts under both events; untrusted
+      # provides scripts/check-ratchets.ts under all three events; untrusted
       # content contributes no byte of the executed code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event_name == 'pull_request_target' }}
@@ -66,6 +101,15 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         with:
           ref: ${{ github.event.before }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Dispatch checks out the last certified main tip, whose copy of the
+      # ratchet script is trusted. Later commits are read only as git data.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          ref: ${{ inputs.base }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -120,3 +164,34 @@ jobs:
         env:
           PUSHED_SHA: ${{ github.sha }}
         run: node scripts/check-ratchets.ts HEAD "$PUSHED_SHA"
+
+      # Fetch the dispatched tip as objects only. A missed push can span
+      # multiple commits, so comparing HEAD^1 would omit uncaught changes.
+      - name: Fetch the dispatched commit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: git fetch --no-tags origin "$DISPATCHED_SHA"
+
+      # Fail before executing the checked-out script if the supplied base is
+      # the tip itself or not an ancestor. Both objects are present now.
+      - name: Validate dispatch ancestry
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
+            echo "::error::Dispatch base must differ from the dispatched commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
+            echo "::error::Dispatch base must be an ancestor of the dispatched commit"
+            exit 1
+          fi
+
+      # HEAD is the last certified main tip; the dispatched tip remains data.
+      - name: Ratchet documents against the last certified main tip
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: node scripts/check-ratchets.ts HEAD "$DISPATCHED_SHA"
