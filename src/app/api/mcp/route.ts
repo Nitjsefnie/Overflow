@@ -22,12 +22,13 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { createModerationPostHandler } from "@/app/api/moderation/route";
 import { createModerationAuditPatchHandler } from "@/app/api/moderation/[id]/route";
 import { createModerationAuditsGetHandler } from "@/app/api/moderation/audits/route";
+import { createModerationUnwritableClosuresGetHandler } from "@/app/api/moderation/unwritable-closures/route";
 import { createIssuesGetHandler } from "@/app/api/issues/route";
 import { createSettlementsGetHandler } from "@/app/api/settlements/route";
 import { createSettlementProofGetHandler } from "@/app/api/settlements/[id]/route";
 import { createCalibrationGetHandler } from "@/app/api/calibration/route";
 import { createDashboardGetHandler } from "@/app/api/dashboard/route";
-import { createSettlementOverridePostHandler } from "@/app/api/overrides/route";
+import { createSettlementOverrideListGetHandler, createSettlementOverridePostHandler } from "@/app/api/overrides/route";
 import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/route";
 import {
   listEligibleIssues,
@@ -41,6 +42,7 @@ import {
   loadCalibrationCohorts,
   getDashboard,
   listOpenAudits,
+  listUnwritableClosures,
 } from "@/lib/dashboard/queries";
 
 /**
@@ -74,7 +76,7 @@ function discoveryHeaders(origin: string): Record<string, string> {
 }
 
 /**
- * The ten wrapped route handlers, wired from the same factories and stores the
+ * The twelve wrapped route handlers, wired from the same factories and stores the
  * route files wire their own exports from. One deliberate exception the whole
  * record shares: every handler takes the member gate's production session
  * reader — the moderation-family ones included — because the session types are
@@ -124,6 +126,12 @@ const productionToolDependencies: McpToolDependencies = {
     getCurrentRole: getCurrentUserRole,
     listOpenAudits,
   }),
+  unwritableClosures: createModerationUnwritableClosuresGetHandler({
+    getSession: getProductionSession,
+    findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
+    getCurrentRole: getCurrentUserRole,
+    listUnwritableClosures,
+  }),
   auditOpen: createModerationPostHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
@@ -148,6 +156,13 @@ const productionToolDependencies: McpToolDependencies = {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
   }),
+  correctionList: createSettlementOverrideListGetHandler({
+    getSession: getProductionSession,
+    findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
+    getCurrentRole: getCurrentUserRole,
+    listOpenRequests: (moderator) =>
+      new SettlementOverrideService(new PostgresSettlementOverrideStore()).listOpenRequests(moderator),
+  }),
   correctionDecide: withPathId(createSettlementOverridePatchHandler({
     getSession: getProductionSession,
     findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
@@ -159,7 +174,7 @@ const productionToolDependencies: McpToolDependencies = {
 };
 
 export type McpRouteDependencies = MemberRouteDependencies & {
-  /** Builds the ten tools with the incoming request's credential and client-address headers. */
+  /** Builds the twelve tools with the incoming request's credential and client-address headers. */
   defineTools: (incomingHeaders: Headers) => ReturnType<typeof defineMcpTools>;
 };
 

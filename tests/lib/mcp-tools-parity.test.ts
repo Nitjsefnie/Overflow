@@ -22,9 +22,11 @@ function dependencies(): McpToolDependencies {
     calibrationCompare: stubReturning({ ok: true }),
     dashboardSummary: stubReturning({ ok: true }),
     moderationQueue: stubReturning({ ok: true }),
+    unwritableClosures: stubReturning({ ok: true }),
     auditOpen: stubReturning({ ok: true }),
     auditDecide: stubReturning({ ok: true }),
     correctionOpen: stubReturning({ ok: true }),
+    correctionList: stubReturning({ ok: true }),
     correctionDecide: stubReturning({ ok: true }),
   };
 }
@@ -82,6 +84,14 @@ function withPathIdArms(
 }
 
 describe("MCP tool schema parity with the wrapped routes", () => {
+  it("unwritable_closures advertises no arguments for the moderation GET route", () => {
+    expect(advertisedInputSchema("unwritable_closures")).toEqual(publicJsonSchema(z.object({}).strict()));
+  });
+
+  it("correction_list advertises no arguments for the overrides GET route", () => {
+    expect(advertisedInputSchema("correction_list")).toEqual(publicJsonSchema(z.object({}).strict()));
+  });
+
   it("audit_open advertises the moderation route's open-audit schema", () => {
     expect(advertisedInputSchema("audit_open")).toEqual(publicJsonSchema(openAccountAuditSchema));
   });
