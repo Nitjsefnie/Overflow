@@ -7,7 +7,10 @@ export type CommandRunner = (
   options?: { cwd?: string; encoding?: "utf8"; stdio?: ["ignore", "pipe", "pipe"] },
 ) => Buffer | string | void;
 
-export function createDockerImageSuite(run: CommandRunner) {
+export function createDockerImageSuite(
+  run: CommandRunner,
+  log: (line: string) => void = (line) => writeSync(2, `${line}\n`),
+) {
   const runId = randomUUID();
 
   function removeImage(tag: string): void {
@@ -36,7 +39,7 @@ export function createDockerImageSuite(run: CommandRunner) {
         stdio: ["ignore", "pipe", "pipe"],
       });
       const imageId = run("docker", ["image", "inspect", "--format", "{{.Id}}", tag], { encoding: "utf8" });
-      writeSync(2, `Built test image ${tag} ${String(imageId).trim()}\n`);
+      log(`Built test image ${tag} ${String(imageId).trim()}`);
       return body(tag);
     } catch (error) {
       failed = true;
