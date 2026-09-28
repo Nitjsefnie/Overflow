@@ -150,10 +150,17 @@ const requiredServiceSwitches: ReadonlyArray<string> = [
  * control carrying `PrivateTmp=yes` alone saw an empty `/tmp`. The same
  * directive shares the network and IPC namespaces where the joined unit has
  * `PrivateNetwork=` or `PrivateIPC=`.
+ *
+ * `OnFailure=` starts another unit when this one enters the failed state. Its
+ * pinned value is the alert template with this unit's name as the instance, so
+ * a failure of the web application mails the tail of its own journal to the
+ * address in the host-only recipient file;
+ * `tests/deploy/alert-units.test.ts` closes the template unit's own set.
  */
 const REVIEWED_UNIT_KEYS: ReadonlySet<string> = new Set([
   "After",
   "Description",
+  "OnFailure",
   "Requires",
   "Wants",
 ]);
@@ -171,6 +178,7 @@ const requiredUnitValues: ReadonlyArray<readonly [string, string]> = [
   ["After", "network-online.target postgresql.service"],
   ["Wants", "network-online.target"],
   ["Requires", "postgresql.service"],
+  ["OnFailure", "overflow-alert@%n.service"],
 ];
 
 /** Without this, `systemctl enable` in deploy/README.md section 6 has nothing to link. */
@@ -304,12 +312,15 @@ describe("Overflow production unit", () => {
     const files = await readdir(resolve("deploy"), { withFileTypes: true });
 
     expect(files.map((file) => file.name).sort(),
-      "deploy/ may contain only README.md, backup-restore.md, container.md, incident-response.md, overflow.service, overflow-backup.service and overflow-backup.timer; review additions alongside the install procedure",
+      "deploy/ may contain only README.md, backup-restore.md, container.md, incident-response.md, " +
+        "overflow-alert@.service, overflow-backup.service, overflow-backup.timer and overflow.service; " +
+        "review additions alongside the install procedure",
     ).toEqual([
       "README.md",
       "backup-restore.md",
       "container.md",
       "incident-response.md",
+      "overflow-alert@.service",
       "overflow-backup.service",
       "overflow-backup.timer",
       "overflow.service",

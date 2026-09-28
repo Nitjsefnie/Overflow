@@ -12,6 +12,12 @@ After=network-online.target postgresql.service
 Wants=network-online.target
 Requires=postgresql.service
 
+# When this unit fails, start the alert template with this unit's name as its
+# instance: overflow-alert@overflow-backup.service mails the tail of the
+# journal to the address in /etc/overflow/alert-recipient (host config,
+# outside the repository).
+OnFailure=overflow-alert@%n.service
+
 [Service]
 Type=oneshot
 

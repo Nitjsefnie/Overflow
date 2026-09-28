@@ -1,0 +1,68 @@
+# Overflow failure alerts.
+#
+# A template unit that mails the tail of a failed unit's journal to the
+# address in /etc/overflow/alert-recipient. Triggered only by OnFailure= from
+# overflow.service and overflow-backup.service; never enabled. Install as
+# /etc/systemd/system/overflow-alert@.service. The recipient file is host
+# configuration read at run time: it is never committed and never referenced
+# by value in this repository.
+#
+# Mail goes out by SMTP to the local exim daemon (smtp://127.0.0.1:25) with
+# curl, because invoking exim in-process needs the setgroups() privilege dance
+# that the empty capability bounding set deliberately removes.
+
+[Unit]
+Description=Email the failure log of %i
+
+[Service]
+Type=oneshot
+
+# Runs as root, like the backup unit: the recipient file is root-only and is
+# read by the script at run time, not by systemd. The PATH carries no
+# component under /root, and curl speaks to the local exim daemon.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/bin/sh /srv/overflow/scripts/overflow-alert.sh %i
+
+# Any file the alert run creates is root-private.
+UMask=0077
+
+# No privilege elevation, no capabilities: the unit reads one root-only file
+# and hands one message to the local mail daemon over SMTP, and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only and the unit writes nothing: the exim
+# daemon spools the submission in its own namespace, outside this sandbox.
+# Home directories are unreachable and /tmp and /dev are private.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+# The host itself is off limits, as in overflow.service. ProcSubset= is
+# deliberately not set: journalctl reads /proc/sys/kernel/random/boot_id,
+# which ProcSubset=pid hides.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+
+# May speak IP and local sockets, on this architecture only, with the same
+# EPERM-instead-of-kill seccomp posture as the web service.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow-alert
