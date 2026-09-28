@@ -1589,3 +1589,103 @@ repeat the count, which must then print `0`:
 set -a; . /etc/overflow/overflow.env; set +a
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null"
 ```
+
+## 12. Failure alerts
+
+When `overflow.service` or `overflow-backup.service` enters the failed state,
+systemd starts `overflow-alert@<failed unit>.service` through that unit's
+`OnFailure=overflow-alert@%n.service`. The template unit runs
+`/srv/overflow/scripts/overflow-alert.sh` with the failed unit's name, and the
+script mails the failed unit's current-boot journal tail — the last 200 lines
+— to the address in `/etc/overflow/alert-recipient`. The alert unit has no
+`[Install]` section and is never enabled: `OnFailure=` and a manual
+`systemctl start overflow-alert@<unit>` are the only ways it runs.
+
+The recipient file is host configuration, not part of this repository: root
+only (`root:root` `0600`), carrying exactly one line — the bare address. It is
+never committed and never referenced by value in the repository, and the
+script refuses anything but a single address on a single line (missing,
+empty, no `@`, or more than one line each exit nonzero without sending), so a
+misconfigured file fails loudly in the alert unit's own journal instead of
+mailing a broken message.
+
+### Prerequisites
+
+The local mail daemon must be running and able to relay: the script submits
+the message by SMTP to the local exim daemon, which relays it to the
+recipient. Check both before installing anything:
+
+```bash
+systemctl is-active exim4
+test -s /etc/overflow/alert-recipient && echo "recipient file present"
+```
+
+The second command must print the confirmation. If the file does not exist
+yet, create it with the address and nothing else:
+
+```bash
+install -d -o root -g root -m 0700 /etc/overflow
+[ -e /etc/overflow/alert-recipient ] \
+  || install -o root -g root -m 0600 /dev/null /etc/overflow/alert-recipient
+printf '%s\n' '<address>' > /etc/overflow/alert-recipient
+chown root:root /etc/overflow/alert-recipient
+chmod 0600 /etc/overflow/alert-recipient
+```
+
+### Install
+
+The script needs no install step — `/srv/overflow` is a checkout of this
+repository at the deployed revision, so each deploy ships it. Install the
+three unit files and reload:
+
+```bash
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-alert@.service /etc/systemd/system/
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow.service /etc/systemd/system/
+install -o root -g root -m 0644 \
+  /srv/overflow/deploy/overflow-backup.service /etc/systemd/system/
+systemctl daemon-reload
+```
+
+Re-copying the two watched units is what replaces the copies section 6 (or a
+previous deploy) installed; on a host whose installed units already carry
+local edits, diff before overwriting.
+
+### Verify
+
+Both watched units must name the alert template:
+
+```bash
+systemctl show overflow.service overflow-backup.service -p OnFailure
+```
+
+Each line must read `OnFailure=overflow-alert@%n.service`. Then send a real
+message through the whole route with a throwaway instance — the instance name
+need not be a unit that exists:
+
+```bash
+systemctl start overflow-alert@test.service
+journalctl -u overflow-alert@test.service --no-pager -n 20
+tail -n 20 /var/log/exim4/mainlog
+```
+
+The alert unit's journal must show a clean exit, and the exim mainlog must
+show the delivery (or the relay attempt) to the address in the recipient
+file; the message's subject names `test.service` as the failed unit. Delete
+nothing afterwards: the throwaway instance leaves no state behind.
+
+### Rollback
+
+Revert the two `OnFailure=` lines — re-copy the units without them, or edit
+the installed copies — remove the alert template, and reload:
+
+```bash
+rm /etc/systemd/system/overflow-alert@.service
+systemctl daemon-reload
+```
+
+The watched units work unchanged without the wiring: nothing else references
+the alert unit, and a failure of `overflow.service` or
+`overflow-backup.service` is still visible in the journal the way it was
+before this section.

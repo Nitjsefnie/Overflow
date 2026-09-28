@@ -79,6 +79,14 @@ Both forges must be able to reach their callback URLs over public HTTPS. Every r
 
 The production deployment runs the application as a dedicated unprivileged system account rather than as root, under a systemd unit that keeps the filesystem read-only apart from the one cache directory Next writes at runtime. `deploy/overflow.service` is that unit, and `deploy/README.md` is the procedure that stands it up on a host, deploys a new revision under it, and rolls it back. `tests/deploy/unit-file.test.ts` fails if the unit loses any of that hardening.
 
+## Failure alerts and off-host copies
+
+Two parts of an instance's data survival belong to the maintainer rather than to the software: keeping an off-host copy of the backups, and learning when a backup or the service itself fails. The on-host dump in `/var/backups/overflow` sits on the same disk as the database it protects, so it is not the only copy of the data that cannot be rebuilt from GitHub — accounts, encrypted credentials, moderation history, audits, corrections, API tokens and credit adjustments. Copying dumps off the host and owning the alert delivery below are the maintainer's responsibilities.
+
+When `overflow.service` or `overflow-backup.service` fails, systemd's `OnFailure=` starts `overflow-alert@<failed unit>`, which mails the failed unit's journal tail to the address in `/etc/overflow/alert-recipient` — host configuration, root-only, never committed — through the host's exim4 smarthost. The route works by design only while the host's mail route works; that dependence is a property of the design, not a defect of it, and the alert unit's own journal shows a submission that could not go out.
+
+On an alert: read the failed unit's journal with `journalctl -b -u <unit>`, then follow [deploy/backup-restore.md](deploy/backup-restore.md) for a failed backup and [deploy/README.md section 10](deploy/README.md#10-deploying-a-new-revision) for a failed service.
+
 ## Reconciliation
 
 A repository is folded from a durable queue rather than inside the request that noticed it had fallen behind. A GitHub webhook delivery records a reconciliation job for the repository and answers immediately; when admission is available, an in-process worker normally claims that job within seconds, folds the repository, and clears the job. After claiming, a GraphQL budget hold can defer that repository to its sponsor's reset time, releasing the lease so the worker can continue to other repositories. A fold that throws is retried on the job after a minute, five, fifteen and an hour, and a repository that exhausts those retries stays visibly failed rather than disappearing from the queue. Registering a repository records the same kind of job, because the work already in the repository predates the webhook.

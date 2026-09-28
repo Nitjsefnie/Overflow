@@ -124,7 +124,9 @@ Verify the first scheduled run in the journal:
 journalctl -u overflow-backup.service -n 50 --no-pager
 ```
 
-and that a dump file appeared in `/var/backups/overflow`.
+and that a dump file appeared in `/var/backups/overflow`. A failed run
+notifies the maintainer by email through `OnFailure=` — see
+[failure alerts](README.md#12-failure-alerts).
 
 ## (d) Backup location and retention
 
@@ -347,3 +349,20 @@ response time, not seconds.
   twice the size recorded in the latest drill-log entry. A restore that has
   not been rehearsed is an assumption; the drill is what keeps this runbook
   true.
+
+## (h) Failure alerts
+
+A failed `overflow-backup.service` run starts
+`overflow-alert@overflow-backup.service` through the unit's `OnFailure=`,
+which mails the backup unit's current-boot journal tail — the `pg_dump`
+error among it — to the address in `/etc/overflow/alert-recipient`. That
+file is host configuration (root only, one line) and is never committed;
+[README.md section 12](README.md#12-failure-alerts) installs the route and
+verifies it.
+
+The drill in (e.1) proves a restore works on the day it runs; the alert
+route is what tells you a backup failed between drills. Without it, a
+nightly backup can fail for weeks unnoticed — an expired backup-role
+password, or the grants gap section (e.2) warns about: a swap that skipped
+the grants fails the first nightly backup with "permission denied" for
+`overflow_backup`.
