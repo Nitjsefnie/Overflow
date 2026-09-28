@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   dispatchJsonRpc,
   type ToolDefinition,
+  MCP_SERVER_VERSION,
 } from "@/lib/mcp/protocol";
 
 const echoTool: ToolDefinition = {
@@ -102,7 +103,9 @@ describe("dispatchJsonRpc methods", () => {
         result: {
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
-          serverInfo: { name: "overflow", version: "0.3.0" },
+          // The value itself is guarded by tests/lib/api-version.test.ts;
+          // this test pins the metadata shape around it.
+          serverInfo: { name: "overflow", version: MCP_SERVER_VERSION },
         },
       },
     });
