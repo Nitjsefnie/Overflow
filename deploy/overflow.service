@@ -16,6 +16,16 @@ Requires=postgresql.service
 # repository).
 OnFailure=overflow-alert@%n.service
 
+# A crash loop restarts every five seconds and must end: with the five-second
+# delay, five failed starts land well inside this window, so a persistent loop
+# reaches this limit and gives up in one final failure. OnFailure= has already
+# alerted on each of them; the giving-up failure alerts once more, and then the
+# unit stays down for the operator instead of mailing forever. The default
+# window (10s / 5 starts) is unreachable at one start per five seconds, which
+# is why the loop never ended before.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 

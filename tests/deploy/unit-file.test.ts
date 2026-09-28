@@ -162,6 +162,8 @@ const REVIEWED_UNIT_KEYS: ReadonlySet<string> = new Set([
   "Description",
   "OnFailure",
   "Requires",
+  "StartLimitBurst",
+  "StartLimitIntervalSec",
   "Wants",
 ]);
 
@@ -179,6 +181,8 @@ const requiredUnitValues: ReadonlyArray<readonly [string, string]> = [
   ["Wants", "network-online.target"],
   ["Requires", "postgresql.service"],
   ["OnFailure", "overflow-alert@%n.service"],
+  ["StartLimitIntervalSec", "300"],
+  ["StartLimitBurst", "5"],
 ];
 
 /** Without this, `systemctl enable` in deploy/README.md section 6 has nothing to link. */
