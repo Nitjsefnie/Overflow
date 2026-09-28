@@ -191,6 +191,50 @@ describe("the canonical subset a unit must be written in", () => {
       );
     });
 
+    /**
+     * `%i` and `%n` are the only specifiers the canonical subset admits, and
+     * only verbatim: neither resolves to a filesystem path (%i is a template
+     * unit's instance string, %n the unit's own name), which is the property
+     * that made every other specifier a refusal, and the reviewed units pin
+     * exactly where each appears.
+     */
+    it.each([
+      ["Service", "ExecStart", "/bin/sh /srv/overflow/scripts/overflow-alert.sh %i", "%i"],
+      ["Unit", "OnFailure", "overflow-alert@%n.service", "%n"],
+    ])("admits the verbatim %s specifier in %s=%s unexpanded", (section, key, value, specifier) => {
+      const parsed = parseUnitFile(`[${section}]\n${key}=${value}\n`);
+
+      expect(parsed).toEqual([
+        { line: 2, section, key, value, words: value.split(" ") },
+      ]);
+      expect(parsed[0]!.value).toContain(specifier);
+    });
+
+    it.each([
+      ["SyslogIdentifier", "%p"],
+      ["Environment", "PATH=%p/bin"],
+      ["User", "over%flow"],
+      ["User", "overflow%"],
+    ])("refuses every other %s percent escape: %s", (key, value) => {
+      expect(() => parseUnitFile(`[Service]\n${key}=${value}\n`)).toThrow(
+        `the specifier %`,
+      );
+    });
+
+    it("reads %%i as the literal %i that the escape stands for", () => {
+      const parsed = parseUnitFile("[Unit]\nDescription=100%%i\n");
+
+      expect(parsed).toEqual([
+        {
+          line: 2,
+          section: "Unit",
+          key: "Description",
+          value: "100%i",
+          words: ["100%i"],
+        },
+      ]);
+    });
+
     it("reads %% as the literal percent systemd expands it to", () => {
       const parsed = parseUnitFile("[Service]\nSyslogIdentifier=100%% overflow\n");
 
