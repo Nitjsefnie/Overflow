@@ -9,6 +9,8 @@ import {
   createModerationPostHandler,
   type ModerationRouteDependencies,
 } from "@/app/api/moderation/route";
+import { createModerationUnwritableClosuresGetHandler } from "@/app/api/moderation/unwritable-closures/route";
+import { createSettlementOverrideListGetHandler } from "@/app/api/overrides/route";
 import { defineMcpTools, type McpToolDependencies } from "@/lib/mcp/tools";
 import type { ToolDefinition } from "@/lib/mcp/protocol";
 
@@ -34,9 +36,11 @@ const TOOL_NAMES = [
   "calibration_compare",
   "dashboard_summary",
   "moderation_queue",
+  "unwritable_closures",
   "audit_open",
   "audit_decide",
   "correction_open",
+  "correction_list",
   "correction_decide",
 ] as const;
 
@@ -52,9 +56,11 @@ function backendDependencies(overrides: Partial<McpToolDependencies> = {}): McpT
     calibrationCompare: vi.fn(async () => Response.json({ ok: true })),
     dashboardSummary: vi.fn(async () => Response.json({ ok: true })),
     moderationQueue: vi.fn(async () => Response.json({ ok: true })),
+    unwritableClosures: vi.fn(async () => Response.json({ ok: true })),
     auditOpen: vi.fn(async () => Response.json({ ok: true })),
     auditDecide: vi.fn(async () => Response.json({ ok: true })),
     correctionOpen: vi.fn(async () => Response.json({ ok: true })),
+    correctionList: vi.fn(async () => Response.json({ ok: true })),
     correctionDecide: vi.fn(async () => Response.json({ ok: true })),
     ...overrides,
   };
@@ -185,7 +191,7 @@ describe("POST /api/mcp", () => {
     });
   });
 
-  it("answers tools/list with the ten pinned tools and their schemas", async () => {
+  it("answers tools/list with the twelve pinned tools and their schemas", async () => {
     const dependencies = endpointDependencies();
 
     const response = await createMcpPostHandler(dependencies)(
@@ -194,13 +200,21 @@ describe("POST /api/mcp", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.result.tools).toHaveLength(10);
+    expect(body.result.tools).toHaveLength(12);
     expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       ...TOOL_NAMES,
     ]);
     for (const tool of body.result.tools) {
       expect(typeof tool.description).toBe("string");
       expect(tool.inputSchema).toBeTypeOf("object");
+    }
+    for (const name of ["unwritable_closures", "correction_list"]) {
+      const tool = body.result.tools.find((candidate: { name: string }) => candidate.name === name);
+      expect(tool.inputSchema).toMatchObject({
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      });
     }
   });
 
@@ -489,6 +503,78 @@ describe("the challenge's 401-only boundary", () => {
 });
 
 describe("transport-to-wrapped-route composition", () => {
+  const unwritableQueues = {
+    queue: [{
+      id: "00000000-0000-4000-8000-000000000010",
+      settlementId: "00000000-0000-4000-8000-000000000011",
+      calibrationId: null,
+      latestCorrection: null,
+      viewerCanRequestCorrection: true,
+    }],
+    history: [],
+  };
+  const openCorrections = [{
+    id: "00000000-0000-4000-8000-000000000012",
+    settlementId: "00000000-0000-4000-8000-000000000011",
+    state: "OPEN",
+  }];
+
+  function queueReadComposition(role: "MEMBER" | "MODERATOR"): McpRouteDependencies {
+    const gate = {
+      getSession: vi.fn().mockResolvedValue({ user: { id: memberId } }),
+      findAccountByTokenHash: vi.fn().mockResolvedValue(null),
+      getCurrentRole: vi.fn().mockResolvedValue(role),
+    };
+    return endpointDependencies({
+      ...gate,
+      defineTools: (headers: Headers) => defineMcpTools(backendDependencies({
+        unwritableClosures: createModerationUnwritableClosuresGetHandler({
+          ...gate,
+          listUnwritableClosures: vi.fn().mockResolvedValue(unwritableQueues),
+        }),
+        correctionList: createSettlementOverrideListGetHandler({
+          ...gate,
+          listOpenRequests: vi.fn().mockResolvedValue(openCorrections),
+        }),
+      }), headers),
+    });
+  }
+
+  it.each([
+    ["unwritable_closures", unwritableQueues],
+    ["correction_list", openCorrections],
+  ])("returns the wrapped %s route's JSON as successful tool text", async (name, expected) => {
+    const response = await createMcpPostHandler(queueReadComposition("MODERATOR"))(
+      mcpRequest(rpc(20, "tools/call", { name, arguments: {} })),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.result.content).toEqual([{ type: "text", text: JSON.stringify(expected) }]);
+    expect(body.result.isError).toBeUndefined();
+  });
+
+  it.each(["unwritable_closures", "correction_list"])(
+    "returns the wrapped %s route's moderator refusal as an errored tool result",
+    async (name) => {
+      const response = await createMcpPostHandler(queueReadComposition("MEMBER"))(
+        mcpRequest(rpc(21, "tools/call", { name, arguments: {} })),
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        jsonrpc: "2.0",
+        id: 21,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({
+            error: { code: "FORBIDDEN", message: "Moderator authorization is required." },
+          }) }],
+          isError: true,
+        },
+      });
+    },
+  );
+
   it("surfaces the wrapped moderation route's origin refusal as a failed tool result for a cookie-authenticated write", async () => {
     const { endpoint } = auditOpenComposition();
 

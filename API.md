@@ -626,6 +626,7 @@ moderation body, and a query parameter named more than once is refused.
 | Method and path | Request | Success |
 | --- | --- | --- |
 | `GET /api/moderation/audits` | None. | `200`: the array of open account audits the moderation queue renders. |
+| `GET /api/moderation/unwritable-closures` | None; moderator credential required. | `200` `{ "queue": <open unwritable closures>, "history": <past unwritable closures> }`. Each rejected-evidence closure includes `settlementId` or `calibrationId`, `latestCorrection`, and `viewerCanRequestCorrection`. |
 | `GET /api/moderation/cohort` | Query: `targetAccountId` (required), `sampleStartedAt`, `sampleEndedAt` (required timestamps), `repositoryId` (optional). | `200` `{ "preview": <calibration cohort preview> }`. |
 | `GET /api/moderation/recalibration` | Query: `targetAccountId` (required). | `200` `{ "preview": <the recalibration figure> }` — the trigger verdict over the latest substantiated audit's stored snapshot, beside every credit adjustment already applied. |
 | `GET /api/moderation/rederivation` | None. | `200` `{ "rederivation": <per-repository derived-row status>, "startupRecoverySkipped": <boolean> }`. |
@@ -663,9 +664,11 @@ the code tells the causes apart:
 | 422 | `INSUFFICIENT_SAMPLES` | The calibration sample is too small to judge. |
 | 500 | `INTERNAL_ERROR` | The moderation handler failed; retry when the service recovers. |
 
-Two routes depart from the fixed message. `GET /api/moderation/audits`
+The queue reads depart from the fixed message. `GET /api/moderation/audits`
 degrades on a failed read with `502` `UPSTREAM_FAILURE` and message
-`Unable to load the moderation queue.` The moderator roster route passes the
+`Unable to load the moderation queue.` `GET /api/moderation/unwritable-closures`
+answers a failed read with `502` `UPSTREAM_FAILURE` and message
+`Unable to load the unwritable-closure queue.` The moderator roster route passes the
 service's own message instead of the fixed one — `403`/`404`/`409` keep the
 code and name the cause in the message, any other service code answers
 `422` — and an outage behind it is `502` `UPSTREAM_FAILURE` with `Unable to
@@ -685,11 +688,12 @@ the shared credential table and the roster service-error rules above apply:
 ## Settlement and calibration overrides
 
 A priced outcome a member believes is wrong is sent to correction: the member
-opens a correction request, and a moderator grants or declines it. Over HTTP
-these are `POST /api/overrides` and `PATCH /api/overrides/<id>` — the same
-two flows the MCP tools `correction_open` and `correction_decide` expose.
+opens a correction request, and a moderator lists, grants or declines open
+requests. Over HTTP these are `POST /api/overrides`, `GET /api/overrides`
+and `PATCH /api/overrides/<id>` — the same flows the MCP tools
+`correction_open`, `correction_list` and `correction_decide` expose.
 
-Opening a correction needs any member's credential; deciding one needs a
+Opening a correction needs any member's credential; listing or deciding one needs a
 moderator. The credential rules are the ones the registration and moderation
 sections state, and the member gate's answers are the read responses'
 own — including `403` `FORBIDDEN` `A member account is required.` for a
@@ -703,6 +707,11 @@ Only a party to the outcome can open a correction against it: the creditor
 or the debtor of the settlement, or the account a self-work calibration
 belongs to. Success is HTTP `200` with
 `{ "request": <the recorded correction request> }`.
+
+`GET /api/overrides` takes no arguments and requires a moderator. Success is
+HTTP `200` with a JSON array of the open correction requests, including each
+request's `id` for a later decision. A failed read answers `502`
+`UPSTREAM_FAILURE` with `Unable to load the open correction requests.`
 
 `PATCH /api/overrides/<id>` decides a correction request. The body is either
 `{ "action": "grant", "settledPoints": <integer 1 through 10>, "reason": … }`
@@ -771,9 +780,11 @@ protocol version `2025-06-18`; a notification (a JSON-RPC request with no
 | `calibration_compare` | Fetch the calibration comparison for the calling account. |
 | `dashboard_summary` | Fetch the calling account's dashboard summary. |
 | `moderation_queue` | List the account audits currently open in the moderation queue. |
+| `unwritable_closures` | List the unwritable closures in the rejected-evidence queue and its history, including each closure's settlement or calibration id and latest correction state. |
 | `audit_open` | Open an account audit over a calibration sample. |
 | `audit_decide` | Dismiss or substantiate an open account audit. |
 | `correction_open` | Request a correction to a priced settlement or calibration outcome. |
+| `correction_list` | List open settlement-correction requests with their ids for `correction_decide`. |
 | `correction_decide` | Grant or decline a settlement correction request. |
 
 Tool errors are not transport errors: the wrapped endpoint's

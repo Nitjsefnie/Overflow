@@ -33,10 +33,7 @@ export type WrappedRouteHandler = (
 ) => Promise<Response>;
 
 /**
- * One wrapped handler per tool backend, keyed by what the tool drives. The
- * moderation queue's route arrives with Task 3; until then its key exists so
- * the registry's shape is final and Task 4 can wire the transport without
- * this module changing again.
+ * One wrapped handler per tool backend, keyed by what the tool drives.
  */
 export interface McpToolDependencies {
   issuesBoard: WrappedRouteHandler;
@@ -45,9 +42,11 @@ export interface McpToolDependencies {
   calibrationCompare: WrappedRouteHandler;
   dashboardSummary: WrappedRouteHandler;
   moderationQueue: WrappedRouteHandler;
+  unwritableClosures: WrappedRouteHandler;
   auditOpen: WrappedRouteHandler;
   auditDecide: WrappedRouteHandler;
   correctionOpen: WrappedRouteHandler;
+  correctionList: WrappedRouteHandler;
   correctionDecide: WrappedRouteHandler;
 }
 
@@ -123,7 +122,7 @@ interface RouteToolSpec {
 }
 
 /**
- * Builds the ten tools fresh for one incoming request: they close over that
+ * Builds the twelve tools fresh for one incoming request: they close over that
  * request's credential and client-address headers, so nothing here outlives
  * the call.
  */
@@ -205,6 +204,18 @@ export function defineMcpTools(
     ),
     defineRouteTool(
       {
+        name: "unwritable_closures",
+        description:
+          "List the unwritable closures in the rejected-evidence queue and its history, including each closure's settlement or calibration id and latest correction state.",
+        schema: noArgumentsSchema,
+        method: "GET",
+        handler: dependencies.unwritableClosures,
+        pathFor: () => "/api/moderation/unwritable-closures",
+      },
+      forwarded,
+    ),
+    defineRouteTool(
+      {
         name: "audit_open",
         description: "Open an account audit over a calibration sample.",
         schema: auditOpenSchema,
@@ -233,6 +244,17 @@ export function defineMcpTools(
         schema: correctionOpenSchema,
         method: "POST",
         handler: dependencies.correctionOpen,
+        pathFor: () => "/api/overrides",
+      },
+      forwarded,
+    ),
+    defineRouteTool(
+      {
+        name: "correction_list",
+        description: "List open settlement-correction requests with their ids for correction_decide.",
+        schema: noArgumentsSchema,
+        method: "GET",
+        handler: dependencies.correctionList,
         pathFor: () => "/api/overrides",
       },
       forwarded,

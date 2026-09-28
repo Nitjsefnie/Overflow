@@ -30,9 +30,11 @@ function dependencies(overrides: Partial<McpToolDependencies> = {}): McpToolDepe
     calibrationCompare: stubReturning({ ok: true }),
     dashboardSummary: stubReturning({ ok: true }),
     moderationQueue: stubReturning({ ok: true }),
+    unwritableClosures: stubReturning({ ok: true }),
     auditOpen: stubReturning({ ok: true }),
     auditDecide: stubReturning({ ok: true }),
     correctionOpen: stubReturning({ ok: true }),
+    correctionList: stubReturning({ ok: true }),
     correctionDecide: stubReturning({ ok: true }),
     ...overrides,
   };
@@ -56,7 +58,7 @@ function calledOnce(mock: WrappedRouteHandler): unknown[] {
 }
 
 describe("defineMcpTools", () => {
-  it("defines exactly the ten pinned tools in routing-table order", () => {
+  it("defines exactly the twelve pinned tools in routing-table order", () => {
     const tools = defineMcpTools(dependencies(), new Headers());
     expect(tools.map((tool) => tool.name)).toEqual([
       "issues_board",
@@ -65,9 +67,11 @@ describe("defineMcpTools", () => {
       "calibration_compare",
       "dashboard_summary",
       "moderation_queue",
+      "unwritable_closures",
       "audit_open",
       "audit_decide",
       "correction_open",
+      "correction_list",
       "correction_decide",
     ]);
     for (const tool of tools) {
@@ -173,6 +177,17 @@ describe("defineMcpTools", () => {
       expect(result).toEqual({ content: [{ type: "text", text: CANNED_TEXT }] });
     });
 
+    it("unwritable_closures sends a plain GET to /api/moderation/unwritable-closures", async () => {
+      const deps = dependencies();
+      const result = await toolNamed(defineMcpTools(deps, new Headers()), "unwritable_closures").call({});
+
+      const [request] = calledOnce(deps.unwritableClosures) as [Request];
+      expect(request.method).toBe("GET");
+      expect(request.url).toBe("http://mcp.internal/api/moderation/unwritable-closures");
+      expect(request.body).toBeNull();
+      expect(result).toEqual({ content: [{ type: "text", text: CANNED_TEXT }] });
+    });
+
     it("audit_open sends a POST to /api/moderation with the audit arguments as the JSON body", async () => {
       const deps = dependencies();
       const tools = defineMcpTools(deps, new Headers());
@@ -220,6 +235,17 @@ describe("defineMcpTools", () => {
       expect(request.method).toBe("POST");
       expect(request.url).toBe("http://mcp.internal/api/overrides");
       expect(await request.json()).toEqual(args);
+      expect(result).toEqual({ content: [{ type: "text", text: CANNED_TEXT }] });
+    });
+
+    it("correction_list sends a plain GET to /api/overrides", async () => {
+      const deps = dependencies();
+      const result = await toolNamed(defineMcpTools(deps, new Headers()), "correction_list").call({});
+
+      const [request] = calledOnce(deps.correctionList) as [Request];
+      expect(request.method).toBe("GET");
+      expect(request.url).toBe("http://mcp.internal/api/overrides");
+      expect(request.body).toBeNull();
       expect(result).toEqual({ content: [{ type: "text", text: CANNED_TEXT }] });
     });
 
@@ -361,6 +387,8 @@ describe("defineMcpTools", () => {
         "calibration_compare",
         "dashboard_summary",
         "moderation_queue",
+        "unwritable_closures",
+        "correction_list",
         "audit_open",
       ]) {
         expect(schemas[name]!.additionalProperties, name).toBe(false);
@@ -374,6 +402,10 @@ describe("defineMcpTools", () => {
 
     it("mirrors the wrapped routes' argument shapes", () => {
       const schemas = schemasByName();
+
+      for (const name of ["unwritable_closures", "correction_list"]) {
+        expect(schemas[name]).toEqual({ type: "object", properties: {}, additionalProperties: false });
+      }
 
       expect(schemas.settlement_get!.required).toEqual(["id"]);
       expect(properties(schemas.settlement_get!).id!.format).toBe("uuid");
