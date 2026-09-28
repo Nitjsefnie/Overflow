@@ -116,7 +116,7 @@ variables at runtime through `env_file`; it does not build an image.
 
 **The image builds in-image on `node:24.21.0-bookworm-slim`.** The same base
 that compiles the bundle serves it — both `FROM` lines pinned by digest — and
-the image's Node base moves on its own patch updates, while `engines` in
+the image's Node base can receive non-major updates within Node 24, while `engines` in
 `package.json` pins the Node version CI and the host deployment use. Copying the
 built release out of the image (the host path's release directories) was
 rejected because it reintroduces the artifact-out-of-band problem the
@@ -176,9 +176,11 @@ immutable identity — exists only after a maintainer publishes one; until
 then the image ID is the identity rollback selects. **Signatures and
 attestations**: nothing here signs an image or attaches build attestations.
 **Automated digest bumps**: these pins go stale the moment a base image is
-rebuilt upstream, and nothing here refreshes them mechanically — bumping a
-digest is a deliberate hand edit of the Dockerfile, the compose file, or the
-CI service image until an automated digest-bump workflow exists.
+rebuilt upstream. Docker Dependabot scans only the root Dockerfile and proposes
+tag-and-digest updates to its `FROM` lines; Node majors remain ignored pending
+review on/after 2026-10-28. A person completes the provenance `LABEL` and test
+constant in the same change. The compose and CI service PostgreSQL digests
+have no proposal lane and remain hand edits.
 
 ## The default path
 
