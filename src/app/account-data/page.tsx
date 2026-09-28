@@ -28,8 +28,8 @@ export function AccountDataNotice() {
           — the tracker is public, so the request and any reply are public too. For anything
           sensitive — a request carrying personal data you would not post publicly, for example —
           use the private vulnerability reporting form at{" "}
-          <a href="https://github.com/Nitjsefnie/Overflow/security" rel="noreferrer">
-            github.com/Nitjsefnie/Overflow/security
+          <a href="https://github.com/Nitjsefnie/Overflow/security/advisories/new" rel="noreferrer">
+            github.com/Nitjsefnie/Overflow/security/advisories/new
           </a>
           , which is private. No email address is published.
         </p>

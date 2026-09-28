@@ -86,7 +86,7 @@ describe("account-data notice page", () => {
     // settings page and the repository's issue tracker.
     expect(external).toContain("https://github.com/settings/applications");
     expect(external).toContain("https://github.com/Nitjsefnie/Overflow/issues");
-    expect(external).toContain("https://github.com/Nitjsefnie/Overflow/security");
+    expect(external).toContain("https://github.com/Nitjsefnie/Overflow/security/advisories/new");
   });
 
   it("reaches the request route from the deletion description", async () => {
@@ -197,7 +197,7 @@ describe("account-data notice page", () => {
       "the controller section names the public issue tracker",
     ).not.toBeNull();
     expect(
-      controller!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security"]'),
+      controller!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security/advisories/new"]'),
       "the controller section names the private vulnerability reporting form",
     ).not.toBeNull();
   });
