@@ -152,6 +152,25 @@ const otherShellLines = new Set([
   "sed -i -e 's/^TOKEN_ENCRYPTION_KEY_PREVIOUS=/TOKEN_ENCRYPTION_KEY=/' -e t -e 's/^TOKEN_ENCRYPTION_KEY=/TOKEN_ENCRYPTION_KEY_PREVIOUS=/' /etc/overflow/overflow.env",
   "psql \"$DATABASE_URL\" -tAc \"select count(*) from registered_repositories where unregistered_at is not null and webhook_credential_id is not null\"",
   "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"update registered_repositories set webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null where unregistered_at is not null and webhook_credential_id is not null\"",
+  // Section 12's failure alerts: the mail-daemon and recipient-file
+  // prerequisite checks, the recipient file's creation in the shape section 4
+  // uses for overflow.env, the three-unit install, the OnFailure= readback,
+  // the throwaway-instance test message with its journal and exim readback,
+  // and the rollback's template removal.
+  "systemctl is-active exim4",
+  "test -s /etc/overflow/alert-recipient && echo \"recipient file present\"",
+  "[ -e /etc/overflow/alert-recipient ] || install -o root -g root -m 0600 /dev/null /etc/overflow/alert-recipient",
+  "printf '%s\\n' '<address>' > /etc/overflow/alert-recipient",
+  "chown root:root /etc/overflow/alert-recipient",
+  "chmod 0600 /etc/overflow/alert-recipient",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-alert@.service /etc/systemd/system/",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow.service /etc/systemd/system/",
+  "install -o root -g root -m 0644 /srv/overflow/deploy/overflow-backup.service /etc/systemd/system/",
+  "systemctl show overflow.service overflow-backup.service -p OnFailure",
+  "systemctl start overflow-alert@test.service",
+  "journalctl -u overflow-alert@test.service --no-pager -n 20",
+  "tail -n 20 /var/log/exim4/mainlog",
+  "rm /etc/systemd/system/overflow-alert@.service",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly
