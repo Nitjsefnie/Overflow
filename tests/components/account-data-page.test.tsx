@@ -36,7 +36,7 @@ describe("account-data notice page", () => {
     expect(screen.getByRole("heading", { level: 1 })).toBe(heading);
 
     const sections = Array.from(main!.querySelectorAll("section.surface"));
-    expect(sections.length).toBe(8);
+    expect(sections.length).toBe(13);
     for (const section of sections) {
       const labelledBy = section.getAttribute("aria-labelledby");
       expect(labelledBy, "every section names the heading that labels it").toBeTruthy();
@@ -86,6 +86,7 @@ describe("account-data notice page", () => {
     // settings page and the repository's issue tracker.
     expect(external).toContain("https://github.com/settings/applications");
     expect(external).toContain("https://github.com/Nitjsefnie/Overflow/issues");
+    expect(external).toContain("https://github.com/Nitjsefnie/Overflow/security");
   });
 
   it("reaches the request route from the deletion description", async () => {
@@ -177,6 +178,52 @@ describe("account-data notice page", () => {
       deletionSection!.querySelector('a[href="https://github.com/settings/applications"]'),
       "the deletion description names where to revoke Overflow's authorization on GitHub",
     ).not.toBeNull();
+  });
+
+  it("opens with the controller section, which carries both contact routes", async () => {
+    await renderAccountDataPage();
+
+    const sections = Array.from(document.querySelectorAll("main section.surface"));
+    const controller = document.getElementById("account-data-controller-heading")?.closest("section");
+    expect(controller, "the controller section exists").not.toBeNull();
+    expect(controller).toHaveAttribute("aria-labelledby", "account-data-controller-heading");
+    expect(controller!.querySelector("h2")).not.toBeNull();
+    expect(
+      sections[0],
+      "the controller section is the first surface after the page heading",
+    ).toBe(controller);
+    expect(
+      controller!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/issues"]'),
+      "the controller section names the public issue tracker",
+    ).not.toBeNull();
+    expect(
+      controller!.querySelector('a[href="https://github.com/Nitjsefnie/Overflow/security"]'),
+      "the controller section names the private vulnerability reporting form",
+    ).not.toBeNull();
+  });
+
+  it("places the scoring and rights sections before the controls and deletion sections", async () => {
+    await renderAccountDataPage();
+
+    const sectionLabelledBy = (headingId: string): Element => {
+      const heading = document.getElementById(headingId);
+      expect(heading, `expected a heading with id "${headingId}"`).not.toBeNull();
+      const section = heading!.closest("section.surface");
+      expect(section, `expected "${headingId}" inside a section.surface`).not.toBeNull();
+      expect(section).toHaveAttribute("aria-labelledby", headingId);
+      return section!;
+    };
+    const follows = (earlier: Element, later: Element): boolean =>
+      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+    const scoring = sectionLabelledBy("account-data-scoring-heading");
+    const rights = sectionLabelledBy("account-data-rights-heading");
+    const controls = sectionLabelledBy("account-data-controls-heading");
+    const deletion = sectionLabelledBy("account-data-deletion-heading");
+
+    expect(follows(scoring, controls), "the scoring section precedes your controls").toBe(true);
+    expect(follows(rights, controls), "the rights section precedes your controls").toBe(true);
+    expect(follows(controls, deletion), "deletion follows your controls").toBe(true);
   });
 
   it("offers nothing that submits or collects an email address", async () => {
