@@ -32,6 +32,7 @@ export type ReconciliationSweepSummary = {
 
 export type ReconciliationSweepSchedule = {
   runSweep(): Promise<unknown>;
+  finalizeAbandonedRuns?(): Promise<unknown>;
   /**
    * Registers the recurring tick. Omit it for an unrefed setInterval, which is
    * what production takes: nothing wires a scheduler, so this is an injection
@@ -236,6 +237,11 @@ export function startReconciliationSweep(schedule: ReconciliationSweepSchedule):
     // a runSweep that throws before it returns one is caught here too.
     void (async () => {
       try {
+        try {
+          await schedule.finalizeAbandonedRuns?.();
+        } catch (error) {
+          console.error("Could not finalize abandoned reconciliation runs during sweep", error);
+        }
         await schedule.runSweep();
       } catch (error) {
         reportSweepFailure(schedule, error);
