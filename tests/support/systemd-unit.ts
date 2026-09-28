@@ -119,8 +119,19 @@ export function toWords(key: string, value: string): string[] {
 }
 
 /**
+ * The specifiers the canonical subset admits, kept verbatim in the value the
+ * parser hands back: `%i`, a template unit's instance string, and `%n`, the
+ * unit's own name. Neither resolves to a filesystem path — the property that
+ * made every other specifier a refusal — and the reviewed units pin exactly
+ * the assignments that carry them (the alert template's `ExecStart=` argument
+ * and the watched units' `OnFailure=`). Expansion is still not modelled here:
+ * the guard reads the written text, and systemd expands it at run time.
+ */
+const ADMITTED_SPECIFIERS: ReadonlySet<string> = new Set(["i", "n"]);
+
+/**
  * Rule 4: replaces systemd's `%%` escape with the literal percent it stands
- * for, and refuses every other specifier.
+ * for, admits `%i` and `%n` verbatim, and refuses every other specifier.
  *
  * systemd expands specifiers while it reads a unit file, and several of them
  * resolve to a filesystem path: verified against systemd 257.13, `%h` is `/root`
@@ -134,7 +145,7 @@ export function toWords(key: string, value: string): string[] {
  * different string than systemd does. `%%` is the one case with no expansion
  * context at all, so it is resolved rather than refused.
  */
-function withoutSpecifiers(key: string, value: string): string {
+function resolvePercentEscapes(key: string, value: string): string {
   let resolved = "";
 
   for (let index = 0; index < value.length; index += 1) {
@@ -144,12 +155,21 @@ function withoutSpecifiers(key: string, value: string): string {
       resolved += character;
       continue;
     }
-    if (value[index + 1] !== "%") {
-      throw new NonCanonicalUnit(`the specifier %${value[index + 1] ?? ""} in ${key}=`);
+
+    const next = value[index + 1];
+
+    if (next === "%") {
+      resolved += "%";
+      index += 1;
+      continue;
+    }
+    if (next !== undefined && ADMITTED_SPECIFIERS.has(next)) {
+      resolved += `%${next}`;
+      index += 1;
+      continue;
     }
 
-    resolved += "%";
-    index += 1;
+    throw new NonCanonicalUnit(`the specifier %${next ?? ""} in ${key}=`);
   }
 
   return resolved;
@@ -239,7 +259,7 @@ export function parseUnitFile(source: string | Uint8Array): UnitEntry[] {
           `write "${key}=${written.replace(/^ +/, "")}" instead of "${line}"`,
       );
     }
-    const value = withoutSpecifiers(key, written);
+    const value = resolvePercentEscapes(key, written);
 
     entries.push({ line: number, section, key, value, words: toWords(key, value) });
   }
