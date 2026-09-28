@@ -143,6 +143,7 @@ describe("abandoned reconciliation runs", () => {
     } finally {
       await owner.end();
     }
+    await waitForAdvisoryLockRelease(sql, fixture.repositoryId);
     expect(await finalizeAbandonedRuns(sql)).toEqual({ finalized: 1, skippedLocked: 0 });
     const [row] = await sql<{ status: string; completed_at: Date | null; error_message: string | null }[]>`
       select status, completed_at, error_message from reconciliation_runs where id = ${runId}
@@ -197,6 +198,7 @@ describe("abandoned reconciliation runs", () => {
       const { completedRun, failedRun, pid } = await started;
       await sql`select pg_terminate_backend(${pid})`;
       backendTerminated = true;
+      await waitForAdvisoryLockRelease(sql, fixture.repositoryId);
       expect(await finalizeAbandonedRuns(sql)).toEqual({ finalized: 2, skippedLocked: 0 });
       releaseWork();
       await lateWrites;
@@ -249,3 +251,29 @@ describe("abandoned reconciliation runs", () => {
   });
 
 });
+
+/**
+ * Waits until no session holds an advisory lock on the repository's coordination key.
+ *
+ * `pg_terminate_backend(pid)` and a client-side `end()` both return before the victim's
+ * exit cleanup has released its session-level advisory locks, so a pass started
+ * immediately can observe the lock still granted and skip the repository. The wait is
+ * on the exact condition `finalizeAbandonedRuns`' `pg_try_advisory_xact_lock` depends
+ * on, and it has no deadline of its own — the test runner's timeout is the bound — so
+ * the assertions after it cannot race the release.
+ */
+async function waitForAdvisoryLockRelease(observer: Sql, repositoryId: string): Promise<void> {
+  for (;;) {
+    const [held] = await observer<{ granted: boolean }[]>`
+      select exists (
+        select 1 from pg_locks
+        where locktype = 'advisory' and granted
+          and database = (select oid from pg_database where datname = current_database())
+          and classid = ((hashtextextended(${repositoryId}, 684029183)::bigint >> 32) & 4294967295)::oid
+          and objid = (hashtextextended(${repositoryId}, 684029183)::bigint & 4294967295)::oid
+      ) as granted
+    `;
+    if (held?.granted !== true) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
