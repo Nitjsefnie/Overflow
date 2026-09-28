@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, isIP } from "node:net";
 import { inject } from "vitest";
 import { GenericContainer, Wait, getContainerRuntimeClient, type StartedTestContainer, type StoppedTestContainer, type WaitStrategy } from "testcontainers";
 import postgres from "postgres";
@@ -15,7 +15,7 @@ export interface PostgresContainerOptions {
 
 export interface StartedPostgres {
   container: StartedTestContainer;
-  /** postgresql://user:password@host:mappedPort/database */
+  /** postgresql://user:password@host:mappedPort/database, with IPv6 hosts bracketed. */
   databaseUrl: string;
 }
 
@@ -25,7 +25,9 @@ export interface StartedPostgres {
  * the main process; these facts are what crosses into each worker, so they
  * carry the container's id too — a worker never holds the container object
  * itself, and the id is how the facade forwards getId() (backup-restore execs
- * pg_dump and pg_restore through it).
+ * pg_dump and pg_restore through it). For a local Docker runtime, host is an
+ * IP literal whose family matches the published port, so Node cannot fall
+ * back to a different address family on that port.
  */
 export interface SharedPostgresFacts {
   host: string;
@@ -55,6 +57,42 @@ const SHARED_POSTGRES_KEY = "sharedPostgres";
 // POSTGRES_IMAGE exposes only 5432 inside the container. Docker's userland-proxy
 // adds a second TCP leg whose local port is pg_stat_activity.client_port.
 const CONTAINER_POSTGRES_PORT = 5432;
+type DockerPortBinding = { HostIp: string; HostPort: string };
+
+/** Selects the literal matching Docker's published port for a local runtime. */
+export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly DockerPortBinding[] | null | undefined, mappedPort: number): { host: string; port: number } {
+  const usable = (bindings ?? []).filter(({ HostPort }) => {
+    const port = Number(HostPort);
+    return Number.isInteger(port) && port > 0 && port <= 65535;
+  });
+  if (usable.length === 0) {
+    throw new Error(`no usable host-port binding for container port ${CONTAINER_POSTGRES_PORT}/tcp`);
+  }
+  if (runtimeHost !== "localhost" && runtimeHost !== "127.0.0.1" && runtimeHost !== "::1") {
+    return { host: runtimeHost, port: mappedPort };
+  }
+
+  const ipv4 = usable.find(({ HostIp }) => HostIp === "0.0.0.0" || HostIp === "127.0.0.1");
+  const ipv6 = usable.find(({ HostIp }) => HostIp === "::" || HostIp === "::1");
+  const dualStack = usable.length === 1 && usable[0].HostIp === "" ? usable[0] : undefined;
+  const selected = ipv4 ?? ipv6 ?? dualStack;
+  if (selected === undefined) {
+    throw new Error(`no usable host-port binding for container port ${CONTAINER_POSTGRES_PORT}/tcp`);
+  }
+  return { host: selected === ipv6 ? "::1" : "127.0.0.1", port: Number(selected.HostPort) };
+}
+
+/** Inspect the started container rather than pairing a mapped port with an unrelated host family. */
+export async function startedPostgresEndpoint(started: StartedTestContainer): Promise<{ host: string; port: number }> {
+  const client = await getContainerRuntimeClient();
+  const inspected = await client.container.inspect(client.container.getById(started.getId()));
+  return selectPostgresEndpoint(started.getHost(), inspected.NetworkSettings.Ports?.[`${CONTAINER_POSTGRES_PORT}/tcp`], started.getMappedPort(CONTAINER_POSTGRES_PORT));
+}
+
+function urlHost(host: string): string {
+  return isIP(host) === 6 ? `[${host}]` : host;
+}
+
 type SurvivorAuditBranch = "calibrated" | "strict";
 let survivorAuditBranchLogged = false;
 let lastSurvivorAuditBranch: SurvivorAuditBranch | undefined;
@@ -157,7 +195,7 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
   }
   const facts = sharedPostgresFacts();
   const admin = postgres(
-    `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${facts.host}:${facts.port}/postgres`,
+    `postgresql://${encodeURIComponent(facts.adminUser)}:${encodeURIComponent(facts.adminPassword)}@${urlHost(facts.host)}:${facts.port}/postgres`,
     { max: 1 },
   );
   try {
@@ -288,9 +326,10 @@ async function startPrivatePostgres(options: PostgresContainerOptions): Promise<
 
     try {
       const started = await container.start();
+      const endpoint = await startedPostgresEndpoint(started);
       return {
         container: started,
-        databaseUrl: `postgresql://${user}:${password}@${started.getHost()}:${started.getMappedPort(5432)}/${database}?client_min_messages=warning`,
+        databaseUrl: `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${urlHost(endpoint.host)}:${endpoint.port}/${database}?client_min_messages=warning`,
       };
     } catch (error) {
       await removeFailedPrivateContainers(attemptId);
@@ -321,7 +360,7 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
   // The postgres maintenance database always exists, whatever POSTGRES_DB the
   // shared container was booted with.
   const admin = postgres(
-    `postgresql://${encodeURIComponent(shared.adminUser)}:${encodeURIComponent(shared.adminPassword)}@${shared.host}:${shared.port}/postgres`,
+    `postgresql://${encodeURIComponent(shared.adminUser)}:${encodeURIComponent(shared.adminPassword)}@${urlHost(shared.host)}:${shared.port}/postgres`,
     { max: 1 },
   );
   try {
@@ -339,7 +378,7 @@ async function startOnSharedServer(options: Pick<PostgresContainerOptions, "data
 
   return {
     container: sharedServerFacade(shared),
-    databaseUrl: `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${shared.host}:${shared.port}/${databaseName}?client_min_messages=warning`,
+    databaseUrl: `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${urlHost(shared.host)}:${shared.port}/${databaseName}?client_min_messages=warning`,
   };
 }
 

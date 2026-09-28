@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { connect, createServer, type Socket } from "node:net";
+import { connect, createServer, getDefaultAutoSelectFamilyAttemptTimeout, isIP, setDefaultAutoSelectFamilyAttemptTimeout, type Socket } from "node:net";
 import postgres, { type Sql } from "postgres";
 import { afterAll, afterEach, describe, expect, inject, it } from "vitest";
 import {
@@ -52,6 +52,33 @@ describe("suites share one postgres server through startPostgresContainer", () =
     clients.push(sql);
     return sql;
   }
+
+  it("connects through the provided port despite a stalled family attempt", async () => {
+    const facts = resolveSharedPostgresFacts(inject("sharedPostgres"));
+    const previousTimeout = getDefaultAutoSelectFamilyAttemptTimeout();
+    setDefaultAutoSelectFamilyAttemptTimeout(10);
+    const socket = connect({ host: facts.host, port: facts.port });
+    socket.on("connectionAttempt", (_address, _port, family) => {
+      if (family === 6) {
+        process.nextTick(() => {
+          const until = Date.now() + 100;
+          while (Date.now() < until) { /* Hold the event loop past the attempt timer. */ }
+        });
+      }
+    });
+
+    try {
+      const outcome = await new Promise<"connected" | Error>((resolve) => {
+        socket.once("connect", () => resolve("connected"));
+        socket.once("error", resolve);
+      });
+      expect(outcome).toBe("connected");
+      expect(isIP(facts.host)).not.toBe(0);
+    } finally {
+      socket.destroy();
+      setDefaultAutoSelectFamilyAttemptTimeout(previousTimeout);
+    }
+  });
 
   it("gives two calls two distinct databases on the one shared server", async () => {
     const first = await start({ database: "shared_first", user: "shared_first", password: "it's" });

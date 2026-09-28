@@ -394,6 +394,7 @@ tests/security/*
 !tests/support/
 tests/support/*
 !tests/support/*.ts
+!tests/support/postgres-endpoint.test.ts
 !tests/webhooks/
 tests/webhooks/*
 !tests/webhooks/*.ts
