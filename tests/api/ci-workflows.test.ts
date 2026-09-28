@@ -7,7 +7,7 @@ import { parse } from "yaml";
 type Workflow = {
   on: Record<
     string,
-    { branches?: string[]; paths?: string[]; types?: string[] } | Array<{ cron: string }> | null
+    { branches?: string[]; paths?: string[]; types?: string[]; inputs?: Record<string, unknown> } | Array<{ cron: string }> | null
   >;
   permissions: Record<string, string>;
   concurrency: { group: string; "cancel-in-progress": boolean | string };
@@ -91,10 +91,20 @@ describe("GitHub Actions release gates", () => {
     // a ratchet-guard run for the check to be required and for the deploy
     // gate (scripts/deploy-revision.sh) to pass on the tip it lands. No
     // paths filter: a push without one of the compared files still needs its
-    // own run, or deploys of the tip it lands hang on `(absent)`.
+    // own run, or deploys of the tip it lands hang on `(absent)`. Dispatch
+    // recovers a main tip when the push event launched no runs (issue 796).
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+      workflow_dispatch: {
+        inputs: {
+          base: {
+            description: "Full SHA of the newest main commit carrying a successful ratchet-guard run",
+            required: true,
+            type: "string",
+          },
+        },
+      },
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
     // Pushes to main must never share a group: GitHub keeps only one PENDING
@@ -107,7 +117,7 @@ describe("GitHub Actions release gates", () => {
       group: "ratchet-guard-${{ github.event.pull_request.number || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
-    // The whole job, exactly, in the dependency-audit style. Two checkouts,
+    // The whole job, exactly, in the dependency-audit style. Three checkouts,
     // each gated on the event name: under pull_request_target the checkout
     // has no ref input at all — actions/checkout's default, main's last
     // commit, the checkout its fork guard exempts; under push its ref is
@@ -117,13 +127,15 @@ describe("GitHub Actions release gates", () => {
     // expression: the pull_request_target step has no ref input at all, so
     // it is visibly the default checkout (main's tip, exempt from
     // checkout's fork guard), and the push step visibly pins the previous
-    // main tip. On a push GitHub always sets `before` to a 40-hex SHA. No
-    // step installs or builds anything: untrusted content enters only as
-    // git objects (refs/remotes/pr/head under pull_request_target,
-    // FETCH_HEAD under push), and the only script that runs is a main-side
+    // main tip. Dispatch pins the last certified main tip, validating its
+    // format before checkout and its ancestry before executing its script.
+    // On a push GitHub always sets `before` to a 40-hex SHA. No step installs
+    // or builds anything: untrusted content enters only as git objects
+    // (refs/remotes/pr/head under pull_request_target, FETCH_HEAD under push
+    // and dispatch), and the only script that runs is a main-side
     // scripts/check-ratchets.ts reading those objects with `git show`. The
     // base of the comparison is the
-    // checked-out commit itself (HEAD) under both events, never the event's
+    // checked-out commit itself (HEAD) under all three events, never the event's
     // base.sha: under pull_request_target that value is recorded when the
     // pull request opens and can trail main, and after a rebase onto a newer
     // main the merge base of the stale base and the head sits below the real
@@ -132,13 +144,36 @@ describe("GitHub Actions release gates", () => {
     // non-forced push, a direct ancestor of the pushed SHA, so the merge
     // base is the previous tip
     // itself and the comparison is exactly "did this push relax a ratchet
-    // document relative to the main it replaced". Every event value travels
-    // through env, never ${{ }} in run:.
+    // document relative to the main it replaced". Dispatch compares all
+    // commits since the last certified tip, not only HEAD^1. Every event
+    // value travels through env, never ${{ }} in run:.
     expect(workflow.jobs).toEqual({
       "ratchet-guard": {
         "runs-on": "ubuntu-latest",
         "timeout-minutes": 10,
         steps: [
+          {
+            name: "Refuse unhandled events",
+            run: `if [[ "$GITHUB_EVENT_NAME" != "pull_request_target" && "$GITHUB_EVENT_NAME" != "push" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+  echo "::error::Unhandled ratchet-guard event: $GITHUB_EVENT_NAME"
+  exit 1
+fi
+`,
+          },
+          {
+            name: "Validate dispatch base and ref",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { BASE_SHA: "${{ inputs.base }}" },
+            run: `if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+  echo "::error::Dispatch must target refs/heads/main"
+  exit 1
+fi
+if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "::error::Dispatch base must be a full lowercase 40-character SHA"
+  exit 1
+fi
+`,
+          },
           {
             if: "${{ github.event_name == 'pull_request_target' }}",
             uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -152,6 +187,15 @@ describe("GitHub Actions release gates", () => {
             uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             with: {
               ref: "${{ github.event.before }}",
+              "persist-credentials": false,
+              "fetch-depth": 0,
+            },
+          },
+          {
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            with: {
+              ref: "${{ inputs.base }}",
               "persist-credentials": false,
               "fetch-depth": 0,
             },
@@ -184,9 +228,52 @@ describe("GitHub Actions release gates", () => {
             env: { PUSHED_SHA: "${{ github.sha }}" },
             run: 'node scripts/check-ratchets.ts HEAD "$PUSHED_SHA"',
           },
+          {
+            name: "Fetch the dispatched commit",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { DISPATCHED_SHA: "${{ github.sha }}" },
+            run: 'git fetch --no-tags origin "$DISPATCHED_SHA"',
+          },
+          {
+            name: "Validate dispatch ancestry",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { DISPATCHED_SHA: "${{ github.sha }}" },
+            run: `if [[ "$(git rev-parse HEAD)" == "$DISPATCHED_SHA" ]]; then
+  echo "::error::Dispatch base must differ from the dispatched commit"
+  exit 1
+fi
+if ! git merge-base --is-ancestor HEAD "$DISPATCHED_SHA"; then
+  echo "::error::Dispatch base must be an ancestor of the dispatched commit"
+  exit 1
+fi
+`,
+          },
+          {
+            name: "Ratchet documents against the last certified main tip",
+            if: "${{ github.event_name == 'workflow_dispatch' }}",
+            env: { DISPATCHED_SHA: "${{ github.sha }}" },
+            run: 'node scripts/check-ratchets.ts HEAD "$DISPATCHED_SHA"',
+          },
         ],
       },
     });
+  });
+
+  it("fails an unhandled ratchet-guard event before checkout", async () => {
+    const workflow = await readWorkflow("ratchet-guard.yml");
+    const guard = workflow.jobs["ratchet-guard"]!.steps[0]!.run!;
+    const unknown = spawnSync("bash", ["-e", "-c", guard], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_EVENT_NAME: "schedule" },
+    });
+    expect(unknown.status).toBe(1);
+    expect(unknown.stdout).toContain("::error::Unhandled ratchet-guard event: schedule");
+
+    const push = spawnSync("bash", ["-e", "-c", guard], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_EVENT_NAME: "push" },
+    });
+    expect(push.status).toBe(0);
   });
 
   it("parses a complete PostgreSQL 17 gate with pinned actions and every release command", async () => {
