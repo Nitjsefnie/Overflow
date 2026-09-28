@@ -1,11 +1,14 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/db/types";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+import { requiredModeratorSession } from "@/lib/moderation/route-auth";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import {
   SettlementOverrideError,
   SettlementOverrideService,
+  type OpenSettlementOverrideRequest,
   type SettlementOverrideRequest,
+  type SettlementOverrideModerator,
   type SettlementOverrideTarget,
 } from "@/lib/overrides/service";
 import { guardByCredential } from "@/lib/security/route-credential";
@@ -58,6 +61,35 @@ export type SettlementOverrideRouteDependencies = {
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideRequestService>;
 };
+
+export type SettlementOverrideListRouteDependencies = {
+  getSession: () => Promise<SettlementOverrideRouteSession | null>;
+  findAccountByTokenHash: (hash: Buffer) => Promise<{ id: string; tokenId: string } | null>;
+  getCurrentRole: (userId: string) => Promise<UserRole | null>;
+  listOpenRequests: (moderator: SettlementOverrideModerator) => Promise<OpenSettlementOverrideRequest[]>;
+};
+
+export function createSettlementOverrideListGetHandler(
+  dependencies: SettlementOverrideListRouteDependencies,
+) {
+  return async function getSettlementOverrideList(request: Request): Promise<Response> {
+    // This read stays deliberately unorigin-guarded, like the cohort preview:
+    // rejectUntrustedRequest rejects a missing Origin header, but a
+    // programmatic GET sends none at all, so applying it here would reject
+    // every script client. The gate still resolves a bearer credential from
+    // the headers.
+    const session = await requiredModeratorSession(request, dependencies);
+    if (session instanceof Response) {
+      return session;
+    }
+
+    try {
+      return Response.json(await dependencies.listOpenRequests(session.user));
+    } catch {
+      return errorResponse(502, "UPSTREAM_FAILURE", "Unable to load the open correction requests.");
+    }
+  };
+}
 
 export function createSettlementOverridePostHandler(dependencies: SettlementOverrideRouteDependencies) {
   return async function postSettlementOverride(request: Request): Promise<Response> {
@@ -142,4 +174,12 @@ export const POST = createSettlementOverridePostHandler({
   async createService() {
     return new SettlementOverrideService(new PostgresSettlementOverrideStore());
   },
+});
+
+export const GET = createSettlementOverrideListGetHandler({
+  getSession: getProductionSession,
+  findAccountByTokenHash: (hash) => new PostgresApiTokenStore().findAccountByTokenHash(hash),
+  getCurrentRole: getCurrentUserRole,
+  listOpenRequests: (moderator) =>
+    new SettlementOverrideService(new PostgresSettlementOverrideStore()).listOpenRequests(moderator),
 });

@@ -113,6 +113,9 @@ src/app/api/moderation/cohort/*
 !src/app/api/moderation/moderators/
 src/app/api/moderation/moderators/*
 !src/app/api/moderation/moderators/*.ts
+!src/app/api/moderation/unwritable-closures/
+src/app/api/moderation/unwritable-closures/*
+!src/app/api/moderation/unwritable-closures/*.ts
 !src/app/api/moderation/recalibration/
 src/app/api/moderation/recalibration/*
 !src/app/api/moderation/recalibration/*.ts
@@ -314,6 +317,7 @@ tests/async/*
 !tests/api/
 tests/api/*
 !tests/api/*.ts
+!tests/api/moderation-unwritable-closures-read.test.ts
 !tests/auth/
 tests/auth/*
 !tests/auth/*.ts
