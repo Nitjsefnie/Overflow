@@ -113,4 +113,42 @@ describe("abandoned reconciliation runs", () => {
     expect(row).toMatchObject({ status: "FAILED", error_message: ABANDONED_RUN_MESSAGE });
     expect(row.completed_at).not.toBeNull();
   });
+
+  it("reclaims a lock when the server takes it but the try-lock response is lost", async () => {
+    const fixture = await materializeRepositoryFixture(sql);
+    await fixture.store.beginRun(fixture.repositoryId);
+    const held = await sql.reserve();
+    let released = false;
+    const wrapped = Object.assign(
+      (strings: TemplateStringsArray, ...values: unknown[]) => {
+        const query = (held as unknown as (...args: unknown[]) => Promise<unknown>)(strings, ...values);
+        if (strings.join(" ").includes("pg_try_advisory_lock")) {
+          return Promise.resolve(query).then(() => { throw new Error("try-lock response lost"); });
+        }
+        return query;
+      },
+      {
+        release: () => { released = true; held.release(); },
+        unsafe: held.unsafe.bind(held),
+      },
+    );
+    const coordinationSql = { reserve: async () => wrapped } as unknown as Sql;
+    const observer = postgres(databaseUrl, { max: 1 });
+    try {
+      await expect(finalizeAbandonedRuns(sql, coordinationSql)).rejects.toThrow();
+      const [attempt] = await observer<{ acquired: boolean }[]>`
+        select pg_try_advisory_lock(hashtextextended(${fixture.repositoryId}, 684029183)) as acquired
+      `;
+      expect(attempt.acquired).toBe(true);
+      if (attempt.acquired) {
+        await observer`select pg_advisory_unlock(hashtextextended(${fixture.repositoryId}, 684029183))`;
+      }
+    } finally {
+      await observer.end();
+      if (!released) {
+        await held`select pg_advisory_unlock_all()`;
+        held.release();
+      }
+    }
+  });
 });
