@@ -239,6 +239,50 @@ describe("createAppInstallationTokenResolver", () => {
     expect(mints.filter((request) => request.method === "POST")).toHaveLength(2);
   });
 
+  it("serves the cached token one millisecond before the refresh margin opens, without a second mint", async () => {
+    let mintCount = 0;
+    const clock = mutableClock();
+    const { fetch } = recordingFetch({
+      lookup: () => Response.json({ id: 166057493 }, { status: 200 }),
+      mint: () => {
+        mintCount += 1;
+        return Response.json(
+          { token: `ghs_mint_${mintCount}`, expires_at: new Date(clock.now().getTime() + tokenLifetimeMs).toISOString() },
+          { status: 201 },
+        );
+      },
+    });
+    const resolver = createAppInstallationTokenResolver({ config: appConfig(), now: clock.now, fetch });
+
+    await expect(resolver("Nitjsefnie/Overflow")).resolves.toEqual({ token: "ghs_mint_1", installationId: 166057493 });
+    // One millisecond short of `expiresAt - margin`: still valid beyond the margin.
+    clock.advance(tokenLifetimeMs - refreshMarginMs - 1);
+    await expect(resolver("Nitjsefnie/Overflow")).resolves.toEqual({ token: "ghs_mint_1", installationId: 166057493 });
+    expect(mintCount).toBe(1);
+  });
+
+  it("remints one millisecond after the refresh margin opens", async () => {
+    let mintCount = 0;
+    const clock = mutableClock();
+    const { fetch } = recordingFetch({
+      lookup: () => Response.json({ id: 166057493 }, { status: 200 }),
+      mint: () => {
+        mintCount += 1;
+        return Response.json(
+          { token: `ghs_mint_${mintCount}`, expires_at: new Date(clock.now().getTime() + tokenLifetimeMs).toISOString() },
+          { status: 201 },
+        );
+      },
+    });
+    const resolver = createAppInstallationTokenResolver({ config: appConfig(), now: clock.now, fetch });
+
+    await expect(resolver("Nitjsefnie/Overflow")).resolves.toEqual({ token: "ghs_mint_1", installationId: 166057493 });
+    // One millisecond past `expiresAt - margin`: no longer valid beyond the margin.
+    clock.advance(tokenLifetimeMs - refreshMarginMs + 1);
+    await expect(resolver("Nitjsefnie/Overflow")).resolves.toEqual({ token: "ghs_mint_2", installationId: 166057493 });
+    expect(mintCount).toBe(2);
+  });
+
   it("coalesces concurrent resolves of one installation into a single mint", async () => {
     const clock = mutableClock();
     const mintGates: Array<(response: Response) => void> = [];
@@ -272,6 +316,8 @@ describe("createAppInstallationTokenResolver", () => {
       { token: "ghs_no_expiry" },
       { token: "ghs_bad_expiry", expires_at: "not-a-timestamp" },
       { token: "", expires_at: new Date(fixedClockMs + tokenLifetimeMs).toISOString() },
+      // Regex-valid but calendar-invalid: only the real-Date.parse layer rejects it.
+      { token: "ghs_calendar_invalid_expiry", expires_at: "9999-99-99T99:99:99Z" },
     ];
     for (const payload of invalidPayloads) {
       const { fetch } = recordingFetch({
