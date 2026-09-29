@@ -59,34 +59,44 @@ is_operational_ignored() {
 # the fetch's refs (FETCH_HEAD, origin/main) have moved. The required
 # contexts come from main's branch protection; .github/required-checks.json,
 # read from the deployed SHA itself, pins each one to the workflow file whose
-# job produces it, and a context with no pin refuses at once. Per context,
-# only the pinned workflow's job named for it decides: among that workflow's
-# runs on the SHA the newest run, and within it the latest attempt.
-# Completed + success passes; completed + any other conclusion refuses
-# immediately; a status that is not completed is pending and waits; an absent
-# job (GitHub has not created the run yet — the normal state in the first
-# minute after a merge) waits too, listed as `<check> (absent)`. A check-run
-# bearing a required name whose id is none of the pinned workflow's jobs of
-# that name waits as `<check> (unattributed check-run <id>)`, so the gate
-# never passes while one exists. The OVERFLOW_DEPLOY_CI_TIMEOUT deadline
-# bounds the wait, so a job that never registers — a renamed job, a
+# job produces it, and a context with no pin refuses at once. Per context, a
+# check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
+# 5118623) attributes the context, and the NEWEST App check-run for it
+# (highest id) decides. When no App check-run exists, the pinned workflow's
+# job record decides exactly as before: among that workflow's runs on the
+# SHA the newest run, and within it the latest attempt. Completed + success
+# passes; completed + any other conclusion refuses immediately; a status
+# that is not completed is pending and waits; an absent job (GitHub has not
+# created the run yet — the normal state in the first minute after a merge)
+# waits too, listed as `<check> (absent)`. A check-run bearing a required
+# name whose app is neither the ledger App nor one of the pinned workflow's
+# jobs of that name waits as `<check> (unattributed check-run <id>)`, so the
+# gate never passes while one exists. The OVERFLOW_DEPLOY_CI_TIMEOUT
+# deadline bounds the wait, so a job that never registers — a renamed job, a
 # path-filtered workflow — or a check-run that never becomes attributable
 # still refuses at the deadline, named with its marker.
 #
-# Why job records and not check-run names: protection matches a required
-# check by name and app alone, and every workflow here posts through the one
-# GitHub Actions app, so a same-named job in any workflow, or a check-run any
-# job with checks: write creates through the Checks API, satisfies it. An
-# Actions job's id is its check-run's id, and a job record cannot be created
-# through the Checks API, so the gate trusts only the pinned workflow's job
-# records. An unattributed check-run waits rather than refusing at once
-# because GitHub documents no read-after-write consistency between the
-# check-run, run and job listings: just after a merge, a legitimate job's
-# check-run can be listed before its run is.
+# Why the ledger App's check-runs are trusted: protection matches a required
+# check by name and app alone, so the relay (a workflow_run workflow running
+# main's own workflow definitions) must post the required contexts under the
+# ledger App's identity for them to count post-switch — the same name+app
+# identity protection itself reads. The gate reads that app id straight off
+# each check-run, so what the gate blessed is what protection will see. Job
+# records remain the no-relay decision path: every workflow here posts
+# through the one GitHub Actions app, so a same-named job in any workflow,
+# or a check-run any job with checks: write creates through the Checks API,
+# satisfies protection; an Actions job's id is its check-run's id, and a job
+# record cannot be created through the Checks API, so only the pinned
+# workflow's job records decide without the relay. An unattributed check-run
+# waits rather than refusing at once because GitHub documents no
+# read-after-write consistency between the check-run, run and job listings:
+# just after a merge, a legitimate job's check-run can be listed before its
+# run is.
 required_checks_gate() {
   local remote_url repo required pins check pin unmapped check_runs runs run_id run_path run_jobs jobs
   local job_line job_run job_path job_id job_name job_attempt job_status job_conclusion
-  local cr_id cr_name producer_ids status conclusion decided_run decided_attempt pending timeout deadline
+  local cr_id cr_name cr_app cr_status cr_conclusion producer_ids status conclusion
+  local decided_run decided_attempt pending timeout deadline ledger_app_id ledger_id
   remote_url=$(git config --get remote.origin.url)
   repo=
   case "$remote_url" in
@@ -125,6 +135,10 @@ required_checks_gate() {
     exit 1
   fi
   timeout="${OVERFLOW_DEPLOY_CI_TIMEOUT:-900}"
+  # The ledger App's id: check-runs it posted attribute a required context to
+  # the relay, and their newest decides. A test-only knob, like the timeout:
+  # production runs on the default and never sets the name.
+  ledger_app_id="${OVERFLOW_DEPLOY_LEDGER_APP_ID:-5118623}"
   deadline=$((SECONDS + timeout))
   while :; do
     # Check-runs first, so a check-run's job has had the longest time to be
@@ -132,7 +146,7 @@ required_checks_gate() {
     # between these listings, so a check-run whose job is not listed yet
     # waits as unattributed rather than refusing.
     if ! check_runs=$(gh api "repos/$repo/commits/$full_sha/check-runs?filter=all&per_page=100" --paginate \
-        --jq '.check_runs[] | [.id, .name] | @tsv'); then
+        --jq '.check_runs[] | [.id, .name, (.app.id // 0), (.status // "unknown"), (.conclusion // "")] | @tsv'); then
       printf 'Could not read check runs for %s on %s; refusing to deploy.\n' "$repo" "$full_sha" >&2
       exit 1
     fi
@@ -179,6 +193,17 @@ required_checks_gate() {
           decided_run=$job_run decided_attempt=$job_attempt status=$job_status conclusion=$job_conclusion
         fi
       done <<<"$jobs"
+      # A check-run the ledger App posted attributes this context: its newest
+      # run (highest id) decides, reading the same name+app identity
+      # protection matches on post-switch.
+      ledger_id=0
+      while IFS=$'\t' read -r cr_id cr_name cr_app cr_status cr_conclusion; do
+        [ "$cr_name" = "$check" ] || continue
+        [ "$cr_app" = "$ledger_app_id" ] || continue
+        if [ "$cr_id" -gt "$ledger_id" ]; then
+          ledger_id=$cr_id status=$cr_status conclusion=$cr_conclusion
+        fi
+      done <<<"$check_runs"
       if [ -z "$status" ]; then
         pending+="${pending:+, }$check (absent)"
       elif [ "$status" != completed ]; then
@@ -187,10 +212,12 @@ required_checks_gate() {
         printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "$conclusion" "$full_sha" >&2
         exit 1
       fi
-      # A check-run bearing the name that none of those producers accounts
-      # for keeps the check pending, whatever the pinned job concluded.
-      while IFS=$'\t' read -r cr_id cr_name; do
+      # A check-run bearing the name that the ledger App did not post and
+      # none of those producers accounts for keeps the check pending,
+      # whatever the pinned job or the ledger App concluded.
+      while IFS=$'\t' read -r cr_id cr_name cr_app cr_status cr_conclusion; do
         [ "$cr_name" = "$check" ] || continue
+        if [ "$cr_app" = "$ledger_app_id" ]; then continue; fi
         if [[ "$producer_ids" != *$'\n'"$cr_id"$'\n'* ]]; then
           pending+="${pending:+, }$check (unattributed check-run $cr_id)"
         fi
