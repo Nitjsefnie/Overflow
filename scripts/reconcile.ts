@@ -2,6 +2,7 @@ import { closeSql } from "../src/lib/db/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { type ReconciliationSummary } from "../src/lib/fold/reconcile.ts";
 import { reconcileRepositoryAsSponsor } from "../src/lib/fold/reconcile-as-sponsor.ts";
+import { appInstallationTokenResolverFromEnv } from "../src/lib/github/app-installation-auth.ts";
 
 export type ReconcileCliDependencies = {
   store: Pick<PostgresFoldStore, "findRepositoryByOwnerName" | "listActiveRepositoryIds">;
@@ -58,9 +59,21 @@ async function repositoryIdsForOwnerName(
 
 function productionDependencies(): ReconcileCliDependencies {
   const store = new PostgresFoldStore();
+  // GitHub repositories fold as the sponsor's GitHub App installation when the
+  // App is configured (issue 804), instead of the sponsor's OAuth token.
+  // Unconfigured — either variable unset or empty — the option stays unwired
+  // and every fold reads the sponsor's OAuth token exactly as before;
+  // configured with an unreadable key file the factory throws here, failing
+  // the CLI run before any fold (fail-closed, the GitLab credential
+  // precedent). Unconfigured reading as null from the factory, unwired reading
+  // as undefined on the options — both leave the option off, so
+  // `?? undefined` carries the factory's null across.
+  const resolveAppInstallationToken =
+    appInstallationTokenResolverFromEnv(process.env) ?? undefined;
   return {
     store,
-    reconcile: (repositoryId) => reconcileRepositoryAsSponsor(store, repositoryId),
+    reconcile: (repositoryId) =>
+      reconcileRepositoryAsSponsor(store, repositoryId, undefined, { resolveAppInstallationToken }),
     write: (line) => process.stdout.write(`${line}\n`),
   };
 }
