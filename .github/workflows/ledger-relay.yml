@@ -1,0 +1,74 @@
+name: ledger relay
+
+# Re-posts the three required checks as check-runs owned by the Overflow
+# Ledger GitHub App (app id 5118623), so branch protection can pin each
+# required context to the App instead of the github-actions app. A workflow_run
+# runs this workflow's definition from the default branch's tip, in the default
+# branch's context, so the pin map and the script executed here are always the
+# trusted main tip, never pull-request content. Every GitHub write goes through
+# the App installation token the script mints; the workflow's own token needs
+# and holds only contents: read.
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # workflow_run runs this definition from the default branch's tip, in the
+  # default branch's context: the checkout, the pin map and the script are
+  # main's own, nothing from the triggering run is checked out, installed or
+  # executed, and every event value reaches the script through env:, never
+  # through ${{ }} interpolation in run:.
+  workflow_run:
+    workflows:
+      - "ci"
+      - "actionlint"
+      - "ratchet guard"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Id of the completed producer run whose relay posting died and must be re-posted"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ledger-relay
+  # Never cancel a queued relay run: a cancelled relay posts no check-runs,
+  # and a missing check-run blocks every open pull request.
+  cancel-in-progress: false
+
+jobs:
+  # Never named after a required context: protection matches a required check
+  # by name and app, so a job named verify/actionlint/ratchet-guard here would
+  # satisfy protection without the App's identity. Held by
+  # tests/ci/required-checks.test.ts.
+  relay-required-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: overflow-ledger
+    steps:
+      # No ref input: under workflow_run the default checkout is the default
+      # branch's tip — the trusted main tip the pin map is read from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+
+      # Event data reaches the script through env only, never ${{ }}
+      # interpolation in run:.
+      - name: Relay the required checks under the ledger App
+        env:
+          LEDGER_APP_ID: "5118623"
+          LEDGER_INSTALLATION_ID: "166057493"
+          LEDGER_APP_KEY: ${{ secrets.LEDGER_APP_KEY }}
+          GITHUB_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          GITHUB_WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GITHUB_WORKFLOW_RUN_PATH: ${{ github.event.workflow_run.path }}
+          GITHUB_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          GITHUB_WORKFLOW_RUN_HTML_URL: ${{ github.event.workflow_run.html_url }}
+          GITHUB_WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          LEDGER_DISPATCH_RUN_ID: ${{ inputs.run_id }}
+        run: node scripts/ledger-relay.ts
