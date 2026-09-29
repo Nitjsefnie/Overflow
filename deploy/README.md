@@ -150,6 +150,13 @@ the reconciliation background starts, or when the `pnpm reconcile` CLI builds
 its production dependencies — and a configured but unreadable key file fails
 there, before any fold.
 
+On a host that also runs the required-checks relay the directory is one
+deliberate deviation from the block above: `/etc/overflow` must stay
+traversable by the overflow account — `0750 root:overflow` on the production
+host today — because the Overflow Ledger App private key lives under it, and
+an untraversable `/etc/overflow` leaves the key unreadable, which fails the
+required checks closed.
+
 ## 5. Build the deployment tree
 
 Clone, install, migrate and build as root, with the production settings loaded
@@ -750,6 +757,17 @@ Each required check is resolved to the job of the workflow file
 `.github/required-checks.json` pins it to, and a same-named check-run from
 any other producer holds the deploy as pending, so it is refused at the
 deadline and never passed.
+
+The required checks are pinned, in branch protection, to the Overflow Ledger
+App (app id 5118623), and the gate's producer rule follows that pin: the gate
+reads each required context's check-runs, a check-run posted by the App
+decides the context, and the pinned workflow's job record decides only when
+no App check-run exists — while any other check-run bearing a required name
+keeps the check pending as unattributed. The App's check-runs are posted by
+the relay (`.github/workflows/ledger-relay.yml`), which mirrors the pinned
+producers' completed runs onto the App; the
+[Required checks relay subsection of `OPERATING.md`](../OPERATING.md#required-checks-relay)
+carries its operations.
 A refused gate leaves `HEAD`, the index and the working tree untouched, so the
 tree stays on the commit it was on; only the refs the fetch wrote
 (`FETCH_HEAD`, `origin/main`) have moved.
