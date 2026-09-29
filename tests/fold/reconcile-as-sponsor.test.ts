@@ -72,7 +72,115 @@ describe("reconciling a repository as its sponsor", () => {
       reconcileRepositoryAsSponsor(harness.store, "repo-1", harness.createGateway),
     ).rejects.toThrow(/not found/i);
   });
+
+  it("authenticates with the App installation token when the resolver is wired and resolves one", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const harness = createHarness({ active: true, accessToken: "sponsor-token" });
+    harness.store.findUsersByGitHubUserIds = async () => [];
+    harness.store.materialize = async () => ({ adds: 0, changes: 0, removals: 0 });
+    const reads: string[] = [];
+    const resolveAppInstallationToken = vi.fn(async () => ({
+      token: "github-app-installation-token", installationId: 7777,
+    }));
+
+    await expect(
+      reconcileRepositoryAsSponsor(harness.store, "repo-1", (accessToken) => {
+        if (accessToken !== "github-app-installation-token") {
+          throw new Error(`the gateway factory ran with ${accessToken} instead of the installation token`);
+        }
+        return {
+          getRepositoryById: async () => {
+            reads.push("getRepositoryById");
+            return {
+              id: 4242, owner: "example", ownerType: "USER", name: "repository", fullName: "example/repository",
+              visibility: "PUBLIC", url: "https://github.com/example/repository", canAdminister: true,
+            };
+          },
+          listIssues: async () => {
+            reads.push("listIssues");
+            return [];
+          },
+          getIssue: async () => null,
+          getPullRequestClosingIssues: async () => [],
+          getPullRequestReviews: async () => [],
+          getPullRequestDiff: async () => "",
+        };
+      }, { resolveAppInstallationToken }),
+    ).resolves.toMatchObject({ repositoryId: "repo-1", skipped: false });
+
+    expect(resolveAppInstallationToken).toHaveBeenCalledExactlyOnceWith("example/repository");
+    // A cold pass reads the gateway more than once; the resolution is memoized,
+    // so every read is served by the single installation token.
+    expect(reads).toEqual(["getRepositoryById", "listIssues"]);
+    // The budget-admission read of the sponsor's OAuth token (reconcile.ts) is
+    // independent of the gateway's auth path; the gateway itself is what must
+    // authenticate with the installation token, and the factory above refuses
+    // any other token.
+    expect(authLogLines(informed)).toEqual([[
+      expect.any(String),
+      { repositoryId: "repo-1", authPath: "github-app-installation", installationId: 7777 },
+    ]]);
+  });
+
+  it("falls back to the sponsor's OAuth token when the resolver is wired but no installation exists", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const harness = createHarness({ active: true, accessToken: "sponsor-token" });
+    const resolveAppInstallationToken = vi.fn(async () => null);
+
+    await expect(
+      reconcileRepositoryAsSponsor(harness.store, "repo-1", harness.createGateway, { resolveAppInstallationToken }),
+    ).resolves.toMatchObject({ repositoryId: "repo-1" });
+
+    expect(resolveAppInstallationToken).toHaveBeenCalledExactlyOnceWith("example/repository");
+    expect(harness.gatewaysBuilt).toEqual(["sponsor-token"]);
+    expect(harness.calls).toContain("getGitHubAccessToken");
+    expect(authLogLines(informed)).toEqual([[
+      expect.any(String),
+      { repositoryId: "repo-1", authPath: "sponsor-oauth-fallback" },
+    ]]);
+  });
+
+  it("fails closed when the wired resolver throws, without falling back to OAuth", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const harness = createHarness({ active: true, accessToken: "sponsor-token" });
+    const resolveAppInstallationToken = vi.fn(async () => {
+      throw new Error("installation lookup failed");
+    });
+
+    await expect(
+      reconcileRepositoryAsSponsor(harness.store, "repo-1", harness.createGateway, { resolveAppInstallationToken }),
+    ).rejects.toThrow(/Unable to reconcile repository/i);
+
+    expect(resolveAppInstallationToken).toHaveBeenCalledExactlyOnceWith("example/repository");
+    expect(harness.calls).toContain("failRun");
+    expect(harness.gatewaysBuilt).toEqual([]);
+    expect(authLogLines(informed)).toEqual([]);
+  });
+
+  it("emits no authentication log when no App resolver is wired", async () => {
+    const informed = vi.spyOn(console, "info").mockImplementation(() => {});
+    const harness = createHarness({ active: true, accessToken: "sponsor-token" });
+
+    await expect(
+      reconcileRepositoryAsSponsor(harness.store, "repo-1", harness.createGateway),
+    ).resolves.toMatchObject({ repositoryId: "repo-1" });
+
+    expect(harness.gatewaysBuilt).toEqual(["sponsor-token"]);
+    expect(authLogLines(informed)).toEqual([]);
+  });
 });
+
+/**
+ * The authentication log lines are identified by their payload's `authPath`
+ * field, never by the message prose: the fold may log unrelated lines (the
+ * GraphQL budget state) on the same spy.
+ */
+function authLogLines(informed: { mock: { calls: Array<unknown[]> } }): Array<[string, Record<string, unknown>]> {
+  return informed.mock.calls.filter(([, payload]) =>
+    payload !== null && typeof payload === "object" && "authPath" in (payload as object),
+  ) as Array<[string, Record<string, unknown>]>;
+}
 
 function createHarness(options: {
   active: boolean;
