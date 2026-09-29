@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 /**
  * Behavioral coverage for scripts/overflow-alert.sh, which nothing else in the
@@ -80,12 +80,46 @@ interface AlertRun {
   mail: string;
 }
 
+/**
+ * State directories shared across several runAlert calls of one test, removed
+ * after each test. A run without an explicit stateDir gets a scratch directory
+ * that dies with its run's fixture, so a test that inspects the recorded state
+ * after a run — or drives two runs against one state directory — asks for one
+ * of these instead.
+ */
+const sharedStateDirs: string[] = [];
+
+afterEach(() => {
+  for (const directory of sharedStateDirs.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/** A scratch throttle state directory that outlives one test's runAlert calls. */
+function makeStateDir(): string {
+  const directory = mkdtempSync(join(tmpdir(), "overflow-alert-state-"));
+  sharedStateDirs.push(directory);
+  return directory;
+}
+
+/** Pre-seeds the throttle state file for a unit with a recorded send time. */
+function seedState(stateDir: string, unit: string, timestamp: number): void {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, unit), `${timestamp}\n`);
+}
+
 function runAlert(
   options: {
     recipient?: string;
     args?: string[];
     curlStatus?: number;
     journalStatus?: number;
+    /**
+     * The throttle state directory to hand the script through
+     * OVERFLOW_ALERT_STATE_DIR. Absent: a scratch directory inside this run's
+     * fixture, so a run whose state nobody inspects touches nothing shared.
+     */
+    stateDir?: string;
   } = {},
 ): AlertRun {
   const directory = mkdtempSync(join(tmpdir(), "overflow-alert-"));
@@ -107,6 +141,7 @@ function runAlert(
 
     const curlArgvPath = join(directory, "curl-argv");
     const mailPath = join(directory, "mail.eml");
+    const stateDir = options.stateDir ?? join(directory, "throttle-state");
 
     const result = spawnSync(
       "/bin/sh",
@@ -116,6 +151,7 @@ function runAlert(
           NODE_ENV: "test",
           PATH: `${bin}:/usr/bin:/bin`,
           OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
+          OVERFLOW_ALERT_STATE_DIR: stateDir,
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
           OVERFLOW_TEST_MAIL: mailPath,
           FAKE_CURL_RC: String(options.curlStatus ?? 0),
@@ -208,5 +244,120 @@ describe("overflow-alert.sh send stage", () => {
     const run = runAlert({ recipient: validRecipient, curlStatus: 7 });
 
     expect(run.status).toBe(7);
+  });
+});
+
+describe("overflow-alert.sh throttle", () => {
+  const unit = "overflow.service";
+  const nowSeconds = (): number => Math.floor(Date.now() / 1000);
+
+  it("sends the first alert and records the send time as all-digits state", () => {
+    const stateDir = makeStateDir();
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.sent).toBe(true);
+    const recorded = readFileSync(join(stateDir, unit), "utf8");
+    expect(recorded).toMatch(/^\d+\n$/);
+    expect(Math.abs(Number(recorded) - nowSeconds())).toBeLessThanOrEqual(60);
+  });
+
+  it("suppresses a second alert for the same unit inside the window, without reaching the send stage", () => {
+    const stateDir = makeStateDir();
+    const first = runAlert({ recipient: validRecipient, stateDir });
+    expect(first.status).toBe(0);
+    expect(first.sent).toBe(true);
+
+    const second = runAlert({ recipient: validRecipient, stateDir });
+    expect(second.status).toBe(0);
+    expect(second.sent, "a suppressed repeat must not reach the send stage").toBe(false);
+    expect(second.stderr).toContain("throttl");
+    expect(second.stderr).toContain(unit);
+    expect(second.stderr).toContain("1800");
+  });
+
+  it("mails when the recorded send is older than the window, and refreshes the record", () => {
+    const stateDir = makeStateDir();
+    seedState(stateDir, unit, nowSeconds() - 2000);
+
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.sent).toBe(true);
+    const recorded = Number(readFileSync(join(stateDir, unit), "utf8"));
+    expect(recorded).toBeGreaterThanOrEqual(nowSeconds() - 60);
+    expect(recorded).toBeLessThanOrEqual(nowSeconds());
+  });
+
+  it("suppresses when the recorded send is fresh, naming the unit, the window and the age", () => {
+    const stateDir = makeStateDir();
+    seedState(stateDir, unit, nowSeconds() - 100);
+
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.sent).toBe(false);
+    expect(run.stderr).toContain("throttl");
+    expect(run.stderr).toContain(unit);
+    expect(run.stderr).toContain("1800");
+    expect(run.stderr).toMatch(/was 10\d seconds ago/);
+  });
+
+  it("throttles per unit: a second unit sharing the state directory still mails", () => {
+    const stateDir = makeStateDir();
+    const first = runAlert({ recipient: validRecipient, stateDir });
+    expect(first.sent).toBe(true);
+
+    const second = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      args: ["overflow-backup.service"],
+    });
+    expect(second.status).toBe(0);
+    expect(second.sent, "another unit's record must not suppress this unit").toBe(true);
+    expect(existsSync(join(stateDir, "overflow-backup.service"))).toBe(true);
+  });
+
+  it("records nothing when the submission fails", () => {
+    const stateDir = makeStateDir();
+    const run = runAlert({ recipient: validRecipient, stateDir, curlStatus: 7 });
+
+    expect(run.status).toBe(7);
+    expect(run.sent).toBe(true);
+    expect(existsSync(join(stateDir, unit)), "a failed submission leaves no state").toBe(false);
+  });
+
+  it("mails anyway, and still exits 0, when the state directory cannot be created", () => {
+    const root = makeStateDir();
+    writeFileSync(join(root, "blocker"), "a regular file, not a directory\n");
+    const stateDir = join(root, "blocker", "sub");
+
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.sent, "an unrecordable throttle must not stop the mail").toBe(true);
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("mails anyway on corrupt state content, then records a fresh record", () => {
+    const stateDir = makeStateDir();
+    seedState(stateDir, unit, nowSeconds() - 100);
+    writeFileSync(join(stateDir, unit), "garbage\n");
+
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status).toBe(0);
+    expect(run.sent).toBe(true);
+    expect(readFileSync(join(stateDir, unit), "utf8")).toMatch(/^\d+\n$/);
+  });
+
+  it("refuses a missing recipient file before consulting the throttle", () => {
+    const stateDir = makeStateDir();
+    seedState(stateDir, unit, nowSeconds() - 100);
+
+    const run = runAlert({ stateDir });
+
+    expect(run.status).toBe(2);
+    expect(run.sent).toBe(false);
   });
 });

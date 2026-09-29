@@ -25,8 +25,10 @@ import {
  * exim in-process needs the setgroups() privilege dance that the empty
  * capability bounding set deliberately removes; and journalctl reads
  * /proc/sys/kernel/random/boot_id, which `ProcSubset=pid` hides. The unit
- * writes nothing, so there is no `ReadWritePaths=` either: the exim daemon
- * spools the submission outside this sandbox.
+ * writes exactly one thing — the alert script's throttle state under
+ * /run/overflow-alert, which `RuntimeDirectory=` grants implicitly — so there
+ * is still no `ReadWritePaths=`: the exim daemon spools the submission outside
+ * this sandbox.
  */
 const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -50,6 +52,8 @@ const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "RestrictNamespaces",
   "RestrictRealtime",
   "RestrictSUIDSGID",
+  "RuntimeDirectory",
+  "RuntimeDirectoryPreserve",
   "StandardError",
   "StandardOutput",
   "SyslogIdentifier",
@@ -75,6 +79,8 @@ const requiredAlertServiceValues: ReadonlyArray<readonly [string, string]> = [
   ["CapabilityBoundingSet", ""],
   ["AmbientCapabilities", ""],
   ["ProtectSystem", "strict"],
+  ["RuntimeDirectory", "overflow-alert"],
+  ["RuntimeDirectoryPreserve", "yes"],
   ["ProtectHome", "yes"],
   ["ProtectProc", "invisible"],
   ["RestrictAddressFamilies", "AF_INET AF_INET6 AF_UNIX"],

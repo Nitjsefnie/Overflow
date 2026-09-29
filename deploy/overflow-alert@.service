@@ -37,10 +37,16 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 
-# The whole filesystem is read-only and the unit writes nothing: the exim
-# daemon spools the submission in its own namespace, outside this sandbox.
-# Home directories are unreachable and /tmp and /dev are private.
+# The whole filesystem is read-only except the one directory the throttle
+# state needs: RuntimeDirectory= stands up /run/overflow-alert for each run
+# and grants it implicitly (ReadWritePaths= stays out), and
+# RuntimeDirectoryPreserve=yes keeps the directory, and the recorded send
+# times in it, across runs of this oneshot (wiped at reboot). The exim daemon
+# spools the submission in its own namespace, outside this sandbox. Home
+# directories are unreachable and /tmp and /dev are private.
 ProtectSystem=strict
+RuntimeDirectory=overflow-alert
+RuntimeDirectoryPreserve=yes
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
