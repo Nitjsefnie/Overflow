@@ -610,6 +610,24 @@ describe("scripts/deploy-revision.sh", () => {
     expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(false);
   });
 
+  it("names unknown, never an empty conclusion, when a completed check carries no conclusion", async () => {
+    const fixture = await makeFixture();
+    const malformed = await writeCheckRuns(fixture, "gate-empty-conclusion", [
+      ["verify", "completed", ""],
+      ["deploy-gate", "completed", "success"],
+    ]);
+    const result = await runDeploy(fixture, {
+      GH_SHIM_GATE_SEQUENCE: malformed,
+      OVERFLOW_DEPLOY_CI_TIMEOUT: "30",
+    });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Required check verify concluded unknown");
+    const entries = await readLog(fixture.shimLog);
+    expectTreeNotMoved(entries);
+    expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(false);
+  });
+
   it("waits for a pending required check and proceeds once it succeeds", async () => {
     const fixture = await makeFixture();
     const pending = await writeCheckRuns(fixture, "gate-pending", [

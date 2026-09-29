@@ -186,7 +186,10 @@ export async function writeGateState(
       checkRuns.map((cr) => {
         const status = cr.status ?? "completed";
         // GitHub leaves a non-completed check-run's conclusion null; the
-        // projection's `// ""` guard prints it empty.
+        // projection's `// ""` guard prints it empty. Deliberate fixture
+        // shape: a completed job with no explicit conclusion is written as ""
+        // in the jobs TSV but as success in its check-run row, so the fixture
+        // does not silently assert a disagreement the real API never produces.
         const conclusion = cr.conclusion ?? (status === "completed" ? "success" : "");
         return [cr.id, cr.name, cr.app ?? ACTIONS_APP_ID, status, conclusion];
       }),
