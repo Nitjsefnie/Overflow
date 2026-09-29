@@ -5,6 +5,7 @@ import {
 } from "@/lib/fold/reconcile";
 import { ForgeCredentialRejectedError, resolveGateway } from "@/lib/forge/gateway";
 import { GitLabApiError } from "@/lib/gitlab/client";
+import type { AppInstallationTokenResolver } from "@/lib/github/app-installation-auth";
 
 /**
  * Folds one repository with its own sponsor's forge credentials.
@@ -39,6 +40,14 @@ export type ReconcileAsSponsorOptions = {
    * stands — see the credential guard in `sponsorGateway`.
    */
   markCredentialRejected?: (identityId: string) => Promise<void>;
+  /**
+   * Authenticates a GitHub repository's fold with the sponsor's GitHub App
+   * installation instead of the sponsor's OAuth token. `null` means no App
+   * installation exists for this repository and the fold falls back to the
+   * OAuth token; any throw fails the fold (fail-closed, the GitLab credential
+   * precedent). Logged once per memoized gateway resolution, never per read.
+   */
+  resolveAppInstallationToken?: AppInstallationTokenResolver;
 };
 
 export function reconcileRepositoryAsSponsor(
@@ -62,6 +71,7 @@ export function reconcileRepositoryAsSponsor(
         createGateway,
         options?.resolveForgeToken,
         options?.markCredentialRejected,
+        options?.resolveAppInstallationToken,
       ),
     },
     repositoryId,
@@ -78,7 +88,14 @@ export function reconcileRepositoryAsSponsor(
  * not at all — the inactive repository, the cooled-down one — never asks for a
  * token that may no longer exist.
  *
- * GitHub repositories resolve the sponsor's OAuth token exactly as before.
+ * GitHub repositories resolve the sponsor's OAuth token exactly as before
+ * when no App resolver is wired. With one wired, the repository's App
+ * installation is tried first: a resolved installation token authenticates
+ * the fold (logged once as `github-app-installation`), `null` falls back to
+ * the OAuth token (logged once as `sponsor-oauth-fallback`), and a throw
+ * fails the fold — no fallback on anything but the definitive "no
+ * installation", so a misconfigured App cannot quietly starve itself past
+ * the budget it exists to protect.
  * GitLab repositories resolve the linked identity's decrypted PAT on the
  * repository's instance and are FAIL-CLOSED: a missing or unverified identity
  * — or an unwired resolver — throws, failing that repository's reconciliation,
@@ -94,6 +111,7 @@ export function sponsorGateway(
   createGateway: (accessToken: string, owner: string) => ReconciliationGateway,
   resolveForgeToken?: (userId: string, instanceUrl: string) => Promise<{ token: string; identityId: string } | null>,
   markCredentialRejected?: (identityId: string) => Promise<void>,
+  resolveAppInstallationToken?: AppInstallationTokenResolver,
 ): ReconciliationGateway {
   let resolving: Promise<ReconciliationGateway> | undefined;
   const gateway = (): Promise<ReconciliationGateway> => {
@@ -131,6 +149,18 @@ export function sponsorGateway(
           instanceUrl,
           markCredentialRejected === undefined ? undefined : () => markCredentialRejected(credential.identityId),
         );
+      }
+      if (resolveAppInstallationToken !== undefined) {
+        const appToken = await resolveAppInstallationToken(repository.ownerName);
+        if (appToken !== null) {
+          console.info("Reconciliation authentication", {
+            repositoryId,
+            authPath: "github-app-installation",
+            installationId: appToken.installationId,
+          });
+          return createGateway(appToken.token, repository.sponsor.id);
+        }
+        console.info("Reconciliation authentication", { repositoryId, authPath: "sponsor-oauth-fallback" });
       }
       const accessToken = await store.getGitHubAccessToken(repository.sponsor.id);
       if (accessToken === null) {
