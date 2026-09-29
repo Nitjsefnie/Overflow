@@ -87,14 +87,22 @@ state_file=$state_dir/$unit
 # moment the check was made against.
 now=$(date +%s)
 
+# This check is pinned to its spot in the flow: after recipient validation
+# (so a misconfigured recipient still exits 2 loudly) and before the hostname
+# lookup and journal read below, a suppressed run exits without touching the
+# journal or the mail daemon.
+
 # A readable state file carries the epoch time of the unit's last send. Empty,
 # non-numeric or unreadable state means no prior alert: fail open and mail.
-# Leading zeros are stripped before the arithmetic, because a POSIX shell
-# reads a leading-zero constant as octal and would abort on a digit 8 or 9;
-# and a value too long to be an epoch time is corrupt like any other, not a
-# reason to crash under set -e.
+# So does state that passes the readability test but fails at read time (a
+# directory named after the unit, or an unlink between test and read): the
+# read failure is caught, and reads as no prior alert, rather than aborting
+# under set -e. Leading zeros are stripped before the arithmetic, because a
+# POSIX shell reads a leading-zero constant as octal and would abort on a
+# digit 8 or 9; and a value too long to be an epoch time is corrupt like any
+# other, not a reason to crash under set -e.
 if [ -r "$state_file" ]; then
-  last=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$state_file")
+  last=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$state_file") || last=''
   case $last in
     ''|*[!0-9]*|???????????*)
       # Empty, non-numeric, or absurdly long: no prior alert.

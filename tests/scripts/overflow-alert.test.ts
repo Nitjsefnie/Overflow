@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -349,6 +350,20 @@ describe("overflow-alert.sh throttle", () => {
     expect(run.status).toBe(0);
     expect(run.sent).toBe(true);
     expect(readFileSync(join(stateDir, unit), "utf8")).toMatch(/^\d+\n$/);
+  });
+
+  it("mails anyway when the state path is a directory, warning instead of recording", () => {
+    const stateDir = makeStateDir();
+    // A directory passes the script's readability test but cannot be read as
+    // a timestamp, and the record write after the send cannot land on it.
+    mkdirSync(join(stateDir, unit));
+
+    const run = runAlert({ recipient: validRecipient, stateDir });
+
+    expect(run.status, "an unreadable state path must not stop the mail").toBe(0);
+    expect(run.sent).toBe(true);
+    expect(run.stderr).toContain("could not write state file");
+    expect(statSync(join(stateDir, unit)).isDirectory()).toBe(true);
   });
 
   it("refuses a missing recipient file before consulting the throttle", () => {
