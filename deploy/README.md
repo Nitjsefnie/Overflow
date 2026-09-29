@@ -1597,8 +1597,12 @@ systemd starts `overflow-alert@<failed unit>.service` through that unit's
 `OnFailure=overflow-alert@%n.service`. The template unit runs
 `/srv/overflow/scripts/overflow-alert.sh` with the failed unit's name, and the
 script mails the failed unit's current-boot journal tail — the last 200 lines
-— to the address in `/etc/overflow/alert-recipient`. The alert unit has no
-`[Install]` section and is never enabled: `OnFailure=` and a manual
+— to the address in `/etc/overflow/alert-recipient`. Each failed unit is
+throttled to one message per 30 minutes: the script sends at most one message
+per failed unit per 30 minutes, a suppressed repeat is logged to the alert
+unit's journal and submits no mail, and the throttle state lives under
+`/run/overflow-alert`, cleared at reboot. The alert unit has no `[Install]`
+section and is never enabled: `OnFailure=` and a manual
 `systemctl start overflow-alert@<unit>` are the only ways it runs.
 
 The recipient file is host configuration, not part of this repository: root
@@ -1679,8 +1683,11 @@ tail -n 20 /var/log/exim4/mainlog
 The alert unit's journal must show a clean exit, and the exim mainlog must
 show the delivery (or the relay attempt) to the address in the recipient
 file; the message's subject names the throwaway instance —
-`[overflow] test failed on <host>`. Delete
-nothing afterwards: the throwaway instance leaves no state behind.
+`[overflow] test failed on <host>`. The throwaway instance leaves one file
+behind: its throttle state under `/run/overflow-alert`. A second start of the
+same throwaway instance within half an hour mails nothing — the script logs
+the suppression to the alert unit's journal and submits no mail. Remove the
+instance's state file under `/run/overflow-alert` to send again immediately.
 
 ### Rollback
 

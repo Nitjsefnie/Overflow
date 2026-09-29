@@ -9,8 +9,19 @@
 # Mail is submitted by SMTP to the local exim daemon with curl rather than by
 # invoking exim in-process: exim's startup privilege dance needs setgroups(),
 # which the alert unit's empty capability bounding set deliberately removes.
-# The daemon spools the submission itself, so this script needs no writable
-# path anywhere on the box.
+# The daemon spools the submission itself; the only path this script writes is
+# its throttle state under /run/overflow-alert, which the alert unit grants
+# through RuntimeDirectory=.
+#
+# A crash loop cycling slower than the service manager's start limit escapes
+# it — StartLimitIntervalSec=300 with Burst=5 trips only on six starts inside
+# the window — and would mail one alert per cycle forever. Each failed unit is
+# therefore throttled to one message per 1800 seconds: the time of the last
+# send is recorded per unit in $state_dir/$unit, and a repeat inside the
+# window suppresses the mail, logging one line to the alert unit's journal
+# instead. The record is written only after a successful send, so a submission
+# that failed leaves no state and the next failure mails again immediately.
+# Anything the throttle path cannot read or write fails open and mails.
 
 set -eu
 
@@ -58,8 +69,55 @@ case "$recipient" in
     ;;
 esac
 
+# The throttle state lives under /run/overflow-alert, the directory the alert
+# unit grants through RuntimeDirectory=. The path is overridable through
+# OVERFLOW_ALERT_STATE_DIR only so tests/scripts/overflow-alert.test.ts can
+# drive this script against a scratch directory; the alert unit sets no such
+# variable, so a deployed run always uses the default path below.
+state_dir=${OVERFLOW_ALERT_STATE_DIR:-/run/overflow-alert}
+throttle_window=1800
+state_file=$state_dir/$unit
+
+# The unit name is the systemd unit instance (%i): the raw string between the
+# "@" and the type suffix of the unit name, and a systemd unit name cannot
+# carry a slash, so state_file cannot escape the state directory.
+
+# One reading of the clock feeds both the suppression decision and the
+# recorded value, so a run that spans a second boundary still records the
+# moment the check was made against.
+now=$(date +%s)
+
+# A readable state file carries the epoch time of the unit's last send. Empty,
+# non-numeric or unreadable state means no prior alert: fail open and mail.
+# Leading zeros are stripped before the arithmetic, because a POSIX shell
+# reads a leading-zero constant as octal and would abort on a digit 8 or 9;
+# and a value too long to be an epoch time is corrupt like any other, not a
+# reason to crash under set -e.
+if [ -r "$state_file" ]; then
+  last=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$state_file")
+  case $last in
+    ''|*[!0-9]*|???????????*)
+      # Empty, non-numeric, or absurdly long: no prior alert.
+      ;;
+    *)
+      while :; do
+        case $last in
+          0[0-9]*) last=${last#0} ;;
+          *) break ;;
+        esac
+      done
+      age=$((now - last))
+      if [ "$age" -lt "$throttle_window" ]; then
+        echo "overflow-alert.sh: last alert for $unit was $age seconds ago, inside the $throttle_window-second throttle window; suppressing" >&2
+        exit 0
+      fi
+      ;;
+  esac
+fi
+
 fqdn=$(hostname -f)
 
+send_status=0
 {
   printf 'From: overflow-alert@%s\nTo: %s\nSubject: [overflow] %s failed on %s\n\n' \
     "$fqdn" "$recipient" "$unit" "$fqdn"
@@ -71,4 +129,16 @@ fqdn=$(hostname -f)
   --url smtp://127.0.0.1:25 \
   --mail-from "overflow-alert@$fqdn" \
   --mail-rcpt "$recipient" \
-  --upload-file -
+  --upload-file - || send_status=$?
+
+# Only a successful send is recorded; either failure below warns and leaves
+# the exit status alone.
+if [ "$send_status" -eq 0 ]; then
+  if ! mkdir -p "$state_dir"; then
+    echo "overflow-alert.sh: could not create state directory $state_dir; not recording the send" >&2
+  elif ! printf '%s\n' "$now" > "$state_file"; then
+    echo "overflow-alert.sh: could not write state file $state_file; not recording the send" >&2
+  fi
+fi
+
+exit "$send_status"
