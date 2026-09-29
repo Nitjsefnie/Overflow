@@ -9,6 +9,7 @@ import {
   sweepReconciliations,
 } from "@/lib/fold/sweep";
 import { FailureLogger } from "@/lib/worker/failure-logger";
+import { appInstallationTokenResolverFromEnv } from "@/lib/github/app-installation-auth";
 
 /**
  * The drain site's failure key (issue 661): the whole-drain hook the schedule
@@ -30,6 +31,18 @@ export async function registerNodejs(): Promise<void> {
   if (!shouldStartReconciliationBackground(process.env)) {
     return;
   }
+
+  // GitHub repositories fold as the sponsor's GitHub App installation when the
+  // App is configured (issue 804), instead of the sponsor's OAuth token. The
+  // resolver is built once at wiring time, never per fold: unconfigured —
+  // either variable unset or empty — it is undefined and every fold reads the
+  // sponsor's OAuth token exactly as before; configured with an unreadable key
+  // file it throws here, failing the start before any fold (fail-closed, the
+  // GitLab credential precedent). Unconfigured reading as null from the
+  // factory, unwired reading as undefined on the options — both leave the
+  // option off, so `?? undefined` carries the factory's null across.
+  const resolveAppInstallationToken =
+    appInstallationTokenResolverFromEnv(process.env) ?? undefined;
 
   const { PostgresFoldStore } = await import("@/lib/fold/postgres-store");
   const { finalizeAbandonedRuns } = await import("@/lib/fold/abandoned-runs");
@@ -69,6 +82,7 @@ export async function registerNodejs(): Promise<void> {
         reconcile: (repositoryId, options) =>
           reconcileRepositoryAsSponsor(store, repositoryId, undefined, {
             ...options,
+            resolveAppInstallationToken,
             resolveForgeToken,
             markCredentialRejected: async (identityId) => {
               const repository = await store.getRepository(repositoryId);
