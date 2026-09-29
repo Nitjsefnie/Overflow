@@ -280,6 +280,10 @@ The separate `calibrate` job runs after a green `verify`, on pushes to `main`: w
 
 The `actionlint` workflow validates and security-checks the workflow definitions themselves: `actionlint` checks workflow correctness, and `zizmor` their security posture, with `zizmor`'s install hash-pinned from `.github/requirements-zizmor.txt`, so the gate refuses any downloaded artifact matching no known hash (#686). All actions are commit-pinned and checkout credentials are not persisted.
 
+### Required checks relay
+
+The `ledger relay` workflow (`.github/workflows/ledger-relay.yml`) re-posts the required checks as check-runs owned by the Overflow Ledger GitHub App: when a run of `ci`, `actionlint` or `ratchet guard` completes, `scripts/ledger-relay.ts` reads `.github/required-checks.json` from its own checkout (the trusted main tip), decides each context pinned to the triggering run's path from that run's job records — highest attempt wins, a non-success wins an attempt tie, a pending job posts as pending, a renamed producer posts failure — and posts one check-run per context against the triggering run's head SHA, so branch protection can pin each required context to the App instead of the github-actions app. The job runs in the `overflow-ledger` environment and needs its `LEDGER_APP_KEY` secret (the App's private key, which also carries the Actions read and Checks write permissions); the App and installation ids are pinned in the workflow. When a run's relay posting died, dispatch the workflow with the id of the newest completed producer run on the affected SHA to re-post it — the newest App check-run for a context decides, so the newest producer run is the one to name. The relay job is never named after a required context: protection matches a required check by name and app, so a same-named job under the github-actions app would satisfy protection without the App's identity, and `tests/ci/required-checks.test.ts` holds every pinned name to exactly one producing job.
+
 ## Environment reference
 
 `.env.example` documents every required application setting. The table below
