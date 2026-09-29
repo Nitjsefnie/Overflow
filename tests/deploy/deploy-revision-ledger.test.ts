@@ -86,6 +86,36 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
     }
   });
 
+  it("refuses when the pinned job record holds a green rerun but the ledger App's older check-run holds failure", async () => {
+    // The original verify run failed and the relay posted its failure
+    // check-run; a rerun then went green. The rerun is the pinned workflow's
+    // NEWEST job record, but the App check-run carries the name+app identity
+    // protection reads, so it outranks the job record whichever way they
+    // split — here the job record's success must not mask the App's failure.
+    const fixture = await makeFixture();
+    const state = await writeGateState(
+      fixture,
+      "gate-ledger-outranks-rerun",
+      [
+        {
+          id: 100,
+          path: FIXTURE_PINS.verify!,
+          jobs: [
+            { id: 1001, name: "verify", attempt: 1, status: "completed", conclusion: "failure" },
+            { id: 1002, name: "verify", attempt: 2, status: "completed", conclusion: "success" },
+          ],
+        },
+        { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
+      ],
+      [{ id: 5001, name: "verify", app: LEDGER_APP_ID, status: "completed", conclusion: "failure" }],
+    );
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "30" });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Required check verify concluded failure");
+    expectGateRefused(await readLog(fixture.shimLog));
+  });
+
   it("decides from the pinned job record when no ledger App check-run exists", async () => {
     for (const [jobConclusion, expected] of [
       ["success", 0],
