@@ -209,7 +209,9 @@ required_checks_gate() {
       elif [ "$status" != completed ]; then
         pending+="${pending:+, }$check ($status)"
       elif [ "$conclusion" != success ]; then
-        printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "$conclusion" "$full_sha" >&2
+        # Malformed API data can complete a check with no conclusion; the
+        # refusal never names it empty.
+        printf 'Required check %s concluded %s on %s; refusing to deploy.\n' "$check" "${conclusion:-unknown}" "$full_sha" >&2
         exit 1
       fi
       # A check-run bearing the name that the ledger App did not post and

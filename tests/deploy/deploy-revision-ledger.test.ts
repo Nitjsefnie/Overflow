@@ -25,12 +25,12 @@ afterEach(cleanupLiveFixture);
 
 describe("scripts/deploy-revision.sh — the ledger App as a required-check producer", () => {
   /**
-   * Both pinned jobs completed successfully — the happy-path job-record state
-   * the ledger-App tests below build on.
+   * The pinned job-record state the ledger-App tests build on — both pinned
+   * jobs completed, verify's job concluding `verify` (success by default).
    */
-  function happyPinnedRuns(): GateRun[] {
+  function happyPinnedRuns(verify: "success" | "failure" = "success"): GateRun[] {
     return [
-      { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "success" }] },
+      { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: verify }] },
       { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
     ];
   }
@@ -44,12 +44,7 @@ describe("scripts/deploy-revision.sh — the ledger App as a required-check prod
       const state = await writeGateState(
         fixture,
         "gate-ledger-decides",
-        job === "success"
-          ? happyPinnedRuns()
-          : [
-              { id: 100, path: FIXTURE_PINS.verify!, jobs: [{ id: 1001, name: "verify", status: "completed", conclusion: "failure" }] },
-              { id: 200, path: FIXTURE_PINS["deploy-gate"]!, jobs: [{ id: 2001, name: "deploy-gate", status: "completed", conclusion: "success" }] },
-            ],
+        happyPinnedRuns(job),
         [{ id: 5001, name: "verify", app: LEDGER_APP_ID, status: "completed", conclusion: ledger }],
       );
       const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: state, OVERFLOW_DEPLOY_CI_TIMEOUT: "30" });

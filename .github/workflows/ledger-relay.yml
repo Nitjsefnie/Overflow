@@ -9,13 +9,12 @@ name: ledger relay
 # the App installation token the script mints; the workflow's own token needs
 # and holds only contents: read.
 on:
-  # zizmor: ignore[dangerous-triggers]
   # workflow_run runs this definition from the default branch's tip, in the
   # default branch's context: the checkout, the pin map and the script are
   # main's own, nothing from the triggering run is checked out, installed or
   # executed, and every event value reaches the script through env:, never
   # through ${{ }} interpolation in run:.
-  workflow_run:
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
     workflows:
       - "ci"
       - "actionlint"
