@@ -1,0 +1,50 @@
+-- The instant an Overflow-issued API token is known to have reached its holder.
+--
+-- An API token is delivered in a single response body, and the store writes
+-- the hash before that body is sent. If the process dies in between, the row
+-- commits and the plaintext does not arrive: the client holds no value, so it
+-- can neither use the credential nor revoke it, and nothing in the product
+-- knows the difference between a token in a script and a token in a dead
+-- process's page cache. Until this column, such a row stayed live for its full
+-- ninety days.
+--
+-- `confirmed_at` is the first instant a request authenticated with the token's
+-- plaintext, which is the only evidence in the system that the value reached
+-- somebody. Until then the row is UNCONFIRMED: the holder has not been proven
+-- to have it, so it carries a short delivery window instead of a lifetime, and
+-- a value nobody ever presented stops authenticating long before a value in
+-- use does. Confirmation is what starts the ninety days, so the lifetime the
+-- copy promises is the lifetime of a credential that demonstrably exists.
+--
+-- The column is nullable with no default. The release still serving while a
+-- deploy builds, and a rollback target, issue tokens without naming it, and
+-- `not null` without a default would refuse those inserts: first token
+-- generation would fail for the whole deploy window and after any rollback. A
+-- default would be worse than useless, because it would stamp every such token
+-- as confirmed — asserting possession of a credential that may never have left
+-- the process that minted it.
+--
+-- Every token that exists when this migration runs is UNCONFIRMED. None of
+-- them was confirmed under a rule that did not exist, and backfilling the
+-- column with `last_used_at` would confirm on the strength of a use that may
+-- have happened before its holder ever received the current value. So the
+-- rewrite below clamps them all: at deploy time every live token stops
+-- authenticating after thirty minutes unless its holder uses it once, and
+-- members regenerate. That is deliberate and visible. The alternative —
+-- leaving existing rows at ninety days and treating them as confirmed by fiat
+-- — is what this column exists to end: a token nobody has ever used is exactly
+-- the population the orphan is drawn from, and grandfathering them leaves the
+-- unbounded case unbounded for another lifetime. Every script that holds a
+-- token keeps working unchanged the first time it runs after the deploy, which
+-- is the whole cost: one request each, by the automation that already makes
+-- them.
+--
+-- The rewrite states the same test of "unconfirmed" the store will use when it
+-- confirms a token on first use, so the clamp and the confirmation agree on
+-- which rows were pending. At migration time the column is new and empty, so
+-- the predicate matches every row; it is written out rather than assumed, so
+-- that the two places cannot drift apart.
+
+alter table api_tokens add column confirmed_at timestamp with time zone;
+
+update api_tokens set expires_at = now() + interval '30 minutes' where confirmed_at is null;

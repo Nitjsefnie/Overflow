@@ -54,7 +54,7 @@ afterAll(async () => {
 });
 
 describe("API token expiry in the store", () => {
-  it("issues a token that resolves and expires ninety days after it was generated", async () => {
+  it("issues a token that resolves, bounded by the delivery window until its holder uses it", async () => {
     const sql = getSql();
     const userId = await insertUser(sql);
     const store = new PostgresApiTokenStore(sql);
@@ -62,14 +62,18 @@ describe("API token expiry in the store", () => {
 
     const issued = await store.issueToken(userId, tokenHash);
 
+    // Read before the first use: confirming rewrites the expiry in the same
+    // statement that resolves the token, so a summary taken afterwards
+    // describes a different lifetime.
+    expect(issued.confirmedAt).toBeNull();
+    expect(issued.expiresAt).toEqual(await thirtyMinutesAfter(sql, issued.createdAt));
+    await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...issued, expired: false });
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toEqual({
       id: userId,
       tokenId: expect.any(String),
       role: "MEMBER",
       enforcementState: "ACTIVE",
     });
-    expect(issued.expiresAt).toEqual(await ninetyDaysAfter(sql, issued.createdAt));
-    await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...issued, expired: false });
   });
 
   it("resolves no account for a token whose expiry has passed", async () => {
@@ -84,7 +88,7 @@ describe("API token expiry in the store", () => {
     await expect(store.findAccountByTokenHash(tokenHash)).resolves.toBeNull();
     // The panel's expired state reads this summary, so it must survive expiry.
     await expect(store.getTokenSummary(userId)).resolves.toEqual({
-      createdAt: issued.createdAt,
+      ...issued,
       expiresAt: lapsed.expires_at,
       expired: true,
     });
@@ -131,7 +135,7 @@ describe("API token expiry in the store", () => {
     expect(summary?.expired).toBe(true);
   });
 
-  it("restarts the lifetime on regeneration after expiry", async () => {
+  it("restarts the delivery window on regeneration after expiry", async () => {
     const sql = getSql();
     const userId = await insertUser(sql);
     const store = new PostgresApiTokenStore(sql);
@@ -142,11 +146,14 @@ describe("API token expiry in the store", () => {
 
     const reissued = await store.issueToken(userId, replacement.tokenHash);
 
-    await expect(store.findAccountByTokenHash(replacement.tokenHash)).resolves.toMatchObject({ id: userId });
-    await expect(store.findAccountByTokenHash(expired.tokenHash)).resolves.toBeNull();
-    expect(reissued.expiresAt).toEqual(await ninetyDaysAfter(sql, reissued.createdAt));
+    // A regeneration hands back a token nobody has used, so it starts the
+    // window over rather than inheriting the replaced token's confirmation.
+    expect(reissued.confirmedAt).toBeNull();
+    expect(reissued.expiresAt).toEqual(await thirtyMinutesAfter(sql, reissued.createdAt));
     expect(reissued.expiresAt.getTime()).toBeGreaterThan(lapsed.expires_at.getTime());
     await expect(store.getTokenSummary(userId)).resolves.toEqual({ ...reissued, expired: false });
+    await expect(store.findAccountByTokenHash(replacement.tokenHash)).resolves.toMatchObject({ id: userId });
+    await expect(store.findAccountByTokenHash(expired.tokenHash)).resolves.toBeNull();
   });
 });
 
@@ -207,7 +214,9 @@ describe(`upgrading across ${expiryMigration}`, () => {
         values (${userId}, ${mintApiToken().tokenHash}, now() - interval '400 days')
       `;
       const [before] = await sql<{ now: Date }[]>`select now()`;
-      await runMigrations();
+      // Stopped at 046: 057 clamps every existing token to the delivery window,
+      // which is its own assertion, in tests/db/api-token-delivery-window.test.ts.
+      await runMigrations({ upTo: expiryMigration });
       const [after] = await sql<{ now: Date }[]>`select now()`;
       const [row] = await sql<{ expires_at: Date }[]>`
         select expires_at from api_tokens where user_id = ${userId}
@@ -269,6 +278,12 @@ async function expireTokenOf(sql: Sql, userId: string): Promise<{ expires_at: Da
 /** The lifetime spelled independently of the store, so the test cannot borrow its constant. */
 async function ninetyDaysAfter(sql: Sql, instant: Date): Promise<Date> {
   const [row] = await sql<{ at: Date }[]>`select ${instant}::timestamptz + interval '90 days' as at`;
+  return row.at;
+}
+
+/** Likewise the window an unused token is issued with. */
+async function thirtyMinutesAfter(sql: Sql, instant: Date): Promise<Date> {
+  const [row] = await sql<{ at: Date }[]>`select ${instant}::timestamptz + interval '30 minutes' as at`;
   return row.at;
 }
 
