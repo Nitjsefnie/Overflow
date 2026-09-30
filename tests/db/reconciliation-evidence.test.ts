@@ -185,14 +185,26 @@ describe("durable reconciliation evidence", () => {
   // fence turns such a pairing into a wasted pass, never a wrong publish, but
   // the read is still one statement now — one round trip, one snapshot — so
   // no commit can interleave inside it.
+  //
+  // The statement returns ROWS, never a single jsonb aggregate: aggregating
+  // all of a repository's facts into one jsonb value would put them back
+  // under jsonb's 268,435,455-byte total ceiling — issue 850's permanent
+  // failure, moved from write to read time. The row-count assertion below
+  // pins that: an aggregate-based read would resolve ONE row here, not one
+  // per fact plus the metadata row.
   it("reads metadata and facts in one statement, so no write can interleave between them", async () => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
     let statements = 0;
+    const resultRowCounts: number[] = [];
     const countingSql: Sql = new Proxy(sql, {
       apply(target, thisArgument, argumentsList) {
         statements += 1;
-        return Reflect.apply(target, thisArgument, argumentsList);
+        const query = Reflect.apply(target, thisArgument, argumentsList) as Promise<unknown[]>;
+        // Record without consuming the read's own await; a rejection here is
+        // already the read's rejection.
+        void query.then((rows) => resultRowCounts.push(rows.length), () => {});
+        return query;
       },
       get(target, property, receiver) {
         const value = Reflect.get(target, property, receiver);
@@ -205,6 +217,9 @@ describe("durable reconciliation evidence", () => {
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(statements).toBe(1);
+    // Two facts joined to their metadata row: one row per fact. An
+    // aggregate-based read would resolve a single row here.
+    expect(resultRowCounts).toEqual([2]);
   });
 
   // Mutant: a no-op guard that let an unchanged document rewrite fact rows —
