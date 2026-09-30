@@ -366,11 +366,12 @@ if [ -n "$reason" ]; then
   # not a misconfiguration and must not borrow exit 2 - and neither must the
   # client's status, because curl exits 2 for a failure to initialise and a
   # reader classifying by number alone could not tell that from this script's
-  # own "refused before sending". Unreachable with the argv pinned below; it is
-  # here so the contract survives an edit to that argv.
+  # own "refused before sending". Unreachable with the argv pinned above; it is
+  # here so the contract survives an edit to that argv. The 2 is a CLAMP, not a
+  # second class of failure, so it shares the arm 0 does: there is no path into
+  # here on a zero submit_status, and 0 would report success over a failure.
   case $submit_status in
-    2) exit 1 ;;
-    0) exit 1 ;;
+    0 | 2) exit 1 ;;
     *) exit "$submit_status" ;;
   esac
 fi

@@ -166,7 +166,12 @@ const sleepShim = [
   `  cat "$OVERFLOW_TEST_LOG_APPEND" >> "$OVERFLOW_TEST_EXIM_LOG"`,
   `  : > "$OVERFLOW_TEST_LOG_APPENDED"`,
   "fi",
-  `/bin/sleep "$@"`,
+  // The real duration is what the script asked for, unless a case overrides
+  // it. A case that drives the run's clock from a shim does not need the
+  // wall-clock wait to match: the poll's LENGTH is then the budget, and the
+  // count of readings is a record the run produces rather than a duration
+  // anyone has to sit through.
+  `/bin/sleep "\${OVERFLOW_TEST_SLEEP_REAL:-$1}"`,
   "",
 ].join("\n");
 
@@ -188,7 +193,19 @@ const dateShim = [
   `if [ "$1" = "+%s" ]; then`,
   `  n=$(cat "$OVERFLOW_TEST_CLOCK_CALLS" 2>/dev/null || echo 0)`,
   `  echo $((n + 1)) > "$OVERFLOW_TEST_CLOCK_CALLS"`,
-  `  echo $(( $(/bin/date +%s) + n * \${OVERFLOW_TEST_CLOCK_STEP:-0} ))`,
+  `  if [ "\${OVERFLOW_TEST_CLOCK_STEP:-0}" -eq 0 ]; then`,
+  `    /bin/date +%s`,
+  "  else",
+  "    # A driven clock is ANCHORED once and then moves only by the step.",
+  "    # Anchoring matters: adding the step to the real time on every reading",
+  "    # lets however long this machine takes to spawn a process leak into the",
+  "    # count, so how many readings a budget takes would depend on the runner",
+  "    # rather than on the budget.",
+  `    if [ ! -s "$OVERFLOW_TEST_CLOCK_BASE" ]; then`,
+  `      /bin/date +%s > "$OVERFLOW_TEST_CLOCK_BASE"`,
+  "    fi",
+  `    echo $(( $(cat "$OVERFLOW_TEST_CLOCK_BASE") + n * \${OVERFLOW_TEST_CLOCK_STEP:-0} ))`,
+  "  fi",
   "  exit 0",
   "fi",
   `exec /bin/date "$@"`,
@@ -257,6 +274,12 @@ function runAlert(
      * See the shim.
      */
     clockStepSeconds?: number;
+    /**
+     * What the sleep shim really sleeps, overriding the interval the script
+     * asked for. Zero pairs with a driven clock: the poll still takes the
+     * number of readings the budget says, without costing them in wall time.
+     */
+    realSleepSeconds?: string;
     /** A daemon that accepts the submission without answering a 250 OK id=. */
     noId?: boolean;
     /**
@@ -310,6 +333,7 @@ function runAlert(
           OVERFLOW_ALERT_EXIM_LOG: eximLogPath,
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
           OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
+          OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
           OVERFLOW_TEST_CLOCK_STEP: String(options.clockStepSeconds ?? 0),
           OVERFLOW_TEST_EXIM_LOG: eximLogPath,
           OVERFLOW_TEST_STALE_ID: options.staleMessageId ?? "",
@@ -319,6 +343,7 @@ function runAlert(
           OVERFLOW_TEST_MESSAGE_ID: messageId,
           OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
           OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
+          OVERFLOW_TEST_SLEEP_REAL: options.realSleepSeconds ?? "",
           FAKE_CURL_RC: String(options.curlStatus ?? 0),
           FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
           ...(options.deployedBudget
@@ -759,26 +784,54 @@ describe("overflow-alert.sh delivery verdict", () => {
     expect(existsSync(join(stateDir, unit))).toBe(false);
   });
 
-  it("closes the poll on the DEPLOYED budget when the variable is absent entirely", () => {
+  it("waits the DEPLOYED budget, and reports it, when the variable is absent entirely", () => {
     // Every other case sets OVERFLOW_ALERT_EXIM_WAIT_SECONDS, so nothing else in
     // this suite can see the number a deployed run actually waits - and no
-    // assertion over an overridden value ever can. The clock shim carries the
-    // run forward one budget length per reading so the deadline closes here
-    // rather than a minute from now; the arithmetic under test is
-    // `date +%s + exim_wait`, and the reason it produces is what this reads.
+    // assertion over an overridden value ever can. This leaves the variable out
+    // of the environment entirely.
+    //
+    // The clock advances one second per reading, so the poll's LENGTH is the
+    // budget: the default of 60 closes the deadline after 59 waits, and that
+    // count is a record the run produces. It is what makes the "60s" below
+    // more than an interpolated string - the run waited that long too. The
+    // case after this is what pins that the deadline is computed FROM the
+    // variable, which this one cannot: 60 written as a literal waits exactly
+    // as long and reads identically.
     const stateDir = makeStateDir();
 
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
       deployedBudget: true,
-      clockStepSeconds: 61,
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
     expect(run.status).not.toBe(0);
     expect(run.stderr, "the deployed default must be the number reported").toContain("60s");
+    expect(run.sleeps, "a 60-second budget closes after 59 waits").toBe(59);
     expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("computes the deadline from the budget, not from a number standing beside it", () => {
+    // The count of readings IS the budget: with the clock advancing a second
+    // per reading, a 3-second budget closes the deadline after two waits. A
+    // deadline computed from anything else - a literal, a constant, some other
+    // variable - takes a different number of readings, and that is what
+    // distinguishes `date +%s + exim_wait` from `date +%s + 60`. Reading the
+    // budget back out of the reason string cannot make that distinction: a
+    // literal beside the arithmetic leaves the string exactly as it was.
+    const run = runAlert({
+      recipient: validRecipient,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
+    });
+
+    expect(run.sleeps, "a 3-second budget closes after two waits").toBe(2);
+    expect(run.stderr).toContain("within 3s");
   });
 
   it("polls once a second rather than at some other interval", () => {
