@@ -1890,45 +1890,73 @@ that listener, so the unit posts out of band and records the outage only if
 the sandbox permits the connection. **This proves the network leg of the
 sandbox; it does not send a real Discord message, and it says nothing about
 whether the webhook URL in `/etc/overflow/canary-discord-webhook` is still
-valid** — the first Verify step above is what covers the real channel.
+valid, nor about DNS or TLS to `discord.com`** — a loopback listener is
+neither of those, and the first Verify step above is what covers the real
+channel.
+
+The verdict below is the **payload the listener actually received**, not the
+absence of a marker. A listener that has not finished binding when the unit
+posts makes the report fail for a reason that has nothing to do with the
+sandbox, and a step that reports its finding when the finding is absent is
+worse than no step: it teaches the operator to distrust the one check that
+would have caught a real regression. The wait for the port below is what
+keeps the two apart, and the marker is only corroboration.
 
 Check the port is free, then install a drop-in that redirects the run. It
 overrides the two paths, so the host's own webhook file is never read,
 written or exposed:
 
 ```bash
-ss -ltn | grep 18099 || echo "port 18099 is free"
+ss -ltn | grep 18099 && echo "port 18099 is BUSY - stop, pick another port and re-run this step" || echo "port 18099 is free"
 install -d -o root -g root -m 0755 /etc/systemd/system/overflow-canary.service.d
 printf '%s\n' 'http://127.0.0.1:18099/probe' > /etc/overflow/canary-sandbox-probe-webhook
+rm -f /etc/overflow/canary-sandbox-probe-received
 printf '%s\n' '[Service]' 'Environment=OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1' 'Environment=OVERFLOW_CANARY_WEBHOOK_FILE=/etc/overflow/canary-sandbox-probe-webhook' > /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf
 systemctl daemon-reload
 ```
 
-Start the listener in the background, run the unit, and read what it
-managed to do. The unit must report out of band and leave the marker behind;
-a journal that instead says the report could not be delivered means the
-sandbox is blocking the egress, and that is the finding this step exists to
-surface:
+The first line is a precondition, not a report. **If it prints `BUSY`, stop
+here**: the listener below would die on `EADDRINUSE` without saying so, and
+the unit's report would be posted to whatever stranger holds that port.
+
+Start the listener, wait for it to be listening before starting the unit,
+then run it. The listener records every request body it is given, which is
+what the verdict is read from:
 
 ```bash
-python3 -c "import http.server as h;h.HTTPServer(('127.0.0.1',18099),h.BaseHTTPRequestHandler).serve_forever()" &
+python3 -c "import http.server as h;H=type('H',(h.BaseHTTPRequestHandler,),{'do_POST':lambda s:(open('/etc/overflow/canary-sandbox-probe-received','ab').write(s.rfile.read(int(s.headers['Content-Length']))),s.send_response(200),s.end_headers()),'log_message':lambda *a:None});h.HTTPServer(('127.0.0.1',18099),H).serve_forever()" &
+until ss -ltn | grep -q 18099 ; do sleep 1 ; done
 systemctl start overflow-canary.service
 journalctl -u overflow-canary.service --no-pager -n 20
-test -e /run/overflow-canary/dead && echo "sandbox reached the out-of-band channel"
+grep -q failure-alert /etc/overflow/canary-sandbox-probe-received && echo "sandbox reached the out-of-band channel" || echo "the listener received no report - see the journal above"
 ```
 
-Remove the drop-in and the probe file, reload, and confirm the unit is back
-to running its own defaults:
+`failure-alert path` is the canary's own text inside the report body, so this
+line is true only when the unit's own payload arrived. No such line means one
+of two things, and the journal above distinguishes them: a report that could
+not be delivered at all is the egress being blocked — the finding this step
+exists to surface — while a report that was delivered and a listener that
+never received it means the probe itself was misrun.
+
+Remove the drop-in, the probe files and the (now empty) drop-in directory,
+reload, and confirm the unit is back to running its own defaults:
 
 ```bash
 rm /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf
+rmdir /etc/systemd/system/overflow-canary.service.d
 rm /etc/overflow/canary-sandbox-probe-webhook
+rm -f /etc/overflow/canary-sandbox-probe-received
 systemctl daemon-reload
 systemctl show overflow-canary.service -p Environment
 ```
 
-Stop the listener with `pkill -f 18099` — or from the shell that started it,
-with the job's own control — once the journal line above has been read. If
+`rmdir` refuses to remove a directory that still has anything in it, so it
+cannot take a drop-in another procedure added; if it reports the directory
+as not empty, look before removing it by hand.
+
+Stop the listener from the shell that started it, with the job's own control —
+`jobs` to list it, `kill %1` to end it — once the journal line above has been
+read. If
 the unit recorded an outage, clear it so the first scheduled run is judged on
 its own merits:
 
