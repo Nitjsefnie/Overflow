@@ -242,10 +242,16 @@ export function AccountDataNotice() {
         <p>
           Overflow&apos;s own output goes to the host&apos;s system journal. The journal has no time limit, only a
           size limit shared with every other service on the host, so how long an entry lasts depends on how much
-          the host logs overall. Overflow does not log client IP addresses. Its log lines can include a
-          repository&apos;s owner and name, which may be a person&apos;s username, and error details; a database
-          or forge error can quote part of the record being written or read, such as an issue description or
-          comment text.
+          the host logs overall. One part of that output is the privileged-action journal, the audit trail for
+          privileged actions: one line for every successful one — granting or revoking a moderator role, opening,
+          dismissing or substantiating an audit, closing a recalibration, creating or reversing a credit
+          adjustment, requesting a repository rederivation, granting or declining a settlement override. Each line
+          records the acting account, a reference to the credential it was performed with (never the credential
+          itself), the client&apos;s IP address, and what was acted on. Those lines go to the same host system
+          journal with the same retention, and no other Overflow log line records an IP address. Overflow&apos;s
+          other log lines can include a repository&apos;s owner and name, which may be a person&apos;s username,
+          and error details; a database or forge error can quote part of the record being written or read, such as
+          an issue description or comment text.
         </p>
       </section>
 
