@@ -83,7 +83,16 @@ The production deployment runs the application as a dedicated unprivileged syste
 
 Two parts of an instance's data survival belong to the maintainer rather than to the software: keeping an off-host copy of the backups, and learning when a backup or the service itself fails. The on-host dump in `/var/backups/overflow` sits on the same disk as the database it protects, so it is not the only copy of the data that cannot be rebuilt from GitHub — accounts, encrypted credentials, moderation history, audits, corrections, API tokens and credit adjustments. Copying dumps off the host and owning the alert delivery below are the maintainer's responsibilities.
 
-When `overflow.service` or `overflow-backup.service` fails, systemd's `OnFailure=` starts `overflow-alert@<failed unit>.service`, which mails the failed unit's journal tail to the address in `/etc/overflow/alert-recipient` — host configuration, root-only, never committed — through the host's exim4 smarthost. The route works by design only while the host's mail route works; that dependence is a property of the design, not a defect of it, and the alert unit's own journal shows a submission that could not go out. Alerts are throttled to one message per failed unit per 30 minutes: the first failure mails immediately, sustained failures re-mail every 30 minutes, bounded far below the mail account's daily limit, and suppressed repeats land in the alert unit's journal.
+When `overflow.service` or `overflow-backup.service` fails, systemd's `OnFailure=` starts `overflow-alert@<failed unit>.service`, which mails the failed unit's journal tail to the address in `/etc/overflow/alert-recipient` — host configuration, root-only, never committed — through the host's exim4 smarthost. The route works by design only while the host's mail route works; that dependence is a property of the design, not a defect of it, and the alert unit's own journal shows a submission that could not go out. Alerts are throttled to one message per failed unit per 30 minutes: the first failure mails immediately, sustained failures re-mail every 30 minutes, bounded far below the mail account's daily limit, and suppressed repeats land in the alert unit's journal. A bounce watcher —
+`overflow-bounce.timer`, running `overflow-bounce.service` every 15 minutes —
+covers what the mail route cannot see about itself: it tails the local spool
+the aliased bounce addresses file into and reports two classes of message, a
+delivery-failure notification for an overflow address (a remote failure on the
+alert route) and a non-DSN alert or canary message that landed in the local
+spool instead of delivering off-host. Its acceptance leg, the
+`overflow-canary: root` and `overflow-alert: root` entries in `/etc/aliases`,
+is host configuration, documented with the install, verification and rollback
+in [deploy/README.md section 12](deploy/README.md#12-failure-alerts).
 
 On an alert: read the failed unit's journal with `journalctl -b -u <unit>`, then follow [deploy/backup-restore.md](deploy/backup-restore.md) for a failed backup and [deploy/README.md section 10](deploy/README.md#10-deploying-a-new-revision) for a failed service. When the failed unit is `overflow.service`, a start within five minutes of the crash loop's give-up is refused with `Start request repeated too quickly` until `systemctl reset-failed overflow.service` runs or the 300-second window elapses.
 
