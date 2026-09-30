@@ -19,9 +19,10 @@ Description=Report failed deliveries of Overflow alert and canary mail
 [Service]
 Type=oneshot
 
-# Runs as root, like the canary unit: the spool and the webhook file are
-# root-only and are read by the script at run time, not by systemd. The PATH
-# carries no component under /root, and curl speaks to the webhook host.
+# Runs as root, like the canary unit: the webhook file is root-only and the
+# spool is the MTA's mail:mail delivery state, and both are read by the
+# script at run time, not by systemd. The PATH carries no component under
+# /root, and curl speaks to the webhook host.
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
 # The bounce watcher script; its own header comment carries the design and
@@ -31,12 +32,23 @@ ExecStart=/bin/sh /srv/overflow/scripts/overflow-bounce.sh
 # Any file the run creates is root-private.
 UMask=0077
 
-# No privilege elevation, no capabilities: the unit reads the mail spool and
-# one root-only webhook file, posts one report to the webhook, and nothing
-# else.
+# No privilege elevation, and exactly one capability. The one thing the
+# canary's empty bounding set would strip that this unit genuinely needs is
+# CAP_DAC_OVERRIDE: the spool is the MTA's delivery state (mail:mail, mode
+# 0600 on the deployed host), so root's plain open of it is denied once the
+# empty set removes the override bit - measured on the host, not assumed:
+# every run under the empty-set posture exited 2 at the script's spool
+# readability check. The canary's own repair shape does not port here:
+# SupplementaryGroups=mail was tested and is still denied, because a 0600
+# file carries zero group bits for a supplementary group to exercise. So the
+# bounding set grants exactly CAP_DAC_OVERRIDE and nothing else - no second
+# capability, and still no privilege elevation: NoNewPrivileges= stays on and
+# the setuid/gid restrictions below stay on. AmbientCapabilities= carries
+# that same single bit into the script's own processes (awk, tail, curl)
+# across exec, without any setuid gymnastics.
 NoNewPrivileges=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_DAC_OVERRIDE
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes

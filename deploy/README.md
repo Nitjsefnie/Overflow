@@ -2215,6 +2215,19 @@ this section installs would change nothing and the verification below would
 fail in a way that looks like a broken watcher. Resolve the existing entry
 before installing.
 
+Unlike the canary unit, the bounce unit carries one capability. The spool it
+tails is delivery state owned by the MTA — `mail:mail`, mode `0600` on this
+host — and systemd's empty capability bounding set strips `CAP_DAC_OVERRIDE`,
+so root's plain open of the spool is denied under the unit's sandbox and every
+run exits 2 at the script's spool readability check. That was measured, not
+assumed. The unit therefore pins `CapabilityBoundingSet=CAP_DAC_OVERRIDE` and
+`AmbientCapabilities=CAP_DAC_OVERRIDE` and nothing beyond that one bit. Two
+cheaper-looking shapes were tested and rejected: `SupplementaryGroups=mail`
+still cannot open the file, because a `0600` spool carries no group bits for
+the supplementary group to exercise; and re-owning the spool to root would
+rewrite MTA-owned delivery state, which is not host configuration this
+repository prescribes.
+
 #### Install
 
 The script needs no install step — `/srv/overflow` is a checkout of this
