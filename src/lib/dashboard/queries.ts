@@ -7,12 +7,10 @@ import {
 import { getSql } from "@/lib/db/client";
 import type { ReconciliationJobState } from "@/lib/fold/reconciliation-jobs";
 
-/** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database. */
+/** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database; `unsafe` is the unnamed-statement escape hatch the board read serves through (issue 838). */
 export type DashboardSql = {
-  <T extends readonly unknown[] = readonly unknown[]>(
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ): Promise<T>;
+  <T extends readonly unknown[] = readonly unknown[]>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+  unsafe<T extends readonly unknown[] = readonly unknown[]>(text: string, values?: unknown[]): Promise<T>;
 };
 
 export type DashboardProjection = {

@@ -116,21 +116,34 @@ describe("eligible issues credit-limit replay scoping against PostgreSQL", () =>
 
 /**
  * Runs the shipped implementation against the real database through a
- * recording wrapper that forwards the tagged-template call untouched, so the
- * captured text and values are exactly what Postgres is asked to run.
+ * recording wrapper that forwards both call shapes untouched — the tagged
+ * template and the unnamed escape hatch — so the captured text and values are
+ * exactly what Postgres is asked to run whichever path the served code takes.
  */
 async function captureBoardQuery(): Promise<{ text: string; values: unknown[] }> {
-  const captured: { strings: TemplateStringsArray; values: unknown[] }[] = [];
-  const recording = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-    captured.push({ strings, values });
-    return (sql as unknown as DashboardSql)(strings, ...values);
-  }) as unknown as DashboardSql;
+  const captured: { strings?: TemplateStringsArray; text?: string; values: unknown[] }[] = [];
+  const recording = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => {
+      captured.push({ strings, values });
+      return (sql as unknown as DashboardSql)(strings, ...values);
+    },
+    {
+      unsafe: (text: string, values: unknown[] = []) => {
+        captured.push({ text, values });
+        return sql.unsafe(text, values as (string | number | null)[]);
+      },
+    },
+  ) as unknown as DashboardSql;
   await listEligibleIssues(seeded.viewerId, {}, { sql: recording });
   expect(captured).toHaveLength(1);
-  const { strings, values } = captured[0]!;
-  let text = strings[0] ?? "";
-  for (let index = 1; index < strings.length; index += 1) {
-    text += `$${index}${strings[index]}`;
+  const entry = captured[0]!;
+  const values = entry.values;
+  if (entry.strings === undefined) {
+    return { text: entry.text!, values };
+  }
+  let text = entry.strings[0] ?? "";
+  for (let index = 1; index < entry.strings.length; index += 1) {
+    text += `$${index}${entry.strings[index]}`;
   }
   return { text, values };
 }
