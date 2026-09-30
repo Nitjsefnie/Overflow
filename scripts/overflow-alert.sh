@@ -341,7 +341,11 @@ else
       # the cause decides what an operator reads at three in the morning, so
       # the most specific one is reported first.
       if [ -n "$local_transport" ]; then
-        reason="exim routed $message_id to the local $local_transport transport, so the alert was written on this host's own mail spool rather than sent to $recipient"
+        # The recipient is NOT named, for the reason its own validation gives
+        # above: this line lands in the journal, and the journal is what gets
+        # pasted into an issue. The transport and the id say everything an
+        # operator needs about why the alert stayed here.
+        reason="exim routed $message_id to the local $local_transport transport, so the alert was written to this host's own mail spool rather than sent off it"
       elif [ -n "$seen_verdict" ]; then
         reason="exim recorded $seen_verdict for $message_id and never Completed it within ${exim_wait}s, so the relay did not take the alert"
       elif [ "$log_readable" -eq 0 ]; then
