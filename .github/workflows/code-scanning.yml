@@ -23,22 +23,32 @@ concurrency:
   # Same event-class shape as ci.yml: every pull request shares one
   # repository-level group, so the repository's Actions minutes stop scaling
   # with the number of open pull requests, and GitHub keeps one PENDING run per
-  # group so `code-scanning-repo-wide` is a single slot. Scheduled and
-  # main-branch runs key on their own SHA. The parentheses are load-bearing:
-  # && binds tighter than ||, and without them the pull_request arm falls
-  # through to github.sha and the bound is gone.
+  # group so `code-scanning-repo-wide` is a single slot. A push to main keys on
+  # its own SHA, so no two commits share a group; note a `schedule` tick resolves
+  # github.sha to the default branch's tip and therefore DOES share a group with
+  # a push run for that same tip — harmless at one weekly tick, and the only
+  # thing `false` gives up there. The parentheses are load-bearing: && binds
+  # tighter than ||, and without them the pull_request arm falls through to
+  # github.sha and the bound is gone.
   #
   # cancel-in-progress is false here too, even though this workflow is NOT one
-  # of the required contexts in .github/required-checks.json — so a cancelled
-  # run blocks nobody, which is the whole argument for letting it cancel. The
-  # flag still adds no bound (GitHub cancels the pending run in a group by
-  # default), and what it would buy is the unused remainder of a ~2 minute
-  # analyze job on roughly 30% of arrivals. What it would cost is the SARIF
-  # upload: cancelling mid-analysis discards the scan for that pull request and
-  # the next run may not come. The same rule as the three required workflows is
-  # worth more here than the remainder it saves, and one rule is one rule for
-  # the next workflow to follow. See ci.yml's concurrency block for the full
-  # argument and the measured contention rate.
+  # of the required contexts in .github/required-checks.json — so a cancelled run
+  # blocks nobody, which is the whole argument for letting it cancel. It also
+  # does not stop GitHub cancelling the PENDING run when a newer arrival claims
+  # the single pending slot; the flag only decides whether the RUNNING job dies
+  # too. See ci.yml's concurrency block for what that residual means for a
+  # required context; here it means only a lost scan, and this workflow's
+  # pull_request carries no types filter, so an edit re-fires it.
+  #
+  # This workflow's OWN rates, from its 484 runs over the same 6.15 days (mean
+  # service 1.86 min, mean 78.7 arrivals/day): rho = 0.10, so a `true` would
+  # destroy a running analyze job on ~8 a day and the pending slot would be
+  # claimed on ~0.7 a day — an order of magnitude below ci's 26 and 7, because
+  # the job is three times shorter. That is the trade: `true` would save the
+  # unused remainder of a 1.9 minute job on ~8 arrivals a day, and would cost the
+  # SARIF upload each time, since a scan cancelled mid-analysis is discarded and
+  # the author's next run may not come. One rule for all four bounded workflows is
+  # worth more than that, and it gives the next workflow one shape to follow.
   group: code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: false
 

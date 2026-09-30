@@ -243,9 +243,27 @@ describe("the verify workflow's migration immutability step", () => {
  * DIFFERENT pull request, and `verify` is a required context in
  * `.github/required-checks.json` that `ledger-relay` mirrors a run conclusion
  * onto, so a cancelling flag would let one contributor's push knock down a
- * peer's required check. Measured over the 6.13 days ending 2026-09-30, `ci`
- * arrives 78.8 times a day against a 6.6 minute mean service time, so about 30%
- * of arrivals find the slot busy — roughly 24 such cancellations a day.
+ * peer's required check. Measured over the 6.13 days ending 2026-09-30 that
+ * would be ~26 destroyed running runs a day at the window mean and ~72 on the
+ * busiest measured day.
+ *
+ * What `false` does NOT do, and this comment used to imply it did: it does not
+ * prevent cancellation. GitHub still cancels the group's PENDING run when a
+ * newer arrival claims the single pending slot, and on a shared group that run
+ * can be a peer's current head with no replacement — the relay mirrors the
+ * cancelled conclusion onto `verify`, and these workflows trigger on
+ * opened/synchronize/reopened with no `edited`, so that pull request is blocked
+ * until its author pushes again. That residual is inherent to sharing one
+ * group; `false` removes the in-flight half only, and `true` would add it back
+ * on top. The honest rates, from the same 483-run window (mean service 6.58
+ * min, load not steady — per-day arrivals 5, 0, 215, 122, 78, 17, 46):
+ * pending-cancelled ~7/day at the window mean, ~20 on 2026-09-27, ~70 on
+ * 2026-09-26's rho=0.98; against 9 such cancellations in the whole window on
+ * main, every one a same-PR self-supersede. On runner minutes the direction is
+ * counter-intuitive: `true` would bill FEWER minutes, because a destroyed run
+ * stops accruing, so `false` costs minutes and is bought deliberately. The bound
+ * is unaffected either way — one running slot caps concurrency at 1 — and a run
+ * dropped from the pending slot never started, so it costs 0 minutes.
  *
  * Assertions are made on the parsed YAML data (workflow.concurrency), never on
  * the raw bytes, so reformatting the block does not disturb them and a change
@@ -283,7 +301,10 @@ describe("the verify workflow's concurrency group", () => {
       "cancel-in-progress must be false — the group is shared by every pull request, so a true " +
         "destroys a RUNNING run that may belong to a different pull request, and verify is a " +
         "required context ledger-relay mirrors the conclusion onto. It cannot tighten the bound: " +
-        "GitHub cancels the group's pending run by default either way.",
+        "GitHub cancels the group's pending run by default either way. Note what it does NOT buy " +
+        "either: a pending run is still cancelled when a newer arrival claims the single pending " +
+        "slot, and here that run can be a peer's live head with no replacement, so its author is " +
+        "blocked until they push again. That residual is inherent to the shared group.",
     ).toBe(false);
   });
 });
