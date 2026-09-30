@@ -27,14 +27,22 @@ import {
  * before the mount namespace and before any drop of privilege, so an unpinned
  * value there is a root-owned write outside the sandbox.
  *
- * The service runs the canary's posture with one structural delta: the state
- * it keeps is the spool offset, which must survive reboots, so it lives in a
+ * The service runs the canary's posture with two deltas. The state it keeps
+ * is the spool offset, which must survive reboots, so it lives in a
  * `StateDirectory=` (/var/lib/overflow-bounce) and not the canary's
  * `RuntimeDirectory=` (/run is wiped at boot - the canary's dead-streak
  * marker may be lost at reboot, the bounce offset may not). Under
  * `ProtectSystem=strict` the state directory is granted read-write
  * implicitly, so `ReadWritePaths=` stays out and the spool and the root-only
- * webhook file stay read-only-readable.
+ * webhook file stay read-only-readable. And unlike the canary it carries one
+ * capability: the spool is the MTA's delivery state (mail:mail, mode 0600 on
+ * the deployed host), an empty bounding set strips CAP_DAC_OVERRIDE, and
+ * root's plain open of the spool is then denied under this unit's posture -
+ * measured, not assumed: every run exited 2 at the spool readability check.
+ * The grant is pinned to the EXACT single token, so a second capability in
+ * either directive fails the pin; the closed key set is what rejects the
+ * canary's SupplementaryGroups= repair shape, which was tested and does not
+ * work here (a 0600 file carries zero group bits).
  */
 const REVIEWED_BOUNCE_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -79,10 +87,16 @@ const REVIEWED_BOUNCE_KEYS: ReadonlyMap<UnitSection, ReadonlySet<string>> = new 
   ["Install", new Set()],
 ]);
 
-/** `[Service]` directives pinned to an exact value, each as the only assignment of its key. */
+/**
+ * `[Service]` directives pinned to an exact value, each as the only assignment
+ * of its key. The two capability directives are pinned to the exact single
+ * token `CAP_DAC_OVERRIDE` - the one capability reading the MTA-owned spool
+ * needs (see the file header) - so a second token in either directive is a
+ * different value and fails the pin: the grant cannot quietly grow.
+ */
 const requiredBounceServiceValues: ReadonlyArray<readonly [string, string]> = [
-  ["CapabilityBoundingSet", ""],
-  ["AmbientCapabilities", ""],
+  ["CapabilityBoundingSet", "CAP_DAC_OVERRIDE"],
+  ["AmbientCapabilities", "CAP_DAC_OVERRIDE"],
   ["ProtectSystem", "strict"],
   ["StateDirectory", "overflow-bounce"],
   ["ProtectHome", "yes"],
