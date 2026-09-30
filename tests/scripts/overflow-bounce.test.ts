@@ -514,6 +514,19 @@ describe("overflow-bounce.sh class B (local-write detection)", () => {
   });
 });
 
+/**
+ * A message torn exactly after the header/body separator blank line: the
+ * appender has written every header and the separator, and no body byte
+ * yet. At that alignment the chunk's last line is blank, which is
+ * byte-identical in shape to a complete message's terminator - the one
+ * alignment the completion rule needs a second discriminator (>=2 blank
+ * lines in the chunk) to reject.
+ */
+function tornAfterSeparator(message: string): string {
+  const separatorEnd = message.indexOf("\n\n") + 2;
+  return message.slice(0, separatorEnd);
+}
+
 describe("overflow-bounce.sh torn-tail handling (concurrent append)", () => {
   it("parks the offset at the last complete message when the final message is torn, and reports it once the append completes (case 14)", () => {
     const root = makeRoot();
@@ -552,6 +565,76 @@ describe("overflow-bounce.sh torn-tail handling (concurrent append)", () => {
     expect(done.payload).toBe(
       `{"content":"${expectedContent("bounce caught mid-append", overflowAlertAddress)}"}`,
     );
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
+  it("parks the offset when a Class B alert is torn exactly after the separator, and reports it once complete (separator tear, class B)", () => {
+    const root = makeRoot();
+    const fullAlert = mboxMessage({
+      subject: `[overflow] overflow.service failed on ${fqdn}`,
+      from: `overflow-alert@${fqdn}`,
+      body: `The systemd unit overflow.service failed on host ${fqdn} at 2026-09-26T10:00:00Z.`,
+    });
+    const tornAlert = tornAfterSeparator(fullAlert);
+    const spool = makeSpool(
+      root,
+      mboxMessage({ subject: cronSubject, body: "settled batch output" }) + tornAlert,
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const torn = runBounce({ spool, stateDir });
+
+    expect(torn.status).toBe(0);
+    expect(torn.posted, "headers-only partial content must not be reported").toBe(false);
+    expect(
+      offsetValue(stateDir),
+      "the offset must stay at the last complete message, not the separator",
+    ).toBe(spoolSize(spool) - tornAlert.length);
+
+    appendToSpool(spool, fullAlert.slice(tornAlert.length));
+
+    const done = runBounce({ spool, stateDir });
+
+    expect(done.status).toBe(0);
+    expect(done.posted).toBe(true);
+    expect(done.payload).toBe(
+      `{"content":"${expectedLocalWriteContent(`[overflow] overflow.service failed on ${fqdn}`)}"}`,
+    );
+    expect(offsetValue(stateDir)).toBe(spoolSize(spool));
+  });
+
+  it("parks the offset when a Class A DSN is torn exactly after the separator: no partial report, no advance into the torn message (separator tear, class A)", () => {
+    const root = makeRoot();
+    const fullDsn = mboxMessage({
+      subject: dsnSubject,
+      dsn: "exim",
+      failedAddress: overflowAlertAddress,
+    });
+    const tornDsn = tornAfterSeparator(fullDsn);
+    const spool = makeSpool(
+      root,
+      mboxMessage({ subject: cronSubject, body: "settled batch output" }) + tornDsn,
+    );
+    const stateDir = makeStateDir(root);
+    seedOffset(stateDir, "0\n");
+
+    const torn = runBounce({ spool, stateDir });
+
+    expect(torn.status).toBe(0);
+    expect(torn.posted, "a DSN torn at the separator has no body to classify").toBe(false);
+    expect(
+      offsetValue(stateDir),
+      "the offset must not advance into the torn message",
+    ).toBe(spoolSize(spool) - tornDsn.length);
+
+    appendToSpool(spool, fullDsn.slice(tornDsn.length));
+
+    const done = runBounce({ spool, stateDir });
+
+    expect(done.status).toBe(0);
+    expect(done.posted).toBe(true);
+    expect(done.payload).toBe(`{"content":"${expectedContent(dsnSubject, overflowAlertAddress)}"}`);
     expect(offsetValue(stateDir)).toBe(spoolSize(spool));
   });
 
