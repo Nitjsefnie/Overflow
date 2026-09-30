@@ -59,9 +59,11 @@ function serializedPayloadBytes(payload: unknown): number {
  * serialized payload exceeds `factByteLimit` (default 64 MiB).
  *
  * Keyed by the GitHub numeric id, so a subject's row is stable across passes
- * and only changed content is rewritten (issue 853). A duplicated key takes
- * the last payload at the first key's position; GitHub ids cannot collide, so
- * this only orders a pathological input deterministically.
+ * and only changed content is rewritten (issue 853). A duplicated key's last
+ * occurrence decides its whole fate — kept with the last payload, or omitted
+ * with the last measured size — so a key is never both stored and counted as
+ * omitted. GitHub ids cannot collide, so this only orders a pathological
+ * input deterministically.
  */
 export function splitEvidenceFacts(
   document: {
@@ -81,12 +83,20 @@ export function splitEvidenceFacts(
     const key = `${kind}\u0000${subjectKey}`;
     const bytes = serializedPayloadBytes(payload);
     if (bytes > factByteLimit) {
-      // Replace any earlier report of the same key: the payload that stands is
-      // the last one seen, exactly as the kept-fact map below does.
+      // The last occurrence's fate is the only fate: unstage any earlier kept
+      // occurrence and replace any earlier report, so a key can never end up
+      // both stored and counted as omitted.
+      facts.delete(key);
       const prior = omitted.findIndex((report) => report.kind === kind && report.subjectKey === subjectKey);
       if (prior >= 0) omitted.splice(prior, 1);
       omitted.push({ kind, subjectKey, bytes });
       return;
+    }
+    // Symmetrically, a key reported oversized earlier in the document but kept
+    // now loses the stale report — the kept occurrence is the last one.
+    if (omitted.length > 0) {
+      const prior = omitted.findIndex((report) => report.kind === kind && report.subjectKey === subjectKey);
+      if (prior >= 0) omitted.splice(prior, 1);
     }
     facts.set(key, { kind, subjectKey, payload });
   };

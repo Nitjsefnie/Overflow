@@ -112,6 +112,25 @@ describe("splitEvidenceFacts", () => {
     expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: second }]);
     expect(oversized).toEqual([]);
   });
+
+  // The last occurrence's fate is the only fate: a key seen both under and
+  // over the byte limit must not end up stored AND counted as omitted.
+  it("gives a duplicated key seen small-then-oversized exactly one fate: omitted", () => {
+    const small = issue({ id: 7, title: "short" });
+    const large = issue({ id: 7, title: "x".repeat(1000) });
+    const { facts, oversized } = splitEvidenceFacts({ issues: [small, large], pullRequests: [] }, { factByteLimit: 500 });
+    expect(facts).toEqual([]);
+    expect(oversized).toEqual([{ kind: "issue", subjectKey: "7", bytes: expect.any(Number) }]);
+    expect(oversized[0]!.bytes).toBeGreaterThan(500);
+  });
+
+  it("gives a duplicated key seen oversized-then-small exactly one fate: kept with the last payload", () => {
+    const small = issue({ id: 7, title: "short" });
+    const large = issue({ id: 7, title: "x".repeat(1000) });
+    const { facts, oversized } = splitEvidenceFacts({ issues: [large, small], pullRequests: [] }, { factByteLimit: 500 });
+    expect(oversized).toEqual([]);
+    expect(facts).toEqual([{ kind: "issue", subjectKey: "7", payload: small }]);
+  });
 });
 
 describe("mergeEvidenceFacts", () => {
