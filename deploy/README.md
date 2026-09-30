@@ -1817,7 +1817,10 @@ carry.
 
 Then send a real message through the whole route with a throwaway instance —
 the instance name need not be a unit that exists, and the message's subject
-names it: `[overflow] test failed on <host>`.
+names it: `[overflow] test failed on <host>`. Mark where this run starts before
+you start it — `started=$(date -u '+%Y-%m-%d %H:%M:%S')` — and keep it in the
+same shell, because the id below is read from this run's lines only and an
+earlier run's id is a worse mistake than no id at all.
 
 ```bash
 systemctl start overflow-alert@test.service
@@ -1827,16 +1830,22 @@ tail -n 20 /var/log/exim4/mainlog
 
 The script's own line is the verdict, and it is one of two shapes. A delivered
 alert reads `overflow-alert.sh: exim routed <id> to <transport> and Completed
-it; the alert left this host`. Anything else reads `overflow-alert.sh:
-<reason>; the send is NOT recorded, so the next failure for test.service
-alerts again`, where the reason names which failure it was: the submission
-never reached the daemon, the daemon named no id to follow, a verdict exim
-recorded against the id, a local transport the message was routed to, no
-`Completed` for the id inside the 60-second budget (with or without a verdict
-written against it), or a mainlog that could not be read at all. **A run that
-ends in the second shape has failed, whatever the SMTP conversation looked
-like**, and the second shape's own wording is the finding — read it rather than
-re-running.
+it; the alert left this host`, and the alert unit exits **0**. Anything else
+reads `overflow-alert.sh: <reason>; the send is NOT recorded, so the next
+failure for test.service alerts again`, and the alert unit exits **nonzero** —
+`systemctl show overflow-alert@test.service -p ExecMainStatus` reads `0` on the
+first shape and something else on the second. **Read that status in one
+direction only: nonzero is a failure, and zero is not a delivery.** A run the
+throttle suppressed exits `0` having sent nothing, so a status of `0` alongside
+a journal that never carried a verdict is a suppressed run, not a delivered
+alert — the journal line is the verdict and the status only confirms it. The
+reason names which failure it was: the submission never reached the daemon, the
+daemon named no id to follow, a verdict exim recorded against the id, a local
+transport the message was routed to, no `Completed` for the id inside the
+60-second budget (with or without a verdict written against it), or a mainlog
+that could not be read at all. **A run that ends in the second shape has
+failed, whatever the SMTP conversation looked like**, and the second shape's own
+wording is the finding — read it rather than re-running.
 
 That `tail` is for seeing the shape of the traffic, not for finding your
 delivery. **Match on the id, never on the word `Completed`.** The mainlog holds
@@ -1846,9 +1855,9 @@ that mean a file write — the last twenty lines will usually hold several, and
 browsing them for one that looks like a delivery will find a file write and
 call it a pass.
 
-`<id>` is the handle onto this send and onto nothing else. Take it from the
-journal line rather than typing it —
-`journalctl -u overflow-alert@test.service --no-pager -n 20 | grep -oE '[0-9A-Za-z]{6}-[0-9A-Za-z]{6,}-[0-9A-Za-z]{4,}' | tail -n 1`
+`<id>` is the handle onto this send and onto nothing else. Take it from **this
+run's** journal lines rather than typing it —
+`journalctl -u overflow-alert@test.service --no-pager --since "$started" -n 20 | grep -oE '[0-9A-Za-z]{6}-[0-9A-Za-z]{6,}-[0-9A-Za-z]{4,}' | tail -n 1`
 — and substitute it for `<id>` in the three commands that follow. They are the
 whole verification, and each one discriminates on your id and nothing else.
 
@@ -1863,9 +1872,22 @@ reduces that line to the single word the script judges on — the last routing
 line for the id, which is the current decision on a message that deferred and
 was re-routed. This is the same extraction the script itself performs.
 
-If the journal named no id at all, stop there: there is no send to follow, and
-running the last command with an empty `<id>` searches the whole log for any
-line carrying a `T=`, which is the exact false green this step exists to end.
+If that prints nothing, stop there. There is no send to follow, and every one of
+the three commands then runs against an empty `<id>` — the first `grep` matches
+any `Completed` line in the log, the second any routing line, and the `awk`
+reduces whichever of those carries a `T=`, so all three would "pass" on some
+earlier, unrelated message. That is the exact false green this step exists to
+end, and `--since` is what makes the empty answer trustworthy: it means **this
+run named no id**, not that the window was too narrow. Two outcomes produce it,
+and they want different responses. A refused submission reports a reason and
+never names an id — nothing was sent, so there is nothing to follow and the
+reason is the whole finding. A suppressed run logs one line, `last alert for
+<unit> was <age> seconds ago, inside the 1800-second throttle window;
+suppressing`, and that line **carries no id** either — which is the second start
+described below, and it means this run deliberately sent nothing. Read which of
+the two you are looking at before you conclude anything. If more than one id
+comes back, the marker was captured inside an earlier run's second: mark again
+and re-run.
 
 **All three, and only all three, is a pass**: a `Completed` line for your id, a
 routing line for your id, and a transport that leaves the host. The `Completed`
@@ -1891,12 +1913,24 @@ after a run the journal called delivered is a contradiction — chase it rather
 than tidy it away.
 
 A second start of the same throwaway instance within half an hour mails
-nothing — the script logs the suppression to the alert unit's journal
-(`last alert for test.service was <age> seconds ago, inside the 1800-second
-throttle window; suppressing`) and submits no mail. That is the only case in
-which a second start is expected to be silent, and it is the one case where
-the state file's presence is not news. Remove the instance's state file under
-`/run/overflow-alert` to send again immediately.
+nothing — **but only if the first one left throttle state behind, and that is
+exactly what a failed delivery does not do.** Suppression reads a state file
+under `/run/overflow-alert`, and the delivered path is the only one that writes
+one, so on a host whose recipient resolves to a local mailbox there is no file
+to read and the second start is not suppressed at all: it runs the whole
+verdict again, waits out its own 60-second budget, and appends a second verdict
+line to the journal and a second write to `/var/mail/mail`. Two starts, two
+verdicts, two writes — and the state file still absent, which is the check
+above telling you the same thing twice.
+
+When the first run did leave state, the second start is silent: the script logs
+`last alert for test.service was <age> seconds ago, inside the 1800-second
+throttle window; suppressing` and submits no mail, and that line carries no
+message id, so the id extraction above comes back empty and the guard there
+applies. That is the only case in which a second start is expected to be
+silent, and it is the one case where the state file's presence is not news.
+Remove the instance's state file under `/run/overflow-alert` to send again
+immediately.
 
 ### Rollback
 
