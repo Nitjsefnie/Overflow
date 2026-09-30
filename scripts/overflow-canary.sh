@@ -187,23 +187,38 @@ else
   # and never on the word alone: a log already holding someone else's Completed
   # line would otherwise read as a verdict about a message that never left.
   deadline=$(( $(date +%s) + exim_wait ))
+  seen_verdict=''
   while :; do
     if [ -r "$exim_log" ]; then
-      # Completed is read first, and it is the only success. A message that
-      # deferred and then succeeded on a retry has both lines in the log, and
-      # that is a delivered message; reading the failures first would call it
-      # dead.
+      # ORDER MATTERS, and a test pins it. Completed is read first and it is
+      # the only success. A message that is greylisted, or answered with a
+      # temporary 4xx, is deferred once and then COMPLETED on its retry, and
+      # both lines sit in the log under one id at the same time. If the check
+      # below were conclusive on sight, or were read first, that ordinary
+      # retry becomes a false dead verdict and a spurious page on the one
+      # signal the maintainer is meant to trust.
+      #
+      # So the verdict is remembered, not obeyed: the poll keeps going for the
+      # rest of the budget and Completed at any point in it wins. A verdict
+      # decides the report only when the budget closes with no Completed
+      # behind it.
       if grep -q -F -e "$message_id Completed" "$exim_log"; then
         reason=''
         break
       fi
-      # A named verdict adds the failure to the report, so the operator reads
-      # what the relay said rather than our own timeout restated. awk's
-      # index() is a literal search, which is why it is used here and not a
-      # grep pattern: an exim id carries no metacharacters by the book, and
-      # this script has a test that puts a backslash and a quote in one to
-      # prove the JSON report survives. Matching a fixed token after a
-      # literal id keeps both properties.
+      # A named verdict is still worth keeping, so the report says what the
+      # relay said rather than our own timeout restated. awk's index() is a
+      # literal search, which is why it is used here and not a grep pattern:
+      # an exim id carries no metacharacters by the book, and this script has
+      # a test that puts a backslash and a quote in one to prove the JSON
+      # report survives. Matching a fixed token after a literal id keeps both
+      # properties.
+      #
+      # `defer` is deliberately the ONLY provisional token. It is what exim
+      # writes for a temporary failure - a 4xx, a greylist - and it goes on
+      # to RETRY the message, so treating it as final would page the
+      # maintainer every time a relay greylists. The rest are the outcomes
+      # that end a message.
       verdict=$(awk -v id="$message_id" '
         index($0, id) > 0 {
           rest = substr($0, index($0, id) + length(id))
@@ -212,13 +227,20 @@ else
           }
         }
       ' "$exim_log") || verdict=''
-      if [ -n "$verdict" ]; then
+      if [ -n "$verdict" ] && [ "$verdict" != defer ]; then
         reason="the relay recorded $verdict for $message_id and never Completed it, so the smarthost did not take the message"
         break
       fi
+      if [ -n "$verdict" ]; then
+        seen_verdict=$verdict
+      fi
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      reason="the local daemon accepted the message as $message_id but $exim_log records no Completed line for it within ${exim_wait}s"
+      if [ -n "$seen_verdict" ]; then
+        reason="the relay recorded $seen_verdict for $message_id and never Completed it within ${exim_wait}s, so the smarthost did not take the message"
+      else
+        reason="the local daemon accepted the message as $message_id but $exim_log records no Completed line for it within ${exim_wait}s"
+      fi
       break
     fi
     sleep 1

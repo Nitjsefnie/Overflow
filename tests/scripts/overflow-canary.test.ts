@@ -72,7 +72,7 @@ const UNRELATED_COMPLETED =
  */
 const hostileMessageId = '1xBuT1-0000"\\0000QH-0Qqz';
 
-type RelayOutcome = "completed" | "deferred";
+type RelayOutcome = "completed" | "deferred" | "deferred-then-completed";
 
 interface SmtpStandIn {
   /** The smtp:// URL the script is pointed at. */
@@ -253,7 +253,40 @@ async function startSmtp(options: {
         if (inData) {
           if (line === ".") {
             inData = false;
-            if (options.outcome === "completed") {
+            const logCompletedLater = (): void => {
+              if (options.completeAfterMs === undefined) {
+                logLine(`${messageId} Completed`);
+                return;
+              }
+              pending.push(
+                new Promise<void>((resolve) => {
+                  setTimeout(() => {
+                    try {
+                      logLine(`${messageId} Completed`);
+                    } catch (error) {
+                      writeFailures.push(error);
+                    } finally {
+                      resolve();
+                    }
+                  }, options.completeAfterMs);
+                }),
+              );
+            };
+
+            if (options.outcome === "deferred-then-completed") {
+              // One message id, two outcomes, in the order a real relay
+              // produces them when a message is greylisted or answered with a
+              // temporary 4xx: the first attempt defers, the retry succeeds.
+              // Both lines are in the log at once, which is the case that
+              // decides whether the script reads a verdict as final on sight
+              // or waits for the budget to close.
+              messages.push(bufferedData.join("\r\n"));
+              bufferedData = [];
+              logLine(
+                `${messageId} ** defer rejected: greylisted, retrying in 120 seconds`,
+              );
+              logCompletedLater();
+            } else if (options.outcome === "completed") {
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               if (options.smarthostAcceptLine) {
@@ -263,23 +296,7 @@ async function startSmtp(options: {
                 // that looks like the host's rather than a single word.
                 logLine(`${messageId} => 250 2.0.0 OK m30pf4687394wrt.42 - gsmtp`);
               }
-              if (options.completeAfterMs === undefined) {
-                logLine(`${messageId} Completed`);
-              } else {
-                pending.push(
-                  new Promise<void>((resolve) => {
-                    setTimeout(() => {
-                      try {
-                        logLine(`${messageId} Completed`);
-                      } catch (error) {
-                        writeFailures.push(error);
-                      } finally {
-                        resolve();
-                      }
-                    }, options.completeAfterMs);
-                  }),
-                );
-              }
+              logCompletedLater();
             } else {
               logLine(
                 `${messageId} ** defer rejected: temporary failure in the relay's upstream connection`,
@@ -1013,6 +1030,56 @@ describe("overflow-canary.sh verdict discrimination", () => {
       expect(run.status).toBe(1);
       const report = JSON.parse(webhook.posts[0]!) as { content: string };
       expect(report.content).toContain("defer");
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("keeps the Completed check ahead of the failure-token check in the exim-log poll", async () => {
+    // THIS TEST PINS AN ORDERING, not a scenario. If the failure-token check
+    // moves ahead of the Completed check in the poll loop, this goes red and
+    // the canary starts paging on every message the relay defers and then
+    // delivers.
+    //
+    // The scenario is one message id with two lines in the log at once: a
+    // first attempt deferred, the retry completed. That is what a greylisted
+    // or temporary-4xx relay produces routinely, so a verdict read as final
+    // on sight turns an ordinary retry into a false dead verdict plus a
+    // spurious page on the one signal the maintainer is meant to trust.
+    //
+    // The consequence of the ordering is that a named verdict is REMEMBERED,
+    // not conclusive: the poll keeps going for the rest of the budget, and
+    // `Completed` at any point in that budget wins. A verdict only decides
+    // the report when the budget closes with no Completed behind it.
+    //
+    // Worth being precise about what this pins, because the two halves are
+    // easy to conflate. Moving the two blocks past each other is now a NO-OP
+    // - verified, and deliberately so: a provisional verdict must not
+    // short-circuit the poll, so there is nothing for the reordering to
+    // change. What this guards is the failure the reviewer's swap actually
+    // produced in the shipped code, where a verdict WAS conclusive on sight:
+    // the canary paged, and recorded a dead streak, for a message the relay
+    // had delivered. Treating `defer` as final, or breaking on any verdict
+    // before re-reading the log, turns this test red.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred-then-completed",
+      logPath: fixture.eximLog,
+      completeAfterMs: 1200,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 30 });
+
+      expect(run.status).toBe(0);
+      expect(
+        webhook.posts,
+        "a message the relay delivered on retry must not page anyone",
+      ).toEqual([]);
+      expect(existsSync(fixture.marker)).toBe(false);
     } finally {
       await smtp.close();
       await webhook.close();
