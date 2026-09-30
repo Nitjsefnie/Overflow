@@ -203,17 +203,23 @@ const otherShellLines = new Set([
   "systemctl disable --now overflow-canary.timer",
   "rm /etc/systemd/system/overflow-canary.timer",
   "rm /etc/systemd/system/overflow-canary.service",
-  // The sandbox egress proof: a drop-in redirecting both paths so the host's
-  // own webhook file is never read, a background listener on loopback, and
-  // the removal of both artefacts afterwards.
-  "ss -ltn | grep 18099 || echo \"port 18099 is free\"",
+  // The sandbox egress proof: a busy-port precondition that stops the step
+  // rather than announcing itself, a drop-in redirecting both paths so the
+  // host's own webhook file is never read, a recording listener on loopback,
+  // an explicit wait for it to bind before the unit posts, and the removal of
+  // every artefact afterwards.
+  "ss -ltn | grep 18099 && echo \"port 18099 is BUSY - stop, pick another port and re-run this step\" || echo \"port 18099 is free\"",
   "install -d -o root -g root -m 0755 /etc/systemd/system/overflow-canary.service.d",
   "printf '%s\\n' 'http://127.0.0.1:18099/probe' > /etc/overflow/canary-sandbox-probe-webhook",
+  "rm -f /etc/overflow/canary-sandbox-probe-received",
   "printf '%s\\n' '[Service]' 'Environment=OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1' 'Environment=OVERFLOW_CANARY_WEBHOOK_FILE=/etc/overflow/canary-sandbox-probe-webhook' > /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf",
-  "python3 -c \"import http.server as h;h.HTTPServer(('127.0.0.1',18099),h.BaseHTTPRequestHandler).serve_forever()\" &",
-  "test -e /run/overflow-canary/dead && echo \"sandbox reached the out-of-band channel\"",
+  "python3 -c \"import http.server as h;H=type('H',(h.BaseHTTPRequestHandler,),{'do_POST':lambda s:(open('/etc/overflow/canary-sandbox-probe-received','ab').write(s.rfile.read(int(s.headers['Content-Length']))),s.send_response(200),s.end_headers()),'log_message':lambda *a:None});h.HTTPServer(('127.0.0.1',18099),H).serve_forever()\" &",
+  "until ss -ltn | grep -q 18099 ; do sleep 1 ; done",
+  "grep -q failure-alert /etc/overflow/canary-sandbox-probe-received && echo \"sandbox reached the out-of-band channel\" || echo \"the listener received no report - see the journal above\"",
   "rm /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf",
+  "rmdir /etc/systemd/system/overflow-canary.service.d",
   "rm /etc/overflow/canary-sandbox-probe-webhook",
+  "rm -f /etc/overflow/canary-sandbox-probe-received",
   "systemctl show overflow-canary.service -p Environment",
   "rm -f /run/overflow-canary/dead",
 ].map((line) => tokenizeLines(line)[0].join(" ")));

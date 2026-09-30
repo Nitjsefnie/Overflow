@@ -199,6 +199,14 @@ async function startSmtp(options: {
    * happened to be running, and reads as a harness fault rather than one.
    */
   const pending: Promise<void>[] = [];
+  /**
+   * Errors from those writes, rethrown by `close` once every one has settled.
+   * Settling the promise in a `finally` is what keeps a throwing write from
+   * hanging `Promise.all` until the vitest timeout - but swallowing the error
+   * would trade a hang for a silent pass, so it is held here instead and
+   * raised at the one moment the test is already looking.
+   */
+  const writeFailures: unknown[] = [];
   const server = createNetServer((socket) => {
     let buffer = "";
     let inData = false;
@@ -232,8 +240,13 @@ async function startSmtp(options: {
                 pending.push(
                   new Promise<void>((resolve) => {
                     setTimeout(() => {
-                      logLine(`${messageId} Completed`);
-                      resolve();
+                      try {
+                        logLine(`${messageId} Completed`);
+                      } catch (error) {
+                        writeFailures.push(error);
+                      } finally {
+                        resolve();
+                      }
                     }, options.completeAfterMs);
                   }),
                 );
@@ -278,6 +291,7 @@ async function startSmtp(options: {
     close: async () => {
       await closeServer(server);
       await Promise.all(pending);
+      if (writeFailures.length > 0) throw writeFailures[0];
     },
   };
 }
@@ -531,12 +545,14 @@ describe("overflow-canary.sh on a healthy path", () => {
     }
   });
 
-  it("waits for the relay to log Completed instead of reading the log once", async () => {
+  it("waits for a slow relay rather than giving up on the first read", async () => {
     // The relay answers the end of DATA immediately and logs Completed a
     // moment later, which is what a real relay does while it waits on the
-    // smarthost. A run that read the log once - the shape the brief's step 6
-    // would collapse to - sees nothing and reports a healthy path as dead,
-    // every single day, on the one channel whose value is being trusted.
+    // smarthost. A run that gave the log one read would call this path dead.
+    //
+    // This is coverage, not a guard: the scenario below is the one that
+    // discriminates, because a read that misses and finds nothing leaves no
+    // reason at all, so a collapsed loop exits 0 here too.
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -555,6 +571,38 @@ describe("overflow-canary.sh on a healthy path", () => {
       expect(run.status).toBe(0);
       expect(webhook.posts, "a slow but successful relay must not page anyone").toEqual([]);
       expect(existsSync(fixture.marker)).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("keeps polling to the budget, and reports, when Completed never arrives", async () => {
+    // The discriminating test for the polling loop, and the direction that
+    // matters. Collapsing the loop to a single read does not report a healthy
+    // path as dead - it reports a DEAD path as HEALTHY: the read misses, no
+    // reason is ever set, and the run falls through to exit 0 with no post and
+    // no marker. That is the silent failure this whole script exists to
+    // prevent, so the scenario has to be one where the loop is the only thing
+    // standing between a deferred message and a green result.
+    //
+    // A non-zero budget is the point: with waitSeconds at 0 the negative cases
+    // exit on the first read, and the deadline arithmetic, the retry and the
+    // sleep the brief's step 6 specifies are never executed at all. Two
+    // seconds is enough for the loop to spin and give up.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "deferred", logPath: fixture.eximLog });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 2 });
+
+      expect(run.status).toBe(1);
+      expect(
+        webhook.posts,
+        "a message the relay never completed is a dead alert path, and must be reported",
+      ).toHaveLength(1);
     } finally {
       await smtp.close();
       await webhook.close();
