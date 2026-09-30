@@ -19,14 +19,21 @@ import { afterEach, describe, expect, it } from "vitest";
  * suite executes (the deploy suites read only its path out of the alert unit's
  * ExecStart=). Each test runs the real script under /bin/sh with a PATH shim
  * directory in front: a recording curl that never touches a network, a
- * journalctl stub, and a fixed hostname, so the headers are deterministic and
- * no mail can leave the machine.
+ * journalctl stub, a sleep that records being asked to wait, and a fixed
+ * hostname, so the headers are deterministic and no mail can leave the machine.
  *
  * The recipient path is overridden through OVERFLOW_ALERT_RECIPIENT_FILE
  * because /etc/overflow/alert-recipient is root-only host configuration: a
  * suite that wrote it would mutate the host it runs on, and CI's runner user
  * cannot write /etc at all. The alert unit sets no such variable, so the
  * deployed path is always the default.
+ *
+ * The exim mainlog is overridden through OVERFLOW_ALERT_EXIM_LOG for the same
+ * reason, and it is the load-bearing fixture of this suite: a submission the
+ * local daemon merely spooled is NOT an alert that arrived, so every verdict
+ * here is read off a log the test writes. The default fixture is a message that
+ * left the host, which is what the send-stage and throttle cases need; the
+ * delivery-verdict cases replace it line by line.
  */
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -36,7 +43,8 @@ const recipientAddress = "ops@example.test";
 
 /** The exact send contract: the recorded curl argv, in order. */
 const expectedCurlArgv = [
-  "-sS",
+  "-v",
+  "--no-progress-meter",
   "--max-time",
   "30",
   "--connect-timeout",
@@ -51,11 +59,94 @@ const expectedCurlArgv = [
   "-",
 ];
 
+/** The id the shimmed daemon accepts a submission under, as a real relay prints it. */
+const messageId = "1xBuT1-000000009AA-1aA1";
+
+const logStamp = "2026-09-30 02:15:07";
+
+/**
+ * A message the script did not cause, already completed. Every fixture carries
+ * it, so a verdict that ignored the id and matched any Completed line passes
+ * here by accident rather than failing.
+ */
+const foreignCompleted = "2026-09-30 01:30:04 1xBuT1-000000001AA-1aA1 Completed";
+
+/** The routing line exim writes when it hands a message to a transport. */
+const routingLine = (transport: string, id: string = messageId): string =>
+  `${logStamp} ${id} => ${recipientAddress} R=smarthost T=${transport}`;
+
+/** The completion line exim writes once every recipient has been dealt with. */
+const completedLine = (id: string = messageId): string =>
+  `${logStamp} ${id} Completed`;
+
+/** The `<= ` line a spooled message carries; no transport, no verdict. */
+const spoolLine = (id: string = messageId): string =>
+  `${logStamp} ${id} <= overflow-alert@${fqdn} U=root P=esmtp S=1421`;
+
+/** The fixture every send-stage and throttle case starts from. */
+const deliveredEximLog = [
+  foreignCompleted,
+  spoolLine(),
+  routingLine("remote_smtp_smarthost"),
+  completedLine(),
+];
+
+/**
+ * The local delivery agents the script refuses by name, and the reason each
+ * one is in this list: it hands the message to something on THIS machine, so
+ * the exim daemon's own acceptance and completion prove nothing about whether
+ * anybody was told. `address_file` is the transport the issue was filed
+ * against; the rest are the siblings that fail the same way.
+ */
+const localTransports = [
+  "address_file",
+  "address_pipe",
+  "address_pipe_unset",
+  "addressd",
+  "address_directory",
+  "appendfile",
+  "autoreply",
+  "mailbox",
+  "maildrop_home",
+  "mailstore_home",
+  "tpipe",
+];
+
 const curlShim = [
   "#!/bin/sh",
-  'printf \'%s\\n\' "$@" > "$OVERFLOW_TEST_CURL_ARGV"',
-  'cat > "$OVERFLOW_TEST_MAIL"',
+  `printf '%s\\n' "$@" > "$OVERFLOW_TEST_CURL_ARGV"`,
+  `cat > "$OVERFLOW_TEST_MAIL"`,
+  `if [ "\${OVERFLOW_TEST_NO_ID:-0}" -eq 0 ]; then`,
+  `  echo '* Connected to 127.0.0.1 port 25' >&2`,
+  `  echo '> EHLO ${fqdn}' >&2`,
+  `  echo '< 250 OK' >&2`,
+  `  echo '> MAIL FROM:<overflow-alert@${fqdn}>' >&2`,
+  `  echo '< 250 OK' >&2`,
+  `  echo '> RCPT TO:<${recipientAddress}>' >&2`,
+  `  echo '< 250 OK' >&2`,
+  `  echo '> DATA' >&2`,
+  `  echo '< 354 Go ahead' >&2`,
+  `  printf '>\\n' >&2`,
+  `  echo "< 250 OK id=\${OVERFLOW_TEST_MESSAGE_ID}" >&2`,
+  `  echo '* Closing connection' >&2`,
+  "fi",
   "exit ${FAKE_CURL_RC:-0}",
+  "",
+].join("\n");
+
+/**
+ * Records every wait the script asks for and then really waits. The record is
+ * what the "concluded rather than ran out the budget" cases assert on, so
+ * that property is read off an interaction the run produced instead of off a
+ * wall-clock margin, and the recorded file survives after the run.
+ *
+ * The real sleep is named by absolute path: the shim directory is first on the
+ * script's PATH, so a bare `sleep` here would find this file again.
+ */
+const sleepShim = [
+  "#!/bin/sh",
+  `printf 'x\\n' >> "$OVERFLOW_TEST_SLEEP_CALLS"`,
+  `/bin/sleep "$@"`,
   "",
 ].join("\n");
 
@@ -79,6 +170,102 @@ interface AlertRun {
   /** The recorded curl argv, present only when the run sent. */
   argv: string[];
   mail: string;
+  /** How many times the run asked to wait, counted from the sleep shim's record. */
+  sleeps: number;
+}
+
+function runAlert(
+  options: {
+    recipient?: string;
+    args?: string[];
+    curlStatus?: number;
+    journalStatus?: number;
+    /**
+     * The throttle state directory to hand the script through
+     * OVERFLOW_ALERT_STATE_DIR. Absent: a scratch directory inside this run's
+     * fixture, so a run whose state nobody inspects touches nothing shared.
+     */
+    stateDir?: string;
+    /**
+     * The exim mainlog lines this run judges against. Absent: a message that
+     * left the host. `null`: no log file at all, so the run cannot read one.
+     */
+    eximLog?: string[] | null;
+    /** The wait budget, as the script's OVERFLOW_ALERT_EXIM_WAIT_SECONDS. */
+    waitSeconds?: string;
+    /** A daemon that accepts the submission without answering a 250 OK id=. */
+    noId?: boolean;
+  } = {},
+): AlertRun {
+  const directory = mkdtempSync(join(tmpdir(), "overflow-alert-"));
+
+  try {
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    const shim = (name: string, source: string): void => {
+      const path = join(bin, name);
+      writeFileSync(path, source);
+      chmodSync(path, 0o755);
+    };
+    shim("curl", curlShim);
+    shim("sleep", sleepShim);
+    shim("journalctl", journalctlShim);
+    shim("hostname", hostnameShim);
+
+    const recipientFile = join(directory, "alert-recipient");
+    if (options.recipient !== undefined) writeFileSync(recipientFile, options.recipient);
+
+    const curlArgvPath = join(directory, "curl-argv");
+    const mailPath = join(directory, "mail.eml");
+    const sleepCallsPath = join(directory, "sleep-calls");
+    const stateDir = options.stateDir ?? join(directory, "throttle-state");
+    const eximLogPath = join(directory, "mainlog");
+    if (options.eximLog !== null) {
+      const lines = options.eximLog ?? deliveredEximLog;
+      writeFileSync(eximLogPath, `${lines.join("\n")}\n`);
+    }
+
+    const result = spawnSync(
+      "/bin/sh",
+      [scriptPath, ...(options.args ?? ["overflow.service"])],
+      {
+        env: {
+          NODE_ENV: "test",
+          PATH: `${bin}:/usr/bin:/bin`,
+          OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
+          OVERFLOW_ALERT_STATE_DIR: stateDir,
+          OVERFLOW_ALERT_EXIM_LOG: eximLogPath,
+          OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1",
+          OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
+          OVERFLOW_TEST_MAIL: mailPath,
+          OVERFLOW_TEST_MESSAGE_ID: messageId,
+          OVERFLOW_TEST_NO_ID: options.noId ? "1" : "0",
+          OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
+          FAKE_CURL_RC: String(options.curlStatus ?? 0),
+          FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
+        },
+        encoding: "utf8",
+      },
+    );
+    if (result.error) throw result.error;
+    expect(result.signal, `killed by ${result.signal}: ${result.stderr}`).toBeNull();
+
+    // Read the shims' captures before the fixture directory is removed.
+    const sent = existsSync(curlArgvPath);
+    const sleeps = existsSync(sleepCallsPath)
+      ? readFileSync(sleepCallsPath, "utf8").split("\n").length - 1
+      : 0;
+    return {
+      status: result.status,
+      stderr: result.stderr,
+      sent,
+      argv: sent ? readFileSync(curlArgvPath, "utf8").split("\n").slice(0, -1) : [],
+      mail: existsSync(mailPath) ? readFileSync(mailPath, "utf8") : "",
+      sleeps,
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -107,75 +294,6 @@ function makeStateDir(): string {
 function seedState(stateDir: string, unit: string, timestamp: number): void {
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(join(stateDir, unit), `${timestamp}\n`);
-}
-
-function runAlert(
-  options: {
-    recipient?: string;
-    args?: string[];
-    curlStatus?: number;
-    journalStatus?: number;
-    /**
-     * The throttle state directory to hand the script through
-     * OVERFLOW_ALERT_STATE_DIR. Absent: a scratch directory inside this run's
-     * fixture, so a run whose state nobody inspects touches nothing shared.
-     */
-    stateDir?: string;
-  } = {},
-): AlertRun {
-  const directory = mkdtempSync(join(tmpdir(), "overflow-alert-"));
-
-  try {
-    const bin = join(directory, "bin");
-    mkdirSync(bin);
-    const shim = (name: string, source: string): void => {
-      const path = join(bin, name);
-      writeFileSync(path, source);
-      chmodSync(path, 0o755);
-    };
-    shim("curl", curlShim);
-    shim("journalctl", journalctlShim);
-    shim("hostname", hostnameShim);
-
-    const recipientFile = join(directory, "alert-recipient");
-    if (options.recipient !== undefined) writeFileSync(recipientFile, options.recipient);
-
-    const curlArgvPath = join(directory, "curl-argv");
-    const mailPath = join(directory, "mail.eml");
-    const stateDir = options.stateDir ?? join(directory, "throttle-state");
-
-    const result = spawnSync(
-      "/bin/sh",
-      [scriptPath, ...(options.args ?? ["overflow.service"])],
-      {
-        env: {
-          NODE_ENV: "test",
-          PATH: `${bin}:/usr/bin:/bin`,
-          OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
-          OVERFLOW_ALERT_STATE_DIR: stateDir,
-          OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
-          OVERFLOW_TEST_MAIL: mailPath,
-          FAKE_CURL_RC: String(options.curlStatus ?? 0),
-          FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
-        },
-        encoding: "utf8",
-      },
-    );
-    if (result.error) throw result.error;
-    expect(result.signal, `killed by ${result.signal}: ${result.stderr}`).toBeNull();
-
-    // Read the shims' captures before the fixture directory is removed.
-    const sent = existsSync(curlArgvPath);
-    return {
-      status: result.status,
-      stderr: result.stderr,
-      sent,
-      argv: sent ? readFileSync(curlArgvPath, "utf8").split("\n").slice(0, -1) : [],
-      mail: existsSync(mailPath) ? readFileSync(mailPath, "utf8") : "",
-    };
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
 }
 
 /** The valid single-line recipient every send-path test starts from. */
@@ -253,6 +371,225 @@ describe("overflow-alert.sh send stage", () => {
     const run = runAlert({ recipient: validRecipient, curlStatus: 7 });
 
     expect(run.status).toBe(7);
+  });
+});
+
+describe("overflow-alert.sh delivery verdict", () => {
+  const unit = "overflow.service";
+
+  /**
+   * The issue this whole verdict is about: exim accepted a message and a local
+   * delivery agent wrote it to /var/mail/mail on this same machine. Both halves
+   * of the daemon's own account are present - the 250 OK id the script follows,
+   * and the Completed line that ends the message - and no operator was told
+   * anything. So the run must fail, and, because a failed alert must not buy
+   * the next thirty minutes of silence, must leave no throttle record behind.
+   */
+  it("refuses a T=address_file routing line as a local write: nonzero, no state recorded", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      eximLog: [foreignCompleted, spoolLine(), routingLine("address_file"), completedLine()],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.sent, "the submission itself still happened").toBe(true);
+    expect(
+      existsSync(join(stateDir, unit)),
+      "a message that reached nobody must not suppress the next alert",
+    ).toBe(false);
+    expect(run.stderr).toContain("address_file");
+    expect(run.stderr).toContain(messageId);
+  });
+
+  it.each(localTransports)(
+    "refuses the local %s transport the same way a local write is refused",
+    (transport) => {
+      const stateDir = makeStateDir();
+
+      const run = runAlert({
+        recipient: validRecipient,
+        stateDir,
+        eximLog: [spoolLine(), routingLine(transport), completedLine()],
+      });
+
+      expect(run.status).not.toBe(0);
+      expect(existsSync(join(stateDir, unit))).toBe(false);
+      expect(run.stderr).toContain(transport);
+    },
+  );
+
+  it("delivers when the routing line names a remote transport and exim Completed it", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost"), completedLine()],
+    });
+
+    expect(run.status).toBe(0);
+    expect(existsSync(join(stateDir, unit))).toBe(true);
+    expect(run.stderr).toContain("remote_smtp_smarthost");
+    expect(run.stderr).toContain(messageId);
+  });
+
+  it.each(["remote_smtp", "remote_smtp_unsecure", "smarthost"])(
+    "delivers on the unlisted but remote %s transport rather than refusing it",
+    (transport) => {
+      // The denylist is deliberate: a legitimately configured remote transport
+      // this script does not name is not a failure, and refusing it would be
+      // the same false green the verdict exists to end.
+      const run = runAlert({
+        recipient: validRecipient,
+        eximLog: [spoolLine(), routingLine(transport), completedLine()],
+      });
+
+      expect(run.status).toBe(0);
+    },
+  );
+
+  it("keeps waiting through a defer and delivers when the retry Completes", () => {
+    const run = runAlert({
+      recipient: validRecipient,
+      eximLog: [
+        spoolLine(),
+        `${logStamp} ${messageId} ** defer rejected: RCPT TO:<${recipientAddress}>: 451 greylisted`,
+        routingLine("remote_smtp_smarthost"),
+        completedLine(),
+      ],
+    });
+
+    expect(run.status).toBe(0);
+  });
+
+  it("fails naming the defer when the budget closes with no Completed behind it", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "1",
+      eximLog: [
+        spoolLine(),
+        routingLine("remote_smtp_smarthost"),
+        `${logStamp} ${messageId} ** defer rejected: RCPT TO:<${recipientAddress}>: 451 greylisted`,
+      ],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("defer");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it.each([
+    ["rejected", `** rejected: RCPT TO:<${recipientAddress}>: 550 no such user`],
+    ["bounce", `** bounce: <> ${recipientAddress}`],
+    ["blackhole", `** blackhole: <> ${recipientAddress}`],
+    ["discarded", `** discarded: <> ${recipientAddress}`],
+    ["Failed", `Failed`],
+  ])(
+    "concludes on the terminal %s verdict instead of waiting out the budget",
+    (_label, tail) => {
+      const stateDir = makeStateDir();
+
+      const run = runAlert({
+        recipient: validRecipient,
+        stateDir,
+        waitSeconds: "20",
+        eximLog: [spoolLine(), routingLine("remote_smtp_smarthost"), `${logStamp} ${messageId} ${tail}`],
+      });
+
+      expect(run.status).not.toBe(0);
+      expect(run.stderr).toContain(messageId);
+      expect(run.sleeps, "a terminal verdict must end the poll, not the budget").toBe(0);
+      expect(existsSync(join(stateDir, unit))).toBe(false);
+    },
+  );
+
+  it("fails when exim never writes a Completed line within the budget", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "1",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain(messageId);
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+    expect(run.sleeps, "the budget is the thing being spent here").toBeGreaterThan(0);
+  });
+
+  it("fails when the daemon accepted the alert but answered no id to follow", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      noId: true,
+      eximLog: [foreignCompleted, completedLine("1xBuT1-000000009AA-1aA1")],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("250 OK id=");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("does not read another message's Completed line as its own verdict", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "1",
+      eximLog: [foreignCompleted, spoolLine(), routingLine("remote_smtp_smarthost")],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("treats an unreadable exim mainlog as no delivery rather than as silence to wait on", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      waitSeconds: "1",
+      eximLog: null,
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("mainlog");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it.each(["thirty", "-1", "1.5", "60s", "0x3c"])(
+    "refuses a wait budget of %j with exit 2 naming the value, before the send",
+    (budget) => {
+      const run = runAlert({ recipient: validRecipient, waitSeconds: budget });
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("OVERFLOW_ALERT_EXIM_WAIT_SECONDS");
+      expect(run.stderr).toContain(budget);
+      expect(run.sent, "an unusable budget must not reach the send stage").toBe(false);
+    },
+  );
+
+  it("falls back to the default budget on an empty one rather than refusing it", () => {
+    // The default is substituted with `:-`, so an empty variable takes the
+    // deployed budget instead of reaching the digit check. That is deliberate:
+    // an unset-and-empty budget is the canary's own shape, and a run that
+    // waits the deployed number of seconds beats one that refuses to alert.
+    const run = runAlert({ recipient: validRecipient, waitSeconds: "" });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toContain(messageId);
   });
 });
 
