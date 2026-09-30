@@ -472,7 +472,7 @@ fi
           name: "zizmor",
           if: "${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}",
           env: { GH_TOKEN: "${{ github.token }}" },
-          run: "zizmor --no-progress .github/workflows-pr/",
+          run: "zizmor --no-progress .github/workflows-pr/*.yml",
         },
         {
           name: "Base freshness",
@@ -623,9 +623,13 @@ fi
     expect(install!.run).not.toContain("upgrade pip");
     expect(install!.run).not.toContain("pip install zizmor");
     // The id is load-bearing: the zizmor step's condition skips the scan only
-    // when the install failed. The scan targets the extracted PR copies
-    // (.github/workflows-pr/), never the checked-out tree's own workflows.
-    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/");
+    // when the install failed. The scan targets the extracted PR copies as
+    // explicit globbed FILE inputs (.github/workflows-pr/*.yml) — zizmor's
+    // directory input only collects a repo root or a path ending in
+    // .github/workflows, so the bare directory exits 3 "no inputs collected"
+    // (fix round 2, finding C) — and never the checked-out tree's own
+    // workflows.
+    const zizmor = steps.find((step) => step.run === "zizmor --no-progress .github/workflows-pr/*.yml");
     expect(zizmor).toBeDefined();
     expect(zizmor!.if).toBe("${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}");
   });
