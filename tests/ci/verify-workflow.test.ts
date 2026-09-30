@@ -222,11 +222,17 @@ describe("the verify workflow's migration immutability step", () => {
  * (fine to cancel) and a merged SHA's run (never fine): the deploy gate in
  * scripts/deploy-revision.sh reads the check conclusion for the SHA it deploys,
  * and a run cancelled by the next push to main concludes `cancelled`, which the
- * gate refuses. A push to main carries no pull_request number, so the group
- * falls back to the ref and every main push shares one group; a literal
- * `cancel-in-progress: true` then cancelled the previous merged SHA's run on
- * every merge (issue 474). The group stays per-pull-request with a ref
- * fallback, and cancellation itself is gated on the event being a pull request.
+ * gate refuses. Under a per-pull-request group with a ref fallback every main
+ * push shared one group, so a literal `cancel-in-progress: true` cancelled the
+ * previous merged SHA's run on every merge (issue 474).
+ *
+ * The group is now split by event class instead: a pull request enters one
+ * repository-level group, and every other leg keys on its own `github.sha`, so
+ * no push to main shares a group with anything at all and nothing a merge
+ * depends on can be cancelled. Cancellation stays gated on the event being a
+ * pull request. The parentheses around the event-name test are load-bearing —
+ * `&&` binds tighter than `||` in a GitHub expression, and without them the
+ * pull_request arm falls through to `github.sha` and the group is per-SHA again.
  *
  * Assertions are made on the parsed YAML data (workflow.concurrency), never on
  * the raw bytes, so reformatting the block does not disturb them and a change
@@ -247,11 +253,11 @@ describe("the verify workflow's concurrency group", () => {
     concurrency = workflow.concurrency ?? {};
   });
 
-  it("scopes the group per pull request, falling back to the ref", () => {
+  it("puts every pull request in one repository-level group and keys every other leg on its own SHA", () => {
     expect(
       concurrency.group,
-      "the concurrency group must be ci-${{ github.event.pull_request.number || github.ref }} — per-pull-request, falling back to the ref for push and workflow_dispatch events",
-    ).toBe("ci-${{ github.event.pull_request.number || github.ref }}");
+      "the concurrency group must be ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }} — one repository-level group for every pull request, and a per-SHA group for push and workflow_dispatch, whose keys must be parenthesised because && binds tighter than ||",
+    ).toBe("ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}");
   });
 
   it("cancels in-progress runs only when the event is a pull request", () => {
