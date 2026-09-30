@@ -20,6 +20,8 @@ Backing the production database up and restoring it — the least-privilege back
 
 Containing and scoping an incident, preserving evidence and recording the maintainer's decisions — [incident-response.md](incident-response.md).
 
+Screening the contributor scoring for data-protection impact — the activities, the human-review routes and the dated conclusion — [dpia-screening.md](dpia-screening.md).
+
 Values used throughout: deployment tree `/srv/overflow`, service account
 `overflow:overflow`, Node 24.17.0 at `/usr/local/lib/nodejs/node-v24.17.0`,
 secrets in `/etc/overflow/overflow.env`, listener `127.0.0.1:3000` behind nginx.
