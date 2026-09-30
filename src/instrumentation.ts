@@ -11,7 +11,18 @@
 // Edge Runtime (issue 88).
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { registerNodejs } = await import("./instrumentation-node");
-    await registerNodejs();
+    try {
+      const { registerNodejs } = await import("./instrumentation-node");
+      await registerNodejs();
+    } catch (error) {
+      // Next.js retries register() on every request once it has rejected, so a
+      // throw here would leave the unit `active` serving 500s and printing the
+      // same rejection per request, forever, seen by nobody (issue 846).
+      // Exiting hands the failure to systemd instead: Restart=on-failure
+      // restarts the process, the start limit then fails the unit visibly,
+      // and OnFailure= alerts on it.
+      console.error("Overflow server startup failed; exiting so the unit restarts, trips its start limit, and fails visibly", error);
+      process.exit(1);
+    }
   }
 }
