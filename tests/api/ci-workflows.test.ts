@@ -292,7 +292,10 @@ fi
     });
     expect(workflow.on).toEqual(expect.objectContaining({
       push: { branches: ["main"] },
-      pull_request: { branches: ["main"] },
+      // pull_request_target executes main's workflow definition, so a pull
+      // request that edits its own ci.yml cannot shape the job that judges it
+      // (issue 822). Same trigger shape as ratchet-guard.yml.
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
       // The dispatch trigger carries the calibrate self-test's input: a
       // boolean, defaulting false, whose fabricated raise must be refused by
       // branch protection so the calibrate job fails visibly (issue 684).
@@ -315,11 +318,11 @@ fi
       },
     }));
     expect(workflow.on.push).not.toHaveProperty("paths");
-    expect(workflow.on.pull_request).not.toHaveProperty("paths");
+    expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
       group: "ci-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
 
     const verify = workflow.jobs.verify!;
@@ -343,8 +346,16 @@ fi
       .map((step) => step.uses)).toEqual([
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     ]);
+    // The verify job tests the pull request's merge ref, not main's tip: the
+    // ref input is pinned exactly (with persist-credentials: false, which is
+    // what actions/checkout's fork guard requires before it admits a PR ref
+    // under pull_request_target), so a checkout silently reverted to main's
+    // tip fails here.
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
-      .toEqual(expect.objectContaining({ "persist-credentials": false }));
+      .toEqual({
+        ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
+        "persist-credentials": false,
+      });
     expect(verify.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))?.with)
       .toEqual(expect.objectContaining({ "node-version": "24.17.0" }));
     expect(verify.steps.map((step) => step.run).filter(Boolean)).toEqual(expect.arrayContaining([
@@ -364,24 +375,98 @@ fi
 
   it("parses a catalogue-style workflow gate with explicit least privilege and pinned actions", async () => {
     const workflow = await readWorkflow("actionlint.yml");
+    // pull_request_target executes main's definition and main's tools; the
+    // pull request head enters only as git objects extracted with `git show`
+    // (issue 822). Same trigger shape as ratchet-guard.yml.
     expect(workflow.on).toEqual(expect.objectContaining({
       push: { branches: ["main"] },
-      pull_request: { branches: ["main"] },
+      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
       workflow_dispatch: null,
     }));
     expect(workflow.on.push).not.toHaveProperty("paths");
-    expect(workflow.on.pull_request).not.toHaveProperty("paths");
+    expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
       group: "actionlint-${{ github.event.pull_request.number || github.ref }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
     const steps = workflow.jobs.actionlint!.steps;
     expect(steps.filter((step) => step.uses).every((step) => /@[0-9a-f]{40}$/.test(step.uses!))).toBe(true);
-    expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with)
-      .toEqual(expect.objectContaining({ "persist-credentials": false }));
-    expect(steps.some((step) => step.run === "./actionlint -color .github/workflows/*.yml")).toBe(true);
-    expect(steps.some((step) => step.run === "zizmor --no-progress .github/workflows/")).toBe(true);
+    // The whole job, exactly, in the dependency-audit style: any extra step —
+    // a second checkout, a script sourced from the extracted tree — fails this
+    // equality. Under pull_request_target the default checkout is main's tip;
+    // the checkout step carries no ref input, and the PR head is fetched as
+    // git objects and extracted as data, never checked out.
+    expect(workflow.jobs.actionlint).toEqual({
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+      env: {
+        ACTIONLINT_VERSION: "1.7.12",
+        ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+      },
+      steps: [
+        {
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "persist-credentials": false },
+        },
+        {
+          name: "Fetch the pull request head",
+          env: { PR_NUMBER: "${{ github.event.pull_request.number }}" },
+          run: 'git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"',
+        },
+        {
+          uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+          with: { "python-version": "3.13" },
+        },
+        {
+          name: "Install actionlint",
+          run: `tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+curl -fsSL --retry 3 -o "$tarball" \\
+  "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+tar -xzf "$tarball" actionlint
+./actionlint --version
+`,
+        },
+        {
+          name: "Install zizmor",
+          id: "install_zizmor",
+          run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n",
+        },
+        {
+          name: "Extract the PR's workflow files as data",
+          run: `mkdir -p .github/workflows-pr
+for f in $(git ls-tree --name-only refs/remotes/pr/head:.github/workflows/); do
+  git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+done
+`,
+        },
+        {
+          name: "actionlint",
+          id: "actionlint",
+          run: "./actionlint -color .github/workflows-pr/*.yml",
+        },
+        {
+          name: "zizmor",
+          if: "${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}",
+          env: { GH_TOKEN: "${{ github.token }}" },
+          run: "zizmor --no-progress .github/workflows-pr/",
+        },
+        {
+          name: "Base freshness",
+          if: "${{ github.event_name == 'pull_request_target' }}",
+          env: {
+            GH_TOKEN: "${{ github.token }}",
+            REPO_SLUG: "${{ github.repository }}",
+            BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+            BASE_REF: "${{ github.event.pull_request.base.ref }}",
+            PR_NUMBER: "${{ github.event.pull_request.number }}",
+            HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+          },
+          run: "bash scripts/ci-base-freshness.sh",
+        },
+      ],
+    });
   });
 
   it("parses a scheduled lockfile audit whose gate is the bare audit command's exit code", async () => {

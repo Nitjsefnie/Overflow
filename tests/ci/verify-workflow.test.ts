@@ -16,6 +16,7 @@ type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, unknown>;
   if?: unknown;
   "continue-on-error"?: unknown;
   env?: Record<string, string | undefined>;
@@ -152,9 +153,9 @@ describe("the verify workflow's ratchet documents step", () => {
     expect(step, "the verify job must contain the Ratchet documents step").toBeDefined();
     expect(
       step.if,
-      "the step must run on pull_request events exactly — a push run has no merge ref, " +
+      "the step must run on pull_request_target events exactly — a push run has no merge ref, " +
         "so HEAD^2 does not exist there",
-    ).toBe("${{ github.event_name == 'pull_request' }}");
+    ).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       step.env,
       "the pull request number must reach the fetch through env, never ${{ }} interpolation " +
@@ -202,7 +203,7 @@ describe("the verify workflow's migration immutability step", () => {
     const [step] = migrationImmutability();
 
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
-    expect(step?.if).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(step?.if).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(step?.run).toBe(
       'git fetch --depth=2 origin "${GITHUB_SHA}"\n' +
         "node scripts/check-migration-edits.ts HEAD^1 HEAD^2\n",
@@ -255,8 +256,8 @@ describe("the verify workflow's concurrency group", () => {
     ).toBe("string");
     expect(
       concurrency["cancel-in-progress"],
-      "cancel-in-progress must be the expression ${{ github.event_name == 'pull_request' }} — a literal true also cancels main pushes, and a cancelled check makes the deploy gate refuse the merged SHA",
-    ).toBe("${{ github.event_name == 'pull_request' }}");
+      "cancel-in-progress must be the expression ${{ github.event_name == 'pull_request_target' }} — a literal true also cancels main pushes, and a cancelled check makes the deploy gate refuse the merged SHA",
+    ).toBe("${{ github.event_name == 'pull_request_target' }}");
   });
 });
 
@@ -350,12 +351,12 @@ describe("the required workflows' base-freshness step", () => {
     ).toBeDefined();
     expect(
       verifyStep.if,
-      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request' }} — a substring pin also accepts a sibling event such as pull_request_target, which these workflows never trigger, so the gate would silently stop running",
-    ).toBe("${{ github.event_name == 'pull_request' }}");
+      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request_target' }} — the required contexts are produced from the pull_request_target leg (issue 822); an expression naming a sibling event would leave the gate silently unrun",
+    ).toBe("${{ github.event_name == 'pull_request_target' }}");
     expect(
       actionlintStep.if,
-      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request' }} — a substring pin also accepts a sibling event such as pull_request_target, which these workflows never trigger, so the gate would silently stop running",
-    ).toBe("${{ github.event_name == 'pull_request' }}");
+      "Base freshness must be gated by the exact expression ${{ github.event_name == 'pull_request_target' }} — the required contexts are produced from the pull_request_target leg (issue 822); an expression naming a sibling event would leave the gate silently unrun",
+    ).toBe("${{ github.event_name == 'pull_request_target' }}");
   });
 
   it("does not tolerate its own failure", () => {
@@ -458,5 +459,85 @@ describe("the required workflows' base-freshness step", () => {
       actionlintStep.run,
       "the gate's logic must live in scripts/ci-base-freshness.sh, where tests/ci/base-freshness.test.ts can execute it against a stubbed gh — an inline run block has no behavioral cover, and issue 510 showed an untested gate decaying into an unsatisfiable one",
     ).toBe("bash scripts/ci-base-freshness.sh");
+  });
+});
+
+/**
+ * Issue 822 moved the required workflows' pull-request legs to
+ * pull_request_target so the executed definition is always main's. Under that
+ * event a workflow can reach repository secrets and runs with the caller's
+ * checkout context, so the move is only as good as the boundary it keeps:
+ * this suite pins ci.yml's side of it. The contexts themselves are posted by
+ * the ledger relay alone; the App key exists only in that relay's
+ * environment, never here.
+ */
+describe("the verify workflow's untrusted-code boundary", () => {
+  let workflow: {
+    permissions?: unknown;
+    jobs?: { verify?: { steps?: WorkflowStep[] } };
+  } = {};
+
+  beforeAll(async () => {
+    const source = await readFile(resolve(".github/workflows/ci.yml"), "utf8");
+    workflow = parse(source);
+  });
+
+  /** Calls visit on every string reachable inside `value`. */
+  function visitStrings(value: unknown, visit: (text: string) => void): void {
+    if (typeof value === "string") {
+      visit(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) visitStrings(entry, visit);
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const entry of Object.values(value)) visitStrings(entry, visit);
+    }
+  }
+
+  it("references no secret anywhere in the workflow", () => {
+    const secretRefs: string[] = [];
+    visitStrings(workflow, (text) => {
+      if (text.includes("secrets.")) secretRefs.push(text);
+    });
+
+    expect(
+      secretRefs,
+      "ci.yml runs pull_request_target and must therefore reference no secret — " +
+        "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
+        "the run's secret context; only the ledger relay holds the App key",
+    ).toEqual([]);
+  });
+
+  it("grants the workflow exactly contents: read", () => {
+    expect(
+      workflow.permissions,
+      "the workflow-level permissions must be exactly { contents: read } — the token " +
+        "a pull_request_target run carries must stay read-only over contents, with no " +
+        "extra scope added anywhere",
+    ).toEqual({ contents: "read" });
+  });
+
+  it("checks out the pull request's merge ref with credentials disabled", () => {
+    const checkouts = (workflow.jobs?.verify?.steps ?? []).filter(
+      (step) => step.uses?.startsWith("actions/checkout@"),
+    );
+
+    expect(
+      checkouts,
+      "the verify job must keep exactly one checkout",
+    ).toHaveLength(1);
+    expect(
+      checkouts[0]?.with,
+      "the PR-tree checkout must carry persist-credentials: false (actions/checkout's " +
+        "fork guard requires it before admitting a PR ref under pull_request_target) " +
+        "AND the merge-ref ref input (under pull_request_target the default checkout " +
+        "is main's tip; the suite must test the pull request's change)",
+    ).toEqual({
+      ref: "refs/pull/${{ github.event.pull_request.number }}/merge",
+      "persist-credentials": false,
+    });
   });
 });

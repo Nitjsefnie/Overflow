@@ -18,9 +18,9 @@ type WorkflowStep = {
 /**
  * The verify job's "Detect docs-only change" step picks the diff base and
  * hands it to scripts/docs-only.ts (issue 646): the merge commit's first
- * parent on pull_request runs, the push's `before` SHA on push runs, and an
- * optional validated base on workflow_dispatch runs. A dispatch without a
- * base and every undecidable push must end in docs_only=false.
+ * parent on pull_request_target runs, the push's `before` SHA on push runs,
+ * and an optional validated base on workflow_dispatch runs. A dispatch
+ * without a base and every undecidable push must end in docs_only=false.
  *
  * The wiring is pinned on the parsed YAML, and the step's own run script is
  * then executed with bash -e (GitHub's default shell) inside scratch
@@ -198,7 +198,7 @@ describe("the verify workflow's docs-only detection step", () => {
         git(repo, "commit", "--quiet", "--message", "rename");
       });
 
-      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request", PUSH_BEFORE: "" });
+      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=false\n");
     });
@@ -211,7 +211,7 @@ describe("the verify workflow's docs-only detection step", () => {
         await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
       });
 
-      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request", PUSH_BEFORE: before });
+      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request_target", PUSH_BEFORE: before });
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=true\n");
     });
