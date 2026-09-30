@@ -316,8 +316,9 @@ describe("Overflow production unit", () => {
     const files = await readdir(resolve("deploy"), { withFileTypes: true });
 
     expect(files.map((file) => file.name).sort(),
-      "deploy/ may contain only README.md, backup-restore.md, container.md, dpia-screening.md, incident-response.md, " +
-        "overflow-alert@.service, overflow-backup.service, overflow-backup.timer and overflow.service; " +
+      "deploy/ may contain only README.md, backup-restore.md, container.md, " +
+        "dpia-screening.md, incident-response.md, overflow-alert@.service, " +
+        "overflow-backup.service, overflow-backup.timer and overflow.service; " +
         "review additions alongside the install procedure",
     ).toEqual([
       "README.md",
