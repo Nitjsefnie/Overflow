@@ -98,7 +98,13 @@ const UNBOUNDED_BY_CHOICE = new Map<string, string>([
 /** The two events that make a workflow reachable from a fork pull request. */
 const PR_EVENTS = ["pull_request", "pull_request_target"];
 
-/** Group keys that scope a run to one pull request or one ref, not to the repository. */
+/**
+ * Group keys that scope a run to one pull request or one ref, not to the
+ * repository. Matched as substrings, so `github.ref_name` is caught too: on a
+ * `pull_request` event that resolves to `<N>/merge`, which is per-pull-request
+ * and equally unbounded, so flagging it is the answer we want rather than a
+ * false positive to work around.
+ */
 const UNBOUNDED_GROUP_KEYS = ["github.event.pull_request.number", "github.ref"];
 
 const workflows = new Map<string, Workflow>();
@@ -181,9 +187,14 @@ describe("the bounded workflows", () => {
   });
 
   it("parenthesise the event test so operator precedence cannot unbind the bound", () => {
-    for (const [name, expected] of Object.entries(BOUNDED)) {
+    // This is a diagnostic over the shape the exact assertion above already
+    // holds, not a second guard: the unparenthesised form is the one plausible
+    // "fix" to a cancelled-run complaint, and it looks right in review while
+    // quietly bounding nothing. Asserting the shipped group means the failure
+    // names the precedence trap rather than an opaque string diff.
+    for (const [name] of Object.entries(BOUNDED)) {
       expect(
-        expected.group,
+        workflows.get(name)!.concurrency?.group,
         `${name}'s group must parenthesise the event-name test: && binds tighter than || in a ` +
           "GitHub expression, and the unparenthesised form reads as `a || (b && 'repo-wide') || " +
           "github.sha`, which gives every pull_request run its own SHA group and bounds nothing.",
