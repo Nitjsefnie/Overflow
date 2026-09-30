@@ -54,9 +54,38 @@ describe("the verify workflow's docs-only detection step", () => {
       EVENT_NAME: "${{ github.event_name }}",
       PUSH_BEFORE: "${{ github.event.before }}",
       DISPATCH_BASE: "${{ inputs.base }}",
+      PR_NUMBER: "${{ github.event.pull_request.number }}",
     });
     expect(step?.run).toBeDefined();
     expect(step?.run?.includes("${{")).toBe(false);
+  });
+
+  it("deepens the checked-out merge ref, never GITHUB_SHA, on the PR branch", () => {
+    const run = step?.run ?? "";
+
+    // GITHUB_SHA is the BASE TIP under pull_request_target (issue 822's event
+    // swap): deepening it leaves the checked-out merge commit's graft at depth
+    // 1 and HEAD^1 unreadable. The branch must fetch the merge ref itself —
+    // the same tip as the checkout, so the shallow graft moves — and the
+    // number must arrive through env.
+    expect(
+      run,
+      "the pull_request_target branch must deepen the checked-out merge ref by " +
+        'fetching refs/pull/<N>/merge at depth 2 before reading HEAD^1',
+    ).toContain(
+      'if [ "${EVENT_NAME}" = pull_request_target ]; then\n' +
+        '  git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"\n' +
+        "  base=HEAD^1\n",
+    );
+    // The push and workflow_dispatch branches keep their byte-identical
+    // deepening of GITHUB_SHA (the checked-out commit on those events): two
+    // --unshallow lines, and the leading depth-2 fetch stays first.
+    expect(run.startsWith('git fetch --depth=2 origin "${GITHUB_SHA}"\n')).toBe(true);
+    expect(run.match(/git fetch --no-tags --unshallow origin "\$\{GITHUB_SHA\}"/g)).toHaveLength(2);
+    expect(run).toContain('elif [ "${EVENT_NAME}" = push ]; then');
+    expect(run).toContain(
+      'elif [ "${EVENT_NAME}" = workflow_dispatch ] && [ -n "${DISPATCH_BASE}" ]; then',
+    );
   });
 
   it("hands the base to the docs-only CLI instead of piping a diff into it", () => {
@@ -100,8 +129,16 @@ describe("the verify workflow's docs-only detection step", () => {
     /**
      * Runs the step's run script the way the runner would: a depth-1 checkout
      * of `sha` fetched from the origin, bash -e, and a GITHUB_OUTPUT file.
+     * `options.githubSha` overrides the runner's GITHUB_SHA for events where
+     * it differs from the checked-out commit (pull_request_target points it
+     * at the base tip while the checkout is the merge ref).
      */
-    async function runStep(origin: string, sha: string, env: { EVENT_NAME: string; PUSH_BEFORE: string; DISPATCH_BASE?: string }) {
+    async function runStep(
+      origin: string,
+      sha: string,
+      env: { EVENT_NAME: string; PUSH_BEFORE: string; DISPATCH_BASE?: string; PR_NUMBER?: string },
+      options?: { githubSha?: string },
+    ) {
       counter += 1;
       const checkout = join(root, `checkout-${counter}`);
       await mkdir(checkout);
@@ -120,7 +157,7 @@ describe("the verify workflow's docs-only detection step", () => {
         env: {
           ...scratchGitEnv,
           ...env,
-          GITHUB_SHA: sha,
+          GITHUB_SHA: options?.githubSha ?? sha,
           GITHUB_OUTPUT: outputPath,
           PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
         },
@@ -181,29 +218,39 @@ describe("the verify workflow's docs-only detection step", () => {
       }
     });
 
-    /** A merge ref: the base tip as first parent, the pull request head as second. */
+    /** A merge ref: the base tip as first parent, the pull request head as second.
+     * Also plants refs/pull/1/merge on the origin, the way GitHub publishes it. */
     async function mergeRef(origin: string, headChange: (repo: string) => Promise<void>): Promise<string> {
       git(origin, "checkout", "--quiet", "-b", "feature");
       await headChange(origin);
       git(origin, "checkout", "--quiet", "main");
       await commitFiles(origin, { "CHANGELOG.md": "# changes\n" }, "base advance");
       git(origin, "merge", "--quiet", "--no-ff", "--no-edit", "feature");
-      return git(origin, "rev-parse", "HEAD");
+      const merge = git(origin, "rev-parse", "HEAD");
+      git(origin, "update-ref", "refs/pull/1/merge", merge);
+      return merge;
     }
 
-    it("classifies a pull request's rename by its source path", async () => {
+    it("classifies a pull_request_target run's rename by its source path", async () => {
       const origin = await upstream();
       const merge = await mergeRef(origin, async (repo) => {
         git(repo, "mv", "src/lib/format-signed.ts", "src/lib/format-signed.md");
         git(repo, "commit", "--quiet", "--message", "rename");
       });
 
-      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "" });
+      const result = await runStep(
+        origin,
+        merge,
+        { EVENT_NAME: "pull_request_target", PUSH_BEFORE: "", PR_NUMBER: "1" },
+        // The real event's runner state: the checkout is the merge ref while
+        // GITHUB_SHA points at the base tip (fix round 1, finding B).
+        { githubSha: git(origin, "rev-parse", `${merge}^1`) },
+      );
       expect(result.status, result.stderr).toBe(0);
       expect(result.output).toBe("docs_only=false\n");
     });
 
-    it("diffs a pull request against its first parent, ignoring the event's before SHA", async () => {
+    it("diffs a pull_request_target run against its first parent, with GITHUB_SHA at the base tip", async () => {
       const origin = await upstream();
       const before = git(origin, "rev-parse", "HEAD");
       await commitFiles(origin, { "src/lib/format-signed.ts": "export const formatSigned = 1;\n" }, "code on main");
@@ -211,8 +258,16 @@ describe("the verify workflow's docs-only detection step", () => {
         await commitFiles(repo, { "README.md": "# scratch, edited\n" }, "docs");
       });
 
-      const result = await runStep(origin, merge, { EVENT_NAME: "pull_request_target", PUSH_BEFORE: before });
+      const result = await runStep(
+        origin,
+        merge,
+        { EVENT_NAME: "pull_request_target", PUSH_BEFORE: before, PR_NUMBER: "1" },
+        { githubSha: git(origin, "rev-parse", `${merge}^1`) },
+      );
       expect(result.status, result.stderr).toBe(0);
+      // The failing witness for finding B: docs_only=true must survive the
+      // pull_request_target branch when the runner state models the real
+      // event (base-tip GITHUB_SHA, merge-ref checkout).
       expect(result.output).toBe("docs_only=true\n");
     });
 
