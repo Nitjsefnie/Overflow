@@ -43,7 +43,18 @@ webhook_file=${OVERFLOW_CANARY_WEBHOOK_FILE:-/etc/overflow/canary-discord-webhoo
 state_dir=${OVERFLOW_CANARY_STATE_DIR:-/run/overflow-canary}
 smtp_url=${OVERFLOW_CANARY_SMTP_URL:-smtp://127.0.0.1:25}
 exim_log=${OVERFLOW_CANARY_EXIM_LOG:-/var/log/exim4/mainlog}
+
+# The wait budget reaches an arithmetic expansion, where a non-numeric value
+# aborts the whole run under set -e with nothing in the journal. Only the
+# tests set it, but a refusal costs three lines and says which value is
+# wrong, where the arithmetic says nothing at all.
 exim_wait=${OVERFLOW_CANARY_EXIM_WAIT_SECONDS:-60}
+case $exim_wait in
+  ''|*[!0-9]*)
+    echo "overflow-canary.sh: OVERFLOW_CANARY_EXIM_WAIT_SECONDS is \"$exim_wait\", which is not a whole number of seconds" >&2
+    exit 2
+    ;;
+esac
 
 marker=$state_dir/dead
 
@@ -73,7 +84,11 @@ case "$recipient" in
     ;;
   *@*) ;;
   *)
-    echo "overflow-canary.sh: $recipient_file carries no @: \"$recipient\"" >&2
+    # The value is NOT echoed. The recipient file is host configuration, and
+    # the journal is not a safe place for it: the journal is what gets pasted
+    # into an issue, a chat and a status page, and a misconfiguration is
+    # exactly the moment somebody does all three. The file is named instead.
+    echo "overflow-canary.sh: $recipient_file carries no @, so it is not a single address" >&2
     exit 2
     ;;
 esac
@@ -173,9 +188,34 @@ else
   # line would otherwise read as a verdict about a message that never left.
   deadline=$(( $(date +%s) + exim_wait ))
   while :; do
-    if [ -r "$exim_log" ] && grep -q -F -e "$message_id Completed" "$exim_log"; then
-      reason=''
-      break
+    if [ -r "$exim_log" ]; then
+      # Completed is read first, and it is the only success. A message that
+      # deferred and then succeeded on a retry has both lines in the log, and
+      # that is a delivered message; reading the failures first would call it
+      # dead.
+      if grep -q -F -e "$message_id Completed" "$exim_log"; then
+        reason=''
+        break
+      fi
+      # A named verdict adds the failure to the report, so the operator reads
+      # what the relay said rather than our own timeout restated. awk's
+      # index() is a literal search, which is why it is used here and not a
+      # grep pattern: an exim id carries no metacharacters by the book, and
+      # this script has a test that puts a backslash and a quote in one to
+      # prove the JSON report survives. Matching a fixed token after a
+      # literal id keeps both properties.
+      verdict=$(awk -v id="$message_id" '
+        index($0, id) > 0 {
+          rest = substr($0, index($0, id) + length(id))
+          if (match(rest, /(defer|rejected|bounce|blackhole|discarded|Failed)/)) {
+            print substr(rest, RSTART, RLENGTH); exit
+          }
+        }
+      ' "$exim_log") || verdict=''
+      if [ -n "$verdict" ]; then
+        reason="the relay recorded $verdict for $message_id and never Completed it, so the smarthost did not take the message"
+        break
+      fi
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       reason="the local daemon accepted the message as $message_id but $exim_log records no Completed line for it within ${exim_wait}s"
@@ -204,11 +244,19 @@ fi
 # escaped in every interpolated value, because a host name or an exim id
 # carrying either would otherwise produce a payload Discord rejects - and the
 # report that is lost is the one the operator is relying on.
+#
+# --fail is load-bearing, not tidiness. Without it curl exits 0 for any HTTP
+# response, so a webhook that answers 404 Unknown Webhook or 401 on a revoked
+# token is recorded as a delivered report, the dead-streak marker is written
+# for an outage nobody was told about, and every later run of the streak stays
+# silent. That is one report lost followed by permanent quiet, which is the
+# exact failure this script exists to prevent. With it, a refusal is a
+# nonzero exit and takes the branch below that leaves the marker unwritten.
 summary="[overflow] the failure-alert path on $fqdn is not delivering: $reason"
 payload=$(printf '{"content":"%s"}' "$(printf '%s' "$summary" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')")
 
 post_status=0
-printf '%s' "$payload" | curl -sS --max-time 15 --connect-timeout 5 \
+printf '%s' "$payload" | curl -sS --fail --max-time 15 --connect-timeout 5 \
   -H 'Content-Type: application/json' \
   --data-binary @- \
   "$webhook_url" >/dev/null || post_status=$?

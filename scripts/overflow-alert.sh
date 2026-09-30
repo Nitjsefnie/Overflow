@@ -64,7 +64,11 @@ case "$recipient" in
     ;;
   *@*) ;;
   *)
-    echo "overflow-alert.sh: $recipient_file carries no @: \"$recipient\"" >&2
+    # The value is NOT echoed. The recipient file is host configuration, and
+    # the journal is not a safe place for it: the journal is what gets pasted
+    # into an issue, a chat and a status page, and a misconfiguration is
+    # exactly the moment somebody does all three. The file is named instead.
+    echo "overflow-alert.sh: $recipient_file carries no @, so it is not a single address" >&2
     exit 2
     ;;
 esac

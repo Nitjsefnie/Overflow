@@ -1747,12 +1747,37 @@ breaks that symmetry.
 The canary runs the same script and the same route, then reads the verdict
 from somewhere the route cannot fake: it submits with `curl -v`, takes the
 exim message id off the final `250 OK id=` line, and waits for a line reading
-`<id> Completed` in `/var/log/exim4/mainlog`. A relay that defers, rejects or
-drops the message logs `defer`, `rejected` or `Failed` against that id
-instead. **The absence of `Completed` is the failure** — which is the only
-observation on this host that can see the smarthost leg at all, since a
-canary addressed to a local mailbox would never leave the box and would call
-the one failure this exists to catch a healthy host.
+`<id> Completed` in `/var/log/exim4/mainlog`. A relay that defers, rejects,
+bounces or discards the message logs `defer`, `rejected`, `bounce`,
+`blackhole` or `discarded` against that id instead, and the script names that
+verdict in the report. **The absence of `Completed` is the failure** — which
+is the only observation on this host that can see the smarthost leg at all,
+since a canary addressed to a local mailbox would never leave the box and
+would call the one failure this exists to catch a healthy host.
+
+**What `Completed` means, precisely — and what it does not.** It means the
+smarthost **accepted** the message. That covers the classes worth naming: a
+stopped daemon (curl fails outright), revoked SMTP credentials, a daily
+limit, greylisting, and any 5xx at RCPT or DATA — all of which leave a
+`defer` or `rejected` line and never a `Completed`. What it does **not** cover
+is the most likely way a mail alert path quietly dies: a recipient address
+that is wrong, deleted or converted to a route that silently accepts.
+
+That case is not detectable from here, and pretending otherwise would be
+worse than saying so. Measured against the real smarthost and an RFC 2606
+reserved domain, so that delivery is impossible by construction, the relay
+answered `250 2.0.0 OK … - gsmtp`, exim logged `Completed`, and the canary
+reported the path healthy. It was not wrong. Once the message has left the
+queue there is no observation available through the local exim that
+distinguishes "the smarthost accepted it" from "the remote mailbox exists" —
+`exim -Mvb` inspects **queued** messages, and this one is long gone by then.
+
+**So the detector for a dead mailbox is the heartbeat itself stopping
+arriving**, and it is the operator's job, not the script's. This canary
+proves the pipe is open; it cannot prove there is a person at the other end.
+Keep the recipient address somewhere you will notice it is stale, and treat a
+run of missing canary mail as a finding in its own right — the same weight as
+a failed backup.
 
 A dead path is reported out of band, to the Discord webhook in
 `/etc/overflow/canary-discord-webhook` — a channel that shares no leg with the
@@ -1815,8 +1840,35 @@ systemctl list-timers overflow-canary.timer --no-pager
 
 #### Verify
 
-Prove both directions, healthy first and then broken. Never send a burst at
-the address in `/etc/overflow/alert-recipient` to do this.
+First, prove the **real** webhook is live. Every other check in this section
+either never posts to it or posts to a loopback stand-in, so without this
+one nothing in the procedure establishes that the configured Discord webhook
+still exists and still accepts posts — and a canary reporting into a deleted
+webhook fails in silence, which is the failure mode the whole section is
+about.
+
+The URL is read from the host file into a shell variable and is never echoed,
+printed or pasted; only the HTTP status leaves this block. `--fail` makes a
+`404 Unknown Webhook` or a revoked token a nonzero exit, which is the point:
+without it curl would call a refusal a success.
+
+```bash
+webhook=$(cat /etc/overflow/canary-discord-webhook)
+printf '%s' '{"content":"[overflow-canary] section 12 verification post - the failure-alert canary is being installed and this webhook is live."}' | curl -sS --fail --max-time 15 --connect-timeout 5 -H 'Content-Type: application/json' --data-binary @- "$webhook" -o /dev/null -w 'webhook answered %{http_code}\n'
+```
+
+Expect `webhook answered 204`, and a message saying the canary is being
+installed must appear in that channel — that is the confirmation, and it is
+what a delivered report looks like.
+
+Scope this honestly, because it is narrower than it looks: it proves the
+webhook URL is live and accepting posts, **not** that the alert recipient
+mailbox exists — see what `Completed` does and does not mean above. And it
+sends one real message, so run it once, not on a loop.
+
+Then prove both directions of the mail path, healthy first and then broken.
+Never send a burst at the address in `/etc/overflow/alert-recipient` to do
+this.
 
 A healthy run must exit zero and leave no marker:
 
@@ -1834,6 +1886,20 @@ for the next 03:20 UTC:
 ```bash
 test ! -e /run/overflow-canary/dead && echo "no outage recorded"
 systemctl list-timers overflow-canary.timer --no-pager
+```
+
+**If a scheduled run ever reports the path dead and the mail route looks
+fine, check for a log rotation before you believe it.** The verdict is a
+single-file read of `/var/log/exim4/mainlog`, and this host rotates it: a
+rotation inside the 60-second wait window moves the `Completed` line to
+`mainlog.1`, where the canary cannot see it, and the run reports dead. It
+fails closed — a rotation can produce a false *dead* verdict but never a
+false healthy one — and the window is a minute wide, so it is rare. Still,
+it is the first thing to rule out, because it is cheap and the alternative is
+chasing a relay that is working:
+
+```bash
+ls -l --time-style=full-iso /var/log/exim4/mainlog /var/log/exim4/mainlog.1
 ```
 
 Then prove the dead direction, which is the one the canary exists for. Take a
@@ -1891,8 +1957,8 @@ the sandbox permits the connection. **This proves the network leg of the
 sandbox; it does not send a real Discord message, and it says nothing about
 whether the webhook URL in `/etc/overflow/canary-discord-webhook` is still
 valid, nor about DNS or TLS to `discord.com`** — a loopback listener is
-neither of those, and the first Verify step above is what covers the real
-channel.
+neither of those. The step that covers the real channel is the first one
+under Verify, which posts to the configured webhook itself.
 
 The verdict below is the **payload the listener actually received**. A
 listener that has not finished binding when the unit posts makes the report

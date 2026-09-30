@@ -209,6 +209,12 @@ const otherShellLines = new Set([
   // an explicit wait for it to bind before the unit posts, and the removal of
   // every artefact afterwards.
   "ss -ltn | grep 18099 && echo \"port 18099 is BUSY - stop, pick another port and re-run this step\" || echo \"port 18099 is free\"",
+  "ls -l --time-style=full-iso /var/log/exim4/mainlog /var/log/exim4/mainlog.1",
+  // The only step in the procedure that establishes the configured webhook is
+  // live. The URL is read from the host file into a variable and never echoed;
+  // --fail is what keeps a 404 or a revoked token from reading as success.
+  "webhook=$(cat /etc/overflow/canary-discord-webhook)",
+  "printf '%s' '{\"content\":\"[overflow-canary] section 12 verification post - the failure-alert canary is being installed and this webhook is live.\"}' | curl -sS --fail --max-time 15 --connect-timeout 5 -H 'Content-Type: application/json' --data-binary @- \"$webhook\" -o /dev/null -w 'webhook answered %{http_code}\\n'",
   "install -d -o root -g root -m 0755 /etc/systemd/system/overflow-canary.service.d",
   "printf '%s\\n' 'http://127.0.0.1:18099/probe' > /etc/overflow/canary-sandbox-probe-webhook",
   "rm -f /etc/overflow/canary-sandbox-probe-received",
