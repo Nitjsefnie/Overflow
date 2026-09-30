@@ -179,11 +179,12 @@ const sleepShim = [
  * A clock the run can be made to move forward on.
  *
  * The deployed wait budget is 60 seconds, and the only place that number is
- * observable is the reason a run produces when it waits the budget out. Testing
- * that honestly costs sixty seconds of a CI worker per run, which is why this
- * exists: the step advances the shim's clock by one budget length per call, so
- * the deadline check closes on its next reading instead of a minute later. With
- * no step set the shim returns the real clock and nothing changes.
+ * observable is in a reason a run produces after waiting it out. Testing that
+ * honestly costs sixty seconds of a CI worker per run, which is why this
+ * exists: with a step set, each reading advances a FIXED amount from a fixed
+ * base, so the number of readings a budget takes is the budget, and the run
+ * closes in milliseconds. With no step set the shim returns the real clock and
+ * nothing changes.
  *
  * Only `+%s` is intercepted. The mail header's `date -u` and everything else
  * reach the real date.
@@ -390,11 +391,16 @@ afterEach(() => {
   }
 });
 
-/** A scratch throttle state directory that outlives one test's runAlert calls. */
-function makeStateDir(): string {
+/** A scratch directory that outlives one test's calls, removed after it. */
+function makeScratchDir(): string {
   const directory = mkdtempSync(join(tmpdir(), "overflow-alert-state-"));
   sharedStateDirs.push(directory);
   return directory;
+}
+
+/** A scratch throttle state directory that outlives one test's runAlert calls. */
+function makeStateDir(): string {
+  return makeScratchDir();
 }
 
 /** Pre-seeds the throttle state file for a unit with a recorded send time. */
@@ -498,6 +504,9 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [foreignCompleted, spoolLine(), routingLine("address_file"), completedLine()],
     });
 
@@ -523,6 +532,9 @@ describe("overflow-alert.sh delivery verdict", () => {
       const run = runAlert({
         recipient: validRecipient,
         stateDir,
+        waitSeconds: "3",
+        clockStepSeconds: 1,
+        realSleepSeconds: "0",
         eximLog: [spoolLine(), routingLine(transport), completedLine()],
       });
 
@@ -588,7 +600,9 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
-      waitSeconds: "1",
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [
         spoolLine(),
         routingLine("remote_smtp_smarthost"),
@@ -633,6 +647,8 @@ describe("overflow-alert.sh delivery verdict", () => {
       recipient: validRecipient,
       stateDir,
       waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
@@ -666,7 +682,9 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
-      waitSeconds: "1",
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [foreignCompleted, spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
@@ -680,7 +698,9 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
-      waitSeconds: "1",
+      waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: null,
     });
 
@@ -830,6 +850,7 @@ describe("overflow-alert.sh delivery verdict", () => {
       eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
+    expect(run.status).not.toBe(0);
     expect(run.sleeps, "a 3-second budget closes after two waits").toBe(2);
     expect(run.stderr).toContain("within 3s");
   });
@@ -841,6 +862,8 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       waitSeconds: "3",
+      clockStepSeconds: 1,
+      realSleepSeconds: "0",
       eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
@@ -1014,5 +1037,90 @@ describe("overflow-alert.sh exit-status contract", () => {
 
     expect(run.status).toBe(2);
     expect(run.sent).toBe(false);
+  });
+});
+
+describe("the driven clock the budget cases measure with", () => {
+  it("advances by exactly the step, whatever the real clock does in between", async () => {
+    // The budget cases pin the number of readings a budget takes, and those
+    // counts are only deterministic because the driven clock is ANCHORED -
+    // base + counter*step, a pure function of the counter. Un-anchored it adds
+    // the step to the REAL time on every reading, so however long this machine
+    // takes to spawn a process leaks into the count.
+    //
+    // So this drives the shim itself rather than a run of the script: two
+    // readings a real second apart, with a step of 1, must differ by exactly
+    // 1. The un-anchored form returns floor(t2)+1 - floor(t1), which is >= 2
+    // once a real second has passed, on ANY hardware - so it cannot satisfy
+    // that assertion here. Detecting it through a poll instead would mean
+    // leaning on a 59-iteration case drifting by two, which is about a 2x
+    // margin on this box and nothing at all on a runner twice as fast per
+    // spawn; the sibling case closes after two iterations and could not detect
+    // it under any hardware.
+    const directory = makeScratchDir();
+    const shimPath = join(directory, "date");
+    writeFileSync(shimPath, dateShim);
+    chmodSync(shimPath, 0o755);
+    const clockCalls = join(directory, "clock-calls");
+    const clockBase = join(directory, "clock-base");
+
+    const readClock = (): number => {
+      const result = spawnSync(shimPath, ["+%s"], {
+        env: {
+          NODE_ENV: "test",
+          PATH: "/usr/bin:/bin",
+          OVERFLOW_TEST_CLOCK_BASE: clockBase,
+          OVERFLOW_TEST_CLOCK_CALLS: clockCalls,
+          OVERFLOW_TEST_CLOCK_STEP: "1",
+        },
+        encoding: "utf8",
+      });
+      if (result.error) throw result.error;
+
+      return Number(result.stdout.trim());
+    };
+
+    const first = readClock();
+    // A real second has to pass, or the two readings are the same instant and
+    // there is nothing to compare.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const second = readClock();
+
+    expect(second - first, "the step, and only the step").toBe(1);
+  });
+
+  it("is the real clock when no step is set, so every other case is untouched", () => {
+    const directory = makeScratchDir();
+    const shimPath = join(directory, "date");
+    writeFileSync(shimPath, dateShim);
+    chmodSync(shimPath, 0o755);
+
+    const readClock = (): number => {
+      const result = spawnSync(shimPath, ["+%s"], {
+        env: {
+          NODE_ENV: "test",
+          PATH: "/usr/bin:/bin",
+          OVERFLOW_TEST_CLOCK_BASE: join(directory, "clock-base"),
+          OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
+          OVERFLOW_TEST_CLOCK_STEP: "0",
+        },
+        encoding: "utf8",
+      });
+      if (result.error) throw result.error;
+
+      return Number(result.stdout.trim());
+    };
+
+    // Two readings of the untouched clock must agree to within a second of each
+    // other and with the wall clock: this is the branch every throttle case in
+    // the suite takes, and a shim that froze time here would silently date
+    // every recorded send to one instant.
+    const before = Math.floor(Date.now() / 1000);
+    const first = readClock();
+    const second = readClock();
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(first).toBeGreaterThanOrEqual(before);
+    expect(second).toBeLessThanOrEqual(after);
   });
 });
