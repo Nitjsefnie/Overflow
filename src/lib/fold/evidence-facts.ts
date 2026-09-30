@@ -287,27 +287,38 @@ export async function synchronizeReconciliationEvidence(
  * Reassembles a repository's evidence document from the metadata row and its
  * fact rows — the same shape the single-document read returned, so the fold's
  * merge logic is unchanged. Deterministic ordering by numeric subject key.
+ *
+ * One statement, one snapshot: the metadata and its facts are fetched by a
+ * single lateral-joined select, so a fold pass committing mid-read can never
+ * hand the reader a metadata/facts pair from different writes (a BEFORE/AFTER
+ * pair of plain selects could). One round trip, like the old single `select`.
  */
 export async function readReconciliationEvidence(
   sql: SqlClient,
   repositoryId: string,
 ): Promise<ReconciliationEvidence | null> {
-  const [row] = await sql<{ version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date }[]>`
-    select version, format_version, checkpoint, last_full_pass_at
-    from repository_reconciliation_evidence where repository_id = ${repositoryId}
+  const [row] = await sql<{
+    version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
+    facts: ReadonlyArray<{ kind: string; subject_key: string; payload: unknown }> | null;
+  }[]>`
+    select e.version, e.format_version, e.checkpoint, e.last_full_pass_at,
+      coalesce(aggregate.facts, '[]'::jsonb) as facts
+    from repository_reconciliation_evidence e
+    left join lateral (
+      select jsonb_agg(jsonb_build_object('kind', f.kind, 'subject_key', f.subject_key, 'payload', f.payload)) as facts
+      from repository_reconciliation_evidence_facts f
+      where f.repository_id = e.repository_id
+    ) aggregate on true
+    where e.repository_id = ${repositoryId}
   `;
   if (row === undefined) {
     return null;
   }
-  const factRows = await sql<{ kind: string; subject_key: string; payload: unknown }[]>`
-    select kind, subject_key, payload from repository_reconciliation_evidence_facts
-    where repository_id = ${repositoryId}
-  `;
   return {
     version: row.version,
     formatVersion: row.format_version,
     checkpoint: row.checkpoint,
     lastFullPassAt: row.last_full_pass_at,
-    ...mergeEvidenceFacts(factRows),
+    ...mergeEvidenceFacts(row.facts ?? []),
   };
 }

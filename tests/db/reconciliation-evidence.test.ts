@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { readReconciliationEvidence } from "@/lib/fold/evidence-facts";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { GitHubIssue } from "@/lib/github/types";
@@ -175,6 +176,33 @@ describe("durable reconciliation evidence", () => {
     const cached = await store.getReconciliationEvidence(repositoryId);
     expect(cached?.issues.map(({ id }) => id)).toEqual([101]);
     expect(cached?.pullRequests.map(({ id }) => id)).toEqual([201]);
+  });
+
+  // A fold committing between the read's metadata and facts selects would
+  // hand the fold a metadata/facts pair from different writes. The version
+  // fence turns such a pairing into a wasted pass, never a wrong publish, but
+  // the read is still one statement now — one round trip, one snapshot — so
+  // no commit can interleave inside it.
+  it("reads metadata and facts in one statement, so no write can interleave between them", async () => {
+    const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
+    await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
+    let statements = 0;
+    const countingSql: Sql = new Proxy(sql, {
+      apply(target, thisArgument, argumentsList) {
+        statements += 1;
+        return Reflect.apply(target, thisArgument, argumentsList);
+      },
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const document = await readReconciliationEvidence(countingSql, repositoryId);
+    expect(document).toEqual({
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first,
+      issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
+    });
+    expect(statements).toBe(1);
   });
 
   // Mutant: ACCEPT_STALE_CACHE_VERSION.
