@@ -429,6 +429,12 @@ interface CanaryFixture {
   recipientFile: string;
   webhookFile: string;
   marker: string;
+  /**
+   * The canary-fault marker: a separate file from `marker`, because it records
+   * a different thing. `marker` means a real outage of the failure-alert path
+   * was reported; this one means the canary itself could not run.
+   */
+  faultMarker: string;
 }
 
 interface FixtureOptions {
@@ -472,6 +478,7 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
     recipientFile,
     webhookFile,
     marker: join(stateDir, "dead"),
+    faultMarker: join(stateDir, "canary-fault"),
   };
 
   if (options.alreadyMarked) {
@@ -1411,13 +1418,18 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
    */
   const RELAY_VERDICT_CLAIMS = [/Completed/, /did not take the message/, /the smarthost/];
 
-  it("refuses before submitting anything, rather than reporting the relay dead", async () => {
+  it("refuses before submitting anything, and reports the canary itself rather than the relay", async () => {
     // The pre-flight check. A canary that cannot read the log cannot take a
     // verdict, so it says so and stops: no submission, no heartbeat mail the
-    // operator would find with no explanation attached, no report on a channel
-    // that exists for outages, and no dead-streak marker - a marker here would
-    // silence the next run over a fault in this script's own host, and the
-    // relay may well be fine.
+    // operator would find with no explanation attached.
+    //
+    // It still reports, and that is the load-bearing half. A silent exit 2 is
+    // invisible - nothing on this host reads the canary's exit status - and a
+    // canary that quietly stopped checking reproduces, one level up, the exact
+    // failure this feature exists to end. So the report goes out under a header
+    // that claims the CANARY is broken and never claims the relay is failing,
+    // which is what keeps it from being the false page this defect produced
+    // once already.
     const fixture = makeFixture();
     const webhook = await startWebhook();
     writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
@@ -1444,13 +1456,24 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
         smtp.messages,
         "a run that cannot read the verdict must not send a message nobody can interpret",
       ).toEqual([]);
+      expect(webhook.posts, "a canary that cannot check must still say so once").toHaveLength(1);
+
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toContain("[overflow]");
+      expect(report.content).toMatch(/cannot run/);
+      expect(report.content).toContain(fixture.eximLog);
+      for (const claim of RELAY_VERDICT_CLAIMS) {
+        expect(report.content, "the refusal must not page about the relay").not.toMatch(claim);
+      }
       expect(
-        webhook.posts,
-        "a host fault in the canary is not an outage of the path it watches",
-      ).toEqual([]);
-      expect(existsSync(fixture.marker), "a fault in the check is not a reported outage").toBe(
-        false,
-      );
+        report.content,
+        "the outage header is the false page; the refusal must not borrow it",
+      ).not.toContain("not delivering");
+      expect(
+        existsSync(fixture.marker),
+        "the dead-streak marker means a real outage was reported, and none was",
+      ).toBe(false);
+      expect(existsSync(fixture.faultMarker), "the refusal has its own dedup state").toBe(true);
     } finally {
       await smtp.close();
       await webhook.close();
@@ -1496,13 +1519,140 @@ describe("overflow-canary.sh when the exim log cannot be read", () => {
           claim,
         );
       }
+      expect(webhook.posts, "a canary that cannot check must still say so once").toHaveLength(1);
+
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toMatch(/cannot run/);
+      for (const claim of RELAY_VERDICT_CLAIMS) {
+        expect(report.content, "the refusal must not page about the relay").not.toMatch(claim);
+      }
       expect(
-        webhook.posts,
-        "a report headed 'not delivering' is the false page this defect produced once already",
-      ).toEqual([]);
-      expect(existsSync(fixture.marker), "a fault in the check is not a reported outage").toBe(
-        false,
-      );
+        report.content,
+        "the outage header is the false page; the refusal must not borrow it",
+      ).not.toContain("not delivering");
+      expect(
+        existsSync(fixture.marker),
+        "the dead-streak marker means a real outage was reported, and none was",
+      ).toBe(false);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reports a persistently broken canary once, under its own state, and re-arms on health", async () => {
+    // A canary broken for a week must not post every day - the same reasoning
+    // that dedups the outage, applied to the fault - and the state it dedups
+    // on must be the FAULT's, or the first real outage would find the fault
+    // marker's silence standing in its way. A healthy run retires the fault
+    // marker, because the one thing that proves the canary works again is a
+    // run that reached a verdict.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
+    openFixtureToDroppedIdentity(fixture);
+    denyReadToChild(fixture.eximLog);
+
+    try {
+      const first = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+      const second = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+
+      expect(first.status).toBe(2);
+      expect(second.status).toBe(2);
+      expect(webhook.posts, "one broken canary is one report, not one a day").toHaveLength(1);
+      expect(second.stderr).toMatch(/canary-fault marker/);
+
+      // Readable again, and the relay is fine: the fault is over and must not
+      // hold the next failure back.
+      grantReadToChild(fixture.eximLog);
+      const healthy = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+
+      expect(healthy.status).toBe(0);
+      expect(
+        existsSync(fixture.faultMarker),
+        "a run that reached a verdict is the only thing that retires the fault",
+      ).toBe(false);
+      expect(webhook.posts, "a healthy run reports nothing").toHaveLength(1);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reports the outage again after a stretch of blindness, rather than honouring a marker from before it", async () => {
+    // The hole one step after the one above, and the reviewer's finding. A real
+    // outage is reported, so the dead-streak marker is written. The canary then
+    // goes blind for a while - which never clears that marker, because clearing
+    // it is a verdict about the path and a blind run has none. When readability
+    // comes back and the relay is STILL dead, the old marker says "already
+    // reported" and the outage is swallowed: a route that stopped delivering,
+    // looking like a host that already said so.
+    //
+    // So the marker is honoured only while it is still the newest word on the
+    // outage. A fault recorded after it retires the dedup, the outage is
+    // reported again, and the fresh marker - with the fault marker retired in
+    // its turn - re-anchors the streak.
+    const fixture = makeFixture({ alreadyMarked: true });
+    const recordedOutage = readFileSync(fixture.marker, "utf8");
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
+    openFixtureToDroppedIdentity(fixture);
+    denyReadToChild(fixture.eximLog);
+
+    try {
+      const blind = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        asDroppedIdentity: true,
+      });
+
+      expect(blind.status).toBe(2);
+      expect(webhook.posts, "the blindness is reported on its own line").toHaveLength(1);
+      expect(
+        readFileSync(fixture.marker, "utf8"),
+        "a fault in the check neither writes nor disturbs the recorded outage",
+      ).toBe(recordedOutage);
+      expect(existsSync(fixture.faultMarker)).toBe(true);
+
+      grantReadToChild(fixture.eximLog);
+      const dead = await startSmtp({ outcome: "deferred", logPath: fixture.eximLog });
+
+      try {
+        const outage = await runCanary(fixture, {
+          smtpUrl: dead.url,
+          asDroppedIdentity: true,
+        });
+
+        expect(outage.status).toBe(1);
+        expect(webhook.posts, "the outage behind the blindness must be reported").toHaveLength(2);
+        const report = JSON.parse(webhook.posts[1]!) as { content: string };
+        expect(report.content).toContain("not delivering");
+        expect(
+          existsSync(fixture.faultMarker),
+          "the fault has been accounted for by the report that followed it",
+        ).toBe(false);
+
+        // And the streak is re-anchored: a third dead run is the same message.
+        const again = await runCanary(fixture, {
+          smtpUrl: dead.url,
+          asDroppedIdentity: true,
+        });
+
+        expect(again.status).toBe(1);
+        expect(webhook.posts, "one outage, one report").toHaveLength(2);
+      } finally {
+        await dead.close();
+      }
     } finally {
       await smtp.close();
       await webhook.close();
