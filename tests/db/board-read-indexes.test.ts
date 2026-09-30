@@ -23,9 +23,9 @@ import type { DashboardSql } from "@/lib/dashboard/queries";
  *    opening leg (DISTINCT ON the cheapest unclaimed opening of each
  *    underwater sponsor) through issues_board_unclaimed_open_idx — neither
  *    leg seq-scans issues any more. The two legs whose issues-side predicate
- *    matches most of the table (candidate_sponsors and the main select) keep
- *    their seq scans by design: no index can beat a scan that must visit
- *    nearly every row.
+ *    matches most of the table (candidate_sponsors and the main select)
+ *    currently keep their sequential scans: no index can beat a scan that
+ *    must visit nearly every row.
  */
 describe("the board-read indexes", () => {
   let container: StartedTestContainer | undefined;
@@ -93,7 +93,7 @@ describe("the board-read indexes", () => {
     // over the minority is the only plan that does not visit the whole table;
     // the leg must reference it and must not seq-scan issues.
     const reservations = cteBlock(plan, "reservations");
-    expect(reservations, plan).toMatch(/issues_board_claimed_open_idx/);
+    expect(reservations, plan).toMatch(/\bissues_board_claimed_open_idx\b/);
     expect(reservations, plan).not.toMatch(/Seq Scan on issues/);
 
     // The repayment leg picks each underwater sponsor's cheapest unclaimed
@@ -103,7 +103,7 @@ describe("the board-read indexes", () => {
     // index and the planner switches — a settled per-repository history is
     // the distribution the partial index earns its keep on.
     const repayment = cteBlock(plan, "repayment_issues");
-    expect(repayment, plan).toMatch(/issues_board_unclaimed_open_idx/);
+    expect(repayment, plan).toMatch(/\bissues_board_unclaimed_open_idx\b/);
     expect(repayment, plan).not.toMatch(/Seq Scan on issues/);
   });
 });

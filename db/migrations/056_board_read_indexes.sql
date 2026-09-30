@@ -2,12 +2,12 @@
 --
 -- The board read (src/lib/dashboard/eligible-issues.ts) reaches the issues
 -- table through four legs, and until now issues carried no secondary index
--- beyond the primary key and the (repository_id, issue_number) and
--- (id, repository_id) unique constraints of 001_initial.sql. The legs whose
--- predicate is selective — a claimed-open minority, or unclaimed openings
--- beside a settled backlog — therefore read the whole table to find their
--- rows, and that cost grows with everything retained rather than with what
--- each leg needs.
+-- beyond the primary key and the github_issue_id,
+-- (repository_id, issue_number) and (id, repository_id) unique constraints
+-- of 001_initial.sql. The legs whose predicate is selective — a claimed-open
+-- minority, or unclaimed openings beside a settled backlog — therefore read
+-- the whole table to find their rows, and that cost grows with everything
+-- retained rather than with what each leg needs.
 --
 -- The claim-state split is the selective part. Two partial indexes mirror the
 -- two claim-state predicates the query actually applies:
