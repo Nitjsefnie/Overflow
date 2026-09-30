@@ -300,8 +300,9 @@ export function AccountDataNotice() {
             receives the token-verified reads of its registered repositories
           </li>
           <li>
-            the hosting provider that runs the server — it holds the account rows, the ledger, and
-            the backups. The repository names no provider, so no region is stated for it
+            the hosting provider that runs the server — it holds the account rows, the ledger, the
+            backups, and the system journal Overflow&apos;s own output goes to. The repository names
+            no provider, so no region is stated for it
           </li>
         </ul>
         <p>
@@ -392,6 +393,13 @@ export function AccountDataNotice() {
 
       <section className="surface" aria-labelledby="account-data-rights-heading">
         <h2 id="account-data-rights-heading">Your rights</h2>
+        <p>
+          The operator responds to a request exercising a right in this section within one month of
+          receiving it. Where that is not possible — a request is complex or a person has made
+          numerous requests — the period may extend by two further months, as GDPR Article 12(3)
+          provides, and the requester is told of any extension and its reasons within the first
+          month.
+        </p>
         <ul>
           <li>
             <strong>Access and export</strong> — download an export of the data stored about your
