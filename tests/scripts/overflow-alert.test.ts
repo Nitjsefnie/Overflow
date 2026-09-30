@@ -127,6 +127,13 @@ const curlShim = [
   `  echo '> DATA' >&2`,
   `  echo '< 354 Go ahead' >&2`,
   `  printf '>\\n' >&2`,
+  // An earlier message's id first, when the case asks for one. A real session
+  // hands out an id per message, and only the reply to the end of DATA names
+  // the one just submitted, so the script has to take the LAST id and not the
+  // first - a fixture with only one line cannot tell those apart.
+  `  if [ -n "\${OVERFLOW_TEST_STALE_ID:-}" ]; then`,
+  `    echo "< 250 OK id=\${OVERFLOW_TEST_STALE_ID}" >&2`,
+  "  fi",
   `  echo "< 250 OK id=\${OVERFLOW_TEST_MESSAGE_ID}" >&2`,
   `  echo '* Closing connection' >&2`,
   "fi",
@@ -135,10 +142,12 @@ const curlShim = [
 ].join("\n");
 
 /**
- * Records every wait the script asks for and then really waits. The record is
- * what the "concluded rather than ran out the budget" cases assert on, so
- * that property is read off an interaction the run produced instead of off a
- * wall-clock margin, and the recorded file survives after the run.
+ * Records every wait the script asks for, with the arguments it asked with, and
+ * then really waits. The record is what the "concluded rather than ran out the
+ * budget" cases assert on, so that property is read off an interaction the run
+ * produced instead of off a wall-clock margin. The ARGS are recorded too, which
+ * is what pins the poll interval: a poll that slept five seconds would still
+ * close the same budget, and only its own record says so.
  *
  * It also grows the exim log, once, on the FIRST wait. A log that already
  * carried its own Completed line before the run ever polled it proves nothing
@@ -152,12 +161,37 @@ const curlShim = [
  */
 const sleepShim = [
   "#!/bin/sh",
-  `printf 'x\\n' >> "$OVERFLOW_TEST_SLEEP_CALLS"`,
+  `printf '%s\\n' "$*" >> "$OVERFLOW_TEST_SLEEP_CALLS"`,
   `if [ -s "$OVERFLOW_TEST_LOG_APPEND" ] && [ ! -e "$OVERFLOW_TEST_LOG_APPENDED" ]; then`,
   `  cat "$OVERFLOW_TEST_LOG_APPEND" >> "$OVERFLOW_TEST_EXIM_LOG"`,
   `  : > "$OVERFLOW_TEST_LOG_APPENDED"`,
   "fi",
   `/bin/sleep "$@"`,
+  "",
+].join("\n");
+
+/**
+ * A clock the run can be made to move forward on.
+ *
+ * The deployed wait budget is 60 seconds, and the only place that number is
+ * observable is the reason a run produces when it waits the budget out. Testing
+ * that honestly costs sixty seconds of a CI worker per run, which is why this
+ * exists: the step advances the shim's clock by one budget length per call, so
+ * the deadline check closes on its next reading instead of a minute later. With
+ * no step set the shim returns the real clock and nothing changes.
+ *
+ * Only `+%s` is intercepted. The mail header's `date -u` and everything else
+ * reach the real date.
+ */
+const dateShim = [
+  "#!/bin/sh",
+  `if [ "$1" = "+%s" ]; then`,
+  `  n=$(cat "$OVERFLOW_TEST_CLOCK_CALLS" 2>/dev/null || echo 0)`,
+  `  echo $((n + 1)) > "$OVERFLOW_TEST_CLOCK_CALLS"`,
+  `  echo $(( $(/bin/date +%s) + n * \${OVERFLOW_TEST_CLOCK_STEP:-0} ))`,
+  "  exit 0",
+  "fi",
+  `exec /bin/date "$@"`,
   "",
 ].join("\n");
 
@@ -183,6 +217,8 @@ interface AlertRun {
   mail: string;
   /** How many times the run asked to wait, counted from the sleep shim's record. */
   sleeps: number;
+  /** The arguments of each wait, in order, from the sleep shim's record. */
+  sleepArgs: string[];
 }
 
 function runAlert(
@@ -210,8 +246,24 @@ function runAlert(
     eximLogGrows?: string[];
     /** The wait budget, as the script's OVERFLOW_ALERT_EXIM_WAIT_SECONDS. */
     waitSeconds?: string;
+    /**
+     * Leaves OVERFLOW_ALERT_EXIM_WAIT_SECONDS out of the environment entirely,
+     * so the run reads the DEPLOYED default. No assertion over an overridden
+     * value can see that number, which is the whole point of this switch.
+     */
+    deployedBudget?: boolean;
+    /**
+     * How far the clock shim advances per reading. Zero is the real clock.
+     * See the shim.
+     */
+    clockStepSeconds?: number;
     /** A daemon that accepts the submission without answering a 250 OK id=. */
     noId?: boolean;
+    /**
+     * An earlier message's id, which the shim answers BEFORE the message under
+     * test. Exercises which of several `250 OK id=` lines the script takes.
+     */
+    staleMessageId?: string;
   } = {},
 ): AlertRun {
   const directory = mkdtempSync(join(tmpdir(), "overflow-alert-"));
@@ -226,6 +278,7 @@ function runAlert(
     };
     shim("curl", curlShim);
     shim("sleep", sleepShim);
+    shim("date", dateShim);
     shim("journalctl", journalctlShim);
     shim("hostname", hostnameShim);
 
@@ -255,9 +308,11 @@ function runAlert(
           OVERFLOW_ALERT_RECIPIENT_FILE: recipientFile,
           OVERFLOW_ALERT_STATE_DIR: stateDir,
           OVERFLOW_ALERT_EXIM_LOG: eximLogPath,
-          OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1",
           OVERFLOW_TEST_CURL_ARGV: curlArgvPath,
+          OVERFLOW_TEST_CLOCK_CALLS: join(directory, "clock-calls"),
+          OVERFLOW_TEST_CLOCK_STEP: String(options.clockStepSeconds ?? 0),
           OVERFLOW_TEST_EXIM_LOG: eximLogPath,
+          OVERFLOW_TEST_STALE_ID: options.staleMessageId ?? "",
           OVERFLOW_TEST_LOG_APPEND: logAppendPath,
           OVERFLOW_TEST_LOG_APPENDED: join(directory, "mainlog-appended"),
           OVERFLOW_TEST_MAIL: mailPath,
@@ -266,6 +321,9 @@ function runAlert(
           OVERFLOW_TEST_SLEEP_CALLS: sleepCallsPath,
           FAKE_CURL_RC: String(options.curlStatus ?? 0),
           FAKE_JOURNALCTL_RC: String(options.journalStatus ?? 0),
+          ...(options.deployedBudget
+            ? {}
+            : { OVERFLOW_ALERT_EXIM_WAIT_SECONDS: options.waitSeconds ?? "1" }),
         },
         encoding: "utf8",
       },
@@ -275,16 +333,17 @@ function runAlert(
 
     // Read the shims' captures before the fixture directory is removed.
     const sent = existsSync(curlArgvPath);
-    const sleeps = existsSync(sleepCallsPath)
-      ? readFileSync(sleepCallsPath, "utf8").split("\n").length - 1
-      : 0;
+    const sleepArgs = existsSync(sleepCallsPath)
+      ? readFileSync(sleepCallsPath, "utf8").split("\n").slice(0, -1)
+      : [];
     return {
       status: result.status,
       stderr: result.stderr,
       sent,
       argv: sent ? readFileSync(curlArgvPath, "utf8").split("\n").slice(0, -1) : [],
       mail: existsSync(mailPath) ? readFileSync(mailPath, "utf8") : "",
-      sleeps,
+      sleeps: sleepArgs.length,
+      sleepArgs,
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -548,13 +607,16 @@ describe("overflow-alert.sh delivery verdict", () => {
     const run = runAlert({
       recipient: validRecipient,
       stateDir,
-      waitSeconds: "1",
+      waitSeconds: "3",
       eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
     });
 
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain(messageId);
     expect(existsSync(join(stateDir, unit))).toBe(false);
+    // The budget has to be comfortably longer than the run's own start-up, or
+    // the very first deadline check can find it already spent and the poll is
+    // never exercised at all.
     expect(run.sleeps, "the budget is the thing being spent here").toBeGreaterThan(0);
   });
 
@@ -623,6 +685,114 @@ describe("overflow-alert.sh delivery verdict", () => {
 
     expect(run.status).toBe(0);
     expect(run.stderr).toContain(messageId);
+  });
+
+  it("follows the LAST 250 OK id=, not the first, when the session names two", () => {
+    // One line in the trace cannot tell "last" from "first", so the fixture has
+    // to carry two. Taking the wrong one reads a verdict about a message that
+    // is not this one, and reports the alert undelivered while it is sitting
+    // delivered in the log.
+    const stateDir = makeStateDir();
+    const staleId = "1xBuT1-000000008ZZ-9old";
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      staleMessageId: staleId,
+    });
+
+    expect(run.stderr, "the id under test is the one that must be followed").toContain(
+      messageId,
+    );
+    expect(run.status).toBe(0);
+    expect(existsSync(join(stateDir, unit))).toBe(true);
+  });
+
+  it("takes the LAST routing line as the current routing decision", () => {
+    // exim re-routes a message whose first attempt did not take, so a local
+    // line under this id can be an attempt that was abandoned rather than the
+    // decision. Reading it anyway reports a failed alert on a route that
+    // delivered - the mirror image of the false green this check exists to
+    // end, and the reason the LAST line is the one the script takes.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      eximLog: [
+        spoolLine(),
+        routingLine("address_file"),
+        routingLine("remote_smtp_smarthost"),
+        completedLine(),
+      ],
+    });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).not.toContain("address_file");
+    expect(existsSync(join(stateDir, unit))).toBe(true);
+  });
+
+  it("reads the transport off a routing line only, never off a T= elsewhere", () => {
+    // exim's log field table gives T three jobs: the TRANSPORT on a routing
+    // line, the message SUBJECT on a reception line, and the transport again on
+    // a deferred or failed line. The `== ... defer` line below is the spec's own
+    // worked example of a deferral, and a message exim goes on to Complete
+    // without ever accepting it for delivery - which is a bounce, not a
+    // delivery. Both other lines carry a T= naming a REMOTE transport, so a
+    // script that read T= off any line would call this delivered; reading it
+    // off a routing line only leaves no evidence that anything left the host,
+    // and the run has to fail.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      eximLog: [
+        `${logStamp} ${messageId} <= overflow-alert@${fqdn} U=root P=esmtp S=1421 T=[overflow] overflow.service failed`,
+        `${logStamp} ${messageId} == ${recipientAddress} R=dnslookup T=remote_smtp_smarthost defer (146): Connection refused`,
+        completedLine(),
+      ],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("defer");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("closes the poll on the DEPLOYED budget when the variable is absent entirely", () => {
+    // Every other case sets OVERFLOW_ALERT_EXIM_WAIT_SECONDS, so nothing else in
+    // this suite can see the number a deployed run actually waits - and no
+    // assertion over an overridden value ever can. The clock shim carries the
+    // run forward one budget length per reading so the deadline closes here
+    // rather than a minute from now; the arithmetic under test is
+    // `date +%s + exim_wait`, and the reason it produces is what this reads.
+    const stateDir = makeStateDir();
+
+    const run = runAlert({
+      recipient: validRecipient,
+      stateDir,
+      deployedBudget: true,
+      clockStepSeconds: 61,
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
+    });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr, "the deployed default must be the number reported").toContain("60s");
+    expect(existsSync(join(stateDir, unit))).toBe(false);
+  });
+
+  it("polls once a second rather than at some other interval", () => {
+    // The interval is invisible from the outside - a five-second poll closes the
+    // same budget - so it is read off the run's own record of what it asked to
+    // wait for.
+    const run = runAlert({
+      recipient: validRecipient,
+      waitSeconds: "3",
+      eximLog: [spoolLine(), routingLine("remote_smtp_smarthost")],
+    });
+
+    expect(run.sleeps, "the budget is the thing being spent here").toBeGreaterThan(0);
+    expect(run.sleepArgs).toEqual(run.sleepArgs.map(() => "1"));
   });
 });
 
@@ -749,6 +919,45 @@ describe("overflow-alert.sh throttle", () => {
     seedState(stateDir, unit, nowSeconds() - 100);
 
     const run = runAlert({ stateDir });
+
+    expect(run.status).toBe(2);
+    expect(run.sent).toBe(false);
+  });
+});
+
+describe("overflow-alert.sh exit-status contract", () => {
+  const unit = "overflow.service";
+
+  /**
+   * 2 means "misconfiguration" here - argument count, recipient file, wait
+   * budget - and it has to keep meaning only that, because it is the one status
+   * a reader can classify by number alone. The client's own numbering has an
+   * entry that collides with it: curl exits 2 when it cannot initialise, which
+   * a caller cannot distinguish from this script's own refusal by status alone.
+   */
+  it("never reports 2 for a submission failure that curl numbered 2", () => {
+    const stateDir = makeStateDir();
+
+    const run = runAlert({ recipient: validRecipient, stateDir, curlStatus: 2 });
+
+    expect(run.status).not.toBe(2);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("curl exited 2");
+    expect(existsSync(join(stateDir, unit)), "a failed submission leaves no state").toBe(false);
+  });
+
+  it("propagates every other submission failure as the client numbered it", () => {
+    for (const code of [7, 28, 56]) {
+      const stateDir = makeStateDir();
+      const run = runAlert({ recipient: validRecipient, stateDir, curlStatus: code });
+
+      expect(run.status, `curl's ${code} is not the misconfiguration class`).toBe(code);
+      expect(existsSync(join(stateDir, unit))).toBe(false);
+    }
+  });
+
+  it("still reserves 2 for a misconfiguration that never sends", () => {
+    const run = runAlert({ recipient: validRecipient, waitSeconds: "sixty" });
 
     expect(run.status).toBe(2);
     expect(run.sent).toBe(false);

@@ -363,11 +363,16 @@ if [ -n "$reason" ]; then
   echo "overflow-alert.sh: $reason; the send is NOT recorded, so the next failure for $unit alerts again" >&2
   # A submission failure keeps curl's own status, which says more than any
   # code invented here would. Everything else is a delivery failure, which is
-  # not a misconfiguration and must not borrow exit 2.
-  if [ "$submit_status" -ne 0 ]; then
-    exit "$submit_status"
-  fi
-  exit 1
+  # not a misconfiguration and must not borrow exit 2 - and neither must the
+  # client's status, because curl exits 2 for a failure to initialise and a
+  # reader classifying by number alone could not tell that from this script's
+  # own "refused before sending". Unreachable with the argv pinned below; it is
+  # here so the contract survives an edit to that argv.
+  case $submit_status in
+    2) exit 1 ;;
+    0) exit 1 ;;
+    *) exit "$submit_status" ;;
+  esac
 fi
 
 echo "overflow-alert.sh: exim routed $message_id to $delivered_via and Completed it; the alert left this host" >&2
