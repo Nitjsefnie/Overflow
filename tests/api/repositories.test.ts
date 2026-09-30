@@ -27,6 +27,7 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql } from "@/lib/db/client";
 import { deleteAccount } from "@/lib/accounts/deletion";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
+import { hashApiToken } from "@/lib/security/api-token";
 
 import {
   RepositoryRegistrationEnforcementError,
@@ -1180,7 +1181,7 @@ describe("Overflow token registration", () => {
     expect(response.status).toBe(201);
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
-      createHash("sha256").update(apiToken).digest(),
+      hashApiToken(apiToken),
     );
   });
 
@@ -2047,7 +2048,7 @@ describe("DELETE /api/repositories", () => {
     });
     expect(fixture.getSession).toHaveBeenCalledTimes(0);
     expect(fixture.findAccountByTokenHash).toHaveBeenCalledExactlyOnceWith(
-      createHash("sha256").update(apiToken).digest(),
+      hashApiToken(apiToken),
     );
     expect(fixture.createRegistrationDependencies).toHaveBeenCalledExactlyOnceWith(
       { user: { id: tokenAccount.id, role: tokenAccount.role } },

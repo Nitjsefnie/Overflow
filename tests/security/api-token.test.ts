@@ -39,15 +39,19 @@ describe("Overflow API token hashing", () => {
   });
 
   it("hashes the whole token string, prefix included", () => {
-    const { token, tokenHash } = mintApiToken();
-    const wholeTokenDigest = createHash("sha256").update(token, "utf8").digest();
+    // A literal fixture: "Zk3m-9pQ_" x4 + "Ab2_-9Q" = 43 base64url characters,
+    // so it matches apiTokenPattern without minting a random token.
+    const fixture = `ovf_${"Zk3m-9pQ_".repeat(4)}Ab2_-9Q`;
+    const fixtureHash = hashApiToken(fixture);
+    expect(fixtureHash).not.toBeNull();
+    const wholeTokenDigest = createHash("sha256").update(fixture, "utf8").digest();
     const secretOnlyDigest = createHash("sha256")
-      .update(token.slice(apiTokenPrefix.length), "utf8")
+      .update(fixture.slice(apiTokenPrefix.length), "utf8")
       .digest();
 
-    expect(tokenHash.equals(wholeTokenDigest)).toBe(true);
-    expect(tokenHash.equals(secretOnlyDigest)).toBe(false);
-    expect(hashApiToken(token)).toEqual(wholeTokenDigest);
+    expect(fixtureHash!.equals(wholeTokenDigest)).toBe(true);
+    expect(fixtureHash!.equals(secretOnlyDigest)).toBe(false);
+    expect(wholeTokenDigest).toHaveLength(32);
   });
 
   it("gives distinct tokens distinct hashes", () => {

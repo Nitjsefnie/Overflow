@@ -392,7 +392,7 @@ describe("parseLayoutCheckPort — the spawned server's port override (issue 514
     "refuses %s, naming the variable and the offending value",
     (bad) => {
       expect(() => parseLayoutCheckPort(bad)).toThrow(/LAYOUT_CHECK_PORT/);
-      expect(() => parseLayoutCheckPort(bad)).toThrow(new RegExp(`"${bad}"`.replace(/[.]/g, "\\.")));
+      expect(() => parseLayoutCheckPort(bad)).toThrow(`"${bad}"`);
     },
   );
 });
