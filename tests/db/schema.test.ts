@@ -4030,10 +4030,10 @@ describe("initial PostgreSQL materialization", () => {
     expect(record.created_at).toBeInstanceOf(Date);
     const columns = await sql<{ column_name: string; is_nullable: string }[]>`
       select column_name, is_nullable from information_schema.columns
-      where table_schema = 'public' and table_name = 'api_tokens'
-      order by column_name
+      where table_schema = 'public' and table_name = 'api_tokens' order by column_name
     `;
     expect(columns).toEqual([
+      { column_name: "confirmed_at", is_nullable: "YES" },
       { column_name: "created_at", is_nullable: "NO" },
       { column_name: "expires_at", is_nullable: "NO" },
       { column_name: "id", is_nullable: "NO" },

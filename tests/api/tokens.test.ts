@@ -332,7 +332,7 @@ function recordingStore(options: { failure?: boolean } = {}): RecordingStore {
       if (options.failure) {
         throw new Error("api_tokens upsert failed");
       }
-      return { createdAt: issuedAt, expiresAt };
+      return { createdAt: issuedAt, expiresAt, confirmedAt: null };
     },
     async findAccountByTokenHash(tokenHash) {
       accountLookups.push(tokenHash);
