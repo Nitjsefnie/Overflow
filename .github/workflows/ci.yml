@@ -74,9 +74,27 @@ jobs:
       MODERATOR_GITHUB_USER_IDS: "1"
 
     steps:
+      # Under pull_request_target the checkout plants the pull request's merge
+      # ref (under that event the default checkout is main's tip): the suite
+      # must test the pull request's change, and the merge ref preserves the
+      # HEAD^1/HEAD^2 parent semantics the docs-only and ratchet steps rely
+      # on. persist-credentials: false is what actions/checkout's fork guard
+      # requires before it admits a PR ref under pull_request_target. The
+      # step is event-gated because github.event.pull_request.number is null
+      # on push and workflow_dispatch, where a ref built from it would break
+      # the checkout (fix round 1, finding A).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name == 'pull_request_target' }}
         with:
           ref: "refs/pull/${{ github.event.pull_request.number }}/merge"
+          persist-credentials: false
+
+      # Every other event checks out the event's own commit by default: the
+      # pushed main tip on a push, the dispatched ref's commit on a
+      # workflow_dispatch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name != 'pull_request_target' }}
+        with:
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -111,10 +129,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BEFORE: ${{ github.event.before }}
           DISPATCH_BASE: ${{ inputs.base }}
+          PR_NUMBER: '${{ github.event.pull_request.number }}'
         run: |
           git fetch --depth=2 origin "${GITHUB_SHA}"
           base=""
           if [ "${EVENT_NAME}" = pull_request_target ]; then
+            git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
             base=HEAD^1
           elif [ "${EVENT_NAME}" = push ]; then
             base="${PUSH_BEFORE}"
@@ -210,8 +230,10 @@ jobs:
 
       - name: Migration immutability
         if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git fetch --depth=2 origin "${GITHUB_SHA}"
+          git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
           node scripts/check-migration-edits.ts HEAD^1 HEAD^2
 
       - name: Typecheck

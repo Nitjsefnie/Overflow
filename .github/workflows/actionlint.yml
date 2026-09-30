@@ -49,9 +49,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # The head is fetched only as git objects. Values from the event reach
-      # the shell through env:, never through ${{ }} interpolation in run:.
+      # The head is fetched only as git objects, and only under
+      # pull_request_target — the other events have no pull request to fetch.
+      # Values from the event reach the shell through env:, never through
+      # ${{ }} interpolation in run:.
       - name: Fetch the pull request head
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
@@ -74,12 +77,21 @@ jobs:
         run: |
           pip install --require-hashes -r .github/requirements-zizmor.txt
 
-      - name: Extract the PR's workflow files as data
+      # Populated on every event, so the lint steps keep one runtime-invariant
+      # target: on pull_request_target from the fetched head ref via `git show`
+      # (the PR's tree is never checked out); on push and workflow_dispatch by
+      # copying the checked-out, trusted tree's own workflows.
+      - name: Collect the workflow files to lint
         run: |
           mkdir -p .github/workflows-pr
-          for f in $(git ls-tree --name-only refs/remotes/pr/head:.github/workflows/); do
-            git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
-          done
+          if [ "${GITHUB_EVENT_NAME}" = pull_request_target ]; then
+            git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
+              while IFS= read -r -d '' f; do
+                git show "refs/remotes/pr/head:.github/workflows/$f" > ".github/workflows-pr/$f"
+              done
+          else
+            cp .github/workflows/*.yml .github/workflows-pr/
+          fi
 
       - name: actionlint
         id: actionlint
