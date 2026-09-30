@@ -127,15 +127,21 @@ interface WebhookStandIn {
  * Stands in for the Discord webhook: an HTTP server that records the exact
  * bytes the script posted, so a payload can be parsed and asserted on rather
  * than pattern-matched.
+ *
+ * `status` is what the stand-in answers with, so a test can play a webhook
+ * that has stopped existing (404) or revoked its token (401). A client that
+ * treats any HTTP response as success records a report nobody received as
+ * delivered, and the failure mode is silent in the worst way — the outage is
+ * marked reported and every later run of the streak posts nothing.
  */
-async function startWebhook(): Promise<WebhookStandIn> {
+async function startWebhook(options: { status?: number } = {}): Promise<WebhookStandIn> {
   const posts: string[] = [];
   const server = createHttpServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
       posts.push(Buffer.concat(chunks).toString("utf8"));
-      response.writeHead(204).end();
+      response.writeHead(options.status ?? 204).end();
     });
   });
 
@@ -196,6 +202,13 @@ async function startSmtp(options: {
    * invisible.
    */
   completeAfterMs?: number;
+  /**
+   * Write the smarthost's own `250 2.0.0 OK ... - gsmtp` acceptance line
+   * before the `Completed` line, as exim records on the way out. Used to
+   * reproduce the boundary case: the relay accepted the message and there is
+   * nothing further to observe, whatever became of it afterwards.
+   */
+  smarthostAcceptLine?: boolean;
 }): Promise<SmtpStandIn> {
   const messageId = options.messageId ?? nextMessageId();
   const messages: string[] = [];
@@ -243,6 +256,13 @@ async function startSmtp(options: {
             if (options.outcome === "completed") {
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
+              if (options.smarthostAcceptLine) {
+                // What a real relay records on the way out: the smarthost's
+                // own 250, which is the acceptance the canary reads. Written
+                // with the same id so the run's verdict is decided on a log
+                // that looks like the host's rather than a single word.
+                logLine(`${messageId} => 250 2.0.0 OK m30pf4687394wrt.42 - gsmtp`);
+              }
               if (options.completeAfterMs === undefined) {
                 logLine(`${messageId} Completed`);
               } else {
@@ -298,9 +318,17 @@ async function startSmtp(options: {
     messageId,
     messages,
     close: async () => {
-      await closeServer(server);
-      await Promise.all(pending);
-      if (writeFailures.length > 0) throw writeFailures[0];
+      // The pending writes are drained and their failures rethrown even if
+      // closing the listener itself throws, which is what a `finally` buys:
+      // without it a rejected closeServer skips both, and the guard above
+      // stops guarding for exactly the run where the harness is already
+      // misbehaving.
+      try {
+        await closeServer(server);
+      } finally {
+        await Promise.all(pending);
+        if (writeFailures.length > 0) throw writeFailures[0];
+      }
     },
   };
 }
@@ -381,7 +409,7 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
  */
 function runCanary(
   fixture: CanaryFixture,
-  options: { smtpUrl: string; waitSeconds?: number; shimBin?: string },
+  options: { smtpUrl: string; waitSeconds?: number | string; shimBin?: string },
 ): Promise<CanaryRun> {
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/sh", [scriptPath], {
@@ -461,6 +489,14 @@ describe("overflow-canary.sh recipient validation", () => {
 
         expect(run.status).toBe(2);
         expect(run.stderr).toContain(message);
+        // The refusal names the file and the reason, never the value: the
+        // recipient file is host configuration, and the journal is exactly
+        // where such a value ends up pasted into an issue or a status page.
+        if (typeof recipient === "string" && recipient !== "") {
+          expect(run.stderr, "the recipient value must not reach the journal").not.toContain(
+            recipient.trim(),
+          );
+        }
         expect(smtp.messages, "the send stage must not be reached").toEqual([]);
       } finally {
         await smtp.close();
@@ -872,6 +908,66 @@ describe("overflow-canary.sh dead-streak dedup", () => {
       await smtp.close();
     }
   });
+
+  it.each([
+    ["404", 404],
+    ["401", 401],
+  ])(
+    "records nothing when the webhook answers %s, so the next run reports again",
+    async (_label, status) => {
+      // The transport succeeded and the report was refused. A webhook that
+      // has been deleted or had its token revoked answers exactly this way,
+      // and a client that counts any HTTP response as delivery writes the
+      // dead-streak marker for an outage it never actually reported - after
+      // which every later run of the streak stays silent. That is the one
+      // report nobody receives followed by permanent quiet, which is the
+      // exact failure this script exists to prevent.
+      const fixture = makeFixture();
+      const webhook = await startWebhook({ status });
+      writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+      const smtp = await startSmtp({
+        outcome: "deferred",
+        logPath: fixture.eximLog,
+      });
+
+      try {
+        const run = await runCanary(fixture, { smtpUrl: smtp.url });
+
+        expect(webhook.posts, "the attempt is still made").toHaveLength(1);
+        expect(existsSync(fixture.marker), "a refused report must not silence the streak").toBe(
+          false,
+        );
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain("could not be delivered");
+      } finally {
+        await smtp.close();
+        await webhook.close();
+      }
+    },
+  );
+
+  it("still records the outage when the webhook accepts the report", async () => {
+    // The counterpart to the two above: a 204 is a real delivery and must keep
+    // the dedup working, or the canary would page every day of an outage.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "deferred",
+      logPath: fixture.eximLog,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url });
+
+      expect(webhook.posts).toHaveLength(1);
+      expect(existsSync(fixture.marker), "a delivered report is recorded").toBe(true);
+      expect(run.status).toBe(1);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
 });
 
 describe("overflow-canary.sh verdict discrimination", () => {
@@ -895,6 +991,65 @@ describe("overflow-canary.sh verdict discrimination", () => {
 
       expect(run.status).toBe(1);
       expect(webhook.posts).toHaveLength(1);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("names the relay's own verdict when the log records a defer for the id", async () => {
+    // The absence of Completed already makes this a failure, but the report
+    // an operator reads at three in the morning should say what the relay
+    // actually said, rather than restating our own timeout. The caught classes
+    // are therefore named in the code, not only implied by a missing word.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({ outcome: "deferred", logPath: fixture.eximLog });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url, waitSeconds: 1 });
+
+      expect(run.status).toBe(1);
+      const report = JSON.parse(webhook.posts[0]!) as { content: string };
+      expect(report.content).toContain("defer");
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("reads as healthy when the smarthost accepted a message to a mailbox that no longer exists", async () => {
+    // THE BOUNDARY OF THIS SCRIPT, pinned by a test rather than by prose
+    // alone - and it is a boundary, not a defect.
+    //
+    // Measured on the real host against the real Gmail smarthost and an
+    // RFC 2606 reserved domain, so that delivery is impossible by
+    // construction: Gmail answered `250 2.0.0 OK ... - gsmtp`, exim logged
+    // Completed, and the canary reported a healthy path. That is correct. The
+    // smarthost accepted the message, and once the message has left the queue
+    // there is no observation left through the local exim that can tell the
+    // smarthost's acceptance from the remote mailbox existing.
+    //
+    // So a wrong, deleted or converted recipient is a permanent false green,
+    // and the only detector for it is the daily heartbeat STOPPING ARRIVING.
+    // The operator section says so; this test is what stops that from being
+    // quietly reworded into a claim the code does not support.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "completed",
+      logPath: fixture.eximLog,
+      smarthostAcceptLine: true,
+    });
+
+    try {
+      const run = await runCanary(fixture, { smtpUrl: smtp.url });
+
+      expect(run.status).toBe(0);
+      expect(webhook.posts, "nothing here is knowably wrong, so nobody is paged").toEqual([]);
+      expect(readFileSync(fixture.eximLog, "utf8")).toContain(smtp.messageId);
     } finally {
       await smtp.close();
       await webhook.close();
@@ -940,4 +1095,30 @@ describe("overflow-canary.sh when the host cannot describe itself", () => {
       await smtp.close();
     }
   });
+
+  it.each(["thirty", "-1", "1.5", "60s"])(
+    "refuses a wait budget of %j rather than aborting inside the arithmetic",
+    async (budget) => {
+      // The budget reaches a $(( )) expansion, where a non-numeric operand
+      // aborts the run under set -e and says nothing at all. Only the tests
+      // set it, so this is not a production path - but a refusal that names
+      // the value costs three lines, and the silence it replaces is the same
+      // unreadable-result failure the rest of this file keeps closing.
+      const fixture = makeFixture();
+      const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
+
+      try {
+        const run = await runCanary(fixture, {
+          smtpUrl: smtp.url,
+          waitSeconds: budget,
+        });
+
+        expect(run.status).toBe(2);
+        expect(run.stderr).toContain("OVERFLOW_CANARY_EXIM_WAIT_SECONDS");
+        expect(smtp.messages, "an unusable budget must not reach the send stage").toEqual([]);
+      } finally {
+        await smtp.close();
+      }
+    },
+  );
 });

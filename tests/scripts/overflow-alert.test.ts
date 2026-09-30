@@ -207,6 +207,14 @@ describe("overflow-alert.sh recipient validation", () => {
 
     expect(run.status).toBe(2);
     expect(run.stderr).toContain(message);
+    // The refusal names the file and the reason, never the value: the
+    // recipient file is host configuration and the journal is exactly where
+    // such a value ends up pasted into an issue.
+    if (recipient !== undefined && recipient !== "") {
+      expect(run.stderr, "the recipient value must not reach the journal").not.toContain(
+        recipient.trim(),
+      );
+    }
     expect(run.sent, "the send stage must not be reached").toBe(false);
   });
 });
