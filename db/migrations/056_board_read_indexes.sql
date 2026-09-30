@@ -12,11 +12,13 @@
 -- The claim-state split is the selective part. Two partial indexes mirror the
 -- two claim-state predicates the query actually applies:
 --
--- issues_board_claimed_open_idx backs the reservations leg, which sums
--- opening_reserve_points over a sponsor's OPEN issues that carry a claim
--- assignee (state = 'OPEN' and claim_assignee_github_login is not null), and
--- the CLAIMED board filter. Claimed-open issues are a small minority of the
--- retained table, so the index stays small and the leg stops reading the rest.
+-- issues_board_claimed_open_idx backs the two reads that sum
+-- opening_reserve_points over claimed-open reservations (state = 'OPEN' and
+-- claim_assignee_github_login is not null): the reservations CTE in
+-- src/lib/dashboard/eligible-issues.ts and the reserved-points subquery in
+-- src/lib/dashboard/queries.ts. Claimed-open issues are a small minority of
+-- the retained table, so the index stays small and each read stops reading
+-- the rest.
 --
 -- issues_board_unclaimed_open_idx backs the repayment-issues leg, which picks
 -- each exhausted sponsor's cheapest unclaimed opening ordered by

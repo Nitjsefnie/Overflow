@@ -84,7 +84,7 @@ describe("the board-read indexes", () => {
     const { text, values } = await captureEligibleQuery();
     const explainRows = (await realSql.unsafe(
       `explain ${text}`,
-      values as (string | null)[],
+      values as (string | number | null)[],
     )) as Record<string, unknown>[];
     const plan = explainRows.map((row) => String(Object.values(row)[0])).join("\n");
 
