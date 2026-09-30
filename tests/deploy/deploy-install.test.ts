@@ -203,6 +203,19 @@ const otherShellLines = new Set([
   "systemctl disable --now overflow-canary.timer",
   "rm /etc/systemd/system/overflow-canary.timer",
   "rm /etc/systemd/system/overflow-canary.service",
+  // The sandbox egress proof: a drop-in redirecting both paths so the host's
+  // own webhook file is never read, a background listener on loopback, and
+  // the removal of both artefacts afterwards.
+  "ss -ltn | grep 18099 || echo \"port 18099 is free\"",
+  "install -d -o root -g root -m 0755 /etc/systemd/system/overflow-canary.service.d",
+  "printf '%s\\n' 'http://127.0.0.1:18099/probe' > /etc/overflow/canary-sandbox-probe-webhook",
+  "printf '%s\\n' '[Service]' 'Environment=OVERFLOW_CANARY_SMTP_URL=smtp://127.0.0.1:1' 'Environment=OVERFLOW_CANARY_WEBHOOK_FILE=/etc/overflow/canary-sandbox-probe-webhook' > /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf",
+  "python3 -c \"import http.server as h;h.HTTPServer(('127.0.0.1',18099),h.BaseHTTPRequestHandler).serve_forever()\" &",
+  "test -e /run/overflow-canary/dead && echo \"sandbox reached the out-of-band channel\"",
+  "rm /etc/systemd/system/overflow-canary.service.d/sandbox-probe.conf",
+  "rm /etc/overflow/canary-sandbox-probe-webhook",
+  "systemctl show overflow-canary.service -p Environment",
+  "rm -f /run/overflow-canary/dead",
 ].map((line) => tokenizeLines(line)[0].join(" ")));
 
 // The manual fallback's expanded source-attestation gates are explicitly

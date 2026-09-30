@@ -174,10 +174,31 @@ async function startSmtp(options: {
   outcome: RelayOutcome;
   logPath: string;
   messageId?: string;
+  /**
+   * Write the `Completed` line this many milliseconds AFTER answering the end
+   * of DATA, instead of at the moment it is answered.
+   *
+   * This is what a real relay does: it accepts the message, and the exim
+   * mainlog records the outcome a moment later, after the connection to the
+   * smarthost has actually been made. It is also the only way to reach the
+   * canary's polling loop, which a stand-in that logs synchronously satisfies
+   * on the very first read - leaving the loop, its deadline arithmetic and
+   * its sleep entirely unexercised, and a regression to a single read
+   * invisible.
+   */
+  completeAfterMs?: number;
 }): Promise<SmtpStandIn> {
   const messageId = options.messageId ?? nextMessageId();
   const messages: string[] = [];
   let bufferedData: string[] = [];
+  /**
+   * Scheduled log writes that have not fired yet. `close` waits on them: the
+   * fixture directory dies with the test, and a relay still owing the mainlog
+   * a line would otherwise write into a directory that is already gone -
+   * which surfaces as an unhandled ENOENT attributed to whichever test
+   * happened to be running, and reads as a harness fault rather than one.
+   */
+  const pending: Promise<void>[] = [];
   const server = createNetServer((socket) => {
     let buffer = "";
     let inData = false;
@@ -205,7 +226,18 @@ async function startSmtp(options: {
             if (options.outcome === "completed") {
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
-              logLine(`${messageId} Completed`);
+              if (options.completeAfterMs === undefined) {
+                logLine(`${messageId} Completed`);
+              } else {
+                pending.push(
+                  new Promise<void>((resolve) => {
+                    setTimeout(() => {
+                      logLine(`${messageId} Completed`);
+                      resolve();
+                    }, options.completeAfterMs);
+                  }),
+                );
+              }
             } else {
               logLine(
                 `${messageId} ** defer rejected: temporary failure in the relay's upstream connection`,
@@ -243,7 +275,10 @@ async function startSmtp(options: {
     url: `smtp://127.0.0.1:${port}`,
     messageId,
     messages,
-    close: () => closeServer(server),
+    close: async () => {
+      await closeServer(server);
+      await Promise.all(pending);
+    },
   };
 }
 
@@ -323,13 +358,15 @@ function makeFixture(options: FixtureOptions = {}): CanaryFixture {
  */
 function runCanary(
   fixture: CanaryFixture,
-  options: { smtpUrl: string; waitSeconds?: number },
+  options: { smtpUrl: string; waitSeconds?: number; shimBin?: string },
 ): Promise<CanaryRun> {
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/sh", [scriptPath], {
       env: {
         NODE_ENV: "test",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
+        PATH: options.shimBin
+          ? `${options.shimBin}:/usr/local/bin:/usr/bin:/bin`
+          : "/usr/local/bin:/usr/bin:/bin",
         OVERFLOW_CANARY_RECIPIENT_FILE: fixture.recipientFile,
         OVERFLOW_CANARY_WEBHOOK_FILE: fixture.webhookFile,
         OVERFLOW_CANARY_STATE_DIR: fixture.stateDir,
@@ -481,11 +518,43 @@ describe("overflow-canary.sh on a healthy path", () => {
       expect(smtp.messages).toHaveLength(1);
       const mail = smtp.messages[0]!;
       expect(mail).toContain(`To: ${recipientAddress}`);
-      expect(mail).toMatch(/^Subject: \[overflow\] .*canary.*$/m);
-      // The alert subject reads "<unit> failed on <host>"; a mailbox holding
-      // both has to be able to tell them apart without reading the body.
-      expect(mail).not.toMatch(/^Subject: \[overflow\] \S+ failed on \S+$/m);
+      // The marker, not a shared prefix. A mailbox rule that pages on
+      // "[overflow]" - a common shape on exactly this kind of host - would
+      // otherwise page once a day on a message whose own body says no action
+      // is needed, which is worse than not paging at all.
+      expect(mail).toMatch(/^Subject: \[overflow-canary\] /m);
+      expect(mail).not.toMatch(/^Subject: \[overflow\] /m);
       expect(mail).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
+    } finally {
+      await smtp.close();
+      await webhook.close();
+    }
+  });
+
+  it("waits for the relay to log Completed instead of reading the log once", async () => {
+    // The relay answers the end of DATA immediately and logs Completed a
+    // moment later, which is what a real relay does while it waits on the
+    // smarthost. A run that read the log once - the shape the brief's step 6
+    // would collapse to - sees nothing and reports a healthy path as dead,
+    // every single day, on the one channel whose value is being trusted.
+    const fixture = makeFixture();
+    const webhook = await startWebhook();
+    writeFileSync(fixture.webhookFile, `${webhook.url}\n`);
+    const smtp = await startSmtp({
+      outcome: "completed",
+      logPath: fixture.eximLog,
+      completeAfterMs: 1500,
+    });
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        waitSeconds: 30,
+      });
+
+      expect(run.status).toBe(0);
+      expect(webhook.posts, "a slow but successful relay must not page anyone").toEqual([]);
+      expect(existsSync(fixture.marker)).toBe(false);
     } finally {
       await smtp.close();
       await webhook.close();
@@ -505,7 +574,7 @@ describe("overflow-canary.sh on a dead path", () => {
         smtpUrl: `smtp://127.0.0.1:${port}`,
       });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(webhook.posts).toHaveLength(1);
       expect(existsSync(fixture.marker), "a reported outage is recorded").toBe(
         true,
@@ -534,7 +603,7 @@ describe("overflow-canary.sh on a dead path", () => {
       expect(
         run.status,
         "a defer on the smarthost leg is a dead alert path",
-      ).not.toBe(0);
+      ).toBe(1);
       expect(
         smtp.messages,
         "the local daemon did accept the message",
@@ -600,7 +669,7 @@ describe("overflow-canary.sh on a dead path", () => {
         smtpUrl: `smtp://127.0.0.1:${port}`,
       });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(webhook.posts).toHaveLength(1);
     } finally {
       await closeServer(server);
@@ -644,14 +713,14 @@ describe("overflow-canary.sh dead-streak dedup", () => {
 
     try {
       const first = await runCanary(fixture, { smtpUrl: smtp.url });
-      expect(first.status).not.toBe(0);
+      expect(first.status).toBe(1);
 
       const second = await runCanary(fixture, { smtpUrl: smtp.url });
 
       expect(
         second.status,
         "a dead path still exits nonzero, so the unit lands in failed",
-      ).not.toBe(0);
+      ).toBe(1);
       expect(
         webhook.posts,
         "one outage must not become a page a day",
@@ -674,7 +743,7 @@ describe("overflow-canary.sh dead-streak dedup", () => {
         smtpUrl: `smtp://127.0.0.1:${port}`,
       });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(webhook.posts).toEqual([]);
     } finally {
       await webhook.close();
@@ -710,7 +779,7 @@ describe("overflow-canary.sh dead-streak dedup", () => {
     try {
       const run = await runCanary(fixture, { smtpUrl: dead.url });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(
         webhook.posts,
         "a fresh failure after a healthy run must report again",
@@ -739,7 +808,7 @@ describe("overflow-canary.sh dead-streak dedup", () => {
     try {
       const run = await runCanary(fixture, { smtpUrl: smtp.url });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(existsSync(fixture.marker)).toBe(false);
       expect(run.stderr).toContain("out-of-band report");
     } finally {
@@ -767,11 +836,51 @@ describe("overflow-canary.sh verdict discrimination", () => {
     try {
       const run = await runCanary(fixture, { smtpUrl: smtp.url });
 
-      expect(run.status).not.toBe(0);
+      expect(run.status).toBe(1);
       expect(webhook.posts).toHaveLength(1);
     } finally {
       await smtp.close();
       await webhook.close();
+    }
+  });
+});
+
+/**
+ * A shim directory holding one command that fails, so the script's own
+ * dependency on it can be broken. PATH is the script's only seam for these:
+ * the canary unit sets none of the OVERFLOW_CANARY_* variables, and it pins a
+ * PATH of its own that this runs ahead of.
+ */
+function shimDir(failing: string): string {
+  const directory = sharedScratch("shim");
+  writeFileSync(join(directory, failing), `#!/bin/sh\nexit 1\n`, { mode: 0o755 });
+
+  return directory;
+}
+
+describe("overflow-canary.sh when the host cannot describe itself", () => {
+  // Without these, `set -e` kills the run at the assignment and the journal
+  // carries nothing but a nonzero exit. "The canary unit failed" would then
+  // have a third meaning - neither a dead path nor a misconfigured file -
+  // distinguishable only by the absence of a line that should be there.
+  it.each([
+    ["hostname", "the FQDN lookup", "could not determine the host's FQDN"],
+    ["date", "the clock", "could not read the clock"],
+  ])("refuses loudly when %s fails, rather than dying with an empty journal", async (failing, _what, message) => {
+    const fixture = makeFixture();
+    const smtp = await startSmtp({ outcome: "completed", logPath: fixture.eximLog });
+
+    try {
+      const run = await runCanary(fixture, {
+        smtpUrl: smtp.url,
+        shimBin: shimDir(failing),
+      });
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain(message);
+      expect(smtp.messages, "a run that cannot describe itself must not mail").toEqual([]);
+    } finally {
+      await smtp.close();
     }
   });
 });
