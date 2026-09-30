@@ -119,8 +119,8 @@ jobs:
       # every first-parent commit since the base. A pull_request_target run
       # uses the merge ref's first parent (the whole PR change), a push uses
       # its before SHA, and a dispatch uses its validated optional base. A
-      # dispatch with
-      # no base, an unknown event, or an undecidable push counts as code.
+      # dispatch with no base, an unknown event, or an undecidable push
+      # counts as code.
       # Rename detection is off, so a code source renamed to a doc counts as
       # code (issue 646).
       - name: Detect docs-only change
