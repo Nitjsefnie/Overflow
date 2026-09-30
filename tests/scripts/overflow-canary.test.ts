@@ -99,9 +99,18 @@ function scratch(prefix: string): string {
 }
 
 /**
- * A scratch directory shared across several runs of one test - the dedup and
- * re-arm cases read the marker a run left behind, so they cannot use a
- * directory that dies with a single run's fixture.
+ * A scratch directory for a fixture or a shim, removed after the test.
+ *
+ * The name is a leftover from an earlier shape and describes no behaviour:
+ * this delegates to `scratch` and returns a **fresh `mkdtemp` directory on
+ * every call**, exactly as `scratch` does. Nothing is shared between calls,
+ * and a test that needs one directory to outlive a single run - the dedup
+ * and re-arm cases, which read the marker a previous run left behind - gets
+ * that by holding the returned path in a local, not from this helper.
+ *
+ * Worth stating because `shimDir` below depends on the fresh-per-call
+ * behaviour: it must not hand two tests the same PATH directory, or one
+ * test's `hostname` shim would silently become another's.
  */
 function sharedScratch(prefix: string): string {
   return scratch(prefix);

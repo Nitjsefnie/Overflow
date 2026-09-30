@@ -1926,17 +1926,23 @@ unit. The wait is **bounded**, and deliberately its own block: an unbounded
 wait cannot tell "not bound yet" from "died a minute ago", and a step that
 leaves the operator watching a silent spin with a `systemctl start` queued
 behind it fails in the same unreadable way this whole section exists to
-prevent. 15 s is roughly sixty times the bind time measured on this host, so
-it cannot reintroduce the race a bare start would have:
+prevent. Fifteen attempts is roughly sixty times the bind time measured on
+this host, so it cannot reintroduce the race a bare start would have:
 
 ```bash
 python3 -c "import http.server as h;H=type('H',(h.BaseHTTPRequestHandler,),{'do_POST':lambda s:(open('/etc/overflow/canary-sandbox-probe-received','ab').write(s.rfile.read(int(s.headers['Content-Length']))),s.send_response(200),s.end_headers()),'log_message':lambda *a:None});h.HTTPServer(('127.0.0.1',18099),H).serve_forever()" &
 ```
 
 ```bash
-for _ in $(seq 1 15) ; do ss -ltn | grep -q 18099 && break ; sleep 1 ; done
-ss -ltn | grep -q 18099 || { echo "the listener did not bind 127.0.0.1:18099 within 15s - stop and read the python error above" ; false ; }
+for _ in $(seq 1 15) ; do sleep 1 ; ss -ltn | grep -q 18099 && break ; done
+ss -ltn | grep -q 18099 || { echo "the listener did not bind 127.0.0.1:18099 after 15 attempts (about 16s) - stop and read the python error above" ; false ; }
 ```
+
+The loop sleeps first and checks second, so its last act is a check rather
+than a sleep and it stops the moment the port answers. The bound it
+enforces is fifteen one-second waits, which measures 15.8-15.9 s here — the
+message names that, not a bare "15s", because `sleep 1` is a floor and the
+`ss` in each iteration costs a few milliseconds on top of it.
 
 **If that block prints its message, or exits nonzero, stop there and do not
 run the next block** — the listener is not up, and the run that follows would
