@@ -32,17 +32,35 @@
 # delivered once; re-reporting an old bounce after a rotation is accepted
 # and documented in deploy/README.md.
 #
-# Two conditions together decide that a message is a reportable bounce, and
-# each exists to suppress a different false alarm:
+# Two classes of new message are reported, and each exists to catch one of
+# the two ways the alert route can fail while leaving no other trace:
 #
-# - It must READ as a delivery-failure notification. Both the exim and the
-#   Gmail wording are matched as literal substrings, because a cron job
-#   whose output mentions an overflow address is ordinary mail, not a
-#   failure to report.
-# - It must REFERENCE an overflow address (overflow-canary@ or
-#   overflow-alert@). A DSN about any other address is the rest of the
-#   system's mail working as intended, not the alert route failing; the
-#   watcher would otherwise page on every bounce this host ever sends.
+# - Class A - remote delivery failed. The message READS as a delivery-failure
+#   notification (both the exim and the Gmail wording are matched as literal
+#   substrings) and it REFERENCES an overflow address (overflow-canary@ or
+#   overflow-alert@). Each conjunct suppresses a different false alarm: a
+#   cron job whose output mentions an overflow address is ordinary mail, not
+#   a failure; and a DSN about any other address is the rest of the system's
+#   mail working as intended. This is the bounce the smarthost sends back
+#   when it could not deliver the alert.
+# - Class B - the alert landed locally (issue 848's class). Exim resolves
+#   the alert recipient to this host far more often than it fails remotely,
+#   and a successful LOCAL write produces no bounce at all - so a Class-A-only
+#   watcher stays silent through the most common real failure. The message
+#   itself is the evidence: if the spool holds a message whose From header
+#   local part is overflow-alert or overflow-canary, then an alert or canary
+#   message was written to the local mailbox and nobody off-host received
+#   it. The match is on the From header ONLY, never body text: the From
+#   header is the message's own identity, while the body is arbitrary
+#   content - a cron job's output can quote "[overflow]" or the addresses
+#   verbatim, and a watcher that keyed on that would page on ordinary mail
+#   forever. Class B additionally requires the message NOT to be a DSN, so a
+#   bounce (Mailer-Daemon's, carrying the alert's text inside it) is
+#   classified as A and never double-reported as B.
+#
+# Together with the canary's own verdict the watcher now distinguishes all
+# three outcomes: off-host accepted (silence), local write (Class B), and
+# refused/deferred/remote-dead (Class A).
 #
 # Any other new message advances the offset silently.
 #
@@ -183,13 +201,16 @@ reports=$tmp_dir/reports
 tail -c +$((offset + 1)) "$spool" > "$segment"
 
 # Split the segment into mbox messages and emit one line per reportable
-# bounce: "<subject><TAB><failed-address>". The From_ separator line is what
-# mbox writes between messages, and a body line can only start with "From "
-# if the delivering agent failed to escape it - the same assumption every
-# mbox reader makes. The two filter conditions are whole-message scans, so
-# header or body placement does not matter. The failed-address line is the
-# first line carrying an @ after exim's "The following address" marker; a
-# Gmail-format DSN names its failed recipient differently, so it reports
+# bounce: "<A|B><TAB><subject><TAB><failed-address>". The From_ separator
+# line is what mbox writes between messages, and a body line can only start
+# with "From " if the delivering agent failed to escape it - the same
+# assumption every mbox reader makes. Class A's two conditions are
+# whole-message scans, so header or body placement does not matter. Class B
+# reads ONLY the ^From: header line: the envelope "From " separator (no
+# colon) cannot match it, and body lines are never consulted, which is what
+# keeps cron output quoting "[overflow]" inert. The failed-address line is
+# the first line carrying an @ after exim's "The following address" marker;
+# a Gmail-format DSN names its failed recipient differently, so it reports
 # subject-only, which is accepted and documented. Tabs are stripped from the
 # extracted fields so the tab stays an unambiguous delimiter.
 awk '
@@ -200,15 +221,30 @@ awk '
     return s
   }
   function emit() {
-    if (count > 0 && dsn && over) printf "%s\t%s\n", subject, addr
+    if (count == 0) return
+    if (dsn && over) printf "A\t%s\t%s\n", subject, addr
+    else if (classb && !dsn) printf "B\t%s\t%s\n", subject, addr
   }
-  function reset() { count = 0; dsn = 0; over = 0; subject = ""; addr = ""; failed = 0 }
+  function reset() {
+    count = 0; dsn = 0; over = 0; classb = 0
+    from = ""; subject = ""; addr = ""; failed = 0
+  }
   BEGIN { reset() }
   /^From / { emit(); reset(); next }
   {
     count++
     if (!dsn && (index($0, "This message was created automatically by mail delivery software") || index($0, "This is an automatically generated Delivery Status Notification"))) dsn = 1
     if (!over && (index($0, "overflow-canary@") || index($0, "overflow-alert@"))) over = 1
+    if (from == "" && $0 ~ /^From:/) {
+      # The Class B identity test: the From header local part. Strip the
+      # colon prefix, any leading whitespace and angle bracket, and take
+      # everything before the @. Nothing else in the message can set
+      # classb.
+      from = trim(substr($0, 6))
+      sub(/^</, "", from)
+      sub(/@.*/, "", from)
+      if (from == "overflow-alert" || from == "overflow-canary") classb = 1
+    }
     if (subject == "" && $0 ~ /^Subject:/) subject = trim(substr($0, 9))
     if (failed && addr == "" && index($0, "@")) addr = trim($0)
     else if (!failed && index($0, "The following address")) failed = 1
@@ -217,12 +253,19 @@ awk '
 ' "$segment" > "$reports"
 
 tab=$(printf '\t')
-while IFS="$tab" read -r subject addr; do
-  # The report text. The failed-address clause is appended only when one was
-  # found, so a subject-only DSN still reports.
-  summary="[overflow] a delivery-failure notification arrived for an overflow alert or canary message on $host: $subject"
-  if [ -n "$addr" ]; then
-    summary="$summary; $addr"
+while IFS="$tab" read -r rclass subject addr; do
+  # The report text, per class. The Class B report names the failure it
+  # actually saw - the alert landed in the local spool - rather than the
+  # remote-failure wording, which would be false for a local write. The
+  # failed-address clause is appended only to the Class A report, and only
+  # when one was found, so a subject-only DSN still reports.
+  if [ "$rclass" = B ]; then
+    summary="[overflow] an overflow alert or canary message on $host landed in the local spool instead of delivering off-host: $subject"
+  else
+    summary="[overflow] a delivery-failure notification arrived for an overflow alert or canary message on $host: $subject"
+    if [ -n "$addr" ]; then
+      summary="$summary; $addr"
+    fi
   fi
 
   # Backslash and double quote are escaped in the interpolated value,
