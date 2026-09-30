@@ -649,7 +649,7 @@ fi
         },
         {
           uses: "github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
-          with: { languages: "javascript-typescript" },
+          with: { languages: "javascript-typescript", "config-file": ".github/codeql-config.yml" },
         },
         {
           uses: "github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
