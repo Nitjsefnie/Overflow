@@ -234,7 +234,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"
-          node scripts/check-migration-edits.ts HEAD^1 HEAD^2
+          node scripts/check-migration-edits.ts HEAD^1 HEAD
 
       - name: Typecheck
         run: pnpm typecheck

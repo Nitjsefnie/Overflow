@@ -199,7 +199,7 @@ describe("the verify workflow's migration immutability step", () => {
     expect(migrationIndex).toBeGreaterThan(ratchetIndex);
   });
 
-  it("runs only for pull requests and compares the merge-ref parents", () => {
+  it("runs only for pull requests and compares the base tip against the merge ref", () => {
     const [step] = migrationImmutability();
 
     expect(step, "the verify job must contain the Migration immutability step").toBeDefined();
@@ -211,7 +211,7 @@ describe("the verify workflow's migration immutability step", () => {
     ).toEqual({ PR_NUMBER: "${{ github.event.pull_request.number }}" });
     expect(step?.run).toBe(
       'git fetch --depth=2 origin "+refs/pull/${PR_NUMBER}/merge"\n' +
-        "node scripts/check-migration-edits.ts HEAD^1 HEAD^2\n",
+        "node scripts/check-migration-edits.ts HEAD^1 HEAD\n",
     );
     expect(Boolean(step?.["continue-on-error"])).toBe(false);
   });
