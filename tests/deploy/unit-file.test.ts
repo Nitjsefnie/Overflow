@@ -318,8 +318,9 @@ describe("Overflow production unit", () => {
     expect(files.map((file) => file.name).sort(),
       "deploy/ may contain only README.md, backup-restore.md, container.md, " +
         "dpia-screening.md, incident-response.md, overflow-alert@.service, " +
-        "overflow-backup.service, overflow-backup.timer, overflow-canary.service, " +
-        "overflow-canary.timer and overflow.service; " +
+        "overflow-backup.service, overflow-backup.timer, overflow-bounce.service, " +
+        "overflow-bounce.timer, overflow-canary.service, overflow-canary.timer " +
+        "and overflow.service; " +
         "review additions alongside the install procedure",
     ).toEqual([
       "README.md",
@@ -330,6 +331,8 @@ describe("Overflow production unit", () => {
       "overflow-alert@.service",
       "overflow-backup.service",
       "overflow-backup.timer",
+      "overflow-bounce.service",
+      "overflow-bounce.timer",
       "overflow-canary.service",
       "overflow-canary.timer",
       "overflow.service",

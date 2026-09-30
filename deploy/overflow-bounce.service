@@ -1,0 +1,78 @@
+# Overflow bounce watcher.
+#
+# A quarter-hourly report of alert or canary mail that failed to deliver
+# off-host, started by deploy/overflow-bounce.timer. Install as
+# /etc/systemd/system/overflow-bounce.service. The files it reads,
+# /var/mail/mail and /etc/overflow/canary-discord-webhook, are host
+# configuration read at run time: they are never committed and never
+# referenced by value in this repository.
+#
+# Like the canary unit this one reads root-only host files, so it runs as
+# root; and like the canary it reports a dead path, so it cannot report
+# through the route it is checking: a webhook refusal is a nonzero exit,
+# which lands the unit in the failed state and leaves the persisted offset
+# untouched, so the next timer run re-reads and re-reports the same bounce.
+
+[Unit]
+Description=Report failed deliveries of Overflow alert and canary mail
+
+[Service]
+Type=oneshot
+
+# Runs as root, like the canary unit: the spool and the webhook file are
+# root-only and are read by the script at run time, not by systemd. The PATH
+# carries no component under /root, and curl speaks to the webhook host.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# The bounce watcher script; its own header comment carries the design and
+# the tests that drive it against scratch files.
+ExecStart=/bin/sh /srv/overflow/scripts/overflow-bounce.sh
+
+# Any file the run creates is root-private.
+UMask=0077
+
+# No privilege elevation, no capabilities: the unit reads the mail spool and
+# one root-only webhook file, posts one report to the webhook, and nothing
+# else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only except the one directory the offset
+# needs - the delta from the canary unit, and the reason for it: the offset
+# must survive reboots, and /run is wiped at boot, so the state lives in a
+# StateDirectory= (/var/lib/overflow-bounce) and not the canary's
+# RuntimeDirectory= with its RuntimeDirectoryPreserve=yes. Under
+# ProtectSystem=strict the state directory is added to ReadWritePaths
+# automatically, so no ReadWritePaths= is declared: /var/mail/mail and the
+# root-only webhook file stay read-only-readable. Home directories are
+# unreachable and /tmp and /dev are private.
+ProtectSystem=strict
+StateDirectory=overflow-bounce
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+# The host itself is off limits, as in overflow.service and the canary.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+
+# May speak IP and local sockets, on this architecture only, with the same
+# EPERM-instead-of-kill seccomp posture as the web service.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow-bounce
