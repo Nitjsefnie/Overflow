@@ -1903,6 +1903,40 @@ to — is a failed alert, and so is the `(no routing line)` case. When the
 transport is `remote_smtp_smarthost` or another name not on the list, the
 alert left the host.
 
+**Before you read an absent verdict as a broken relay, check there was a log to
+read.** `/var/log/exim4/mainlog` is rotated daily by
+`/etc/logrotate.d/exim4-base`, and that rule carries **`nocreate`**: rotation
+moves the live file to `mainlog.1` and does **not** leave an empty one in its
+place. The daemon puts it back the next time it has something to log, so on a
+host whose mail goes quiet the file is simply **absent** — for a day, or for as
+long as nothing is delivered — and every command above then reports nothing at
+all. No `Completed` line, no routing line, `(no routing line)` from the `awk`:
+an empty verdict that is evidence about nothing at all, including the relay.
+This is not a rare race on this host. The previous rotation, at 00:08, *was*
+followed by enough traffic to fill the file again by 23:38; the next one, at
+00:38 the following morning, was not, and the file was still absent when this
+section was written. A rotation with nothing after it leaves the verdict
+unreadable until the next message, not until the next rotation.
+
+The script fails closed on an unreadable log, which is the right direction to
+fail: it takes a branch of its own and **names the path in its verdict** —
+`/var/log/exim4/mainlog is missing or unreadable, so no off-host acceptance of
+<id> could be observed within 60s` — so the alert unit exits nonzero having
+reported *no verdict*, which is a different report from a verdict of failure.
+**A failed alert unit is therefore not by itself evidence that the relay is
+broken**; on this host, at the time of writing, a failed alert unit with that
+verdict is exactly the absent log and nothing else. A verdict that names the
+log is telling you where to look, not what broke.
+
+So check the file before drawing any conclusion from the absence of a verdict —
+`ls -l /var/log/exim4/mainlog` — and if it has rotated out from under you, the
+answer is in the rotation, which `zcat -f /var/log/exim4/mainlog*` reads across
+the retained files. Substitute that in for `/var/log/exim4/mainlog` in the three
+commands above and your id resolves against the same rules, because the same
+rules are what the script applied. A run whose verdict you can only find in
+`mainlog.1` was a real run judged late, and the delivery or the failure recorded
+there is the real one.
+
 The throwaway instance leaves one file behind, and which file it leaves is
 itself a check: **an alert that left the host writes its throttle state under
 `/run/overflow-alert`, and one that did not leaves no state at all.** So
