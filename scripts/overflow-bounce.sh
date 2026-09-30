@@ -65,16 +65,28 @@
 # The offset parks at the end of the last COMPLETE message. The spool is
 # appended to concurrently - cron mail lands throughout the day, and the
 # nightly backup's mail lands exactly on the 15-minute grid this watcher
-# runs on - so a read can end mid-append, on a final message whose
-# terminating blank line has not been written yet. Classifying that
-# fragment loses mail twice over: a fragment whose headers and markers
-# already arrived gets reported on content never seen whole, and advancing
-# past a fragment hands the remainder to the next run as a headerless blob
-# no classifier can place - a bounce silently swallowed. So a message
-# without its terminating blank line is left unread until the next run
-# re-reads it whole. A partial tail is a concurrent append, not corruption:
-# the cost of waiting is one timer period, and the cost of reading early is
-# a swallowed message.
+# runs on - so a read can end mid-append, on a final message whose body is
+# still being written. Classifying that fragment loses mail twice over: a
+# fragment whose headers and markers already arrived gets reported on
+# content never seen whole, and advancing past a fragment hands the
+# remainder to the next run as a headerless blob no classifier can place -
+# a bounce silently swallowed.
+#
+# What "complete" means here, precisely: the chunk since a message's From_
+# separator ends with a blank line AND carries at least two of them - the
+# header/body separator plus the message terminator. Two are required
+# because a message torn exactly after its separator ends in a blank line
+# too, byte-identical to a terminator where one blank line is all the
+# evidence there is; a separator tear leaves the chunk exactly one blank, a
+# complete message always carries two. Whatever the final chunk trails
+# behind is left unread until the next run re-reads it whole. A partial
+# tail is a concurrent append, not corruption: the cost of waiting is one
+# timer period, and the cost of reading early is a swallowed message. One
+# residual remains, and no byte-local rule can close it: a tear landing
+# exactly after an interior body blank is byte-identical to a terminator,
+# passes this rule, and reports on the prefix - which by then already
+# carries the message's class evidence - with the remainder consumed next
+# run.
 #
 # Any other new message advances the offset silently.
 #
@@ -224,24 +236,29 @@ reports=$tmp_dir/reports
 tail -c +$((offset + 1)) "$spool" > "$segment"
 
 # The bytes up to and including the last COMPLETE message. A message is
-# complete when the chunk since its From_ separator ENDS with a blank line -
-# the terminating blank line. An interior blank line (the header/body
-# separator) is not an end: every message carries one, and a torn message's
-# headers can be fully appended while its body is still missing. So the
-# completion point is advanced only where a chunk is seen to end blank: at
-# the next From_ line, or at end-of-file for the final chunk. Whatever the
-# last chunk trails behind is a message caught mid-append: excluded from
-# classification and from the offset advance, and re-read whole next run.
+# complete when the chunk since its From_ separator ends with a blank line
+# AND carries at least two of them - the header/body separator plus the
+# terminator; an interior body blank only adds to the count. The count is
+# taken per chunk, reset at each From_ line, and required only at
+# end-of-file: mid-segment, the next From_ line is itself the proof the
+# previous chunk ended (and a chunk torn mid-segment is unobservable - mbox
+# appends are lock-serialized, so the tear is always in the final chunk).
+# This closes the separator-tear alignment, where the torn chunk ends in
+# exactly one blank that a terminator could not otherwise be told apart
+# from. Whatever trails behind is excluded from classification and from the
+# offset advance, re-read whole next run.
 complete_bytes=$(awk '
-  BEGIN { off = 0; complete = 0; prev_blank = 1 }
+  BEGIN { off = 0; complete = 0; prev_blank = 1; blanks = 0 }
   {
     if ($0 ~ /^From /) {
       if (prev_blank) complete = off
+      blanks = 0
     }
+    if ($0 == "") blanks++
     prev_blank = ($0 == "")
     off += length($0) + 1
   }
-  END { if (prev_blank) complete = off; print complete }
+  END { if (prev_blank && blanks >= 2) complete = off; print complete }
 ' "$segment")
 complete_prefix=$tmp_dir/complete
 head -c "$complete_bytes" "$segment" > "$complete_prefix"
