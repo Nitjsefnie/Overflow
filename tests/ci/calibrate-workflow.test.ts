@@ -54,6 +54,12 @@ const PUSH_MAIN_CLAUSE =
   "github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.outputs.docs_only != 'true'";
 const DISPATCH_CLAUSE =
   "github.event_name == 'workflow_dispatch' && inputs.simulate-refused-raise == true";
+// Pinned byte for byte against the calibrate job's `if:` in
+// .github/workflows/ci.yml — read out of the parsed YAML, not hand-copied — so
+// no disjunct, in particular a pull_request_target disjunct, can slip into the
+// write-permission job's trigger without a conscious edit to this constant.
+const EXACT_CONDITION =
+  "${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.outputs.docs_only != 'true') || (github.event_name == 'workflow_dispatch' && inputs.simulate-refused-raise == true) }}";
 const GATED_WHEN_SIMULATING = "${{ inputs.simulate-refused-raise != true }}";
 const RUNS_WHEN_SIMULATING = "${{ inputs.simulate-refused-raise == true }}";
 
@@ -95,8 +101,12 @@ describe("the calibrate workflow's trigger", () => {
     ).toContain(DISPATCH_CLAUSE);
     expect(
       condition,
-      "a pull_request run must never be able to trigger the calibrate job — it would write to the branch it targets",
-    ).not.toMatch(/github\.event_name == 'pull_request'/);
+      "the calibrate job's if condition is pinned exactly — a new disjunct, in particular a pull_request_target one, must require a conscious edit to EXACT_CONDITION",
+    ).toBe(EXACT_CONDITION);
+    expect(
+      condition,
+      "a pull_request-family run must never be able to trigger the write-permission calibrate job — it would write to the branch it targets",
+    ).not.toMatch(/github\.event_name == 'pull_request/);
   });
 
   it("keeps write permission over contents", () => {
