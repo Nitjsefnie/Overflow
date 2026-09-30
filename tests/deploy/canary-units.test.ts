@@ -59,6 +59,7 @@ const REVIEWED_CANARY_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "RuntimeDirectoryPreserve",
   "StandardError",
   "StandardOutput",
+  "SupplementaryGroups",
   "SyslogIdentifier",
   "SystemCallArchitectures",
   "SystemCallErrorNumber",
@@ -81,6 +82,17 @@ const REVIEWED_CANARY_KEYS: ReadonlyMap<UnitSection, ReadonlySet<string>> = new 
 const requiredCanaryServiceValues: ReadonlyArray<readonly [string, string]> = [
   ["CapabilityBoundingSet", ""],
   ["AmbientCapabilities", ""],
+  // The one widening in the unit, and the one directive the closed set is
+  // there to catch: this service reads /var/log/exim4/mainlog, a 0640
+  // Debian-exim:adm file, and `CapabilityBoundingSet=` empty above strips the
+  // CAP_DAC_OVERRIDE that let a root process read it. Measured on the deployed
+  // unit, the read answers "Permission denied" - so the canary could never see
+  // a Completed line, spent its whole budget proving it, and reported a relay
+  // that had delivered the message a second earlier. Group membership is the
+  // ordinary mechanism and needs no capability, and the value is pinned to
+  // `adm` rather than admitted by name: a unit that could name any group here
+  // would be a unit whose only limit is review.
+  ["SupplementaryGroups", "adm"],
   ["ProtectSystem", "strict"],
   ["RuntimeDirectory", "overflow-canary"],
   ["RuntimeDirectoryPreserve", "yes"],
@@ -221,6 +233,19 @@ describe("Overflow canary service unit", () => {
       "/bin/sh",
       "/srv/overflow/scripts/overflow-canary.sh",
     ]);
+  });
+
+  it("grants the exim mainlog read by group alone, so the empty bounding set still holds", () => {
+    // The three together are the invariant, and any one of them alone is not
+    // the fix. Reading a 0640 Debian-exim:adm file needs either the group's
+    // read bit - which needs a capability this unit has none of, because
+    // CapabilityBoundingSet= is empty - or a supplementary group. Admitting
+    // the group while widening the capability set would have granted the same
+    // read with strictly more authority, so both are pinned here rather than
+    // trusted to the directive list above.
+    expectPinnedValue(only("Service", "SupplementaryGroups"), "adm");
+    expectPinnedValue(only("Service", "CapabilityBoundingSet"), "");
+    expectPinnedValue(only("Service", "AmbientCapabilities"), "");
   });
 
   it("grants no write path outside the runtime directory the marker needs", () => {

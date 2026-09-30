@@ -28,6 +28,16 @@
 # silence the next run for good, which is the failure being guarded against
 # rather than a repetition of it.
 #
+# The verdict is read out of a FILE, and the unit runs this script with an
+# empty capability bounding set, so the read succeeds only as a member of the
+# group that owns the log. That is checked before anything is submitted, and a
+# log that cannot be read is never turned into a statement about the relay. The
+# deployed canary had neither the membership nor the capability: it read a 0640
+# Debian-exim:adm mainlog it could not open, spent the whole budget proving it,
+# and reported a relay that had Completed the message one second after
+# submission - a false page, sent to the one channel the maintainer trusts, on
+# a host that was healthy.
+#
 # Host configuration, read at run time and never committed: the address the
 # canary mails is in /etc/overflow/canary-recipient and the out-of-band
 # channel in /etc/overflow/canary-discord-webhook. Each path below is
@@ -116,6 +126,26 @@ case "$webhook_url" in
     ;;
 esac
 
+# The relay verdict is read from the exim mainlog, so a log this process cannot
+# open is a run that can take no verdict at all - and "no verdict" is not "the
+# relay delivered nothing". It is checked HERE, before the submission, for
+# three reasons: the failure is immediate and says which file is at fault
+# rather than costing the whole wait budget to discover; no heartbeat mail goes
+# out that the operator would receive with no explanation attached to it; and
+# a canary that cannot read its own evidence must not go on to pretend it has.
+#
+# This is the deployed defect's own shape, measured on the unit's exact
+# hardening: `grep` of the mainlog under this sandbox answers "Permission
+# denied", the run timed out, and the report named a relay that had completed
+# the message a second earlier. So the refusal below is exit 2 with no post and
+# no dead-streak marker - the same class as a missing host file. It is a fault
+# in the check, not an outage of the path being checked, and a marker written
+# here would silence every later run of a relay that may well be fine.
+if [ ! -r "$exim_log" ]; then
+  echo "overflow-canary.sh: $exim_log is not readable by this process, so the relay verdict could not be taken and nothing was submitted" >&2
+  exit 2
+fi
+
 # Both of these are the only inputs the report and the message carry that the
 # script cannot supply for itself, and under set -e a failing command
 # substitution kills the run at the assignment with nothing in the journal.
@@ -177,6 +207,11 @@ if [ "$submit_status" -eq 0 ]; then
 fi
 
 reason=''
+# Set only where the verdict cannot be taken, never where one is taken. It is
+# what separates a run that knows the relay failed from a run that cannot read
+# the evidence, and the two must not leave the same journal line: one is an
+# outage to act on, the other is a permission to fix.
+verdict_impossible=''
 if [ "$submit_status" -ne 0 ]; then
   reason="the canary could not be submitted to $smtp_url (curl exited $submit_status)"
 elif [ -z "$message_id" ]; then
@@ -189,6 +224,10 @@ else
   deadline=$(( $(date +%s) + exim_wait ))
   seen_verdict=''
   while :; do
+    # Reset on every pass, so what the deadline reads is the state of the log
+    # at the deadline and not the worst moment it passed through. A gap that
+    # closed again inside the budget decides nothing at all.
+    verdict_impossible=''
     if [ -r "$exim_log" ]; then
       # ORDER MATTERS, and a test pins it. Completed is read first and it is
       # the only success. A message that is greylisted, or answered with a
@@ -251,9 +290,23 @@ else
       if [ -n "$verdict" ]; then
         seen_verdict=$verdict
       fi
+    else
+      # The log was readable at the check above and is not now. A rotation
+      # under `nocreate` - which is what this host's exim logrotate does -
+      # leaves the path absent until exim itself reopens it, and a permission
+      # change lands the same way, so this is reachable rather than theoretical.
+      #
+      # The loop is NOT broken. A log that comes back inside the budget is a
+      # log the run can still take its verdict from, and giving up on a
+      # momentary gap would fail a run whose relay is fine. The reason is only
+      # ever read at the deadline, and only if the log is STILL unreadable
+      # then; the first gap never decides anything on its own.
+      verdict_impossible="$exim_log was not readable to this process when the ${exim_wait}s wait closed, so the verdict for $message_id could not be taken; the relay is not implicated"
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      if [ -n "$seen_verdict" ]; then
+      if [ -n "$verdict_impossible" ]; then
+        reason=$verdict_impossible
+      elif [ -n "$seen_verdict" ]; then
         reason="the relay recorded $seen_verdict for $message_id and never Completed it within ${exim_wait}s, so the smarthost did not take the message"
       else
         reason="the local daemon accepted the message as $message_id but $exim_log records no Completed line for it within ${exim_wait}s"
@@ -272,6 +325,20 @@ if [ -z "$reason" ]; then
     fi
   fi
   exit 0
+fi
+
+# A verdict that could not be taken stops here, and it is placed after the
+# healthy exit so a log that went dark and came back inside the budget is
+# still the healthy run it actually was. Everything below this line reports an
+# OUTAGE of the failure-alert path, and a report is headed "the failure-alert
+# path is not delivering": reaching it with a log this process could not read
+# would put a false claim in the maintainer's alert channel and, once the
+# marker were written, silence the real outage that follows. So the refusal
+# exits 2 with the reason in the journal and nothing posted - the same shape
+# as a misconfigured host file, which is what an unreadable log is.
+if [ -n "$verdict_impossible" ]; then
+  echo "overflow-canary.sh: $reason" >&2
+  exit 2
 fi
 
 if [ -e "$marker" ]; then

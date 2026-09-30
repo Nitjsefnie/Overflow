@@ -178,6 +178,11 @@ const otherShellLines = new Set([
   // report, and the rollback's removal of both files.
   "test -s /etc/overflow/canary-recipient && echo \"recipient file present\"",
   "test -s /etc/overflow/canary-discord-webhook && echo \"webhook file present\"",
+  // The canary reads the exim mainlog as a member of adm and refuses every run
+  // without it, so the check is a prerequisite beside the two host files rather
+  // than a comment: the directive is in the unit's pinned set, and a host whose
+  // installed unit predates it pages nothing and explains nothing.
+  "systemctl show overflow-canary.service -p SupplementaryGroups --value | grep -qw adm && echo \"canary reads the exim log as a member of adm\" || echo \"the canary is NOT in group adm - every run will refuse with the log named as unreadable\"",
   "install -o root -g root -m 0600 /dev/null /etc/overflow/canary-recipient",
   "printf '%s\\n' '<address>' > /etc/overflow/canary-recipient",
   "chown root:root /etc/overflow/canary-recipient",
