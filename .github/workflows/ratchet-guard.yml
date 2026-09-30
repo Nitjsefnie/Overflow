@@ -43,9 +43,15 @@ concurrency:
   # run per concurrency group and cancels the older pending one even with
   # cancel-in-progress false, and a cancelled conclusion on a merged SHA
   # makes the deploy gate refuse immediately. Keying on the SHA gives each
-  # push its own group; pull requests keep one group per PR, where
-  # cancellation supersedes the queued rest.
-  group: ratchet-guard-${{ github.event.pull_request.number || github.sha }}
+  # push its own group.
+  # Every pull request shares one repository-level group instead of one group
+  # each, so the repository's Actions minutes stop scaling with the number of
+  # open pull requests; GitHub keeps one PENDING run per group and cancels the
+  # superseded one, so `ratchet-guard-repo-wide` is a single slot. The
+  # parentheses are load-bearing: && binds tighter than || in a GitHub
+  # expression, and without them the pull_request arm falls through to
+  # github.sha and the bound is gone.
+  group: ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:

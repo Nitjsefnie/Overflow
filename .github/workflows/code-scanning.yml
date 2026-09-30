@@ -20,10 +20,15 @@ permissions:
   contents: read
 
 concurrency:
-  # Same shape as ci.yml: per-ref group with cancellation gated on pull_request
-  # events — a fresh push to a pull request cancels its previous run, while
-  # scheduled and main-branch runs queue instead of cancelling each other.
-  group: code-scanning-${{ github.event.pull_request.number || github.ref }}
+  # Same event-class shape as ci.yml: every pull request shares one
+  # repository-level group, so the repository's Actions minutes stop scaling
+  # with the number of open pull requests, and GitHub keeps one PENDING run per
+  # group so `code-scanning-repo-wide` is a single slot. Scheduled and
+  # main-branch runs key on their own SHA and queue instead of cancelling each
+  # other, and cancellation is gated on the event being a pull request. The
+  # parentheses are load-bearing: && binds tighter than ||, and without them
+  # the pull_request arm falls through to github.sha and the bound is gone.
+  group: code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -25,7 +25,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: actionlint-${{ github.event.pull_request.number || github.ref }}
+  # One group for every pull request, so the repository's Actions minutes stop
+  # scaling with the number of open pull requests. GitHub keeps one PENDING run
+  # per group and cancels the superseded one, so `actionlint-repo-wide` is a
+  # single slot. Every other leg — push, workflow_dispatch — keys on its own
+  # SHA and is therefore never cancelled by a later event. The parentheses are
+  # load-bearing: && binds tighter than ||, and without them the pull_request
+  # arm falls through to github.sha and the bound is gone.
+  group: actionlint-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:

@@ -113,10 +113,11 @@ describe("GitHub Actions release gates", () => {
     // run per concurrency group and cancels the older pending one even with
     // cancel-in-progress false, and a cancelled conclusion on a merged SHA
     // makes the deploy gate refuse immediately. Keying on the SHA gives each
-    // push its own group; pull requests keep one group per PR with
-    // cancellation.
+    // push its own group; every pull request shares one repository-level
+    // group, so the repository's Actions minutes stop scaling with the number
+    // of open pull requests.
     expect(workflow.concurrency).toEqual({
-      group: "ratchet-guard-${{ github.event.pull_request.number || github.sha }}",
+      group: "ratchet-guard-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
     // The whole job, exactly, in the dependency-audit style. Three checkouts,
@@ -328,7 +329,7 @@ fi
     expect(workflow.on).not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "ci-${{ github.event.pull_request.number || github.ref }}",
+      group: "ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
 
@@ -412,7 +413,7 @@ fi
     expect(workflow.on).not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "actionlint-${{ github.event.pull_request.number || github.ref }}",
+      group: "actionlint-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request_target' }}",
     });
     const steps = workflow.jobs.actionlint!.steps;
@@ -746,7 +747,7 @@ fi
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({
-      group: "code-scanning-${{ github.event.pull_request.number || github.ref }}",
+      group: "code-scanning-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
 

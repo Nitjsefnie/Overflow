@@ -36,7 +36,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # One group for every pull request, so the repository's Actions minutes stop
+  # scaling with the number of open pull requests: a per-pull-request group
+  # bounds one contributor's parallelism and nothing else, and N open pull
+  # requests produced N concurrent runs. GitHub keeps one PENDING run per group
+  # and cancels the superseded one, so `ci-repo-wide` is a single slot.
+  # Every other leg — push, workflow_dispatch — keys on its own SHA and is
+  # therefore never cancelled by a later event: the deploy gate reads the check
+  # conclusion for the SHA it deploys and refuses a `cancelled` one (issue
+  # 474), so nothing a merge depends on may share a cancellable group. The
+  # parentheses are load-bearing; && binds tighter than || in a GitHub
+  # expression, and without them the pull_request arm falls through to github.sha
+  # and the bound is gone.
+  group: ci-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
