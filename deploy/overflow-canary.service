@@ -1,0 +1,80 @@
+# Overflow failure-alert canary.
+#
+# A daily check that the host's one failure-alert delivery route still
+# delivers, started by deploy/overflow-canary.timer. Install as
+# /etc/systemd/system/overflow-canary.service. The two files it reads,
+# /etc/overflow/canary-recipient and /etc/overflow/canary-discord-webhook,
+# are host configuration read at run time: they are never committed and never
+# referenced by value in this repository.
+#
+# The canary's whole job is to report a dead path, so it cannot report through
+# the route it is checking: a failure is posted to the webhook and the oneshot
+# exits nonzero, which lands the unit in the failed state. The alert script
+# mails the journal tail; this one sends nothing anyone has to read and reads
+# no journal at all.
+
+[Unit]
+Description=Check that the Overflow failure-alert path still delivers
+
+[Service]
+Type=oneshot
+
+# Runs as root, like the alert unit: both host files are root-only and are
+# read by the script at run time, not by systemd. The PATH carries no
+# component under /root, and curl speaks to the local exim daemon and to the
+# webhook host.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/bin/sh /srv/overflow/scripts/overflow-canary.sh
+
+# Any file the canary run creates is root-private.
+UMask=0077
+
+# No privilege elevation, no capabilities: the unit reads two root-only files,
+# hands one message to the local mail daemon, optionally posts one report to
+# the webhook, and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# The whole filesystem is read-only except the one directory the dead-streak
+# marker needs: RuntimeDirectory= stands up /run/overflow-canary for each run
+# and grants it implicitly (ReadWritePaths= stays out), and
+# RuntimeDirectoryPreserve=yes keeps the directory, and the marker in it,
+# across runs of this oneshot (wiped at reboot). The exim daemon spools the
+# submission in its own namespace, outside this sandbox, and the script only
+# reads /var/log/exim4/mainlog. Home directories are unreachable and /tmp and
+# /dev are private.
+ProtectSystem=strict
+RuntimeDirectory=overflow-canary
+RuntimeDirectoryPreserve=yes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+# The host itself is off limits, as in overflow.service. ProcSubset= is
+# deliberately not set: the canary reads no journal, so the boot_id read that
+# forced the alert template to leave it out does not apply here, but the
+# directive stays undeclared rather than declared for symmetry.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+
+# May speak IP and local sockets, on this architecture only, with the same
+# EPERM-instead-of-kill seccomp posture as the web service.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=overflow-canary

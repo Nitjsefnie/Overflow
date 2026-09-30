@@ -1,0 +1,24 @@
+# Daily timer for the Overflow failure-alert canary
+# (overflow-canary.service).
+#
+# Install as /etc/systemd/system/overflow-canary.timer.
+# deploy/README.md section 12 carries the install and verification steps.
+
+[Unit]
+Description=Daily check that the Overflow failure-alert path delivers
+
+[Timer]
+# Fixed wall-clock schedule in UTC, stated explicitly so a host timezone
+# change cannot move the check. Persistent= catches up a check missed while the
+# host was down, on the next boot.
+#
+# 03:20, well clear of the 01:30 backup window: a canary sharing the backup's
+# minute would read the relay verdict against an exim log the backup's own mail
+# is still filling, and a check that reports a path broken because the relay is
+# busy paging is a canary that gets ignored.
+OnCalendar=*-*-* 03:20:00 UTC
+Persistent=true
+Unit=overflow-canary.service
+
+[Install]
+WantedBy=timers.target
